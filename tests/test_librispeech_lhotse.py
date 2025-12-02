@@ -1,22 +1,25 @@
-"""Test suite for Lhotse dataset loaders.
+"""Test suite for LibriSpeech Lhotse dataset loader.
 
-This module tests that the Lhotse dataset loaders can:
+This module tests that the LibriSpeech dataset loader can:
 1. Load CutSets from disk correctly
 2. Be iterated with a BucketingSampler
 3. Provide valid audio and supervision data
 
 To run tests:
-    pytest tests/test_lhotse_datasets.py -v
+    pytest tests/test_librispeech_lhotse.py -v
 
 Note: These tests require the Shar archives to be present on disk.
       They are integration tests that verify the full data loading pipeline.
 """
 
+import sys
 from pathlib import Path
 
 import pytest
 from lhotse import CutSet
 from lhotse.dataset import DynamicBucketingSampler
+
+sys.path.append(".")
 
 from src.data_utils.lhotse import (
     LHOTSE_DATASET_REGISTRY,

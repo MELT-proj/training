@@ -84,9 +84,8 @@ DEFAULT_LANGUAGE = "en"  # Used in supervision segments
 # Split corresponds to HuggingFace's split argument
 CONFIGS_AND_SPLITS = {
     "clean": ["train", "validation", "test"],
-    # "clean": ["validation", "test"],
+    "clean_sa": ["train", "validation", "test"],
     # "dirty": ["train", "validation", "test"],
-    # "clean_sa": ["train", "validation", "test"],
     # "dirty_sa": ["train", "validation", "test"],
     # "microset": ["train"],
 }
