@@ -71,7 +71,8 @@ DATASET_NICKNAME = "peoples_speech"
 BASE_OUTPUT_DIR = Path("/mnt/home/giuseppe/myscratch/melt-data/shar")
 SHARD_SIZE = 4000
 AUDIO_FORMAT = "flac"
-DONE_MARKER = ".done"  # Marker file to indicate completed conversion
+MARKER_ROOT = BASE_OUTPUT_DIR / ".conversion_markers"
+DONE_MARKER = ".done"  # legacy name (kept for human-readable filenames)
 
 # Dataset properties
 IS_MULTILINGUAL = False
@@ -112,20 +113,31 @@ def get_output_dir(
     return base / config / split
 
 
-def is_conversion_complete(output_dir: Path) -> bool:
-    """Check if the conversion for a given output directory is already complete.
+def _marker_path_for_output(output_dir: Path) -> Path:
+    try:
+        rel = output_dir.relative_to(BASE_OUTPUT_DIR)
+    except Exception:
+        rel = Path(output_dir.name)
+    marker = MARKER_ROOT / rel
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    return marker.with_suffix(".done")
 
-    A conversion is considered complete if the .done marker file exists.
+
+def is_conversion_complete(output_dir: Path) -> bool:
+    """Check if conversion is already complete (without touching leaf directories).
+
+    Strategy:
+    1. Check for a central marker file under BASE_OUTPUT_DIR/.conversion_markers
+    2. Fallback to checking whether the output_dir exists and contains files
     """
-    return (output_dir / DONE_MARKER).exists()
+    marker = _marker_path_for_output(output_dir)
+    if marker.exists():
+        return True
+    return output_dir.exists() and any(output_dir.iterdir())
 
 
 def mark_conversion_complete(output_dir: Path, count: int, errors: int) -> None:
-    """Create a .done marker file to indicate successful conversion.
-
-    The marker file contains metadata about the conversion for reference.
-    """
-    marker_path = output_dir / DONE_MARKER
+    marker_path = _marker_path_for_output(output_dir)
     marker_path.write_text(
         f"Conversion completed successfully.\n"
         f"Cuts processed: {count}\n"
@@ -164,9 +176,10 @@ def convert_subset_to_shar(
 
     # Check if conversion is already complete
     if not force and is_conversion_complete(output_dir):
+        marker = _marker_path_for_output(output_dir)
         logger.info(
             f"SKIPPING {config}{lang_str}/{split} - already complete "
-            f"(marker file exists: {output_dir / DONE_MARKER})"
+            f"(marker: {marker} or existing output files)"
         )
         return None, None
 

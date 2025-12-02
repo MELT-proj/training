@@ -69,7 +69,8 @@ HF_CONFIG = "all"  # LibriSpeech uses a single "all" config, splits encode quali
 BASE_OUTPUT_DIR = Path("/mnt/home/giuseppe/myscratch/melt-data/shar")
 SHARD_SIZE = 2000
 AUDIO_FORMAT = "flac"
-DONE_MARKER = ".done"  # Marker file to indicate completed conversion
+MARKER_ROOT = BASE_OUTPUT_DIR / ".conversion_markers"
+DONE_MARKER = ".done"  # legacy name (kept for human-readable filenames)
 
 # Dataset properties
 IS_MULTILINGUAL = False
@@ -112,20 +113,51 @@ def get_output_dir(
     return base / config / split
 
 
-def is_conversion_complete(output_dir: Path) -> bool:
-    """Check if the conversion for a given output directory is already complete.
+def _marker_path_for_output(output_dir: Path) -> Path:
+    """Return a central marker path for a given output directory.
 
-    A conversion is considered complete if the .done marker file exists.
+    The project should not write marker files into leaf data folders because
+    Lhotse and other tools may expect certain files there. Instead we store
+    markers under BASE_OUTPUT_DIR/.conversion_markers/<relative-path>.done
     """
-    return (output_dir / DONE_MARKER).exists()
+    try:
+        rel = output_dir.relative_to(BASE_OUTPUT_DIR)
+    except Exception:
+        # If output_dir isn't inside BASE_OUTPUT_DIR for some reason,
+        # fallback to using the output dir name as the marker name
+        rel = Path(output_dir.name)
+    marker = MARKER_ROOT / rel
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    return marker.with_suffix(".done")
+
+
+def is_conversion_complete(output_dir: Path) -> bool:
+    """Check if conversion is already complete.
+
+    Strategy (in order):
+    1. If a central marker file exists under BASE_OUTPUT_DIR/.conversion_markers,
+       treat the conversion as complete.
+    2. Otherwise, if the output directory exists and contains any files,
+       assume conversion was already run (useful for manual/partial runs).
+    This avoids writing anything into leaf output directories.
+    """
+    marker = _marker_path_for_output(output_dir)
+    if marker.exists():
+        return True
+    # Fallback: if the output dir already exists and is non-empty, treat
+    # it as complete so we avoid re-downloading/re-converting. This is a
+    # simpler mechanism that doesn't require writing markers at all.
+    return output_dir.exists() and any(output_dir.iterdir())
 
 
 def mark_conversion_complete(output_dir: Path, count: int, errors: int) -> None:
-    """Create a .done marker file to indicate successful conversion.
+    """Record a completion marker in the central marker directory.
 
-    The marker file contains metadata about the conversion for reference.
+    We do NOT write into the leaf output directory to avoid confusion with
+    Lhotse's own on-disk artifacts. The marker contains basic metadata and
+    is stored under BASE_OUTPUT_DIR/.conversion_markers.
     """
-    marker_path = output_dir / DONE_MARKER
+    marker_path = _marker_path_for_output(output_dir)
     marker_path.write_text(
         f"Conversion completed successfully.\n"
         f"Cuts processed: {count}\n"
@@ -166,9 +198,10 @@ def convert_subset_to_shar(
 
     # Check if conversion is already complete
     if not force and is_conversion_complete(output_dir):
+        marker = _marker_path_for_output(output_dir)
         logger.info(
             f"SKIPPING {config}{lang_str}/{split} - already complete "
-            f"(marker file exists: {output_dir / DONE_MARKER})"
+            f"(marker: {marker} or existing output files)"
         )
         return None, None
 
