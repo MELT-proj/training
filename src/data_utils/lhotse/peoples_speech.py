@@ -69,73 +69,68 @@ class PeoplesSpeechLhotse(BaseLhotseDataset):
     def load_train(
         self,
         config: str = "clean",
-        shuffle: bool = True,
+        shuffle_shards: bool = True,
         seed: int = 42,
-        lazy: bool = True,
     ):
         """Convenience method to load training data.
 
         Args:
             config: Dataset configuration to use.
-            shuffle: Whether to shuffle the data.
+            shuffle_shards: Whether to shuffle the shards.
             seed: Random seed for shuffling.
-            lazy: Whether to load lazily for memory efficiency.
 
         Returns:
-            CutSet containing training cuts.
+            CutSet containing training cuts (always lazy).
         """
-        if lazy:
-            return self.load_cuts_lazy(
-                split="train", config=config, shuffle=shuffle, seed=seed
-            )
-        return self.load_cuts(split="train", config=config, shuffle=shuffle, seed=seed)
+        return self.load_cuts(
+            split="train",
+            config=config,
+            shuffle_shards=shuffle_shards,
+            seed=seed,
+        )
 
     def load_validation(
         self,
         config: str = "clean",
-        shuffle: bool = False,
+        shuffle_shards: bool = False,
         seed: int = 42,
-        lazy: bool = False,
     ):
         """Convenience method to load validation data.
 
         Args:
             config: Dataset configuration to use.
-            shuffle: Whether to shuffle the data.
+            shuffle_shards: Whether to shuffle the shards.
             seed: Random seed for shuffling.
-            lazy: Whether to load lazily for memory efficiency.
 
         Returns:
-            CutSet containing validation cuts.
+            CutSet containing validation cuts (always lazy).
         """
-        if lazy:
-            return self.load_cuts_lazy(
-                split="validation", config=config, shuffle=shuffle, seed=seed
-            )
         return self.load_cuts(
-            split="validation", config=config, shuffle=shuffle, seed=seed
+            split="validation",
+            config=config,
+            shuffle_shards=shuffle_shards,
+            seed=seed,
         )
 
     def load_test(
         self,
         config: str = "clean",
-        shuffle: bool = False,
+        shuffle_shards: bool = False,
         seed: int = 42,
-        lazy: bool = False,
     ):
         """Convenience method to load test data.
 
         Args:
             config: Dataset configuration to use.
-            shuffle: Whether to shuffle the data.
+            shuffle_shards: Whether to shuffle the shards.
             seed: Random seed for shuffling.
-            lazy: Whether to load lazily for memory efficiency.
 
         Returns:
-            CutSet containing test cuts.
+            CutSet containing test cuts (always lazy).
         """
-        if lazy:
-            return self.load_cuts_lazy(
-                split="test", config=config, shuffle=shuffle, seed=seed
-            )
-        return self.load_cuts(split="test", config=config, shuffle=shuffle, seed=seed)
+        return self.load_cuts(
+            split="test",
+            config=config,
+            shuffle_shards=shuffle_shards,
+            seed=seed,
+        )

@@ -40,12 +40,12 @@ class BaseLhotseDataset(ABC):
         task: The task this dataset is intended for (e.g., "transcribe").
     """
 
-    nickname: str = None
+    nickname: Optional[str] = None
     is_multilingual: bool = False
-    supported_languages: list[str] = None
+    supported_languages: Optional[list[str]] = None
     supported_configs: Optional[list[str]] = None
-    supported_splits: dict[str, list[str]] = None
-    default_language: str = None
+    supported_splits: Optional[dict[str, list[str]]] = None
+    default_language: Optional[str] = None
     task: str = "transcribe"
 
     def __init__(self, shar_dir: Union[str, Path]):
@@ -98,7 +98,10 @@ class BaseLhotseDataset(ABC):
                     f"Language must be specified for multilingual dataset {self.nickname}. "
                     f"Available languages: {self.supported_languages}"
                 )
-            if lang not in self.supported_languages:
+            if (
+                self.supported_languages is not None
+                and lang not in self.supported_languages
+            ):
                 raise ValueError(
                     f"Language '{lang}' not supported for {self.nickname}. "
                     f"Available languages: {self.supported_languages}"
@@ -121,6 +124,8 @@ class BaseLhotseDataset(ABC):
             splits_key = "default"
 
         # Validate split
+        if self.supported_splits is None:
+            raise ValueError(f"No supported splits defined for {self.nickname}")
         available_splits = self.supported_splits.get(splits_key, [])
         if split not in available_splits:
             raise ValueError(
@@ -133,20 +138,24 @@ class BaseLhotseDataset(ABC):
         split: str,
         lang: Optional[str] = None,
         config: Optional[str] = None,
-        shuffle: bool = False,
+        shuffle_shards: bool = False,
         seed: int = 42,
     ) -> CutSet:
         """Load a CutSet for the specified configuration, language, and split.
+
+        Note: CutSet.from_shar() always returns a lazy CutSet that streams data
+        on-demand via LazySharIterator. This is memory-efficient for large datasets.
 
         Args:
             split: The data split (e.g., "train", "validation", "test").
             lang: Language code (required for multilingual datasets).
             config: The dataset configuration (e.g., "clean", "dirty").
-            shuffle: Whether to shuffle the cuts.
-            seed: Random seed for shuffling.
+            shuffle_shards: Whether to shuffle the shards (not individual cuts).
+                           For per-cut shuffling, use .shuffle() on the returned CutSet.
+            seed: Random seed for shard shuffling.
 
         Returns:
-            A CutSet containing the loaded cuts.
+            A lazy CutSet that loads data on-demand from Shar archives.
         """
         self._validate_params(split, lang, config)
         split_dir = self._get_split_dir(split, lang, config)
@@ -158,49 +167,11 @@ class BaseLhotseDataset(ABC):
             )
 
         logger.info(f"Loading CutSet from {split_dir}")
-        cuts = CutSet.from_shar(in_dir=split_dir)
-
-        if shuffle:
-            cuts = cuts.shuffle(seed=seed)
-
-        return cuts
-
-    def load_cuts_lazy(
-        self,
-        split: str,
-        lang: Optional[str] = None,
-        config: Optional[str] = None,
-        shuffle: bool = False,
-        seed: int = 42,
-    ) -> CutSet:
-        """Load a CutSet lazily for memory-efficient streaming.
-
-        This is particularly useful for large datasets that don't fit in memory.
-
-        Args:
-            split: The data split (e.g., "train", "validation", "test").
-            lang: Language code (required for multilingual datasets).
-            config: The dataset configuration (e.g., "clean", "dirty").
-            shuffle: Whether to shuffle the shards (not individual cuts).
-            seed: Random seed for shuffling.
-
-        Returns:
-            A lazy CutSet that loads data on-demand.
-        """
-        self._validate_params(split, lang, config)
-        split_dir = self._get_split_dir(split, lang, config)
-
-        if not split_dir.exists():
-            raise FileNotFoundError(
-                f"Split directory not found: {split_dir}. "
-                f"Make sure the data has been prepared."
-            )
-
-        logger.info(f"Loading lazy CutSet from {split_dir}")
-        cuts = CutSet.from_shar(in_dir=split_dir, lazy=True)
-
-        if shuffle:
-            cuts = cuts.shuffle(seed=seed)
+        cuts = CutSet.from_shar(
+            in_dir=split_dir,
+            shuffle_shards=shuffle_shards,
+            seed=seed,
+        )
 
         return cuts
 
@@ -212,11 +183,17 @@ class BaseLhotseDataset(ABC):
     @classmethod
     def get_available_languages(cls) -> list[str]:
         """Return a list of available languages."""
-        return cls.supported_languages or [cls.default_language]
+        if cls.supported_languages is not None:
+            return cls.supported_languages
+        if cls.default_language is not None:
+            return [cls.default_language]
+        return []
 
     @classmethod
     def get_available_splits(cls, config: Optional[str] = None) -> list[str]:
         """Return a list of available splits for a given configuration."""
+        if cls.supported_splits is None:
+            return []
         if cls.supported_configs is not None:
             if config is None:
                 raise ValueError(

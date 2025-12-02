@@ -75,47 +75,50 @@ class LibriSpeechLhotse(BaseLhotseDataset):
         self,
         config: str = "clean",
         subset: str = "all",
-        shuffle: bool = True,
+        shuffle_shards: bool = True,
         seed: int = 42,
-        lazy: bool = True,
     ):
         """Convenience method to load training data.
+
+        Note: CutSet.from_shar() always returns a lazy CutSet that streams
+        data on-demand. This is memory-efficient for large training sets.
 
         Args:
             config: Dataset configuration ("clean" or "other").
             subset: Which training subset to load:
                 - For "clean": "100", "360", or "all" (combines both)
                 - For "other": "500" or "all"
-            shuffle: Whether to shuffle the data.
+            shuffle_shards: Whether to shuffle the shards.
             seed: Random seed for shuffling.
-            lazy: Whether to load lazily for memory efficiency.
 
         Returns:
-            CutSet containing training cuts.
+            CutSet containing training cuts (always lazy).
         """
         from lhotse import CutSet
 
-        load_fn = self.load_cuts_lazy if lazy else self.load_cuts
-
         if config == "clean":
             if subset == "100":
-                return load_fn(
-                    split="train.100", config=config, shuffle=shuffle, seed=seed
+                return self.load_cuts(
+                    split="train.100",
+                    config=config,
+                    shuffle_shards=shuffle_shards,
+                    seed=seed,
                 )
             elif subset == "360":
-                return load_fn(
-                    split="train.360", config=config, shuffle=shuffle, seed=seed
+                return self.load_cuts(
+                    split="train.360",
+                    config=config,
+                    shuffle_shards=shuffle_shards,
+                    seed=seed,
                 )
             elif subset == "all":
-                cuts_100 = load_fn(
-                    split="train.100", config=config, shuffle=False, seed=seed
+                cuts_100 = self.load_cuts(
+                    split="train.100", config=config, shuffle_shards=False, seed=seed
                 )
-                cuts_360 = load_fn(
-                    split="train.360", config=config, shuffle=False, seed=seed
+                cuts_360 = self.load_cuts(
+                    split="train.360", config=config, shuffle_shards=False, seed=seed
                 )
                 combined = CutSet.mux(cuts_100, cuts_360)
-                if shuffle:
-                    combined = combined.shuffle(seed=seed)
                 return combined
             else:
                 raise ValueError(
@@ -124,8 +127,11 @@ class LibriSpeechLhotse(BaseLhotseDataset):
                 )
         elif config == "other":
             if subset in ("500", "all"):
-                return load_fn(
-                    split="train.500", config=config, shuffle=shuffle, seed=seed
+                return self.load_cuts(
+                    split="train.500",
+                    config=config,
+                    shuffle_shards=shuffle_shards,
+                    seed=seed,
                 )
             else:
                 raise ValueError(
@@ -138,58 +144,53 @@ class LibriSpeechLhotse(BaseLhotseDataset):
     def load_validation(
         self,
         config: str = "clean",
-        shuffle: bool = False,
+        shuffle_shards: bool = False,
         seed: int = 42,
-        lazy: bool = False,
     ):
         """Convenience method to load validation data.
 
         Args:
             config: Dataset configuration ("clean" or "other").
-            shuffle: Whether to shuffle the data.
+            shuffle_shards: Whether to shuffle the shards.
             seed: Random seed for shuffling.
-            lazy: Whether to load lazily for memory efficiency.
 
         Returns:
-            CutSet containing validation cuts.
+            CutSet containing validation cuts (always lazy).
         """
-        if lazy:
-            return self.load_cuts_lazy(
-                split="validation", config=config, shuffle=shuffle, seed=seed
-            )
         return self.load_cuts(
-            split="validation", config=config, shuffle=shuffle, seed=seed
+            split="validation",
+            config=config,
+            shuffle_shards=shuffle_shards,
+            seed=seed,
         )
 
     def load_test(
         self,
         config: str = "clean",
-        shuffle: bool = False,
+        shuffle_shards: bool = False,
         seed: int = 42,
-        lazy: bool = False,
     ):
         """Convenience method to load test data.
 
         Args:
             config: Dataset configuration ("clean" or "other").
-            shuffle: Whether to shuffle the data.
+            shuffle_shards: Whether to shuffle the shards.
             seed: Random seed for shuffling.
-            lazy: Whether to load lazily for memory efficiency.
 
         Returns:
-            CutSet containing test cuts.
+            CutSet containing test cuts (always lazy).
         """
-        if lazy:
-            return self.load_cuts_lazy(
-                split="test", config=config, shuffle=shuffle, seed=seed
-            )
-        return self.load_cuts(split="test", config=config, shuffle=shuffle, seed=seed)
+        return self.load_cuts(
+            split="test",
+            config=config,
+            shuffle_shards=shuffle_shards,
+            seed=seed,
+        )
 
     def load_all_train(
         self,
-        shuffle: bool = True,
+        shuffle_shards: bool = True,
         seed: int = 42,
-        lazy: bool = True,
     ):
         """Load all training data from both clean and other configurations.
 
@@ -197,28 +198,23 @@ class LibriSpeechLhotse(BaseLhotseDataset):
         for a total of ~960 hours of training data.
 
         Args:
-            shuffle: Whether to shuffle the data.
+            shuffle_shards: Whether to shuffle the shards.
             seed: Random seed for shuffling.
-            lazy: Whether to load lazily for memory efficiency.
 
         Returns:
-            CutSet containing all training cuts (~960 hours).
+            CutSet containing all training cuts (~960 hours, always lazy).
         """
         from lhotse import CutSet
 
-        load_fn = self.load_cuts_lazy if lazy else self.load_cuts
-
-        cuts_clean_100 = load_fn(
-            split="train.100", config="clean", shuffle=False, seed=seed
+        cuts_clean_100 = self.load_cuts(
+            split="train.100", config="clean", shuffle_shards=False, seed=seed
         )
-        cuts_clean_360 = load_fn(
-            split="train.360", config="clean", shuffle=False, seed=seed
+        cuts_clean_360 = self.load_cuts(
+            split="train.360", config="clean", shuffle_shards=False, seed=seed
         )
-        cuts_other_500 = load_fn(
-            split="train.500", config="other", shuffle=False, seed=seed
+        cuts_other_500 = self.load_cuts(
+            split="train.500", config="other", shuffle_shards=False, seed=seed
         )
 
         combined = CutSet.mux(cuts_clean_100, cuts_clean_360, cuts_other_500)
-        if shuffle:
-            combined = combined.shuffle(seed=seed)
         return combined
