@@ -78,27 +78,50 @@ conda install -c conda-forge \
 echo "Installing packages from pip (deepspeed)..."
 pip install --no-cache-dir deepspeed
 
-# Install conda-pack if not already installed
-echo "Installing conda-pack..."
-conda install conda-pack -c conda-forge -y
-
-# Pack the environment
-echo "Packing environment (this may take a few minutes)..."
-conda pack -n ${ENV_NAME} -o ${OUTPUT_FILE}
-
-# Get file size
-FILE_SIZE=$(du -h ${OUTPUT_FILE} | cut -f1)
-
 echo ""
-echo "================================================"
-echo "SUCCESS! Environment packed successfully"
-echo "================================================"
-echo "Output file: ${OUTPUT_FILE}"
-echo "File size: ${FILE_SIZE}"
+echo "Environment creation completed successfully!"
 echo ""
-echo "Next steps:"
-echo "1. Transfer the file to your HPC cluster:"
-echo "   scp ${OUTPUT_FILE} username@hpc-cluster:/path/to/destination/"
+echo "Do you want to pack this environment for HPC deployment?"
+echo "This will install conda-pack and create a ${OUTPUT_FILE} file."
+read -p "Pack environment? (y/n): " -n 1 -r
 echo ""
-echo "2. Run remote_setup.sh on the HPC cluster"
-echo "================================================"
+
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    # Install conda-pack if not already installed
+    echo "Installing conda-pack..."
+    conda install conda-pack -c conda-forge -y
+
+    # Pack the environment
+    echo "Packing environment (this may take a few minutes)..."
+    conda pack -n ${ENV_NAME} -o ${OUTPUT_FILE}
+
+    # Get file size
+    FILE_SIZE=$(du -h ${OUTPUT_FILE} | cut -f1)
+
+    echo ""
+    echo "================================================"
+    echo "SUCCESS! Environment packed successfully"
+    echo "================================================"
+    echo "Output file: ${OUTPUT_FILE}"
+    echo "File size: ${FILE_SIZE}"
+    echo ""
+    echo "Next steps:"
+    echo "1. Transfer the file to your HPC cluster:"
+    echo "   scp ${OUTPUT_FILE} username@hpc-cluster:/path/to/destination/"
+    echo ""
+    echo "2. Run remote_setup.sh on the HPC cluster"
+    echo "================================================"
+else
+    echo ""
+    echo "================================================"
+    echo "SUCCESS! Environment created successfully"
+    echo "================================================"
+    echo "Environment name: ${ENV_NAME}"
+    echo ""
+    echo "The environment is ready to use locally."
+    echo "If you want to pack it later for HPC deployment, you can run:"
+    echo "conda activate ${ENV_NAME}"
+    echo "conda install conda-pack -c conda-forge"
+    echo "conda pack -n ${ENV_NAME} -o ${OUTPUT_FILE}"
+    echo "================================================"
+fi
