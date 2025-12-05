@@ -294,10 +294,6 @@ class SpeechLMForConditionalGeneration(SpeechLMPreTrainedModel):
         config.tie_word_embeddings = False
         return cls(encoder=encoder, decoder=decoder, config=config)
 
-    # @add_start_docstrings_to_model_forward(SPEECH_ENCODER_DECODER_INPUTS_DOCSTRING)
-    # @replace_return_docstrings(
-    #     output_type=Seq2SeqLMOutput, config_class=_CONFIG_FOR_DOC
-    # )
     def forward(
         self,
         audio_input_features: torch.FloatTensor,
