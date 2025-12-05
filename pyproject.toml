@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "melt-proj"
+version = "0.1.0"
+description = "MELT project training utilities"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Giuseppe Attanasio", email = "gattanasio.work@gmail.com"}
+]
+requires-python = ">=3.8"
+dependencies = [
+    "transformers==4.57.2",
+    "wandb",
+    "datasets",
+    "tyro",
+    "librosa",
+    "soundfile",
+    "sentencepiece",
+    "accelerate",
+    "deepspeed",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "black",
+    "isort",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.black]
+line-length = 120
+target-version = ["py38", "py39", "py310", "py311"]
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+    | \.venv
+    | build
+    | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 120
+known_first_party = ["src", "melt"]
+skip = [".git", ".venv", "build", "dist"]
