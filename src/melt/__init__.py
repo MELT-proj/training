@@ -1,3 +1,3 @@
 from .configuration_melt import MELTConfig
-from .modeling_speechlm import SpeechLMForConditionalGeneration
-from .processing_speechlm import SpeechLMProcessor
+from .modeling_melt import SpeechLMForConditionalGeneration
+from .processing_melt import SpeechLMProcessor
