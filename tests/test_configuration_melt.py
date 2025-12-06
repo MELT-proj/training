@@ -1,7 +1,7 @@
 import pytest
-from transformers import AutoConfig
 
 from src.melt.configuration_melt import MELTConfig, MELTProjectorConfig
+from transformers import AutoConfig
 
 
 class TestMELTProjectorConfig:
@@ -95,7 +95,7 @@ class TestMELTConfig:
         assert config.audio_token_index == 32000
         assert config.initializer_range == 0.02
         assert config.has_lora_adapter is False
-        assert config.adapter_type == "linear"
+        assert config.adapter_type == "mlp"
         assert config.num_latents == 64
         assert config.loss_type == "ForCausalLMLoss"
 

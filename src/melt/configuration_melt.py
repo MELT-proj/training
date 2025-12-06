@@ -56,8 +56,8 @@ class MELTConfig(PretrainedConfig):
             The standard deviation of the truncated_normal_initializer for initializing all weight matrices.
         has_lora_adapter (`bool`, *optional*, defaults to `False`):
             Indicates whether or not the model has a LoRA adapter.
-        adapter_type (`str`, *optional*, defaults to `"linear"`):
-            Type of adapter to use for modality projection.
+        adapter_type (`str`, *optional*, defaults to `"mlp"`):
+            Type of adapter to use for modality projection. One of: "mlp", "qformer", or "conformer".
         num_latents (`int`, *optional*, defaults to 64):
             Number of latent vectors for perceiver-style adapters.
     """
@@ -80,7 +80,7 @@ class MELTConfig(PretrainedConfig):
         has_lora_adapter=False,
         # add_pre_adapter=False,
         # num_pre_adapter_layers=3,
-        adapter_type="linear",
+        adapter_type="mlp",
         num_latents=64,
         **kwargs,
     ):
