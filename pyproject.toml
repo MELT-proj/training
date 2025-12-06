@@ -35,21 +35,31 @@ dev = [
 where = ["."]
 include = ["src*"]
 
-[tool.black]
-line-length = 120
-target-version = ["py38", "py39", "py310", "py311"]
-include = '\.pyi?$'
-exclude = '''
-/(
-    \.git
-    | \.venv
-    | build
-    | dist
-)/
-'''
+[tool.ruff]
+target-version = "py310"
+line-length = 119
 
-[tool.isort]
-profile = "black"
-line_length = 120
-known_first_party = ["src", "melt"]
-skip = [".git", ".venv", "build", "dist"]
+# Only consider Python files under src/
+# Patterns are relative to the repository root.
+include = ["src/**/*.py"]
+
+# Optional: exclude things you never want Ruff to touch
+exclude = [
+  "src/**/migrations",
+  "build",
+  "dist",
+  ".venv",
+  ".eggs",
+]
+
+[tool.ruff.lint]
+select = ["C", "E", "F", "I", "W", "RUF013", "PERF102", "SIM", "UP", "FURB"]
+ignore = ["C901", "E501", "E741"]
+
+[tool.ruff.lint.isort]
+lines-after-imports = 2
+known-first-party = ["transformers"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

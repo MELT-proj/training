@@ -15,15 +15,12 @@ This AGENTS.md file provides guidance for code agents working with this codebase
 
 ## Coding Conventions
 
-- Code style is enforced using `black` and `isort`. Run formatting before committing:
-  ```bash
-  black src/ tests/
-  isort src/ tests/
-  ```
+- Code style is enforced using `ruff`.
 - PRs should be focused and minimal. Bugfix PRs should be as brief as possible.
 - When writing tests, add them to existing test files when appropriate.
 - Use type hints for function signatures.
 - Document public functions and classes with docstrings.
+- Do not use the `typing` module as it is deprecated starting from Python 3.10.
 
 ## Dependencies
 

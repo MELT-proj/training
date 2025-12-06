@@ -13,274 +13,343 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-Speech processor class for Wav2Vec2-BERT
+Processor class for MELT.
 """
 
-import itertools
 import logging
-import pdb
-import warnings
-from typing import Dict, List, Optional, Union
+import re
 
-import torch
-from tokenizers import AddedToken
-from transformers import AutoTokenizer
-from transformers.models.llama.tokenization_llama import LlamaTokenizer
-from transformers.models.seamless_m4t.feature_extraction_seamless_m4t import SeamlessM4TFeatureExtractor
-from transformers.models.wav2vec2.tokenization_wav2vec2 import Wav2Vec2CTCTokenizer
-from transformers.processing_utils import ProcessingKwargs, ProcessorMixin, Unpack
+from transformers.feature_extraction_utils import BatchFeature
+from transformers.image_utils import ImageInput
+from transformers.processing_utils import ProcessingKwargs, ProcessorMixin, Unpack, VideosKwargs
 from transformers.tokenization_utils_base import AudioInput, PreTokenizedInput, TextInput
+from transformers.video_utils import VideoInput
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
 
 
-class SpeechLMProcessorKwargs(ProcessingKwargs, total=False):
-    _defaults = {}
+# Redefine kwargs for videos (optional, for future use)
+# class MELTVideosKwargs(VideosKwargs, total=False):
+#     min_pixels: int
+#     max_pixels: int
+#     patch_size: int
+#     temporal_patch_size: int
+#     merge_size: int
+#     min_frames: int
+#     max_frames: int
+#     use_audio_in_video: bool
+#     seconds_per_chunk: float
+#     position_id_per_seconds: int | float
 
 
-def _have_same_length(items: list):
-    return all(len(item) == len(items[0]) for item in items)
+class MELTProcessorKwargs(ProcessingKwargs, total=False):
+    # videos_kwargs: MELTVideosKwargs
+
+    _defaults = {
+        "text_kwargs": {
+            "padding": False,
+            "padding_side": "left",
+        },
+        "audio_kwargs": {
+            "sampling_rate": 16000,
+            "return_attention_mask": True,
+        },
+        # "videos_kwargs": {
+        #     "seconds_per_chunk": 2.0,
+        #     "position_id_per_seconds": 25,
+        #     "use_audio_in_video": False,
+        # },
+    }  # type: ignore
 
 
-def _make_tensor(x: dict, device, dtype):
-    return {k: torch.tensor(v, device=device, dtype=dtype) for k, v in x.items()}
+# Special tokens for MELT
+MELT_SPECIAL_TOKENS = {
+    "image_token": "<|IMAGE|>",
+    "audio_token": "<|AUDIO|>",
+    "video_token": "<|VIDEO|>",
+    "vision_bos_token": "<|vision_bos|>",
+    "vision_eos_token": "<|vision_eos|>",
+    "audio_bos_token": "<|audio_bos|>",
+    "audio_eos_token": "<|audio_eos|>",
+}
 
 
-class SpeechLMProcessor(ProcessorMixin):
+class MELTProcessor(ProcessorMixin):
     r"""
-    Constructs a Wav2Vec2-BERT processor which wraps a Wav2Vec2-BERT feature extractor and a Wav2Vec2 CTC tokenizer into a single
-    processor.
+    Constructs a MELT processor which wraps a feature extractor and a tokenizer into a single processor.
 
-    [`Wav2Vec2Processor`] offers all the functionalities of [`SeamlessM4TFeatureExtractor`] and [`PreTrainedTokenizer`].
-    See the docstring of [`~Wav2Vec2Processor.__call__`] and [`~Wav2Vec2Processor.decode`] for more information.
+    [`MELTProcessor`] offers all the functionalities of an audio feature extractor and a tokenizer.
+    See the [`~MELTProcessor.__call__`] and [`~MELTProcessor.decode`] for more information.
 
     Args:
-        feature_extractor (`SeamlessM4TFeatureExtractor`):
-            An instance of [`SeamlessM4TFeatureExtractor`]. The feature extractor is a required input.
-        tokenizer ([`PreTrainedTokenizer`]):
-            An instance of [`PreTrainedTokenizer`]. The tokenizer is a required input.
+        feature_extractor ([`AutoFeatureExtractor`], *optional*):
+            The audio feature extractor.
+        tokenizer ([`AutoTokenizer`], *optional*):
+            The text tokenizer.
+        image_processor ([`AutoImageProcessor`], *optional*):
+            The image processor (optional, for future use).
+        video_processor ([`AutoVideoProcessor`], *optional*):
+            The video processor (optional, for future use).
     """
 
-    feature_extractor_class = "SeamlessM4TFeatureExtractor"
+    attributes = [
+        "feature_extractor",
+        "tokenizer",
+    ]  # , "image_processor", "video_processor"]
+    feature_extractor_class = "AutoFeatureExtractor"
     tokenizer_class = "AutoTokenizer"
+    # image_processor_class = "AutoImageProcessor"
+    # video_processor_class = "AutoVideoProcessor"
 
-    lang2token = {
-        # Official EU languages
-        "bg": "<|bg|>",  # Bulgarian
-        "hr": "<|hr|>",  # Croatian
-        "cs": "<|cs|>",  # Czech
-        "da": "<|da|>",  # Danish
-        "nl": "<|nl|>",  # Dutch
-        "en": "<|en|>",  # English
-        "et": "<|et|>",  # Estonian
-        "fi": "<|fi|>",  # Finnish
-        "fr": "<|fr|>",  # French
-        "de": "<|de|>",  # German
-        "el": "<|el|>",  # Greek
-        "hu": "<|hu|>",  # Hungarian
-        "ga": "<|ga|>",  # Irish
-        "it": "<|it|>",  # Italian
-        "lv": "<|lv|>",  # Latvian
-        "lt": "<|lt|>",  # Lithuanian
-        "mt": "<|mt|>",  # Maltese
-        "pl": "<|pl|>",  # Polish
-        "pt": "<|pt|>",  # Portuguese
-        "ro": "<|ro|>",  # Romanian
-        "sk": "<|sk|>",  # Slovak
-        "sl": "<|sl|>",  # Slovene
-        "es": "<|es|>",  # Spanish
-        "sv": "<|sv|>",  # Swedish
-        "sq": "<|sq|>",  # Albanian
-        # Other languages
-        "ast": "<|ast|>",  # Asturian
-        "eu": "<|eu|>",  # Basque
-        "br": "<|br|>",  # Breton
-        "ca": "<|ca|>",  # Catalan
-        "fy": "<|fy|>",  # Frisian
-        "gl": "<|gl|>",  # Galician
-        "oc": "<|oc|>",  # Occitan
-        "rm": "<|rm|>",  # Romansh (Vallader, Sursilv)
-        "sc": "<|sc|>",  # Sardinian
-        "hsb": "<|hsb|>",  # Sorbian
-        "cy": "<|cy|>",  # Welsh
-        "zh": "<|zh|>",  # Chinese
-    }
+    def __init__(
+        self,
+        feature_extractor=None,
+        tokenizer=None,
+        # image_processor=None,
+        # video_processor=None,
+    ):
+        # Ensure we have required components
+        if feature_extractor is None:
+            raise ValueError("feature_extractor is required for MELTProcessor")
+        if tokenizer is None:
+            raise ValueError("tokenizer is required for MELTProcessor")
 
-    task2token = {
-        "transcribe": "<|transcribe|>",
-        "translate": "<|translate|>",
-        "summarize": "<|summarize|>",
-        "sqa": "<|reply|>",
-    }
+        super().__init__(feature_extractor, tokenizer)  # , image_processor, video_processor)
+        self.image_processor = None
 
-    @property
-    def eos_token(self):
-        return self.tokenizer.eos_token
+        # Add special tokens if not present
+        self._ensure_special_tokens()
 
-    def __init__(self, feature_extractor, tokenizer):
-        super().__init__(feature_extractor, tokenizer)
+        # Set token attributes
+        self.image_token = MELT_SPECIAL_TOKENS["image_token"]
+        self.audio_token = MELT_SPECIAL_TOKENS["audio_token"]
+        self.video_token = MELT_SPECIAL_TOKENS["video_token"]
+        self.vision_bos_token = MELT_SPECIAL_TOKENS["vision_bos_token"]
+        self.vision_eos_token = MELT_SPECIAL_TOKENS["vision_eos_token"]
+        self.audio_bos_token = MELT_SPECIAL_TOKENS["audio_bos_token"]
+        self.audio_eos_token = MELT_SPECIAL_TOKENS["audio_eos_token"]
 
-    @classmethod
-    def from_encoder_decoder_pretrained(cls, audio_model_name_or_path, text_model_name_or_path, **kwargs):
-        feature_extractor = SeamlessM4TFeatureExtractor.from_pretrained(audio_model_name_or_path, **kwargs)
-        tokenizer = AutoTokenizer.from_pretrained(text_model_name_or_path, **kwargs)
+    def _ensure_special_tokens(self):
+        """Ensure all special tokens are in the tokenizer vocabulary."""
+        tokens_to_add = []
+        for token_value in MELT_SPECIAL_TOKENS.values():
+            if token_value not in self.tokenizer.get_vocab():
+                tokens_to_add.append(token_value)
 
-        additional_tokens = [
-            *list(cls.task2token.values()),
-            *list(cls.lang2token.values()),
-        ]
-
-        tokenizer.add_tokens(additional_tokens, special_tokens=True)
-        return cls(feature_extractor=feature_extractor, tokenizer=tokenizer)
-
-    def _build_preamble_block(self, target_lang, target_task, text_preamble: str | None = None):
-        if text_preamble is not None:
-            preamble_block = [
-                f"{self.lang2token[tl]}{self.task2token[tt]}{tp}"
-                for tl, tt, tp in zip(target_lang, target_task, text_preamble)
-            ]
-        else:
-            preamble_block = [f"{self.lang2token[tl]}{self.task2token[tt]}" for tl, tt in zip(target_lang, target_task)]
-
-        # We pad becasue because the text preamble might contain some signal
-        # for certain items in the batch or not for others.
-        preamble_inputs = self.tokenizer(
-            preamble_block,
-            padding="longest",
-            padding_side="left",
-            return_attention_mask=True,
-            add_special_tokens=False,
-        )
-        return preamble_inputs
+        if tokens_to_add:
+            self.tokenizer.add_tokens(tokens_to_add, special_tokens=True)
+            logger.info(f"Added {len(tokens_to_add)} special tokens to tokenizer: {tokens_to_add}")
 
     def __call__(
         self,
-        audio: AudioInput,
-        task: str | list[str],
-        target_lang: str | list[str],
-        text: str | list[str] | TextInput | PreTokenizedInput = None,
-        text_preamble: str | list[str] = None,
-        return_labels: bool = False,
-        **kwargs,
-    ):
+        text: TextInput | PreTokenizedInput | list[TextInput] | list[PreTokenizedInput] | None = None,
+        audio: AudioInput | None = None,
+        images: ImageInput | None = None,
+        videos: VideoInput | None = None,
+        **kwargs: Unpack[MELTProcessorKwargs],
+    ) -> BatchFeature:
         """
-        TODO: update docstring
+        Main method to prepare for the model one or several sequences(s) and audio(s).
+
+        This method forwards the `text` and `kwargs` arguments to the tokenizer's `__call__` if `text` is not `None`
+        to encode the text. To prepare the audio(s), this method forwards the `audio` and `kwargs` arguments to
+        the feature extractor's `__call__` if `audio` is not `None`.
+
+        Args:
+            text (`str`, `List[str]`, `List[List[str]]`):
+                The sequence or batch of sequences to be encoded. Each sequence can be a string or a list of strings
+                (pretokenized string). If the sequences are provided as list of strings (pretokenized), you must set
+                `is_split_into_words=True` (to lift the ambiguity with a batch of sequences).
+            audio (`np.ndarray`, `List[np.ndarray]}`, *optional*):
+                The audio or batch of audios to be prepared. Each audio can be a NumPy array.
+            images (`PIL.Image.Image`, `np.ndarray`, `torch.Tensor`, `List[PIL.Image.Image]`, *optional*):
+                The image or batch of images to be prepared (optional, for future use).
+            videos (`np.ndarray`, `torch.Tensor`, `List[np.ndarray]`, `List[torch.Tensor]`, *optional*):
+                The video or batch of videos to be prepared (optional, for future use).
+
+        Returns:
+            [`BatchFeature`]: A [`BatchFeature`] with the following fields:
+
+            - **input_ids** -- List of token ids to be fed to the model.
+            - **attention_mask** -- List of indices specifying which tokens should be attended to by the model.
+            - **input_features** -- Audio features to be fed to the model (if audio is provided).
+            - **feature_attention_mask** -- Attention mask for audio features (if audio is provided).
         """
-        if return_labels and text is None:
-            raise ValueError("You need to specify a `text` input to return labels.")
-
-        if audio is None and text is None:
-            raise ValueError("You need to specify either an `audio` or `text` input to process.")
-
-        if "return_tensors" in kwargs and kwargs["return_tensors"] != "pt":
-            warnings.warn(
-                "We currently support `return_tensors='pt'`. Setting it to `pt` for now.",
-            )
-        kwargs["return_tensors"] = "pt"
+        if text is None:
+            raise ValueError("You need to specify a `text` input to process.")
 
         output_kwargs = self._merge_kwargs(
-            SpeechLMProcessorKwargs,
+            MELTProcessorKwargs,
             tokenizer_init_kwargs=self.tokenizer.init_kwargs,
             **kwargs,
         )
 
-        # 1. build audio component of the input
-        # TODO: for now, audio is mandatory
-        audio_inputs = self.feature_extractor(audio, **output_kwargs["audio_kwargs"])
-        items_count = audio_inputs["input_features"].shape[0]
-
-        # 2. audio is followed by a block containing ids for task, target_lang, and optionally text preamble
-        target_lang = target_lang if isinstance(target_lang, list) else [target_lang] * items_count
-        task = task if isinstance(task, list) else [task] * items_count
-        len_to_check = [target_lang, task]
-        if text_preamble is not None:
-            text_preamble = text_preamble if isinstance(text_preamble, list) else [text_preamble] * items_count
-            len_to_check.append(text_preamble)
-        if not _have_same_length(len_to_check):
-            raise ValueError("`lang`, `task`, and `text_preamble` must have the same length")
-
-        preamble_inputs = self._build_preamble_block(target_lang, task, text_preamble)
-
-        # 3. encode text if needed
-        text_inputs = preamble_inputs
-        if text is not None:
-            if not isinstance(text, list):
-                text = [text]
-            if not _have_same_length([text, target_lang]):
-                raise ValueError("`text` and `lang` must have the same length")
-
-            # TODO: we should truncate the input text!
-
-            tokenized_text = self.tokenizer(
-                text,
-                padding=False,
-                truncation=False,
-                add_special_tokens=False,
-                return_attention_mask=True,
-            )
-            tokenized_text["input_ids"] = [tt + [self.tokenizer.eos_token_id] for tt in tokenized_text["input_ids"]]
-            tokenized_text["attention_mask"] = [tt + [1] for tt in tokenized_text["attention_mask"]]
-
-            text_inputs = {
-                "input_ids": [pi + tt for pi, tt in zip(preamble_inputs["input_ids"], tokenized_text["input_ids"])],
-                "attention_mask": [
-                    pi + tt
-                    for pi, tt in zip(
-                        preamble_inputs["attention_mask"],
-                        tokenized_text["attention_mask"],
-                    )
-                ],
-            }
-
-            # text inputs should be in this moment: (tokenized)
-            # <|en|><|transcribe|> 5 I went to the store</s>
-            # <|en|><|transcribe|> 8 I went to the store with my daughter.</s>
-            # here we want to pad everything
-            text_inputs = self.tokenizer.pad(
-                text_inputs,
-                padding_side="left",
-                padding="longest",
-                return_tensors="pt",
-            )
-            # here we should be like this
-            # <pad><pad><pad><pad><|en|><|transcribe|> 5 I went to the store</s>
-            # <|en|><|transcribe|> 8 I went to the store with my daughter.</s>
+        # Process audio
+        if audio is not None:
+            audio_inputs = self.feature_extractor(audio, **output_kwargs["audio_kwargs"])
+            # Rename to prevent conflicts
+            audio_inputs["feature_attention_mask"] = audio_inputs.pop("attention_mask", None)
+            if audio_inputs["feature_attention_mask"] is not None:
+                input_lengths = (audio_inputs["feature_attention_mask"].sum(-1) - 1) // 2 + 1
+                audio_lengths = iter((input_lengths - 2) // 2 + 1)
+            else:
+                # Estimate audio lengths from input_features shape
+                audio_lengths = iter(
+                    [audio_inputs["input_features"].shape[-1] // 4] * len(audio_inputs["input_features"])
+                )
         else:
-            # if we don't have text to learn we are generating, hence create tensors out of the preamble
-            text_inputs = _make_tensor(
-                text_inputs,
-                device=audio_inputs["input_features"].device,
-                dtype=torch.long,
+            audio_inputs = {}
+            audio_lengths = iter([])
+
+        # Process images (optional)
+        if images is not None and getattr(self, "image_processor", None) is not None:
+            images_inputs = self.image_processor(images=images, **output_kwargs.get("images_kwargs", {}))
+            image_grid_thw = iter(images_inputs.get("image_grid_thw", []))
+        else:
+            images_inputs = {}
+            image_grid_thw = None  # iter([])
+
+        # Process videos (optional)
+        if videos is not None and getattr(self, "video_processor", None) is not None:
+            videos_inputs = self.video_processor(videos=videos, **output_kwargs.get("videos_kwargs", {}))
+            video_grid_thw = iter(videos_inputs.get("video_grid_thw", []))
+        else:
+            videos_inputs = {}
+            video_grid_thw = None  # iter([])
+
+        if not isinstance(text, list):
+            text = [text]
+
+        # Replace multimodal special tokens with appropriate number of placeholders
+        if audio is not None or images is not None or videos is not None:
+            text = self.replace_multimodal_special_tokens(
+                text,
+                audio_lengths=audio_lengths,
+                image_grid_thw=image_grid_thw,
+                video_grid_thw=video_grid_thw,
             )
 
-        output_dict = {
-            **{f"audio_{k}": v for k, v in audio_inputs.items()},
-            **text_inputs,
-        }
-        if return_labels:
-            output_dict["labels"] = self.tokenizer.pad(
-                tokenized_text,
-                padding_side="left",
-                padding="longest",
-                return_tensors="pt",
-            )["input_ids"]
+        texts_inputs = self.tokenizer(text, **output_kwargs["text_kwargs"])
 
-        return output_dict
+        return BatchFeature(
+            data={**texts_inputs, **audio_inputs, **images_inputs, **videos_inputs},
+            tensor_type=kwargs.get("return_tensors"),
+        )
+
+    def replace_multimodal_special_tokens(
+        self,
+        text: list[str],
+        audio_lengths,
+        image_grid_thw=None,
+        video_grid_thw=None,
+    ) -> list[str]:
+        """
+        Replace multimodal special tokens with the appropriate number of placeholder tokens.
+
+        Args:
+            text: List of text strings containing special tokens.
+            audio_lengths: Iterator of audio sequence lengths.
+            image_grid_thw: Iterator of image grid dimensions (optional).
+            video_grid_thw: Iterator of video grid dimensions (optional).
+
+        Returns:
+            List of processed text strings with expanded placeholder tokens.
+        """
+        if image_grid_thw is None:
+            image_grid_thw = iter([])
+        if video_grid_thw is None:
+            video_grid_thw = iter([])
+
+        # Get merge lengths for image/video if processors are available
+        merge_length_image = 1
+        merge_length_video = 1
+        if getattr(self, "image_processor", None) is not None and hasattr(self.image_processor, "merge_size"):
+            merge_length_image = self.image_processor.merge_size**2
+        if getattr(self, "video_processor", None) is not None and hasattr(self.video_processor, "merge_size"):
+            merge_length_video = self.video_processor.merge_size**2
+
+        processed_text = []
+        for sample in text:
+            # Find all special tokens and their positions
+            special_tokens = [re.escape(tok) for tok in [self.audio_token, self.image_token, self.video_token]]
+            pattern = "|".join(special_tokens)
+            positions = sorted([(match.start(), match.group()) for match in re.finditer(pattern, sample)])
+
+            for _, special_token in positions:
+                if special_token == self.audio_token:
+                    try:
+                        audio_len = next(audio_lengths)
+                        sample = sample.replace(
+                            self.audio_token,
+                            "<|audio_placeholder|>" * int(audio_len),
+                            1,
+                        )
+                    except StopIteration:
+                        pass
+                elif special_token == self.image_token:
+                    try:
+                        grid = next(image_grid_thw)
+                        image_seq_length = grid.prod() // merge_length_image
+                        sample = sample.replace(
+                            self.image_token,
+                            "<|image_placeholder|>" * image_seq_length,
+                            1,
+                        )
+                    except StopIteration:
+                        pass
+                elif special_token == self.video_token:
+                    try:
+                        grid = next(video_grid_thw)
+                        video_seq_length = grid.prod() // merge_length_video
+                        sample = sample.replace(
+                            self.video_token,
+                            "<|video_placeholder|>" * video_seq_length,
+                            1,
+                        )
+                    except StopIteration:
+                        pass
+
+            # Replace placeholders back to actual tokens
+            sample = sample.replace("<|audio_placeholder|>", self.audio_token)
+            sample = sample.replace("<|image_placeholder|>", self.image_token)
+            sample = sample.replace("<|video_placeholder|>", self.video_token)
+            processed_text.append(sample)
+
+        return processed_text
 
     def batch_decode(self, *args, **kwargs):
         """
-        This method forwards all its arguments to PreTrainedTokenizer's [`~PreTrainedTokenizer.batch_decode`]. Please
-        refer to the docstring of this method for more information.
+        This method forwards all its arguments to the tokenizer's [`~PreTrainedTokenizer.batch_decode`].
+        Please refer to the docstring of this method for more information.
         """
         return self.tokenizer.batch_decode(*args, **kwargs)
 
     def decode(self, *args, **kwargs):
         """
-        This method forwards all its arguments to PreTrainedTokenizer's [`~PreTrainedTokenizer.decode`]. Please refer
-        to the docstring of this method for more information.
+        This method forwards all its arguments to the tokenizer's [`~PreTrainedTokenizer.decode`].
+        Please refer to the docstring of this method for more information.
         """
         return self.tokenizer.decode(*args, **kwargs)
 
+    @property
+    def model_input_names(self):
+        tokenizer_input_names = self.tokenizer.model_input_names
+        feature_extractor_input_names = self.feature_extractor.model_input_names
+        names = list(dict.fromkeys(tokenizer_input_names + feature_extractor_input_names + ["feature_attention_mask"]))
 
-# __all__ = ["Wav2Vec2BertProcessor"]
+        if getattr(self, "image_processor", None) is not None:
+            names.extend(self.image_processor.model_input_names)
+        if getattr(self, "video_processor", None) is not None:
+            names.extend(self.video_processor.model_input_names)
+
+        return list(dict.fromkeys(names))
+
+
+__all__ = ["MELTProcessor"]
+
+__all__ = ["MELTProcessor"]
+
+__all__ = ["MELTProcessor"]
+__all__ = ["MELTProcessor"]
+__all__ = ["MELTProcessor"]
+__all__ = ["MELTProcessor"]
