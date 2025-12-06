@@ -208,6 +208,63 @@ class MELTPreTrainedModel(PreTrainedModel, GenerationMixin):
     _supports_flash_attn_2 = False
     _supports_sdpa = True
 
+    def _init_weights(self, module: nn.Module):
+        """Initialize the weights for MELT adapter modules.
+
+        Weight initialization follows the patterns from:
+        - Qwen2Audio: Standard normal initialization for Linear layers
+        - GraniteSpeech: Query parameter initialization for Q-Former
+        - Wav2Vec2Bert: Kaiming initialization for Conv1d, xavier for attention biases
+        """
+        std = self.config.initializer_range
+
+        # Q-Former adapter query initialization (GraniteSpeech style)
+        if isinstance(module, MELTQFormerAdapter):
+            module.query.data.normal_(mean=0.0, std=1.0)
+
+        # MLP adapter initialization (Qwen2Audio style)
+        elif isinstance(module, MELTMLPAdapter):
+            module.linear.weight.data.normal_(mean=0.0, std=std)
+            if module.linear.bias is not None:
+                module.linear.bias.data.zero_()
+
+        # Conformer adapter initialization (Wav2Vec2Bert style)
+        elif isinstance(module, MELTConformerAdapter):
+            if module.proj is not None:
+                module.proj.weight.data.normal_(mean=0.0, std=std)
+                if module.proj.bias is not None:
+                    module.proj.bias.data.zero_()
+            if module.out_proj is not None:
+                module.out_proj.weight.data.normal_(mean=0.0, std=std)
+                if module.out_proj.bias is not None:
+                    module.out_proj.bias.data.zero_()
+
+        # Generic Linear layers (Qwen2Audio style)
+        elif isinstance(module, nn.Linear):
+            module.weight.data.normal_(mean=0.0, std=std)
+            if module.bias is not None:
+                module.bias.data.zero_()
+
+        # Conv1d layers (Wav2Vec2Bert style - Kaiming initialization)
+        elif isinstance(module, nn.Conv1d):
+            nn.init.kaiming_normal_(module.weight)
+            if module.bias is not None:
+                k = math.sqrt(module.groups / (module.in_channels * module.kernel_size[0]))
+                nn.init.uniform_(module.bias, a=-k, b=k)
+
+        # LayerNorm and BatchNorm (common pattern)
+        elif isinstance(module, (nn.LayerNorm, nn.BatchNorm1d, nn.GroupNorm)):
+            if module.weight is not None:
+                module.weight.data.fill_(1.0)
+            if module.bias is not None:
+                module.bias.data.zero_()
+
+        # Embedding layers
+        elif isinstance(module, nn.Embedding):
+            module.weight.data.normal_(mean=0.0, std=std)
+            if module.padding_idx is not None:
+                module.weight.data[module.padding_idx].zero_()
+
 
 class MELTForConditionalGeneration(MELTPreTrainedModel):
     r"""
