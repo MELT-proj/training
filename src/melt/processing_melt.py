@@ -19,6 +19,8 @@ Processor class for MELT.
 import logging
 import re
 
+import torch
+
 from transformers.feature_extraction_utils import BatchFeature
 from transformers.image_utils import ImageInput
 from transformers.processing_utils import ProcessingKwargs, ProcessorMixin, Unpack, VideosKwargs
@@ -195,11 +197,6 @@ class MELTProcessor(ProcessorMixin):
                     f"Pass a list of audio arrays if you have multiple audio tokens."
                 )
 
-    def _get_audio_token_positions(self, text: list[str]) -> list[list[int]]:
-        """Return list of positions for each occurrence of audio_token per sample."""
-        pattern = re.compile(re.escape(self.audio_token))
-        return [[m.start() for m in pattern.finditer(sample)] for sample in text]
-
     def __call__(
         self,
         text: TextInput | PreTokenizedInput | list[TextInput] | list[PreTokenizedInput] | None = None,
@@ -241,10 +238,6 @@ class MELTProcessor(ProcessorMixin):
         is_batched = isinstance(text, list)
         if not is_batched:
             text = [text]
-
-        # Track positions of audio tokens for downstream replacement
-        audio_token_positions = self._get_audio_token_positions(text)
-        audio_token_pos_output = audio_token_positions if is_batched else audio_token_positions[0]
 
         # Validate audio token count matches audio inputs
         self._validate_audio_token_count(text, audio, is_batched)
@@ -312,8 +305,16 @@ class MELTProcessor(ProcessorMixin):
 
         output_data = {**texts_inputs, **audio_inputs}
         if audio_lengths_output is not None:
-            output_data["audio_lengths"] = audio_lengths_output  # add batch dimension
-        output_data["audio_token_pos"] = audio_token_pos_output
+            output_data["audio_lengths"] = audio_lengths_output
+            if (
+                isinstance(output_data["audio_lengths"], list)
+                and output_data["audio_lengths"]
+                and isinstance(output_data["audio_lengths"][0], list)
+            ):
+                max_len = max(len(lengths) for lengths in output_data["audio_lengths"])
+                output_data["audio_lengths"] = [
+                    lengths + [-1] * (max_len - len(lengths)) for lengths in output_data["audio_lengths"]
+                ]
 
         return BatchFeature(
             data=output_data,  # , **images_inputs, **videos_inputs},
@@ -335,10 +336,10 @@ class MELTProcessor(ProcessorMixin):
             - audio_inputs contains 'input_features' and 'feature_attention_mask' with shape (batch_size, *).
             - audio_lengths is a list of lists for batched input, or a single int/list for single input.
         """
-        import torch
 
         def _get_features_from_sample(audio):
-            # Single input: audio can be a single array or a list of arrays
+            """Extract input features, attention mask, and lengths for a single sample."""
+
             if not isinstance(audio, list):
                 audio = [audio]
 
@@ -347,6 +348,9 @@ class MELTProcessor(ProcessorMixin):
             all_masks = []
             audio_lengths_output = []
 
+            # TODO: the length estimation does not consider any reduction due to adapters after the speech encoder.
+            # Hence, we are now adding potentially more token placeholders than needed.
+            # A better solution would be to have the feature extractor return the exact length after all processing
             audio_kwargs["return_attention_mask"] = True
             audio_kwargs["pad_to_multiple_of"] = 8
             for audio_array in audio:
@@ -433,11 +437,10 @@ class MELTProcessor(ProcessorMixin):
         Returns:
             List of processed text strings with expanded placeholder tokens.
         """
-        if image_grid_thw is None:
-            image_grid_thw = iter([])
-        if video_grid_thw is None:
-            video_grid_thw = iter([])
-
+        # if image_grid_thw is None:
+        #     image_grid_thw = iter([])
+        # if video_grid_thw is None:
+        #     video_grid_thw = iter([])
         # Get merge lengths for image/video if processors are available
         # merge_length_image = 1
         # merge_length_video = 1
