@@ -22,7 +22,7 @@ import os
 import torch.distributed as dist
 from transformers.trainer_utils import get_last_checkpoint
 from tqdm import tqdm
-from training_utils import AudioTextDataCollator, CustomTrainer, filter_data
+from training_utils import AudioTextDataCollator, MELTTrainer, filter_data
 from accelerate.logging import get_logger
 from data_utils.utils import get_dataset
 import yaml
@@ -275,7 +275,7 @@ def main(config_file: str, dry_run: bool = False):
     ## TRAINING
     ##########################
 
-    trainer = CustomTrainer(
+    trainer = MELTTrainer(
         model=model,
         args=targs,
         train_dataset=train_dataset,

@@ -14,7 +14,7 @@ import pdb
 logger = get_logger(__name__)
 
 
-class CustomTrainer(Trainer):
+class MELTTrainer(Trainer):
 
     @staticmethod
     def num_tokens(train_dl: DataLoader, max_steps: Optional[int] = None) -> int:
