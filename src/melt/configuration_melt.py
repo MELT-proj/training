@@ -60,6 +60,9 @@ class MELTConfig(PretrainedConfig):
             Type of adapter to use for modality projection. One of: "mlp", "qformer", or "conformer".
         num_latents (`int`, *optional*, defaults to 64):
             Number of latent vectors for perceiver-style adapters.
+        max_audio_seq_len (`int`, *optional*, defaults to 500):
+            Maximum sequence length for audio features before chunking is applied.
+            Sequences longer than this will be split into chunks.
     """
 
     model_type = "melt"
@@ -67,7 +70,7 @@ class MELTConfig(PretrainedConfig):
         "audio_encoder_config": AutoConfig,
         "text_decoder_config": AutoConfig,
         "projector_config": MELTProjectorConfig,
-    }
+    }  # type: ignore
     is_composition = True
 
     def __init__(
@@ -75,22 +78,13 @@ class MELTConfig(PretrainedConfig):
         audio_encoder_config=None,
         text_decoder_config=None,
         projector_config=None,
-        audio_token_index=32000,
         initializer_range=0.02,
         has_lora_adapter=False,
-        # add_pre_adapter=False,
-        # num_pre_adapter_layers=3,
         adapter_type="mlp",
         num_latents=64,
+        max_audio_seq_len=500,
         **kwargs,
     ):
-        super().__init__(**kwargs)
-
-        if audio_encoder_config is None:
-            raise ValueError("audio_encoder_config must be provided")
-        if text_decoder_config is None:
-            raise ValueError("text_decoder_config must be provided")
-
         # Handle audio encoder config
         if isinstance(audio_encoder_config, dict):
             encoder_model_type = audio_encoder_config.get("model_type")
@@ -117,7 +111,6 @@ class MELTConfig(PretrainedConfig):
         else:
             self.projector_config = projector_config
 
-        self.audio_token_index = audio_token_index
         self.initializer_range = initializer_range
         self.has_lora_adapter = has_lora_adapter
         # self.add_pre_adapter = add_pre_adapter
@@ -125,8 +118,12 @@ class MELTConfig(PretrainedConfig):
         self.adapter_type = adapter_type
         self.num_latents = num_latents
 
+        # Audio encoder chunking settings
+        self.max_audio_seq_len = max_audio_seq_len
+
         # Set decoder-related attributes
         self.loss_type = "ForCausalLMLoss"
+        super().__init__(**kwargs)
 
     @property
     def vocab_size(self):

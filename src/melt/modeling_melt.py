@@ -36,7 +36,7 @@ class MELTMLPAdapter(nn.Module):
         audio_hidden_size = getattr(
             config.audio_encoder_config,
             "output_hidden_size",
-            getattr(config.audio_encoder_config, "hidden_size", config.audio_encoder_config.d_model),
+            getattr(config.audio_encoder_config, "hidden_size", config.audio_encoder_config.output_hidden_size),
         )
         text_hidden_size = config.text_decoder_config.hidden_size
         self.linear = nn.Linear(audio_hidden_size, text_hidden_size, bias=True)
@@ -186,6 +186,148 @@ class MELTAudioAdapter(nn.Module):
 
 
 # =============================================================================
+# Audio Encoder with Chunking Support
+# =============================================================================
+
+
+def _unfold_tensor(tensor: torch.Tensor, max_seq_len: int) -> torch.Tensor:
+    """
+    For a given tensor with shape of (N, T, D), if sequence length T is longer than max_seq_len,
+    this function unfolds it to a (N*T', max_seq_len, D) where T' is T // max_seq_len.
+
+    Args:
+        tensor: Input tensor of shape (N, T, D)
+        max_seq_len: Maximum sequence length for each chunk
+
+    Returns:
+        Unfolded tensor of shape (N*T', max_seq_len, D)
+    """
+    _, _, D = tensor.shape
+    tensor = tensor.transpose(-1, -2)
+    # N x D x 1 x T => N x (D x max_seq_len) x T'
+    tensor = F.unfold(tensor[..., None, :], kernel_size=(1, max_seq_len), stride=(1, max_seq_len))
+
+    new_bsz, _, slen = tensor.shape
+    tensor = tensor.view(new_bsz, -1, max_seq_len, slen)
+    tensor = tensor.permute(0, 3, 2, 1)
+    tensor = tensor.view(-1, max_seq_len, D).contiguous()
+    return tensor
+
+
+class MELTAudioEncoder(nn.Module):
+    """
+    Audio encoder module that encapsulates an audio model and an adapter.
+
+    This module handles:
+    - Loading the audio encoder model
+    - Projecting encoder outputs through an adapter
+    - Chunking long sequences that exceed max_seq_len
+
+    Args:
+        config: MELTConfig containing audio_encoder_config and adapter settings
+    """
+
+    def __init__(self, config: MELTConfig):
+        super().__init__()
+        self.config = config
+
+        # Maximum sequence length for chunking (default 500 like Phi4)
+        self.max_seq_len = getattr(config, "max_audio_seq_len", 500)
+
+        # Initialize the audio encoder
+        self.encoder = AutoModel.from_config(config.audio_encoder_config)
+
+        # Validate that the encoder doesn't have an LM head
+        if self.encoder.get_output_embeddings() is not None:
+            raise ValueError(
+                f"The audio encoder {self.encoder} should not have a LM Head. Please use a model without LM Head."
+            )
+
+        # Initialize the audio adapter (projector)
+        self.adapter = MELTAudioAdapter(config)
+
+    def forward(
+        self,
+        input_features: torch.Tensor,
+        features_attention_mask: torch.Tensor | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
+        return_dict: bool | None = None,
+        **kwargs,
+    ) -> torch.Tensor:
+        """
+        Forward pass through the audio encoder and adapter.
+
+        Args:
+            input_features: Audio features of shape (batch_size, seq_len, feature_dim)
+            features_attention_mask: Attention mask of shape (batch_size, seq_len)
+            output_attentions: Whether to output attention weights
+            output_hidden_states: Whether to output hidden states
+            return_dict: Whether to return a dict or tuple
+            **kwargs: Additional arguments passed to the encoder
+
+        Returns:
+            Projected audio features ready for the text decoder
+        """
+        hidden_states = input_features
+        bs, seq_len, _ = hidden_states.shape
+        unfolded = False
+        chunk_pad_size = 0
+
+        # Handle long sequences by chunking
+        if seq_len > self.max_seq_len:
+            unfolded = True
+
+            # Pad to multiple of max_seq_len for clean unfolding
+            if seq_len % self.max_seq_len > 0:
+                chunk_pad_size = self.max_seq_len - (seq_len % self.max_seq_len)
+
+            if chunk_pad_size > 0:
+                hidden_states = F.pad(hidden_states, (0, 0, 0, chunk_pad_size), "constant", 0)
+
+            # Unfold into chunks
+            hidden_states = _unfold_tensor(hidden_states, self.max_seq_len)
+
+            # Handle attention mask for unfolded tensor
+            chunk_mask = None
+            if features_attention_mask is not None:
+                # Pad the attention mask similarly
+                padded_mask = F.pad(features_attention_mask, (0, chunk_pad_size), "constant", 0)
+                padded_mask = padded_mask.unsqueeze(-1).float()
+                chunk_mask = _unfold_tensor(padded_mask, self.max_seq_len)
+                chunk_mask = chunk_mask.squeeze(-1).bool()
+        else:
+            chunk_mask = features_attention_mask
+
+        # Pass through the encoder
+        encoder_outputs = self.encoder(
+            hidden_states,
+            attention_mask=chunk_mask,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+            **kwargs,
+        )
+        hidden_states = encoder_outputs[0]
+
+        # Project through adapter
+        hidden_states = self.adapter(hidden_states, attention_mask=chunk_mask)
+
+        # Reshape back and remove padding if we unfolded
+        if unfolded:
+            hidden_states = hidden_states.reshape(bs, -1, hidden_states.shape[-1])
+            if chunk_pad_size > 0:
+                hidden_states = hidden_states[:, :-chunk_pad_size, :]
+
+        return hidden_states
+
+    def freeze_encoder(self):
+        """Freeze the audio encoder parameters (not the adapter)."""
+        for param in self.encoder.parameters():
+            param.requires_grad = False
+
+
+# =============================================================================
 # MELT Model Classes
 # =============================================================================
 
@@ -284,30 +426,20 @@ class MELTForConditionalGeneration(MELTPreTrainedModel):
         if self.text_decoder._tied_weights_keys is not None:
             self._tied_weights_keys = [f"text_decoder.{k}" for k in self.text_decoder._tied_weights_keys]
 
-        # Initialize the audio encoder
-        self.audio_encoder = AutoModel.from_config(config.audio_encoder_config)
-
-        # Validate that the encoder doesn't have an LM head
-        if self.audio_encoder.get_output_embeddings() is not None:
-            raise ValueError(
-                f"The audio encoder {self.audio_encoder} should not have a LM Head. "
-                "Please use a model without LM Head."
-            )
-
-        # Initialize the audio adapter (projector)
-        self.audio_adapter = MELTAudioAdapter(config)
+        # Initialize the audio encoder (includes encoder model + adapter)
+        self.audio_encoder = MELTAudioEncoder(config)
 
         # Sync attention implementation between config and models
-        self.config.audio_encoder_config._attn_implementation = self.audio_encoder.config._attn_implementation
+        self.config.audio_encoder_config._attn_implementation = self.audio_encoder.encoder.config._attn_implementation
         self.config.text_decoder_config._attn_implementation = self.text_decoder.config._attn_implementation
-        self.audio_encoder.config = self.config.audio_encoder_config
+        self.audio_encoder.encoder.config = self.config.audio_encoder_config
         self.text_decoder.config = self.config.text_decoder_config
 
         # Initialize weights and apply final processing
         self.post_init()
 
     def get_encoder(self):
-        return self.audio_encoder
+        return self.audio_encoder.encoder
 
     def get_decoder(self):
         return self.text_decoder
@@ -328,26 +460,87 @@ class MELTForConditionalGeneration(MELTPreTrainedModel):
         self, input_features: torch.Tensor, attention_mask: torch.Tensor | None = None
     ) -> torch.Tensor:
         """Get the audio features projected to the text decoder embedding space."""
-        encoder_outputs = self.audio_encoder(input_features, attention_mask=attention_mask)
-        encoder_hidden_states = encoder_outputs[0]
-        projected_features = self.audio_adapter(encoder_hidden_states, attention_mask=attention_mask)
-        return projected_features
+        return self.audio_encoder(input_features, features_attention_mask=attention_mask)
 
-    def freeze_audio_encoder(self):
+    def _replace_audio_placeholders(
+        self,
+        text_data: torch.Tensor,
+        audio_data: torch.Tensor,
+        input_ids: torch.Tensor,
+        audio_lengths: torch.Tensor,
+    ) -> torch.Tensor:
         """
-        Freeze the audio encoder parameters.
-        This disables gradient computation for the encoder so its parameters won't be updated during training.
-        """
-        for param in self.audio_encoder.parameters():
-            param.requires_grad = False
+        Replace placeholder <|AUDIO|> tokens with actual audio data (embeddings or masks).
 
-    def freeze_text_decoder(self):
+        The text data is expected to contain placeholder tokens after each <audio_bos>:
+        <audio_bos> <|AUDIO|> <|AUDIO|> ... <audio_eos>
+
+        This function replaces the <|AUDIO|> placeholders with actual audio data.
+
+        Args:
+            text_data: Text data of shape (batch_size, seq_len, ...) - embeddings or masks
+            audio_data: Audio data of shape (batch_size, audio_seq_len, ...) - embeddings or masks
+            input_ids: Token IDs of shape (batch_size, seq_len)
+            audio_lengths: Audio lengths of shape (batch_size, num_audios) where -1 means empty slot
+
+        Returns:
+            Data with <|AUDIO|> placeholders replaced by actual audio data
         """
-        Freeze the text decoder parameters.
-        This disables gradient computation for the decoder so its parameters won't be updated during training.
-        """
-        for param in self.text_decoder.parameters():
-            param.requires_grad = False
+        batch_size = text_data.shape[0]
+
+        # Get audio_bos token ID from tokenizer
+        audio_bos_token = self.config.audio_bos_token_id
+
+        # Clone text data to avoid in-place modification
+        merged_data = text_data.clone()
+
+        # Track current position in audio_data
+        audio_pos = 0
+
+        for batch_idx in range(batch_size):
+            input_id_seq = input_ids[batch_idx]  # (seq_len,)
+            audio_lens = audio_lengths[batch_idx]  # (num_audios,)
+
+            # Find positions of audio_bos token in this sequence
+            audio_bos_positions = torch.where(input_id_seq == audio_bos_token)[0]
+
+            # Filter valid audio lengths (remove -1 padding)
+            valid_audio_lens = audio_lens[audio_lens > 0].tolist()
+
+            # If no audio tokens or no audio lengths, keep text data as-is
+            if len(audio_bos_positions) == 0 or len(valid_audio_lens) == 0:
+                continue
+
+            # Replace placeholder tokens with actual audio data
+            for audio_idx, pos in enumerate(audio_bos_positions):
+                if audio_idx >= len(valid_audio_lens):
+                    break
+
+                audio_len = valid_audio_lens[audio_idx]
+
+                # Get the audio data for this segment
+                if audio_data.ndim == 3:  # Embeddings (batch, seq, hidden)
+                    audio_slice = audio_data[batch_idx, audio_pos : audio_pos + audio_len, :]
+                else:  # Masks (batch, seq)
+                    audio_slice = audio_data[batch_idx, audio_pos : audio_pos + audio_len]
+
+                # Replace the placeholder tokens (positions after audio_bos)
+                # Placeholders are at positions: pos+1, pos+2, ..., pos+audio_len
+                placeholder_start = pos + 1
+                placeholder_end = pos + 1 + audio_len
+
+                if audio_data.ndim == 3:
+                    merged_data[batch_idx, placeholder_start:placeholder_end, :] = audio_slice
+                else:
+                    merged_data[batch_idx, placeholder_start:placeholder_end] = audio_slice
+
+                # Update audio position for next iteration
+                audio_pos += audio_len
+
+            # Reset audio_pos for next batch item
+            audio_pos = 0
+
+        return merged_data
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
@@ -363,10 +556,11 @@ class MELTForConditionalGeneration(MELTPreTrainedModel):
 
     def forward(
         self,
-        audio_input_features: torch.FloatTensor,
-        input_ids: torch.FloatTensor,
-        audio_attention_mask: torch.FloatTensor = None,
-        attention_mask: torch.FloatTensor = None,
+        input_ids: torch.FloatTensor | None = None,
+        attention_mask: torch.FloatTensor | None = None,
+        input_features: torch.FloatTensor | None = None,
+        features_attention_mask: torch.FloatTensor | None = None,
+        audio_lengths: torch.LongTensor | None = None,
         past_key_values: tuple[tuple[torch.FloatTensor]] | None = None,
         labels: torch.LongTensor | None = None,
         use_cache: bool | None = None,
@@ -386,43 +580,54 @@ class MELTForConditionalGeneration(MELTPreTrainedModel):
         if "num_items_in_batch" in kwargs_encoder:
             kwargs_decoder["num_items_in_batch"] = kwargs_encoder.pop("num_items_in_batch", None)
 
-        # we assume that if we are using cache then we are caching encoder_outputs
-        if not use_cache or (use_cache and past_key_values is None):
-            encoder_outputs = self.audio_encoder(
-                audio_input_features,
-                attention_mask=audio_attention_mask,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-                **kwargs_encoder,
-            )
-            encoder_hidden_states = encoder_outputs[0]
-
-            # Project through audio adapter
-            encoder_hidden_states = self.audio_adapter(encoder_hidden_states, attention_mask=audio_attention_mask)
-
-            if audio_attention_mask is not None:
-                encoder_outputs_mask = self.audio_encoder._get_feature_vector_attention_mask(
-                    encoder_hidden_states.shape[1], audio_attention_mask
-                )
-            else:
-                encoder_outputs_mask = torch.ones(
-                    encoder_hidden_states.shape[:2],
-                    dtype=attention_mask.dtype if attention_mask is not None else torch.float32,
-                    device=encoder_hidden_states.device,
-                )
-
         # extract input embeds from the decoder
         decoder_input_embs = self.text_decoder.get_input_embeddings()(input_ids)
 
-        # If we are not using the cache, or it's the first pass with the cache on.
-        # Hence, we need to build new inputs for the decoder
-        if not use_cache or (use_cache and past_key_values is None):
-            # prepend audio representations to the text input embeddings
-            decoder_input_embs = torch.cat([encoder_hidden_states, decoder_input_embs], dim=1)
+        # Process audio through encoder (includes chunking and adapter projection)
+        # We assume that if we are using cache then we are caching encoder_outputs
+        if input_features is not None:
+            encoder_hidden_states = None
+            if not use_cache or (use_cache and past_key_values is None):
+                encoder_hidden_states = self.audio_encoder(
+                    input_features,
+                    features_attention_mask=features_attention_mask,
+                    output_attentions=output_attentions,
+                    output_hidden_states=output_hidden_states,
+                    return_dict=return_dict,
+                    **kwargs_encoder,
+                )
 
-            if attention_mask is not None:
-                attention_mask = torch.cat([encoder_outputs_mask, attention_mask], dim=1)
+                # Create attention mask for encoder outputs
+                if features_attention_mask is not None:
+                    encoder_outputs_mask = self.audio_encoder.encoder._get_feature_vector_attention_mask(
+                        encoder_hidden_states.shape[1], features_attention_mask
+                    )
+                else:
+                    encoder_outputs_mask = torch.ones(
+                        encoder_hidden_states.shape[:2],
+                        dtype=attention_mask.dtype if attention_mask is not None else torch.float32,
+                        device=encoder_hidden_states.device,
+                    )
+
+            # If we are not using the cache, or it's the first pass with the cache on.
+            # Hence, we need to build new inputs for the decoder
+            if not use_cache or (use_cache and past_key_values is None):
+                # Replace placeholder audio tokens with actual audio embeddings
+                if audio_lengths is not None and encoder_hidden_states is not None:
+                    decoder_input_embs = self._replace_audio_placeholders(
+                        decoder_input_embs,
+                        encoder_hidden_states,
+                        input_ids,
+                        audio_lengths,
+                    )
+
+                if attention_mask is not None and encoder_outputs_mask is not None:
+                    attention_mask = self._replace_audio_placeholders(
+                        attention_mask,
+                        encoder_outputs_mask,
+                        input_ids,
+                        audio_lengths,
+                    )
 
         if logits_to_keep == 0:
             logits_to_keep = labels.shape[1] if labels is not None else input_ids.shape[1]
@@ -452,10 +657,8 @@ class MELTForConditionalGeneration(MELTPreTrainedModel):
             )
 
         if not return_dict:
-            if loss is not None:
-                return (loss,) + decoder_outputs + encoder_outputs
-            else:
-                return decoder_outputs + encoder_outputs
+            output = (logits,) + decoder_outputs[1:]
+            return (loss,) + output if loss is not None else output
 
         return CausalLMOutputWithPast(
             loss=loss,
@@ -488,6 +691,7 @@ class MELTForConditionalGeneration(MELTPreTrainedModel):
 __all__ = [
     "MELTPreTrainedModel",
     "MELTForConditionalGeneration",
+    "MELTAudioEncoder",
     "MELTAudioAdapter",
     "MELTMLPAdapter",
     "MELTQFormerAdapter",
