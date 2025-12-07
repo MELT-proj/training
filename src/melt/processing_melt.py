@@ -25,6 +25,7 @@ from transformers.processing_utils import ProcessingKwargs, ProcessorMixin, Unpa
 from transformers.tokenization_utils_base import AudioInput, PreTokenizedInput, TextInput
 from transformers.video_utils import VideoInput
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -53,6 +54,7 @@ class MELTProcessorKwargs(ProcessingKwargs, total=False):
         "audio_kwargs": {
             "sampling_rate": 16000,
             "return_attention_mask": True,
+            "return_tensors": "pt",
         },
         # "videos_kwargs": {
         #     "seconds_per_chunk": 2.0,
@@ -140,6 +142,64 @@ class MELTProcessor(ProcessorMixin):
             self.tokenizer.add_tokens(tokens_to_add, special_tokens=True)
             logger.info(f"Added {len(tokens_to_add)} special tokens to tokenizer: {tokens_to_add}")
 
+    def _validate_audio_token_count(self, text: list[str], audio, is_batched: bool) -> None:
+        """Validate that the number of audio tokens in text matches the number of audio inputs.
+
+        Args:
+            text: List of text strings.
+            audio: Audio input(s). For batched input, should be a list of lists where audio[i]
+                   contains the audio arrays for text[i]. For single input, can be a single array
+                   or a list of arrays.
+            is_batched: Whether we are processing a batch (text is a list of multiple samples).
+        """
+        audio_token_counts = [sample.count(self.audio_token) for sample in text]
+        total_audio_tokens = sum(audio_token_counts)
+
+        if audio is None:
+            if total_audio_tokens > 0:
+                logger.warning(
+                    f"Found {total_audio_tokens} audio token(s) in text but no audio input was provided. "
+                    f"The audio token(s) will be treated as normal text tokens."
+                )
+            return
+
+        if is_batched:
+            # For batched input, audio must be a list of lists
+            if not isinstance(audio, list) or len(audio) != len(text):
+                raise ValueError(
+                    f"For batched input, `audio` must be a list of lists with the same length as `text`. "
+                    f"Got {len(audio) if isinstance(audio, list) else 'non-list'} audio entries for {len(text)} text samples. "
+                    f"Each audio[i] should be a list of audio arrays corresponding to the audio tokens in text[i]."
+                )
+
+            # Validate per-sample
+            for i, (sample_text, sample_audio, expected_count) in enumerate(zip(text, audio, audio_token_counts)):
+                if not isinstance(sample_audio, list):
+                    raise ValueError(
+                        f"For batched input, audio[{i}] must be a list of audio arrays. "
+                        f"Got {type(sample_audio).__name__} instead."
+                    )
+                if len(sample_audio) != expected_count:
+                    raise ValueError(
+                        f"Mismatch at sample {i}: found {expected_count} audio token(s) in text "
+                        f"but received {len(sample_audio)} audio array(s) in audio[{i}]."
+                    )
+        else:
+            # For single input, audio can be a single array or a list of arrays
+            num_audio_inputs = len(audio) if isinstance(audio, list) else 1
+
+            if total_audio_tokens != num_audio_inputs:
+                raise ValueError(
+                    f"Mismatch between audio tokens and audio inputs: found {total_audio_tokens} audio tokens "
+                    f"in text but received {num_audio_inputs} audio inputs. "
+                    f"Pass a list of audio arrays if you have multiple audio tokens."
+                )
+
+    def _get_audio_token_positions(self, text: list[str]) -> list[list[int]]:
+        """Return list of positions for each occurrence of audio_token per sample."""
+        pattern = re.compile(re.escape(self.audio_token))
+        return [[m.start() for m in pattern.finditer(sample)] for sample in text]
+
     def __call__(
         self,
         text: TextInput | PreTokenizedInput | list[TextInput] | list[PreTokenizedInput] | None = None,
@@ -178,6 +238,17 @@ class MELTProcessor(ProcessorMixin):
         if text is None:
             raise ValueError("You need to specify a `text` input to process.")
 
+        is_batched = isinstance(text, list)
+        if not is_batched:
+            text = [text]
+
+        # Track positions of audio tokens for downstream replacement
+        audio_token_positions = self._get_audio_token_positions(text)
+        audio_token_pos_output = audio_token_positions if is_batched else audio_token_positions[0]
+
+        # Validate audio token count matches audio inputs
+        self._validate_audio_token_count(text, audio, is_batched)
+
         output_kwargs = self._merge_kwargs(
             MELTProcessorKwargs,
             tokenizer_init_kwargs=self.tokenizer.init_kwargs,
@@ -186,55 +257,162 @@ class MELTProcessor(ProcessorMixin):
 
         # Process audio
         if audio is not None:
-            audio_inputs = self.feature_extractor(audio, **output_kwargs["audio_kwargs"])
-            # Rename to prevent conflicts
-            audio_inputs["feature_attention_mask"] = audio_inputs.pop("attention_mask", None)
-            if audio_inputs["feature_attention_mask"] is not None:
-                input_lengths = (audio_inputs["feature_attention_mask"].sum(-1) - 1) // 2 + 1
-                audio_lengths = iter((input_lengths - 2) // 2 + 1)
-            else:
-                # Estimate audio lengths from input_features shape
-                audio_lengths = iter(
-                    [audio_inputs["input_features"].shape[-1] // 4] * len(audio_inputs["input_features"])
-                )
+            audio_inputs, audio_lengths_output = self._process_audio(audio, is_batched, output_kwargs["audio_kwargs"])
         else:
             audio_inputs = {}
-            audio_lengths = iter([])
+            audio_lengths_output = None
 
         # Process images (optional)
-        if images is not None and getattr(self, "image_processor", None) is not None:
-            images_inputs = self.image_processor(images=images, **output_kwargs.get("images_kwargs", {}))
-            image_grid_thw = iter(images_inputs.get("image_grid_thw", []))
-        else:
-            images_inputs = {}
-            image_grid_thw = None  # iter([])
+        # TODO: to support in future
+        # if images is not None and getattr(self, "image_processor", None) is not None:
+        #     images_inputs = self.image_processor(images=images, **output_kwargs.get("images_kwargs", {}))
+        #     image_grid_thw = iter(images_inputs.get("image_grid_thw", []))
+        # else:
+        #     images_inputs = {}
+        #     image_grid_thw = None  # iter([])
 
         # Process videos (optional)
-        if videos is not None and getattr(self, "video_processor", None) is not None:
-            videos_inputs = self.video_processor(videos=videos, **output_kwargs.get("videos_kwargs", {}))
-            video_grid_thw = iter(videos_inputs.get("video_grid_thw", []))
-        else:
-            videos_inputs = {}
-            video_grid_thw = None  # iter([])
-
-        if not isinstance(text, list):
-            text = [text]
+        # TODO: to support in future
+        # if videos is not None and getattr(self, "video_processor", None) is not None:
+        #     videos_inputs = self.video_processor(videos=videos, **output_kwargs.get("videos_kwargs", {}))
+        #     video_grid_thw = iter(videos_inputs.get("video_grid_thw", []))
+        # else:
+        #     videos_inputs = {}
+        #     video_grid_thw = None  # iter([])
 
         # Replace multimodal special tokens with appropriate number of placeholders
         if audio is not None or images is not None or videos is not None:
+            # Flatten audio_lengths for token replacement
+            if audio_lengths_output is not None:
+                if is_batched:
+                    flat_lengths: list[int] = []
+                    if isinstance(audio_lengths_output, list):
+                        for sample_lengths in audio_lengths_output:
+                            if isinstance(sample_lengths, list):
+                                flat_lengths.extend(sample_lengths)
+                            else:
+                                flat_lengths.append(int(sample_lengths))
+                    audio_lengths_flat = iter(flat_lengths)
+                else:
+                    flat_lengths_single = (
+                        audio_lengths_output if isinstance(audio_lengths_output, list) else [audio_lengths_output]
+                    )
+                    audio_lengths_flat = iter(flat_lengths_single)
+            else:
+                audio_lengths_flat = iter([])
+
             text = self.replace_multimodal_special_tokens(
                 text,
-                audio_lengths=audio_lengths,
-                image_grid_thw=image_grid_thw,
-                video_grid_thw=video_grid_thw,
+                audio_lengths=audio_lengths_flat,
+                # image_grid_thw=image_grid_thw,
+                # video_grid_thw=video_grid_thw,
             )
 
         texts_inputs = self.tokenizer(text, **output_kwargs["text_kwargs"])
 
+        output_data = {**texts_inputs, **audio_inputs}
+        if audio_lengths_output is not None:
+            output_data["audio_lengths"] = audio_lengths_output  # add batch dimension
+        output_data["audio_token_pos"] = audio_token_pos_output
+
         return BatchFeature(
-            data={**texts_inputs, **audio_inputs, **images_inputs, **videos_inputs},
+            data=output_data,  # , **images_inputs, **videos_inputs},
             tensor_type=kwargs.get("return_tensors"),
         )
+
+    def _process_audio(self, audio, is_batched: bool, audio_kwargs: dict) -> tuple[dict, list | int]:
+        """
+        Process audio inputs and return features with audio lengths.
+
+        Args:
+            audio: Audio input(s). For batched input, a list of lists. For single input,
+                   a single array or list of arrays.
+            is_batched: Whether we are processing a batch.
+            audio_kwargs: Keyword arguments for the feature extractor.
+
+        Returns:
+            Tuple of (audio_inputs dict, audio_lengths).
+            - audio_inputs contains 'input_features' and 'feature_attention_mask' with shape (batch_size, *).
+            - audio_lengths is a list of lists for batched input, or a single int/list for single input.
+        """
+        import torch
+
+        def _get_features_from_sample(audio):
+            # Single input: audio can be a single array or a list of arrays
+            if not isinstance(audio, list):
+                audio = [audio]
+
+            # Multiple audios for single text sample - concatenate on time dimension
+            all_features = []
+            all_masks = []
+            audio_lengths_output = []
+
+            audio_kwargs["return_attention_mask"] = True
+            audio_kwargs["pad_to_multiple_of"] = 8
+            for audio_array in audio:
+                audio_out = self.feature_extractor([audio_array], **audio_kwargs)
+                all_features.append(audio_out["input_features"])
+                mask = audio_out.get("attention_mask")
+                if mask is not None:
+                    all_masks.append(mask)
+                    audio_lengths_output.append(int(mask.sum(-1).item()))
+                else:
+                    audio_lengths_output.append(audio_out["input_features"].shape[-1])
+
+            input_features = torch.cat(all_features, dim=1)
+            attention_mask = torch.cat(all_masks, dim=-1) if all_masks else None
+
+            assert input_features.shape[0] == 1, "Batch size should be 1 for single input"
+            assert attention_mask.sum(-1).item() == sum(audio_lengths_output), (
+                f"Total sequence length mismatch: {input_features.shape[1]} vs {sum(audio_lengths_output)}"
+            )
+            return input_features, attention_mask, audio_lengths_output
+
+        if is_batched:
+            # audio is a list of lists: audio[i] = list of audio arrays for sample i
+            all_features = []
+            all_masks = []
+            audio_lengths_output = []
+
+            for sample_audios in audio:
+                input_features, attention_mask, sample_audio_lengths = _get_features_from_sample(sample_audios)
+                all_features.append(input_features)
+                all_masks.append(attention_mask)
+                audio_lengths_output.append(sample_audio_lengths)
+
+            # Stack all samples to create batch tensors
+            # Pad to max length in batch
+            max_len = max(f.shape[1] for f in all_features)
+            padded_features = []
+            padded_masks = []
+
+            for features, mask in zip(all_features, all_masks):
+                pad_len = max_len - features.shape[1]
+                if pad_len > 0:
+                    # Pad features with zeros on seq_len dim
+                    padded_features.append(torch.nn.functional.pad(features, (0, 0, 0, pad_len), value=0))
+                    # Pad mask with zeros (no attention) on seq_len dim
+                    if mask is not None:
+                        padded_masks.append(torch.nn.functional.pad(mask, (0, pad_len), value=0))
+                else:
+                    padded_features.append(features)
+                    if mask is not None:
+                        padded_masks.append(mask)
+
+            audio_inputs = {
+                "input_features": torch.cat(padded_features, dim=0),
+                "feature_attention_mask": torch.cat(padded_masks, dim=0) if padded_masks else None,
+            }
+        else:
+            # Single item: here audio is a single array or a list of arrays
+            input_features, attention_mask, audio_lengths_output = _get_features_from_sample(audio)
+
+            audio_inputs = {
+                "input_features": input_features,
+                "feature_attention_mask": attention_mask,
+            }
+
+        return audio_inputs, audio_lengths_output
 
     def replace_multimodal_special_tokens(
         self,
@@ -261,12 +439,12 @@ class MELTProcessor(ProcessorMixin):
             video_grid_thw = iter([])
 
         # Get merge lengths for image/video if processors are available
-        merge_length_image = 1
-        merge_length_video = 1
-        if getattr(self, "image_processor", None) is not None and hasattr(self.image_processor, "merge_size"):
-            merge_length_image = self.image_processor.merge_size**2
-        if getattr(self, "video_processor", None) is not None and hasattr(self.video_processor, "merge_size"):
-            merge_length_video = self.video_processor.merge_size**2
+        # merge_length_image = 1
+        # merge_length_video = 1
+        # if getattr(self, "image_processor", None) is not None and hasattr(self.image_processor, "merge_size"):
+        #     merge_length_image = self.image_processor.merge_size**2
+        # if getattr(self, "video_processor", None) is not None and hasattr(self.video_processor, "merge_size"):
+        #     merge_length_video = self.video_processor.merge_size**2
 
         processed_text = []
         for sample in text:
@@ -279,40 +457,49 @@ class MELTProcessor(ProcessorMixin):
                 if special_token == self.audio_token:
                     try:
                         audio_len = next(audio_lengths)
+                        replacement = (
+                            "<|audio_bos_placeholder|>"
+                            + "<|audio_placeholder|>" * int(audio_len)
+                            + "<|audio_eos_placeholder|>"
+                        )
                         sample = sample.replace(
                             self.audio_token,
-                            "<|audio_placeholder|>" * int(audio_len),
+                            replacement,
                             1,
                         )
                     except StopIteration:
                         pass
-                elif special_token == self.image_token:
-                    try:
-                        grid = next(image_grid_thw)
-                        image_seq_length = grid.prod() // merge_length_image
-                        sample = sample.replace(
-                            self.image_token,
-                            "<|image_placeholder|>" * image_seq_length,
-                            1,
-                        )
-                    except StopIteration:
-                        pass
-                elif special_token == self.video_token:
-                    try:
-                        grid = next(video_grid_thw)
-                        video_seq_length = grid.prod() // merge_length_video
-                        sample = sample.replace(
-                            self.video_token,
-                            "<|video_placeholder|>" * video_seq_length,
-                            1,
-                        )
-                    except StopIteration:
-                        pass
+                # elif special_token == self.image_token:
+                #     try:
+                #         grid = next(image_grid_thw)
+                #         image_seq_length = grid.prod() // merge_length_image
+                #         sample = sample.replace(
+                #             self.image_token,
+                #             "<|image_placeholder|>" * image_seq_length,
+                #             1,
+                #         )
+                #     except StopIteration:
+                #         pass
+                # elif special_token == self.video_token:
+                #     try:
+                #         grid = next(video_grid_thw)
+                #         video_seq_length = grid.prod() // merge_length_video
+                #         sample = sample.replace(
+                #             self.video_token,
+                #             "<|video_placeholder|>" * video_seq_length,
+                #             1,
+                #         )
+                #     except StopIteration:
+                #         pass
 
             # Replace placeholders back to actual tokens
+            sample = sample.replace("<|audio_bos_placeholder|>", self.audio_bos_token)
             sample = sample.replace("<|audio_placeholder|>", self.audio_token)
-            sample = sample.replace("<|image_placeholder|>", self.image_token)
-            sample = sample.replace("<|video_placeholder|>", self.video_token)
+            sample = sample.replace("<|audio_eos_placeholder|>", self.audio_eos_token)
+
+            # TODO: Uncomment when image/video processing is supported
+            # sample = sample.replace("<|image_placeholder|>", self.image_token)
+            # sample = sample.replace("<|video_placeholder|>", self.video_token)
             processed_text.append(sample)
 
         return processed_text
@@ -345,11 +532,4 @@ class MELTProcessor(ProcessorMixin):
         return list(dict.fromkeys(names))
 
 
-__all__ = ["MELTProcessor"]
-
-__all__ = ["MELTProcessor"]
-
-__all__ = ["MELTProcessor"]
-__all__ = ["MELTProcessor"]
-__all__ = ["MELTProcessor"]
 __all__ = ["MELTProcessor"]
