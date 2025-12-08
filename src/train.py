@@ -1,139 +1,151 @@
-import tyro
-from datasets import (
-    concatenate_datasets,
-    Dataset,
-)
-from datasets import disable_caching
-
-disable_caching()
-# datasets.config.IN_MEMORY_MAX_SIZE = 16_000_000_000
-
-import torch
-from transformers.models.speechlm import (
-    SpeechLMProcessor,
-    SpeechLMForConditionalGeneration,
-)
-from transformers import TrainingArguments, set_seed
-import pdb
-from secrets import token_hex
-import time
 import logging
 import os
-import torch.distributed as dist
-from transformers.trainer_utils import get_last_checkpoint
-from tqdm import tqdm
-from training_utils import AudioTextDataCollator, MELTTrainer, filter_data
+import time
+from dataclasses import asdict
+
+import torch
+import tyro
+import yaml
 from accelerate.logging import get_logger
 from data_utils.utils import get_dataset
-import yaml
-import psutil
-import pandas as pd
+from datasets import Dataset, concatenate_datasets
 
+import ddp
+import transformers
+from config import Config, override_dataclass
+from melt import MELTConfig, MELTForConditionalGeneration, MELTProcessor
+from training_utils import AudioTextDataCollator, MELTTrainer, count_trainable_parameters, filter_data
+from transformers import AutoConfig, AutoFeatureExtractor, AutoTokenizer, TrainingArguments, set_seed
+from transformers.trainer_utils import get_last_checkpoint
+
+
+# from datasets import disable_caching
+# disable_caching()
+# datasets.config.IN_MEMORY_MAX_SIZE = 16_000_000_000
 
 # Setup logger
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
-)
+logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = get_logger(__name__)
-
-clean_name = lambda x: x.replace("/", "--")
 
 # set because torch _inductor backend warning said it was a good idea
 torch.set_float32_matmul_precision("high")
 
-process = psutil.Process(os.getpid())
+
+def prepare_model(
+    cfg: Config, targs: TrainingArguments, processor: MELTProcessor
+) -> (MELTForConditionalGeneration, str | None):
+    # Prepare model configs
+    audio_config = AutoConfig.from_pretrained(cfg.audio_encoder, **cfg.encoder_params)
+    text_config = AutoConfig.from_pretrained(cfg.text_decoder, **cfg.decoder_params)
+    config = MELTConfig(audio_encoder_config=audio_config, text_decoder_config=text_config)
+
+    # The audi_bos_token is important in our forward and might change depending on the tokenizer used
+    config.audio_bos_token_id = processor.tokenizer.convert_tokens_to_ids(["<|audio_bos|>"])[0]
+
+    # Detecting last checkpoint.
+    last_checkpoint = None
+    if os.path.isdir(targs.output_dir) and targs.do_train and not targs.overwrite_output_dir:
+        last_checkpoint = get_last_checkpoint(targs.output_dir)
+        if last_checkpoint is None and len(os.listdir(targs.output_dir)) > 0:
+            raise ValueError(
+                f"Output directory ({targs.output_dir}) already exists and is not empty. "
+                "Use --overwrite_output_dir to overcome."
+            )
+        elif last_checkpoint is not None and targs.resume_from_checkpoint is None:
+            logger.info(
+                f"Checkpoint detected, resuming training at {last_checkpoint}. To avoid this behavior, change "
+                "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
+            )
+
+    # TODO: these should be probably optimized with hparam tuning
+    if cfg.ckpt is not None:
+        logger.info(f"Loading model from checkpoint: {cfg.ckpt}")
+        model = MELTForConditionalGeneration.from_pretrained(cfg.ckpt)
+    else:
+        model = MELTForConditionalGeneration(config)
+        # resize the embedding matrix due to possibly new special tokens
+        model.decoder.resize_token_embeddings(len(processor.tokenizer), mean_resizing=False, pad_to_multiple_of=8)
+
+    if cfg.freeze_adapter:
+        logger.info("Freezing the adapter")
+        model.freeze_adapter()
+    if cfg.freeze_encoder:
+        logger.info("Freezing the encoder")
+        model.freeze_encoder()
+    if cfg.freeze_decoder:
+        logger.info("Freezing the decoder")
+        model.freeze_decoder()
+
+    return model, last_checkpoint
 
 
-def current_cpumem_usage():
-    return f"{process.memory_info().rss / 1024 ** 2:.2f}"
-
-
-def main(config_file: str, dry_run: bool = False):
-    ##########################
-    ## CONFIGURATION
-    ##########################
-    # Load the config file
+def main(cfg: Config = Config(), config_file: str | None = None, dry_run: bool = False):
+    # Override defaults with values from YAML if provided
     if config_file is not None:
-        with open(config_file, "r") as f:
-            config = yaml.safe_load(f)
-    targs = TrainingArguments(**config["training_args"])
+        with open(config_file) as f:
+            overrides = yaml.safe_load(f) or {}
+        cfg = override_dataclass(cfg, overrides)
+
+    targs = TrainingArguments(**asdict(cfg.training_args))
     targs.output_dir = os.path.expandvars(targs.output_dir)
-    audio_encoder = config.get("audio_encoder", None)
-    text_decoder = config.get("text_decoder", None)
-    ckpt = config.get("ckpt", None)
-    datasets = config["datasets"]
-    encoder_params = config["encoder_params"]
-    decoder_params = config.get("decoder_params", {})
-    dataset_workers = int(config["dataset_workers"])
-    max_duration = config.get("max_duration", 60)
-    min_chars = config.get("min_chars", 3)
-    attn_implementation = config.get("attn_implementation", None)
-    freeze_encoder = config.get("freeze_encoder", False)
-    freeze_decoder = config.get("freeze_decoder", False)
-    freeze_adapter = config.get("freeze_adapter", False)
-    encoder_lr = float(config.get("encoder_lr", 6e-6))
-    decoder_lr = float(config.get("decoder_lr", 2e-5))
-    adapter_lr = float(config.get("adapter_lr", 2e-4))
-    min_lr_scale = float(config.get("min_lr_scale", 0.1))
-    val_samples_per_language = config.get("val_samples_per_language", 1000)
-    seed = config.get("seed", 42)
-    selected_langs = config.get("selected_langs", None)
-    collator_args = config.get("collator_args", {})
-    add_pre_adapter = config.get("add_pre_adapter", False)
-    num_pre_adapter_layers = config.get("num_pre_adapter_layers", 3)
-    ##########################
+    targs.dataloader_num_workers = cfg.dataset_workers
+    seed = cfg.seed if cfg.seed is not None else targs.seed
 
     # Basic setup
     set_seed(seed)
-    is_dist = False
-    if dist.is_initialized():
-        is_dist = True
-        rank = dist.get_rank()
-        world_size = dist.get_world_size()
+
+    if ddp.is_distributed():
+        rank = ddp.get_global_rank()
+        world_size = ddp.get_world_size()
         logger.info(f"Distributed setup: rank {rank} out of {world_size}")
+        world_size = ddp.get_world_size()
+        _local_world_size = ddp.get_local_world_size()
+        local_rank = ddp.get_local_rank()
+        is_local_master = ddp.is_local_master()
+        is_global_master = ddp.is_global_master()
+        is_distributed = ddp.is_distributed()
+        logging.info(
+            f"world_size: {world_size}, local_world_size: {ddp.get_local_world_size()}"
+            f" local_rank: {local_rank}, group_rank: {ddp.get_group_rank()}"
+            f" is_local_master: {is_local_master}, is_global_master: {is_global_master}"
+            f" is_distributed: {is_distributed}"
+        )
+        # DDP blows up logging, so this is an attempt to suppress it to only logs from the master process
+        logging.basicConfig(level=logging.INFO if is_local_master else logging.ERROR)
+        # os.environ["TORCH_LOGS"] = "ERROR" if is_local_master else "WARNING"
+        transformers.logging.set_verbosity(logging.WARNING if is_local_master else logging.ERROR)
+        # hf_datasets.logging.set_verbosity(logging.WARNING if is_local_master else logging.ERROR)
     else:
         logger.info("Not in a distributed setup")
-
-    # targs.run_name = (
-    # f"{token_hex(2)}_{clean_name(audio_encoder)}_{clean_name(text_decoder)}"
-    # )
-    logger.info(targs)
 
     ##########################
     ## DATA LOADING
     ##########################
-    train_datasets = list()
-    val_datasets = list()
-    for dataset_name in datasets:
+    train_datasets = []
+    val_datasets = []
+    for dataset_name in cfg.datasets:
         logger.info(f"Loading dataset: {dataset_name}")
         data = get_dataset(
             dataset_name,
             splits=["train", "validation"],
-            max_duration=max_duration,
-            samples_validation=val_samples_per_language,
-            selected_langs=selected_langs,
+            max_duration=cfg.max_duration,
+            samples_validation=cfg.val_samples_per_language,
+            selected_langs=cfg.selected_langs,
         )
 
         def add_column(ds, col_name):
             tmp = Dataset.from_dict({col_name: [""] * len(ds)})
             return concatenate_datasets([ds, tmp], axis=1)
 
-        preamble_col = collator_args.get("preamble_col", None)
+        preamble_col = cfg.collator_args.get("preamble_col", None)
         if preamble_col is not None and preamble_col not in data["train"].column_names:
             logger.info(f"Adding empty preamble to the dataset: {preamble_col}")
             data["train"] = add_column(data["train"], preamble_col)
             data["validation"] = add_column(data["validation"], preamble_col)
-            data["train"] = data["train"].filter(
-                lambda x: isinstance(x, str), input_columns=[preamble_col]
-            )
-            data["validation"] = data["validation"].filter(
-                lambda x: isinstance(x, str), input_columns=[preamble_col]
-            )
+            data["train"] = data["train"].filter(lambda x: isinstance(x, str), input_columns=[preamble_col])
+            data["validation"] = data["validation"].filter(lambda x: isinstance(x, str), input_columns=[preamble_col])
 
-        logger.info(
-            f"CPU memory after loading {dataset_name}: {current_cpumem_usage()} MB",
-            main_process_only=False,
-        )
+        logger.info(f"Loaded dataset {dataset_name}", main_process_only=False)
 
         if dry_run:
             logger.info("Dry run, using a subset of the dataset")
@@ -148,128 +160,48 @@ def main(config_file: str, dry_run: bool = False):
     logger.info(f"Loaded {datasets_count} training datasets")
     # At this stage, datasets are loaded with columns: audio, text, lang
 
-    ##########################
-    ## DATA PREPARATION
-    ##########################
+    processor = MELTProcessor(
+        feature_extractor=AutoFeatureExtractor.from_pretrained(cfg.audio_encoder),
+        tokenizer=AutoTokenizer.from_pretrained(cfg.text_decoder, use_fast=True),
+    )  # the processor takes care if special tokens are added to the tokenizer
 
-    # if ckpt:
-    #     processor = SpeechLMProcessor.from_pretrained(ckpt)
-    # else:
-    processor = SpeechLMProcessor.from_encoder_decoder_pretrained(
-        audio_encoder, text_decoder, add_eos_token=True
-    )
-    # Prepare padding for training
-    processor.tokenizer.padding_side = "left"
-    processor.tokenizer.add_special_tokens({"pad_token": "<pad>"})
-
-    train_dataset = (
-        train_datasets[0]
-        if datasets_count == 1
-        else concatenate_datasets(train_datasets)
-    )
+    train_dataset = train_datasets[0] if datasets_count == 1 else concatenate_datasets(train_datasets)
     val_dataset = None
     if targs.do_eval:
-        val_dataset = (
-            val_datasets[0]
-            if datasets_count == 1
-            else concatenate_datasets(val_datasets)
-        )
+        val_dataset = val_datasets[0] if datasets_count == 1 else concatenate_datasets(val_datasets)
 
     ### Preprocess the datasets and set transforms
-    logger.info(f"Starting preprocessing... Tracking time")
+    logger.info("Starting preprocessing... Tracking time")
     stime = time.time()
 
     # Remove every sample that has a duration longer than the max_duration
     # with targs.main_process_first():
-    train_dataset = filter_data(train_dataset, max_duration, min_chars)
+    train_dataset = filter_data(train_dataset, cfg.max_duration, cfg.min_chars)
     if targs.do_eval:
-        val_dataset = filter_data(val_dataset, max_duration, min_chars)
+        val_dataset = filter_data(val_dataset, cfg.max_duration, cfg.min_chars)
 
     logger.info(f"Preprocessing took {time.time() - stime:.2f} seconds")
-    data_collator = AudioTextDataCollator(processor, **collator_args)
+    data_collator = AudioTextDataCollator(processor, **cfg.collator_args)
     logger.info(f"Number of rows: {len(train_dataset)}")
 
     ##########################
     ## MODEL PREPARATION
     ##########################
-    # if is_dist and rank == 0:
-    #     torch.cuda.memory._record_memory_history(max_entries=100000)
-
-    # Detecting last checkpoint.
-    last_checkpoint = None
-    if (
-        os.path.isdir(targs.output_dir)
-        and targs.do_train
-        and not targs.overwrite_output_dir
-    ):
-        last_checkpoint = get_last_checkpoint(targs.output_dir)
-        if last_checkpoint is None and len(os.listdir(targs.output_dir)) > 0:
-            raise ValueError(
-                f"Output directory ({targs.output_dir}) already exists and is not empty. "
-                "Use --overwrite_output_dir to overcome."
-            )
-        elif last_checkpoint is not None and targs.resume_from_checkpoint is None:
-            logger.info(
-                f"Checkpoint detected, resuming training at {last_checkpoint}. To avoid this behavior, change "
-                "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
-            )
-
-    # TODO: these should be probably optimized with hparam tuning
-    if ckpt is not None:
-        logger.info(f"Loading model from checkpoint: {ckpt}")
-
-        model = SpeechLMForConditionalGeneration.from_pretrained(
-            ckpt, attn_implementation=attn_implementation
-        )
-    else:
-        model_kwargs = {}
-        encoder_params = {f"encoder_{k}": v for k, v in encoder_params.items()}
-        model_kwargs.update(encoder_params)
-        decoder_params = {f"decoder_{k}": v for k, v in decoder_params.items()}
-        model_kwargs.update(decoder_params)
-
-        model_kwargs["attn_implementation"] = attn_implementation
-        model_kwargs["add_pre_adapter"] = add_pre_adapter
-        model_kwargs["num_pre_adapter_layers"] = num_pre_adapter_layers
-
-        model = SpeechLMForConditionalGeneration.from_encoder_decoder_pretrained(
-            audio_encoder,
-            text_decoder,
-            **model_kwargs,
-        )
-        model.config.decoder.pad_token_id = processor.tokenizer.pad_token_id
-        model.config.decoder.pad_token = "<pad>"
-
-        # resize the embedding matrix due to the new task and lang tokens
-        model.decoder.resize_token_embeddings(
-            len(processor.tokenizer), mean_resizing=False, pad_to_multiple_of=8
-        )
-
-    targs.freeze_adapter = freeze_adapter
-    targs.freeze_encoder = freeze_encoder
-    targs.freeze_decoder = freeze_decoder
-    if freeze_adapter:
-        logger.info("Freezing the adapter")
-        model.freeze_adapter()
-    if freeze_encoder:
-        logger.info("Freezing the encoder")
-        model.freeze_encoder()
-    if freeze_decoder:
-        logger.info("Freezing the decoder")
-        model.freeze_decoder()
+    model, last_checkpoint = prepare_model(cfg, targs, processor)
+    logger.info("Model prepared!")
 
     # Print the number of learnable parameters
-    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    logger.info(f"Total number of learnable parameters: {total_params}")
+    trainable_params, trainable_str = count_trainable_parameters(model, return_int=True)
+    logger.info(f"Total number of learnable parameters: {trainable_params} ({trainable_str})")
 
     ############################
     ## VALUES FOR THE OPTIMIZER
     ############################
     # These values are used within the custom trainer to setup optimizer and scheduler
-    targs.encoder_lr = encoder_lr
-    targs.decoder_lr = decoder_lr
-    targs.adapter_lr = adapter_lr
-    targs.min_lr_scale = min_lr_scale
+    targs.encoder_lr = cfg.encoder_lr
+    targs.decoder_lr = cfg.decoder_lr
+    targs.adapter_lr = cfg.adapter_lr
+    targs.min_lr_scale = cfg.min_lr_scale
 
     ##########################
     ## TRAINING
@@ -299,9 +231,9 @@ def main(config_file: str, dry_run: bool = False):
     if trainer.is_fsdp_enabled:
         trainer.accelerator.state.fsdp_plugin.set_state_dict_type("FULL_STATE_DICT")
 
-    if is_dist and rank == 0:
-        torch.cuda.memory._dump_snapshot("profile.pkl")
-        torch.cuda.memory._record_memory_history(enabled=None)
+    # if is_dist and ddp.get_global_rank() == 0:
+    #     torch.cuda.memory._dump_snapshot("profile.pkl")
+    #     torch.cuda.memory._record_memory_history(enabled=None)
 
     trainer.save_model()
     processor.save_pretrained(targs.output_dir)

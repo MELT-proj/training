@@ -82,7 +82,7 @@ class MELTConfig(PretrainedConfig):
         has_lora_adapter=False,
         adapter_type="mlp",
         num_latents=64,
-        max_audio_seq_len=500,
+        max_audio_seq_len=750,
         **kwargs,
     ):
         # Handle audio encoder config
