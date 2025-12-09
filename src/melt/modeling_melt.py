@@ -38,8 +38,29 @@ class MELTMLPAdapter(nn.Module):
             "output_hidden_size",
             getattr(config.audio_encoder_config, "hidden_size", config.audio_encoder_config.output_hidden_size),
         )
-        text_hidden_size = config.text_decoder_config.hidden_size
-        self.linear = nn.Linear(audio_hidden_size, text_hidden_size, bias=True)
+        self.output_hidden_size = config.text_decoder_config.hidden_size
+        self.linear = nn.Linear(audio_hidden_size, self.output_hidden_size, bias=True)
+
+    def _get_output_features_shape(
+        self,
+        input_features: torch.Tensor,
+        features_attention_mask: torch.Tensor | None = None,
+    ) -> tuple[tuple[int, int, int], torch.Tensor | None]:
+        """
+        Compute the expected output shape after passing through this adapter.
+
+        Args:
+            input_features: Input tensor of shape (batch_size, seq_len, hidden_size)
+            features_attention_mask: Optional attention mask of shape (batch_size, seq_len)
+
+        Returns:
+            Tuple of (output_shape, output_attention_mask):
+                - output_shape: (batch_size, output_seq_len, output_hidden_size)
+                - output_attention_mask: Same as input (MLP preserves sequence length)
+        """
+        batch_size, seq_len, _ = input_features.shape
+        output_shape = (batch_size, seq_len, self.output_hidden_size)
+        return output_shape, features_attention_mask
 
     def forward(self, audio_features: torch.Tensor) -> torch.Tensor:
         hidden_states = self.linear(audio_features)
@@ -58,6 +79,7 @@ class MELTQFormerAdapter(nn.Module):
         self.downsample_rate = getattr(config, "downsample_rate", 5)
         self.window_size = getattr(config, "window_size", 15)
         self.num_queries = self.window_size // self.downsample_rate
+        self.output_hidden_size = config.text_decoder_config.hidden_size
 
         self.query = nn.Parameter(torch.zeros(1, self.num_queries, config.projector_config.hidden_size))
         self.query.data.normal_(mean=0.0, std=1.0)
@@ -66,7 +88,32 @@ class MELTQFormerAdapter(nn.Module):
         self.qformer = AutoModel.from_config(config.projector_config)
 
         # Final projection to text decoder hidden size
-        self.linear = nn.Linear(config.projector_config.hidden_size, config.text_decoder_config.hidden_size)
+        self.linear = nn.Linear(config.projector_config.hidden_size, self.output_hidden_size)
+
+    def _get_output_features_shape(
+        self,
+        input_features: torch.Tensor,
+        features_attention_mask: torch.Tensor | None = None,
+    ) -> tuple[tuple[int, int, int], torch.Tensor | None]:
+        """
+        Compute the expected output shape after passing through this adapter.
+
+        Args:
+            input_features: Input tensor of shape (batch_size, seq_len, hidden_size)
+            features_attention_mask: Optional attention mask of shape (batch_size, seq_len)
+
+        Returns:
+            Tuple of (output_shape, output_attention_mask):
+                - output_shape: (batch_size, output_seq_len, output_hidden_size)
+                - output_attention_mask: All ones since Q-Former doesn't use input mask
+        """
+        batch_size, seq_len, _ = input_features.shape
+        nblocks = math.ceil(seq_len / self.window_size)
+        output_seq_len = nblocks * self.num_queries
+        output_shape = (batch_size, output_seq_len, self.output_hidden_size)
+        # Q-Former doesn't propagate the attention mask; output is always valid
+        output_attention_mask = torch.ones(batch_size, output_seq_len, device=input_features.device)
+        return output_shape, output_attention_mask
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         batch_size, seq_len, dim = hidden_states.size()
@@ -107,6 +154,7 @@ class MELTConformerAdapter(nn.Module):
             self.proj_layer_norm = None
 
         num_adapter_layers = getattr(encoder_config, "num_adapter_layers", 1)
+        self.num_adapter_layers = num_adapter_layers
         self.layers = nn.ModuleList(Wav2Vec2BertAdapterLayer(encoder_config) for _ in range(num_adapter_layers))
         self.layerdrop = getattr(encoder_config, "layerdrop", 0.0)
 
@@ -115,9 +163,9 @@ class MELTConformerAdapter(nn.Module):
 
         # Final projection to text decoder hidden size
         adapter_output_size = output_hidden_size
-        text_hidden_size = config.text_decoder_config.hidden_size
-        if adapter_output_size != text_hidden_size:
-            self.out_proj = nn.Linear(adapter_output_size, text_hidden_size)
+        self.output_hidden_size = config.text_decoder_config.hidden_size
+        if adapter_output_size != self.output_hidden_size:
+            self.out_proj = nn.Linear(adapter_output_size, self.output_hidden_size)
         else:
             self.out_proj = None
 
@@ -127,6 +175,54 @@ class MELTConformerAdapter(nn.Module):
         pad = self.kernel_size // 2
         seq_lens = ((seq_lens + 2 * pad - self.kernel_size) / self.stride) + 1
         return seq_lens.floor()
+
+    def _compute_output_seq_len(self, seq_len: int) -> int:
+        """
+        Compute the output sequence length after all conformer adapter layers.
+
+        Each layer applies a strided convolution that reduces sequence length.
+        Formula: out_len = floor((in_len + 2*pad - kernel_size) / stride + 1)
+        """
+        output_len = seq_len
+        pad = self.kernel_size // 2
+        for _ in range(self.num_adapter_layers):
+            output_len = int((output_len + 2 * pad - self.kernel_size) / self.stride + 1)
+        return output_len
+
+    def _get_output_features_shape(
+        self,
+        input_features: torch.Tensor,
+        features_attention_mask: torch.Tensor | None = None,
+    ) -> tuple[tuple[int, int, int], torch.Tensor | None]:
+        """
+        Compute the expected output shape after passing through this adapter.
+
+        Args:
+            input_features: Input tensor of shape (batch_size, seq_len, hidden_size)
+            features_attention_mask: Optional attention mask of shape (batch_size, seq_len)
+
+        Returns:
+            Tuple of (output_shape, output_attention_mask):
+                - output_shape: (batch_size, output_seq_len, output_hidden_size)
+                - output_attention_mask: Subsampled attention mask matching output_seq_len
+        """
+        batch_size, seq_len, _ = input_features.shape
+        output_seq_len = self._compute_output_seq_len(seq_len)
+        output_shape = (batch_size, output_seq_len, self.output_hidden_size)
+
+        # Compute subsampled attention mask
+        output_attention_mask = None
+        if features_attention_mask is not None:
+            # Compute effective lengths from attention mask
+            seq_lens = (features_attention_mask.size(1) - (1 - features_attention_mask.int()).sum(1)).float()
+            # Apply subsampling for each layer
+            for _ in range(self.num_adapter_layers):
+                seq_lens = self._compute_sub_sample_lengths_from_attention_mask(seq_lens)
+            # Create output attention mask from computed lengths
+            output_attention_mask = torch.arange(output_seq_len, device=input_features.device).unsqueeze(0)
+            output_attention_mask = (output_attention_mask < seq_lens.unsqueeze(1)).float()
+
+        return output_shape, output_attention_mask
 
     def forward(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor | None = None) -> torch.Tensor:
         # Down project hidden_states if necessary
@@ -183,6 +279,27 @@ class MELTAudioAdapter(nn.Module):
         if isinstance(self.adapter, MELTConformerAdapter):
             return self.adapter(hidden_states, attention_mask=attention_mask)
         return self.adapter(hidden_states)
+
+    def _get_output_features_shape(
+        self,
+        input_features: torch.Tensor,
+        features_attention_mask: torch.Tensor | None = None,
+    ) -> tuple[tuple[int, int, int], torch.Tensor | None]:
+        """
+        Compute the expected output shape after passing through this adapter.
+
+        Delegates to the underlying adapter implementation.
+
+        Args:
+            input_features: Input tensor of shape (batch_size, seq_len, hidden_size)
+            features_attention_mask: Optional attention mask of shape (batch_size, seq_len)
+
+        Returns:
+            Tuple of (output_shape, output_attention_mask):
+                - output_shape: (batch_size, output_seq_len, output_hidden_size)
+                - output_attention_mask: Adapter-specific output attention mask
+        """
+        return self.adapter._get_output_features_shape(input_features, features_attention_mask)
 
 
 # =============================================================================
