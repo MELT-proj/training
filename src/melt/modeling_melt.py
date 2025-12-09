@@ -1,4 +1,3 @@
-# coding=utf-8
 """MELT (Multimodal Encoder Language Transformer) architecture"""
 
 import math
