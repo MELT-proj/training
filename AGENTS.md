@@ -21,6 +21,8 @@ This AGENTS.md file provides guidance for code agents working with this codebase
 - Use type hints for function signatures.
 - Document public functions and classes with docstrings.
 - Do not use the `typing` module as it is deprecated starting from Python 3.10.
+- I use `uv` for package management, so `pip` calls should take that into account.
+- My current virtual environment is in `./venv` so be sure to activate it before running tests that require it.
 
 ## Dependencies
 
