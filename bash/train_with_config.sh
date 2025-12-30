@@ -49,6 +49,8 @@ fi
 if command -v module >/dev/null 2>&1; then
     module load cuda
 fi
+echo "CUDA version:"
+nvcc --version || true
 
 if [ -z "${1:-}" ] || [ -z "${2:-}" ]; then
     echo "Usage: $0 <config_file> <accelerate_config>"

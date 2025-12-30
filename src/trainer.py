@@ -100,7 +100,9 @@ class MELTTrainer(Trainer):
             split_batches=split_batches,
         )
 
-        dataloader = self.accelerator.prepare(dataloader)
+        # We do not prepare the dataloader with the accelerator since rank and DDP allocation is already
+        # taken care of by lhotse. Also, it seems the accelerator does not like setting batch_size to None.
+        # dataloader = self.accelerator.prepare(dataloader)
         return dataloader
 
     def get_eval_dataloader(self, eval_dataset=None) -> DataLoader:
