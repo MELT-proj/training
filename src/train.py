@@ -3,8 +3,8 @@
 This script uses Lhotse-based data loading and hierarchical YAML configs.
 
 Usage:
-    python src/train.py --config-file config/train/melt_asr.yaml
-    python src/train.py --config-file config/train/melt_asr.yaml trainer.max_steps=1000
+    python src/train.py --config-file config/train/LS_asr.yaml
+    python src/train.py --config-file config/train/LS_asr.yaml trainer.max_steps=1000
 """
 
 import logging
@@ -13,7 +13,8 @@ from pathlib import Path
 
 import torch
 import tyro
-from accelerate.logging import get_logger
+# Use standard logging module to avoid requiring accelerate state at import time
+
 from omegaconf import DictConfig
 
 import ddp
@@ -28,7 +29,7 @@ from transformers.trainer_utils import get_last_checkpoint
 # Setup logger
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
-logger = get_logger(__name__) if ddp.is_distributed() else logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 # Optimize matmul precision
 torch.set_float32_matmul_precision("high")

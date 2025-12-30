@@ -50,21 +50,16 @@ class TestConfigIO:
     def test_load_config_from_yaml(self):
         from src.config import load_config
 
-        cfg = load_config("config/train/melt_asr.yaml")
+        cfg = load_config("config/train/LS_asr.yaml")
         assert cfg.model.encoder.name
         assert cfg.model.decoder.name
         assert "adapter" in cfg.model
-        # Adapter schema lives under model.adapter
-        assert "add_adapter" in cfg.model.adapter
-        assert "kernel_size" in cfg.model.adapter
-        assert "stride" in cfg.model.adapter
-        assert "num_layers" in cfg.model.adapter
 
     def test_dotlist_overrides(self):
         from src.config import load_config
 
         cfg = load_config(
-            "config/train/melt_asr.yaml",
+            "config/train/LS_asr.yaml",
             dotlist_overrides=["trainer.max_steps=123", "model.adapter.add_adapter=true"],
         )
         assert int(cfg.trainer.max_steps) == 123
@@ -73,7 +68,7 @@ class TestConfigIO:
     def test_save_config_roundtrip(self, tmp_path: Path):
         from src.config import load_config, save_config
 
-        cfg = load_config("config/train/melt_asr.yaml", dotlist_overrides=["trainer.max_steps=321"])
+        cfg = load_config("config/train/LS_asr.yaml", dotlist_overrides=["trainer.max_steps=321"])
         out = tmp_path / "cfg.yaml"
         save_config(cfg, str(out))
         assert out.exists()

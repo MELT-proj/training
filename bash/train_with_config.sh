@@ -110,6 +110,13 @@ if [[ "$RUNNING_UNDER_SLURM" -eq 1 ]]; then
     MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
 fi
 
+echo "Running under SLURM: $RUNNING_UNDER_SLURM"
+echo "GPUS per node: $GPUS_PER_NODE"
+echo "Num nodes: $NUM_NODES"
+echo "World size (total GPUs): $WORLD_SIZE"
+echo "Master addr: $MASTER_ADDR"
+echo "Master port: $MASTER_PORT"
+
 if [[ "$RUNNING_UNDER_SLURM" -eq 1 ]]; then
     export LAUNCHER="accelerate launch \
         --config_file $ACCELERATE_CONFIG \

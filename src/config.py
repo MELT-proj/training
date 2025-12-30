@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from omegaconf import DictConfig, OmegaConf
 
@@ -29,6 +30,12 @@ def load_config(config_file: str, dotlist_overrides: list[str] | None = None) ->
     cfg = OmegaConf.load(config_file)
     if dotlist_overrides:
         cfg = OmegaConf.merge(cfg, OmegaConf.from_dotlist(dotlist_overrides))
+
+    # Ensure common environment variables used in the YAML are at least set to defaults
+    # so tests and non-cluster runs don't fail during interpolation resolution.
+    os.environ.setdefault("SCRATCH", os.path.expanduser("~"))
+    os.environ.setdefault("LOCAL_DATASETS_DIR", str(Path.home()))
+
     OmegaConf.resolve(cfg)
     return cfg
 

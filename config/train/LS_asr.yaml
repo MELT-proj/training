@@ -2,8 +2,8 @@
 # Following NeMo SpeechLM2 configuration structure
 #
 # Usage:
-#   python src/train.py --config-file config/train/melt_asr.yaml
-#   python src/train.py --config-file config/train/melt_asr.yaml trainer.max_steps=1000
+#   python src/train.py --config-file config/train/LS_asr.yaml
+#   python src/train.py --config-file config/train/LS_asr.yaml trainer.max_steps=1000
 
 # =============================================================================
 # Model Configuration
@@ -106,7 +106,7 @@ data:
 # Trainer Configuration
 # =============================================================================
 trainer:
-  output_dir: ${oc.env:SCRATCH}/speech_lm/models/melt_asr
+  output_dir: ${oc.env:SCRATCH}/speech_lm/models/LS_asr
   seed: 42
   do_train: true
   do_eval: true

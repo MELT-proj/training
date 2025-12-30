@@ -11,7 +11,6 @@ import random
 from typing import Any
 
 import torch
-from accelerate.logging import get_logger
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -26,7 +25,7 @@ from src.data.audio.lhotse import (
 )
 from src.melt import MELTProcessor
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 def current_cpumem_usage():
@@ -174,7 +173,8 @@ class MELTTrainer(Trainer):
         adapter_params = (
             list(adapter_module.parameters()) if adapter_module is not None else []
         )
-        cfg = self.config.optimization
+        # Get optimization config if present, otherwise fall back to args
+        opt_cfg = getattr(self.config, "optimization", None) if getattr(self, "config", None) is not None else None
 
         # encoder_module may itself wrap the underlying model (has .encoder)
         if encoder_module is not None:
@@ -208,21 +208,32 @@ class MELTTrainer(Trainer):
                 for p in decoder_params:
                     p.requires_grad = False
 
+        # Determine learning rates: prefer config.optimization values, otherwise fall back to args
+        adapter_lr = getattr(opt_cfg, "adapter_lr", None) if opt_cfg is not None else None
+        if adapter_lr is None:
+            adapter_lr = getattr(self.args, "adapter_lr", 1e-4)
+        encoder_lr = getattr(opt_cfg, "encoder_lr", None) if opt_cfg is not None else None
+        if encoder_lr is None:
+            encoder_lr = getattr(self.args, "encoder_lr", 1e-5)
+        decoder_lr = getattr(opt_cfg, "decoder_lr", None) if opt_cfg is not None else None
+        if decoder_lr is None:
+            decoder_lr = getattr(self.args, "decoder_lr", 1e-3)
+
         groups = []
         if not getattr(self.args, "freeze_adapter", False) and adapter_params:
-            groups.append({"params": adapter_params, "lr": cfg.adapter_lr})
+            groups.append({"params": adapter_params, "lr": adapter_lr})
         if not getattr(self.args, "freeze_encoder", False) and encoder_params:
             groups.append(
                 {
                     "params": encoder_params,
-                    "lr": cfg.encoder_lr,
+                    "lr": encoder_lr,
                 }
             )
         if not getattr(self.args, "freeze_decoder", False) and decoder_params:
             groups.append(
                 {
                     "params": decoder_params,
-                    "lr": cfg.decoder_lr,
+                    "lr": decoder_lr,
                 }
             )
 
