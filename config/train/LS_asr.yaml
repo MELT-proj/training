@@ -111,6 +111,12 @@ trainer:
   do_train: true
   do_eval: true
 
+  # Accelerate DataLoader behavior under Transformers Trainer.
+  # If you hit errors about different-shaped batches being concatenated,
+  # set `split_batches: true` (slice one big batch per step).
+  accelerator_config:
+    split_batches: true
+
   # Batch and accumulation
   per_device_train_batch_size: 1  # Handled by Lhotse, set to 1
   per_device_eval_batch_size: 1   # Handled by Lhotse, set to 1

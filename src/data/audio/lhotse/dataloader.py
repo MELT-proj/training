@@ -135,6 +135,7 @@ def get_lhotse_sampler_from_config(
     config: DictConfig,
     global_rank: int = 0,
     world_size: int = 1,
+    split_batches: bool = False,
 ) -> tuple[CutSampler, bool]:
     """Create a CutSampler from configuration.
 
@@ -161,11 +162,31 @@ def get_lhotse_sampler_from_config(
         cuts = cuts.filter(lambda c: min_dur <= c.duration <= max_dur)
         logger.info(f"Applied duration filter: [{min_dur}, {max_dur}]")
 
-    # Determine sampling constraint
+    # Determine sampling constraint.
+    # When training with an IterableDataset under Accelerate + `split_batches=True`,
+    # the main process fetches a *global* batch and slices it across `world_size`.
+    # To preserve the effective per-rank batch constraint, scale it by `world_size`.
+    max_cuts = config.get("batch_size", None)
+    max_duration = config.get("batch_duration", None)
+    quadratic_duration = config.get("quadratic_duration", None)
+
+    if use_iterable and split_batches and world_size > 1:
+        if max_cuts is not None:
+            max_cuts = int(max_cuts) * int(world_size)
+        if max_duration is not None:
+            max_duration = float(max_duration) * float(world_size)
+        if quadratic_duration is not None:
+            quadratic_duration = float(quadratic_duration) * float(world_size)
+
+        logger.info(
+            "IterableDataset + split_batches=True: scaling sampler constraints by world_size=%s ",
+            world_size,
+        )
+
     constraint = TimeConstraint(
-        max_cuts=config.get("batch_size", None),
-        max_duration=config.get("batch_duration", None),
-        quadratic_duration=config.get("quadratic_duration", None),
+        max_cuts=max_cuts,
+        max_duration=max_duration,
+        quadratic_duration=quadratic_duration,
     )
 
     # Create sampler
@@ -236,6 +257,7 @@ def get_lhotse_dataloader_from_config(
     global_rank: int,
     world_size: int,
     dataset: torch.utils.data.Dataset,
+    split_batches: bool = False,
 ) -> torch.utils.data.DataLoader:
     """Create a DataLoader from configuration.
 
@@ -264,6 +286,7 @@ def get_lhotse_dataloader_from_config(
         config=config,
         global_rank=global_rank,
         world_size=world_size,
+        split_batches=split_batches,
     )
 
     # Create dataloader
@@ -310,6 +333,7 @@ def get_train_dataloader_from_config(
     dataset: torch.utils.data.Dataset,
     global_rank: int = 0,
     world_size: int = 1,
+    split_batches: bool = False,
 ) -> torch.utils.data.DataLoader:
     """Convenience function to create training dataloader.
 
@@ -327,6 +351,7 @@ def get_train_dataloader_from_config(
         global_rank=global_rank,
         world_size=world_size,
         dataset=dataset,
+        split_batches=split_batches,
     )
 
 
@@ -335,6 +360,7 @@ def get_eval_dataloader_from_config(
     dataset: torch.utils.data.Dataset,
     global_rank: int = 0,
     world_size: int = 1,
+    split_batches: bool = False,
 ) -> torch.utils.data.DataLoader:
     """Convenience function to create validation dataloader.
 
@@ -352,6 +378,7 @@ def get_eval_dataloader_from_config(
         global_rank=global_rank,
         world_size=world_size,
         dataset=dataset,
+        split_batches=split_batches,
     )
 
 

@@ -72,6 +72,14 @@ def trainer_args_dict(cfg: DictConfig) -> dict[str, object]:
     if isinstance(report_to, str):
         tcfg["report_to"] = [report_to]
 
+    # Transformers expects an AcceleratorConfig instance (not a raw dict).
+    # This controls accelerate DataLoader behavior (e.g. dispatch_batches/split_batches).
+    accelerator_config = tcfg.get("accelerator_config")
+    if isinstance(accelerator_config, dict):
+        from transformers.trainer_pt_utils import AcceleratorConfig
+
+        tcfg["accelerator_config"] = AcceleratorConfig(**accelerator_config)
+
     return tcfg
 
 

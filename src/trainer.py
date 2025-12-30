@@ -91,11 +91,13 @@ class MELTTrainer(Trainer):
         dataset = FallbackDataset(dataset)
 
         # Create dataloader from config
+        split_batches = bool(getattr(getattr(self.args, "accelerator_config", None), "split_batches", False))
         dataloader = get_train_dataloader_from_config(
             data_config=self.config.data,
             dataset=dataset,
             global_rank=self._global_rank,
             world_size=self._world_size,
+            split_batches=split_batches,
         )
 
         dataloader = self.accelerator.prepare(dataloader)
