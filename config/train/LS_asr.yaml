@@ -71,7 +71,7 @@ data:
     max_duration: 30.0
 
     # DataLoader settings
-    num_workers: 0
+    num_workers: 2
     pin_memory: true
     prefetch_factor: 2
     sample_rate: ${data.sample_rate}

@@ -18,13 +18,12 @@ set -euo pipefail
 # Override any of these at invocation time, e.g.:
 #   SCRATCH=/path WANDB_PROJECT=foo ./bash/train_with_config.sh ...
 
-VENV_PATH_DEFAULT="${VENV_PATH_DEFAULT:-$HOME/mydata/venvs/speech_lm/bin/activate}"
+VENV_PATH_DEFAULT="${VENV_PATH_DEFAULT:-/mnt/data-poseidon/giuseppe/melt-proj/training/venv/bin/activate}"
 
 SCRATCH="${SCRATCH:-/mnt/home/giuseppe/myscratch}"
 BASEDIR="${BASEDIR:-$SCRATCH/speech_lm}"
 
-TMPDIR="${TMPDIR:-/tmp}"
-LOCAL_DATASETS_DIR="${LOCAL_DATASETS_DIR:-/mnt/scratch-artemis/shared/datasets}"
+LOCAL_DATASETS_DIR="${LOCAL_DATASETS_DIR:-/mnt/home/giuseppe/myscratch/melt-data/shar}"
 HF_HOME="${HF_HOME:-$SCRATCH/hf_home_speech}"
 HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-$BASEDIR/hf_datasets_cache}"
 
@@ -92,7 +91,7 @@ if [[ -n "${SLURM_JOB_ID:-}" ]]; then
     RUNNING_UNDER_SLURM=1
 fi
 
-GPUS_PER_NODE=${GPUS_PER_NODE:-4}
+GPUS_PER_NODE=${GPUS_PER_NODE:-1}
 if [[ "$RUNNING_UNDER_SLURM" -eq 0 ]]; then
     if command -v nvidia-smi >/dev/null 2>&1; then
         DETECTED_GPUS=$(nvidia-smi -L 2>/dev/null | wc -l | tr -d ' ' || true)
@@ -100,6 +99,9 @@ if [[ "$RUNNING_UNDER_SLURM" -eq 0 ]]; then
             GPUS_PER_NODE=$DETECTED_GPUS
         fi
     fi
+else
+    # Use SLURM's GPUS per node setting
+    GPUS_PER_NODE=${SLURM_GPUS_ON_NODE}
 fi
 
 NUM_NODES=${SLURM_NNODES:-1}
