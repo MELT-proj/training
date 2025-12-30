@@ -66,6 +66,10 @@ class MELTConfig(PretrainedConfig):
     """
 
     model_type = "melt"
+    # Transformers' `PretrainedConfig.to_diff_dict()` will attempt to instantiate
+    # `self.__class__()` to compute defaults unless we opt out. Since MELTConfig
+    # requires nested sub-configs at init, we must disable that behavior.
+    has_no_defaults_at_init = True
     sub_configs = {
         "audio_encoder_config": AutoConfig,
         "text_decoder_config": AutoConfig,

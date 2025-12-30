@@ -1,4 +1,5 @@
 import pytest
+import json
 
 from src.melt.configuration_melt import MELTConfig, MELTProjectorConfig
 from transformers import AutoConfig
@@ -146,3 +147,21 @@ class TestMELTConfig:
         )
 
         assert config.is_composition is True
+
+    def test_save_pretrained_writes_config_json(self, tmp_path):
+        # Use local config objects (no network) but still exercise HF save_pretrained
+        # which triggers Transformers' diff-serialization logic.
+        config = MELTConfig(
+            audio_encoder_config=AutoConfig.for_model("wav2vec2"),
+            text_decoder_config=AutoConfig.for_model("gpt2"),
+        )
+
+        config.save_pretrained(tmp_path)
+
+        config_path = tmp_path / "config.json"
+        assert config_path.exists()
+
+        saved = json.loads(config_path.read_text())
+        assert saved["model_type"] == "melt"
+        assert "audio_encoder_config" in saved
+        assert "text_decoder_config" in saved
