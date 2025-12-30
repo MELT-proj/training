@@ -14,7 +14,6 @@ import torch
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from transformers import Trainer
 
 import ddp
 from src.data.audio.lhotse import (
@@ -24,6 +23,8 @@ from src.data.audio.lhotse import (
     get_train_dataloader_from_config,
 )
 from src.melt import MELTProcessor
+from transformers import Trainer
+
 
 logger = logging.getLogger(__name__)
 
@@ -147,14 +148,9 @@ class MELTTrainer(Trainer):
         try:
             dataset = train_dl.dataset
             words_by_row = [
-                len(t.split(" "))
-                for t in tqdm(
-                    dataset["text"], total=len(dataset), desc="Counting tokens"
-                )
+                len(t.split(" ")) for t in tqdm(dataset["text"], total=len(dataset), desc="Counting tokens")
             ]
-            train_tokens = sum(
-                words_by_row
-            )  # it's not tokens, but it's a good approximation
+            train_tokens = sum(words_by_row)  # it's not tokens, but it's a good approximation
         except KeyError:
             logger.warning("Cannot get num_tokens from dataloader")
 
@@ -169,23 +165,22 @@ class MELTTrainer(Trainer):
         """
 
         decoder_module = getattr(self.model, "text_decoder", None)
-        adapter_module = getattr(self.model.audio_stack, "adapter", None)
-        encoder_module = getattr(self.model.audio_stack, "encoder", None)
-        adapter_params = (
-            list(adapter_module.parameters()) if adapter_module is not None else []
-        )
+        audio_stack = getattr(self.model, "audio_stack", None)
+        adapter_module = getattr(audio_stack, "adapter", None) if audio_stack is not None else None
+        encoder_module = getattr(audio_stack, "encoder", None) if audio_stack is not None else None
+
+        adapter_params = list(adapter_module.parameters()) if adapter_module is not None else []
         # Get optimization config if present, otherwise fall back to args
         opt_cfg = getattr(self.config, "optimization", None) if getattr(self, "config", None) is not None else None
 
-        # encoder_module may itself wrap the underlying model (has .encoder)
+        # encoder_module is expected to be MELTAudioEncoder; its underlying HF model is `encoder_module.encoder`
         if encoder_module is not None:
-            encoder_params = list(encoder_module.model.parameters())
+            inner = getattr(encoder_module, "encoder", None)
+            encoder_params = list(inner.parameters()) if inner is not None else list(encoder_module.parameters())
         else:
             encoder_params = []
 
-        decoder_params = (
-            list(decoder_module.parameters()) if decoder_module is not None else []
-        )
+        decoder_params = list(decoder_module.parameters()) if decoder_module is not None else []
 
         # Apply freezes using provided freeze helpers when available
         if getattr(self.args, "freeze_adapter", False):
@@ -208,6 +203,12 @@ class MELTTrainer(Trainer):
             else:
                 for p in decoder_params:
                     p.requires_grad = False
+
+        # Filter out any frozen params before building optimizer groups.
+        # DeepSpeed ZeRO will error out if any param group is empty.
+        adapter_params = [p for p in adapter_params if p.requires_grad]
+        encoder_params = [p for p in encoder_params if p.requires_grad]
+        decoder_params = [p for p in decoder_params if p.requires_grad]
 
         # Determine learning rates: prefer config.optimization values, otherwise fall back to args
         adapter_lr = getattr(opt_cfg, "adapter_lr", None) if opt_cfg is not None else None
@@ -238,13 +239,14 @@ class MELTTrainer(Trainer):
                 }
             )
 
+        # Final safety: drop any accidentally-empty groups (defensive against config mistakes)
+        groups = [g for g in groups if g.get("params")]
+
         # If everything got frozen or no groups created, fall back to any remaining trainable params
         if len(groups) == 0:
             trainable = [p for p in self.model.parameters() if p.requires_grad]
             if len(trainable) == 0:
-                raise ValueError(
-                    "All model parameters are frozen; cannot create optimizer."
-                )
+                raise ValueError("All model parameters are frozen; cannot create optimizer.")
             groups = [{"params": trainable, "lr": getattr(self.args, "lr", 1e-5)}]
 
         self.optimizer = torch.optim.AdamW(
@@ -267,9 +269,7 @@ def _format_param_count(count: int, precision: int = 2) -> str:
     return str(count)
 
 
-def count_trainable_parameters(
-    model: torch.nn.Module, precision: int = 2, return_int: bool = False
-):
+def count_trainable_parameters(model: torch.nn.Module, precision: int = 2, return_int: bool = False):
     """Return the number of trainable parameters, respecting any frozen modules.
 
     Args:

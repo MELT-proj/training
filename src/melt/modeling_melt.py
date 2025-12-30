@@ -500,11 +500,8 @@ class MELTPreTrainedModel(PreTrainedModel, GenerationMixin):
     base_model_prefix = "melt"
     _skip_keys_device_placement = ["past_key_values"]
     _no_split_modules = [
-        "LlamaDecoderLayer",
         "Qwen2DecoderLayer",
         "MELTAudioAdapter",
-        "MELTAudioStack",
-        "Wav2Vec2BertAdapterLayer",
         "Wav2Vec2BertEncoderLayer",
     ]
     supports_gradient_checkpointing = True
