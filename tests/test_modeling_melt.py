@@ -7,8 +7,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 import torch
 
-from melt.configuration_melt import MELTConfig
-from melt.modeling_melt import MELTAudioAdapter, MELTConformerAdapter, MELTForConditionalGeneration, MELTMLPAdapter
+from src.melt import (
+    MELTAudioAdapter,
+    MELTConfig,
+    MELTConformerAdapter,
+    MELTForConditionalGeneration,
+    MELTMLPAdapter,
+)
 
 
 class TestReplaceAudioPlaceholders:
@@ -473,6 +478,29 @@ class TestMergeCorrectness:
         # Positions 7-11 (after placeholder region) should be unchanged
         assert torch.allclose(result[0, 7:, :], original_text_data[0, 7:, :])
 
+
+def test_freeze_decoder_minimal():
+    """Ensure freeze_decoder freezes all decoder parameters and returns self."""
+    from transformers import AutoConfig
+
+    audio_config = AutoConfig.from_pretrained("facebook/wav2vec2-base")
+    text_config = AutoConfig.from_pretrained("gpt2")
+    audio_config.num_hidden_layers = 1
+    text_config.n_layer = 1
+
+    config = MELTConfig(
+        audio_encoder_config=audio_config,
+        text_decoder_config=text_config,
+        adapter_type="mlp",
+    )
+    config.audio_bos_token_id = 100
+
+    model = MELTForConditionalGeneration(config)
+    ret = model.freeze_decoder()
+    assert ret is model
+    # All decoder params should be frozen
+    assert all((not p.requires_grad) for p in model.text_decoder.parameters())
+
     def test_mask_values_correctly_propagated(self, mock_model):
         """Verify mask values from audio are correctly placed."""
         batch_size = 1
@@ -637,7 +665,7 @@ class TestAdapterOutputFeaturesShape:
         # The real Wav2Vec2BertAdapterLayer depends on numeric fields in the
         # encoder config. Patch it to a lightweight identity module so we can
         # exercise the adapter's length math without constructing heavy layers.
-        with patch("melt.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
+        with patch("src.melt.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
             adapter = MELTConformerAdapter(config)
 
         # Test the _compute_output_seq_len method
@@ -665,7 +693,7 @@ class TestAdapterOutputFeaturesShape:
         config.text_decoder_config = MagicMock()
         config.text_decoder_config.hidden_size = 1024
 
-        with patch("melt.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
+        with patch("src.melt.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
             adapter = MELTConformerAdapter(config)
 
         seq_len = 100
@@ -696,7 +724,7 @@ class TestAdapterOutputFeaturesShape:
         config.text_decoder_config = MagicMock()
         config.text_decoder_config.hidden_size = 2048
 
-        with patch("melt.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
+        with patch("src.melt.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
             adapter = MELTConformerAdapter(config)
 
         batch_size = 2
@@ -726,7 +754,7 @@ class TestAdapterOutputFeaturesShape:
         config.text_decoder_config = MagicMock()
         config.text_decoder_config.hidden_size = 1024
 
-        with patch("melt.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
+        with patch("src.melt.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
             adapter = MELTConformerAdapter(config)
 
         batch_size = 2

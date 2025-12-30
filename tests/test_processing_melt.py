@@ -130,7 +130,7 @@ class TestMELTProcessorAudio:
             f"Audio 1: {processor.audio_token}",
             f"Audio 2: {processor.audio_token}",
         ]
-        audios = [audio_sample, audio_sample]
+        audios = [[audio_sample], [audio_sample]]
         result = processor(text=texts, audio=audios)
 
         assert "input_ids" in result
@@ -254,8 +254,10 @@ class TestMELTProcessorMultipleAudios:
         assert "input_ids" in result
         assert "attention_mask" in result
         assert "input_features" in result
-        # All three audios should be processed
-        assert result["input_features"].shape[0] == 3
+        # Single text sample => batch size 1; audios concatenated on time dim
+        assert result["input_features"].shape[0] == 1
+        assert "audio_lengths" in result
+        assert len(result["audio_lengths"]) == 3
 
     def test_multiple_audio_tokens_with_chat_template(self, processor, audio_sample):
         """Test multiple audio tokens with chat template."""
@@ -273,7 +275,9 @@ class TestMELTProcessorMultipleAudios:
 
         assert "input_ids" in result
         assert "input_features" in result
-        assert result["input_features"].shape[0] == 3
+        assert result["input_features"].shape[0] == 1
+        assert "audio_lengths" in result
+        assert len(result["audio_lengths"]) == 3
 
     def test_two_audio_tokens(self, processor, audio_sample):
         """Test with exactly two audio tokens."""
@@ -285,7 +289,9 @@ class TestMELTProcessorMultipleAudios:
 
         assert "input_ids" in result
         assert "input_features" in result
-        assert result["input_features"].shape[0] == 2
+        assert result["input_features"].shape[0] == 1
+        assert "audio_lengths" in result
+        assert len(result["audio_lengths"]) == 2
 
     def test_audio_token_expansion_multiple(self, processor, audio_sample):
         """Test that multiple audio tokens are each expanded correctly."""
@@ -310,15 +316,16 @@ class TestMELTProcessorMultipleAudios:
             f"Single audio: {audio_token}",
             f"Two audios: {audio_token} and {audio_token}",
         ]
-        # Flatten all audios into a single list (1 + 2 = 3)
-        audios = [audio_sample, audio_sample, audio_sample]
+        audios = [[audio_sample], [audio_sample, audio_sample]]
 
         result = processor(text=texts, audio=audios, padding=True)
 
         assert "input_ids" in result
         assert "input_features" in result
-        # Total of 3 audios processed
-        assert result["input_features"].shape[0] == 3
+        # Two samples in the batch
+        assert result["input_features"].shape[0] == 2
+        assert "audio_lengths" in result
+        assert len(result["audio_lengths"]) == 2
 
     def test_multiple_audios_preserves_text_structure(self, processor, audio_sample):
         """Test that text structure is preserved with multiple audios."""
@@ -343,7 +350,9 @@ class TestMELTProcessorMultipleAudios:
 
         assert "input_ids" in result
         assert "input_features" in result
-        assert result["input_features"].shape[0] == 3
+        assert result["input_features"].shape[0] == 1
+        assert "audio_lengths" in result
+        assert len(result["audio_lengths"]) == 3
 
         decoded = processor.decode(result["input_ids"][0])
         assert "What is said here" in decoded
@@ -359,17 +368,14 @@ class TestMELTProcessorMultipleAudios:
         text2 = f"Transcribe: {audio_token}"
 
         texts = [text1, text2]
-        # 3 audios for sample 1, 1 audio for sample 2 = 4 total
-        audios = [audio_sample, audio_sample, audio_sample, audio_sample]
+        audios = [[audio_sample, audio_sample, audio_sample], [audio_sample]]
 
         result = processor(text=texts, audio=audios, padding=True)
 
         assert "input_ids" in result
         assert "attention_mask" in result
         assert "input_features" in result
-        # Total of 4 audios processed
-        assert result["input_features"].shape[0] == 4
-        # Two samples in the batch
+        assert result["input_features"].shape[0] == 2
         assert len(result["input_ids"]) == 2
 
     def test_batch_single_and_multi_audio(self, processor, audio_sample):
@@ -381,17 +387,14 @@ class TestMELTProcessorMultipleAudios:
         text2 = f"Compare {audio_token} with {audio_token}"
 
         texts = [text1, text2]
-        # 1 audio for sample 1, 2 audios for sample 2 = 3 total
-        audios = [audio_sample, audio_sample, audio_sample]
+        audios = [[audio_sample], [audio_sample, audio_sample]]
 
         result = processor(text=texts, audio=audios, padding=True)
 
         assert "input_ids" in result
         assert "attention_mask" in result
         assert "input_features" in result
-        # Total of 3 audios processed
-        assert result["input_features"].shape[0] == 3
-        # Two samples in the batch
+        assert result["input_features"].shape[0] == 2
         assert len(result["input_ids"]) == 2
 
         # Verify text content is preserved for both samples
@@ -420,12 +423,11 @@ class TestMELTProcessorMultipleAudios:
         text2 = processor.tokenizer.apply_chat_template(messages2, tokenize=False, add_generation_prompt=True)
 
         texts = [text1, text2]
-        # 2 audios for sample 1, 1 audio for sample 2 = 3 total
-        audios = [audio_sample, audio_sample, audio_sample]
+        audios = [[audio_sample, audio_sample], [audio_sample]]
 
         result = processor(text=texts, audio=audios, padding=True)
 
         assert "input_ids" in result
         assert "input_features" in result
-        assert result["input_features"].shape[0] == 3
+        assert result["input_features"].shape[0] == 2
         assert len(result["input_ids"]) == 2

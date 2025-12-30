@@ -19,22 +19,28 @@ Directory Structure Convention:
         Example: mls/default/en/train/
 
 Example usage:
-    >>> from src.data_utils.lhotse import get_lhotse_dataset, PeoplesSpeechLhotse
+    >>> from src.data.audio.lhotse import get_lhotse_dataset, PeoplesSpeechLhotse
     >>>
     >>> # Monolingual dataset (People's Speech)
     >>> dataset = get_lhotse_dataset("peoples_speech", "/path/to/shar/peoples_speech")
     >>> cuts = dataset.load_cuts(split="train", config="clean")
     >>>
-    >>> # Or using the class directly with convenience methods
-    >>> dataset = PeoplesSpeechLhotse("/path/to/shar/peoples_speech")
-    >>> cuts = dataset.load_train(config="clean", lazy=True)
-    >>>
-    >>> # Multilingual dataset (hypothetical example)
-    >>> dataset = get_lhotse_dataset("common_voice", "/path/to/shar/common_voice")
-    >>> cuts = dataset.load_cuts(split="train", lang="en")
+    >>> # Using the new dataloader API
+    >>> from src.data.audio.lhotse import (
+    ...     SpeechToTextDataset,
+    ...     get_lhotse_dataloader_from_config,
+    ... )
+    >>> processor = MELTProcessor(feature_extractor, tokenizer)
+    >>> dataset = SpeechToTextDataset(processor, data_config)
+    >>> dataloader = get_lhotse_dataloader_from_config(
+    ...     config=data_config.train_ds,
+    ...     global_rank=0,
+    ...     world_size=1,
+    ...     dataset=dataset,
+    ... )
 
 Adding a new dataset:
-    1. Create a new file: src/data_utils/lhotse/{dataset_name}.py
+    1. Create a new file: src/data/audio/lhotse/{dataset_name}.py
     2. Implement a class inheriting from BaseLhotseDataset
     3. Set is_multilingual=True/False and supported_languages accordingly
     4. Register it in LHOTSE_DATASET_REGISTRY below
@@ -42,16 +48,36 @@ Adding a new dataset:
 """
 
 from .base import BaseLhotseDataset
+from .dataloader import (
+    get_eval_dataloader_from_config,
+    get_lhotse_dataloader_from_config,
+    get_lhotse_sampler_from_config,
+    get_train_dataloader_from_config,
+    read_cutset_from_config,
+)
+from .dataset import FallbackDataset, SpeechToTextDataset
 from .librispeech import LibriSpeechLhotse
 from .peoples_speech import PeoplesSpeechLhotse
 
+
 __all__ = [
+    # Base classes
     "BaseLhotseDataset",
+    # Dataset loaders
     "LibriSpeechLhotse",
     "PeoplesSpeechLhotse",
+    # Registry functions
     "get_lhotse_dataset",
     "list_available_datasets",
     "LHOTSE_DATASET_REGISTRY",
+    # New dataloader API
+    "SpeechToTextDataset",
+    "FallbackDataset",
+    "read_cutset_from_config",
+    "get_lhotse_sampler_from_config",
+    "get_lhotse_dataloader_from_config",
+    "get_train_dataloader_from_config",
+    "get_eval_dataloader_from_config",
 ]
 
 # Registry mapping dataset nicknames to their loader classes
@@ -80,9 +106,7 @@ def get_lhotse_dataset(dataset_name: str, shar_dir: str) -> BaseLhotseDataset:
     """
     if dataset_name not in LHOTSE_DATASET_REGISTRY:
         available = list(LHOTSE_DATASET_REGISTRY.keys())
-        raise ValueError(
-            f"Unknown dataset '{dataset_name}'. Available datasets: {available}"
-        )
+        raise ValueError(f"Unknown dataset '{dataset_name}'. Available datasets: {available}")
 
     dataset_class = LHOTSE_DATASET_REGISTRY[dataset_name]
     return dataset_class(shar_dir)

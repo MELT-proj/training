@@ -54,6 +54,7 @@ Reference: https://huggingface.co/datasets/openslr/librispeech_asr
 
 import argparse
 import logging
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -62,11 +63,12 @@ from lhotse import MonoCut, Recording, SupervisionSegment
 from lhotse.shar import SharWriter
 from tqdm.auto import tqdm
 
+
 # --- Configuration ---
 DATASET_NAME = "openslr/librispeech_asr"
 DATASET_NICKNAME = "librispeech"
 HF_CONFIG = "all"  # LibriSpeech uses a single "all" config, splits encode quality
-BASE_OUTPUT_DIR = Path("/mnt/home/giuseppe/myscratch/melt-data/shar")
+BASE_OUTPUT_DIR = Path(os.environ.get("LHOTSE_DATA_SHAR_ROOT", "/mnt/home/giuseppe/myscratch/melt-data/shar"))
 SHARD_SIZE = 2000
 AUDIO_FORMAT = "flac"
 MARKER_ROOT = BASE_OUTPUT_DIR / ".conversion_markers"
@@ -158,11 +160,7 @@ def mark_conversion_complete(output_dir: Path, count: int, errors: int) -> None:
     is stored under BASE_OUTPUT_DIR/.conversion_markers.
     """
     marker_path = _marker_path_for_output(output_dir)
-    marker_path.write_text(
-        f"Conversion completed successfully.\n"
-        f"Cuts processed: {count}\n"
-        f"Errors: {errors}\n"
-    )
+    marker_path.write_text(f"Conversion completed successfully.\nCuts processed: {count}\nErrors: {errors}\n")
     logger.info(f"Created completion marker: {marker_path}")
 
 
@@ -200,8 +198,7 @@ def convert_subset_to_shar(
     if not force and is_conversion_complete(output_dir):
         marker = _marker_path_for_output(output_dir)
         logger.info(
-            f"SKIPPING {config}{lang_str}/{split} - already complete "
-            f"(marker: {marker} or existing output files)"
+            f"SKIPPING {config}{lang_str}/{split} - already complete (marker: {marker} or existing output files)"
         )
         return None, None
 
@@ -216,8 +213,7 @@ def convert_subset_to_shar(
     if use_batched:
         # Use batched processing with parallelization
         logger.info(
-            f"Using BATCHED mode: batch_size={batch_size}, "
-            f"num_workers={num_workers}, hf_num_proc={hf_num_proc}"
+            f"Using BATCHED mode: batch_size={batch_size}, num_workers={num_workers}, hf_num_proc={hf_num_proc}"
         )
         from batch_utils import convert_subset_to_shar_batched
 
@@ -245,9 +241,7 @@ def convert_subset_to_shar(
             lang_str=lang_str,
         )
 
-    logger.info(
-        f"Finished {config}{lang_str}/{split}! Processed {count} cuts with {errors} errors."
-    )
+    logger.info(f"Finished {config}{lang_str}/{split}! Processed {count} cuts with {errors} errors.")
     logger.info(f"Data is ready in: {output_dir}")
 
     # Mark conversion as complete
@@ -268,26 +262,20 @@ def _convert_streaming(
 
     Memory-efficient but sequential processing.
     """
-    logger.info(
-        f"Initializing stream for {DATASET_NAME} (config={HF_CONFIG}, split={hf_split})..."
-    )
+    logger.info(f"Initializing stream for {DATASET_NAME} (config={HF_CONFIG}, split={hf_split})...")
     dataset = load_dataset(DATASET_NAME, HF_CONFIG, split=hf_split, streaming=True)
 
     # Prevent HF from decoding; get raw bytes
     dataset = dataset.cast_column("audio", Audio(decode=False))
 
-    writer = SharWriter(
-        output_dir=output_dir, fields={"recording": AUDIO_FORMAT}, shard_size=SHARD_SIZE
-    )
+    writer = SharWriter(output_dir=output_dir, fields={"recording": AUDIO_FORMAT}, shard_size=SHARD_SIZE)
 
     count = 0
     errors = 0
 
     logger.info(f"Starting conversion loop for {config}{lang_str}/{split}...")
     with writer:
-        for i, item in enumerate(
-            tqdm(dataset, desc=f"Processing {config}{lang_str}/{split}", unit="cut")
-        ):
+        for i, item in enumerate(tqdm(dataset, desc=f"Processing {config}{lang_str}/{split}", unit="cut")):
             try:
                 # 1. Get raw info - LibriSpeech uses "id" field
                 hf_id = item.get("id", f"no_id_{i}")
@@ -358,10 +346,7 @@ def convert_all_to_shar(
     logger.info(f"Base output directory: {BASE_OUTPUT_DIR / DATASET_NICKNAME}")
 
     if use_batched:
-        logger.info(
-            f"BATCHED MODE: batch_size={batch_size}, num_workers={num_workers}, "
-            f"hf_num_proc={hf_num_proc}"
-        )
+        logger.info(f"BATCHED MODE: batch_size={batch_size}, num_workers={num_workers}, hf_num_proc={hf_num_proc}")
     else:
         logger.info("STREAMING MODE (sequential, memory-efficient)")
 
@@ -371,11 +356,9 @@ def convert_all_to_shar(
 
     for config, splits_mapping in CONFIGS_AND_SPLITS.items():
         for our_split, hf_split in splits_mapping.items():
-            logger.info(f"\n{'='*60}")
-            logger.info(
-                f"Processing configuration: {config}, split: {our_split} (HF: {hf_split})"
-            )
-            logger.info(f"{'='*60}")
+            logger.info(f"\n{'=' * 60}")
+            logger.info(f"Processing configuration: {config}, split: {our_split} (HF: {hf_split})")
+            logger.info(f"{'=' * 60}")
             count, errors = convert_subset_to_shar(
                 config,
                 our_split,
@@ -392,11 +375,9 @@ def convert_all_to_shar(
                 total_count += count
                 total_errors += errors
 
-    logger.info(f"\n{'='*60}")
-    logger.info(
-        f"ALL DONE! Processed: {total_count} cuts, Errors: {total_errors}, Skipped: {skipped} subsets"
-    )
-    logger.info(f"{'='*60}")
+    logger.info(f"\n{'=' * 60}")
+    logger.info(f"ALL DONE! Processed: {total_count} cuts, Errors: {total_errors}, Skipped: {skipped} subsets")
+    logger.info(f"{'=' * 60}")
 
 
 def parse_args():

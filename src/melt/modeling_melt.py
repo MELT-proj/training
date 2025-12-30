@@ -265,8 +265,10 @@ class MELTAudioAdapter(nn.Module):
         if architecture == "mlp":
             self.adapter = MELTMLPAdapter(config)
         elif architecture == "qformer":
+            raise NotImplementedError("Q-Former adapter is not yet implemented.")
             self.adapter = MELTQFormerAdapter(config)
         elif architecture == "conformer":
+            raise NotImplementedError("Conformer adapter is not yet implemented.")
             self.adapter = MELTConformerAdapter(config)
         else:
             raise ValueError(
@@ -300,6 +302,13 @@ class MELTAudioAdapter(nn.Module):
         """
         return self.adapter._get_output_features_shape(input_features, features_attention_mask)
 
+    def freeze(self):
+        """Freeze all adapter parameters."""
+        for param in self.parameters():
+            param.requires_grad = False
+
+        return self
+
 
 # =============================================================================
 # Audio Encoder with Chunking Support
@@ -332,15 +341,14 @@ def _unfold_tensor(tensor: torch.Tensor, max_seq_len: int) -> torch.Tensor:
 
 class MELTAudioEncoder(nn.Module):
     """
-    Audio encoder module that encapsulates an audio model and an adapter.
+    Audio encoder module that encapsulates an audio model with chunking support.
 
     This module handles:
     - Loading the audio encoder model
-    - Projecting encoder outputs through an adapter
     - Chunking long sequences that exceed max_seq_len
 
     Args:
-        config: MELTConfig containing audio_encoder_config and adapter settings
+        config: MELTConfig containing audio_encoder_config and chunking settings
     """
 
     def __init__(self, config: MELTConfig):
@@ -351,16 +359,13 @@ class MELTAudioEncoder(nn.Module):
         self.max_seq_len = getattr(config, "max_audio_seq_len", 500)
 
         # Initialize the audio encoder
-        self.encoder = AutoModel.from_config(config.audio_encoder_config)
+        self.model = AutoModel.from_config(config.audio_encoder_config)
 
         # Validate that the encoder doesn't have an LM head
-        if self.encoder.get_output_embeddings() is not None:
+        if self.model.get_output_embeddings() is not None:
             raise ValueError(
-                f"The audio encoder {self.encoder} should not have a LM Head. Please use a model without LM Head."
+                f"The audio encoder {self.model} should not have a LM Head. Please use a model without LM Head."
             )
-
-        # Initialize the audio adapter (projector)
-        self.adapter = MELTAudioAdapter(config)
 
     def forward(
         self,
@@ -372,7 +377,7 @@ class MELTAudioEncoder(nn.Module):
         **kwargs,
     ) -> torch.Tensor:
         """
-        Forward pass through the audio encoder and adapter.
+        Forward pass through the audio encoder.
 
         Args:
             input_features: Audio features of shape (batch_size, seq_len, feature_dim)
@@ -383,7 +388,7 @@ class MELTAudioEncoder(nn.Module):
             **kwargs: Additional arguments passed to the encoder
 
         Returns:
-            Projected audio features ready for the text decoder
+            Audio encoder hidden states
         """
         hidden_states = input_features
         bs, seq_len, _ = hidden_states.shape
@@ -416,7 +421,7 @@ class MELTAudioEncoder(nn.Module):
             chunk_mask = features_attention_mask
 
         # Pass through the encoder
-        encoder_outputs = self.encoder(
+        encoder_outputs = self.model(
             hidden_states,
             attention_mask=chunk_mask,
             output_attentions=output_attentions,
@@ -426,9 +431,6 @@ class MELTAudioEncoder(nn.Module):
         )
         hidden_states = encoder_outputs[0]
 
-        # Project through adapter
-        hidden_states = self.adapter(hidden_states, attention_mask=chunk_mask)
-
         # Reshape back and remove padding if we unfolded
         if unfolded:
             hidden_states = hidden_states.reshape(bs, -1, hidden_states.shape[-1])
@@ -437,10 +439,52 @@ class MELTAudioEncoder(nn.Module):
 
         return hidden_states
 
-    def freeze_encoder(self):
-        """Freeze the audio encoder parameters (not the adapter)."""
-        for param in self.encoder.parameters():
+    def freeze(self):
+        """Freeze all encoder parameters."""
+        for param in self.parameters():
             param.requires_grad = False
+
+        return self
+
+
+class MELTAudioStack(nn.Module):
+    """Audio stack = encoder + adapter.
+
+    This mirrors the historical behavior of :class:`MELTAudioEncoder` (which used to
+    include the adapter), but keeps the responsibilities separated.
+    """
+
+    def __init__(self, config: MELTConfig):
+        super().__init__()
+        self.config = config
+        self.encoder = MELTAudioEncoder(config)
+        self.adapter = MELTAudioAdapter(config)
+
+    def forward(
+        self,
+        input_features: torch.Tensor,
+        features_attention_mask: torch.Tensor | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
+        return_dict: bool | None = None,
+        **kwargs,
+    ) -> torch.Tensor:
+        hidden_states = self.encoder(
+            input_features,
+            features_attention_mask=features_attention_mask,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+            **kwargs,
+        )
+        return self.adapter(hidden_states, attention_mask=features_attention_mask)
+
+    def freeze(self):
+        """Freeze all stack parameters (encoder + adapter)."""
+        for param in self.parameters():
+            param.requires_grad = False
+
+        return self
 
 
 # =============================================================================
@@ -458,6 +502,7 @@ class MELTPreTrainedModel(PreTrainedModel, GenerationMixin):
         "LlamaDecoderLayer",
         "Qwen2DecoderLayer",
         "MELTAudioAdapter",
+        "MELTAudioStack",
         "Wav2Vec2BertAdapterLayer",
         "Wav2Vec2BertEncoderLayer",
     ]
@@ -542,20 +587,22 @@ class MELTForConditionalGeneration(MELTPreTrainedModel):
         if self.text_decoder._tied_weights_keys is not None:
             self._tied_weights_keys = [f"text_decoder.{k}" for k in self.text_decoder._tied_weights_keys]
 
-        # Initialize the audio encoder (includes encoder model + adapter)
-        self.audio_encoder = MELTAudioEncoder(config)
+        # Initialize the audio stack (encoder model + adapter)
+        self.audio_stack = MELTAudioStack(config)
 
         # Sync attention implementation between config and models
-        self.config.audio_encoder_config._attn_implementation = self.audio_encoder.encoder.config._attn_implementation
+        self.config.audio_encoder_config._attn_implementation = (
+            self.audio_stack.encoder.model.config._attn_implementation
+        )
         self.config.text_decoder_config._attn_implementation = self.text_decoder.config._attn_implementation
-        self.audio_encoder.encoder.config = self.config.audio_encoder_config
+        self.audio_stack.encoder.model.config = self.config.audio_encoder_config
         self.text_decoder.config = self.config.text_decoder_config
 
         # Initialize weights and apply final processing
         self.post_init()
 
     def get_encoder(self):
-        return self.audio_encoder.encoder
+        return self.audio_stack.encoder.model
 
     def get_decoder(self):
         return self.text_decoder
@@ -572,11 +619,22 @@ class MELTForConditionalGeneration(MELTPreTrainedModel):
     def set_output_embeddings(self, new_embeddings):
         return self.text_decoder.set_output_embeddings(new_embeddings)
 
+    def freeze_decoder(self):
+        """Freeze all decoder (text) parameters."""
+        for param in self.text_decoder.parameters():
+            param.requires_grad = False
+
+        return self
+
+    def freeze_encoder(self):
+        self.audio_stack.encoder.freeze()
+        return self
+
     def get_audio_features(
         self, input_features: torch.Tensor, attention_mask: torch.Tensor | None = None
     ) -> torch.Tensor:
         """Get the audio features projected to the text decoder embedding space."""
-        return self.audio_encoder(input_features, features_attention_mask=attention_mask)
+        return self.audio_stack(input_features, features_attention_mask=attention_mask)
 
     def _replace_audio_placeholders(
         self,
@@ -704,7 +762,7 @@ class MELTForConditionalGeneration(MELTPreTrainedModel):
         if input_features is not None:
             encoder_hidden_states = None
             if not use_cache or (use_cache and past_key_values is None):
-                encoder_hidden_states = self.audio_encoder(
+                encoder_hidden_states = self.audio_stack(
                     input_features,
                     features_attention_mask=features_attention_mask,
                     output_attentions=output_attentions,
@@ -715,7 +773,7 @@ class MELTForConditionalGeneration(MELTPreTrainedModel):
 
                 # Create attention mask for encoder outputs
                 if features_attention_mask is not None:
-                    encoder_outputs_mask = self.audio_encoder.encoder._get_feature_vector_attention_mask(
+                    encoder_outputs_mask = self.audio_stack.encoder.model._get_feature_vector_attention_mask(
                         encoder_hidden_states.shape[1], features_attention_mask
                     )
                 else:
@@ -808,6 +866,7 @@ __all__ = [
     "MELTPreTrainedModel",
     "MELTForConditionalGeneration",
     "MELTAudioEncoder",
+    "MELTAudioStack",
     "MELTAudioAdapter",
     "MELTMLPAdapter",
     "MELTQFormerAdapter",

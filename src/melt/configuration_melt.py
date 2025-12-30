@@ -78,6 +78,7 @@ class MELTConfig(PretrainedConfig):
         audio_encoder_config=None,
         text_decoder_config=None,
         projector_config=None,
+        audio_token_index=32000,
         initializer_range=0.02,
         has_lora_adapter=False,
         adapter_type="mlp",
@@ -85,13 +86,19 @@ class MELTConfig(PretrainedConfig):
         max_audio_seq_len=750,
         **kwargs,
     ):
+        if audio_encoder_config is None:
+            raise ValueError("audio_encoder_config must be provided")
+        if text_decoder_config is None:
+            raise ValueError("text_decoder_config must be provided")
+
         # Handle audio encoder config
         if isinstance(audio_encoder_config, dict):
             encoder_model_type = audio_encoder_config.get("model_type")
             if encoder_model_type is None:
                 raise ValueError("audio_encoder_config dict must contain 'model_type'")
-            print(audio_encoder_config)
-            self.audio_encoder_config = AutoConfig.for_model(**audio_encoder_config)
+            encoder_cfg = dict(audio_encoder_config)
+            encoder_cfg.pop("model_type", None)
+            self.audio_encoder_config = AutoConfig.for_model(encoder_model_type, **encoder_cfg)
         else:
             self.audio_encoder_config = audio_encoder_config
 
@@ -100,7 +107,9 @@ class MELTConfig(PretrainedConfig):
             decoder_model_type = text_decoder_config.get("model_type")
             if decoder_model_type is None:
                 raise ValueError("text_decoder_config dict must contain 'model_type'")
-            self.text_decoder_config = AutoConfig.for_model(**text_decoder_config)
+            decoder_cfg = dict(text_decoder_config)
+            decoder_cfg.pop("model_type", None)
+            self.text_decoder_config = AutoConfig.for_model(decoder_model_type, **decoder_cfg)
         else:
             self.text_decoder_config = text_decoder_config
 
@@ -111,6 +120,7 @@ class MELTConfig(PretrainedConfig):
         else:
             self.projector_config = projector_config
 
+        self.audio_token_index = audio_token_index
         self.initializer_range = initializer_range
         self.has_lora_adapter = has_lora_adapter
         # self.add_pre_adapter = add_pre_adapter

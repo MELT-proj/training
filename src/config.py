@@ -1,94 +1,77 @@
-from dataclasses import asdict, dataclass, field, is_dataclass
-from typing import Any
+"""Configuration utilities for MELT training.
+
+This project uses hierarchical YAML configs loaded via OmegaConf.
+
+Per the simplified configuration scheme, Python keeps configuration as an
+OmegaConf ``DictConfig`` and only defines a minimal CLI ``TrainingArgs``
+dataclass.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+
+from omegaconf import DictConfig, OmegaConf
 
 
 @dataclass
-class TrainingArgsConfig:
-    output_dir: str = "$SCRATCH/speech_lm/models/w2v-qwen25-05_align-iwslt"
-    seed: int = 42
-    do_train: bool = True
-    per_device_train_batch_size: int = 2
-    gradient_accumulation_steps: int = 4
-    per_device_eval_batch_size: int = 2
-    adam_beta1: float = 0.9
-    adam_beta2: float = 0.95
-    num_train_epochs: float = 1
-    lr_scheduler_type: str = "cosine"
-    warmup_steps: int = 2000
-    logging_strategy: str = "steps"
-    logging_steps: int = 25
-    report_to: str | list[str] = "wandb"
-    do_eval: bool = True
-    evaluation_strategy: str = "steps"
-    eval_steps: int = 3000
-    save_strategy: str = "steps"
-    save_total_limit: int = 5
-    save_steps: int = 1000
-    dataloader_num_workers: int = 4
-    remove_unused_columns: bool = False
-    bf16: bool = True
-    group_by_length: bool = True
+class TrainingArgs:
+    """CLI args for training."""
+
+    config_file: str
+    dry_run: bool = False
 
 
-@dataclass
-class Config:
-    datasets: list[str] = field(default_factory=lambda: ["librispeech", "peoples_speech", "mls", "cv16.1"])
-    selected_langs: list[str] = field(default_factory=lambda: ["en", "de", "it", "zh-CN", "zh-HK", "zh-TW"])
-    dataset_workers: int = 8
-    audio_encoder: str = "facebook/w2v-bert-2.0"
-    text_decoder: str = "Qwen/Qwen2.5-0.5B"
-    training_args: TrainingArgsConfig = field(default_factory=TrainingArgsConfig)
-    encoder_lr: float = 6e-6
-    decoder_lr: float = 2e-5
-    adapter_lr: float = 2e-4
-    min_lr_scale: float = 0.1
-    use_flash_attention_2: bool = True
-    val_samples_per_language: int = 3000
-    encoder_params: dict[str, Any] = field(
-        default_factory=lambda: {
-            "add_adapter": False,
-            "adapter_kernel_size": 3,
-            "adapter_stride": 2,
-            "num_adapter_layers": 2,
-        }
-    )
-    decoder_params: dict[str, Any] = field(default_factory=dict)
-    max_duration: int = 60
-    min_chars: int = 3
-    attn_implementation: str | None = None
-    freeze_encoder: bool = False
-    freeze_decoder: bool = False
-    freeze_adapter: bool = False
-    seed: int | None = None
-    collator_args: dict[str, Any] = field(default_factory=dict)
-    add_pre_adapter: bool = False
-    num_pre_adapter_layers: int = 3
-    ckpt: str | None = None
+def load_config(config_file: str, dotlist_overrides: list[str] | None = None) -> DictConfig:
+    """Load a YAML config and apply dotlist overrides (e.g. ``trainer.max_steps=10``)."""
+
+    cfg = OmegaConf.load(config_file)
+    if dotlist_overrides:
+        cfg = OmegaConf.merge(cfg, OmegaConf.from_dotlist(dotlist_overrides))
+    OmegaConf.resolve(cfg)
+    return cfg
 
 
-def override_dataclass(obj: Any, overrides: dict[str, Any]) -> Any:
-    """Recursively override a dataclass (or nested dicts) with values from a dict."""
+def save_config(cfg: DictConfig, path: str) -> None:
+    """Save a resolved config to YAML."""
 
-    for key, value in overrides.items():
-        target_key = "evaluation_strategy" if key == "eval_strategy" else key
-        if not hasattr(obj, target_key):
-            continue
+    OmegaConf.save(config=OmegaConf.create(OmegaConf.to_container(cfg, resolve=True)), f=path)
 
-        current = getattr(obj, target_key)
 
-        if is_dataclass(current) and isinstance(value, dict):
-            override_dataclass(current, value)
-        elif isinstance(current, dict) and isinstance(value, dict):
-            current.update(value)
-        else:
-            setattr(obj, target_key, value)
+def as_dict(cfg: DictConfig) -> dict[str, object]:
+    """Convert config to a resolved plain dict."""
 
-    return obj
+    out = OmegaConf.to_container(cfg, resolve=True)
+    if not isinstance(out, dict):
+        raise TypeError("Expected config to resolve to a dict")
+    return out
+
+
+def trainer_args_dict(cfg: DictConfig) -> dict[str, object]:
+    """Extract a Transformers TrainingArguments-compatible dict from ``cfg.trainer``."""
+
+    if "trainer" not in cfg:
+        raise ValueError("Config missing required key: trainer")
+
+    tcfg = OmegaConf.to_container(cfg.trainer, resolve=True)
+    if not isinstance(tcfg, dict):
+        raise TypeError("cfg.trainer must be a mapping")
+
+    output_dir = os.path.expandvars(str(tcfg.get("output_dir", "")))
+    tcfg["output_dir"] = os.path.expanduser(output_dir)
+
+    report_to = tcfg.get("report_to")
+    if isinstance(report_to, str):
+        tcfg["report_to"] = [report_to]
+
+    return tcfg
 
 
 __all__ = [
-    "asdict",
-    "Config",
-    "TrainingArgsConfig",
-    "override_dataclass",
+    "TrainingArgs",
+    "load_config",
+    "save_config",
+    "as_dict",
+    "trainer_args_dict",
 ]
