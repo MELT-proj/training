@@ -1,0 +1,39 @@
+Bootstrap: docker
+From: nvidia/cuda:12.6.1-runtime-ubuntu22.04
+
+%setup
+    mkdir -p ${APPTAINER_ROOTFS}/usr/local/share/uv/cache
+
+%files
+    /home/twigs/projects/bigfish  /workspace/bigfish
+
+%environment
+    export PATH=$PATH:/usr/local/bin
+    export UV_PYTHON_INSTALL_DIR=/usr/local/share/uv/python
+    
+%post
+    #!/bin/bash
+    set -eux
+
+    export UV_PYTHON_INSTALL_DIR=/usr/local/share/uv/python
+    export UV_INSTALL_DIR=/usr/local/bin
+    export PATH=$PATH:/usr/local/bin
+
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        git build-essential curl ca-certificates \
+        && rm -rf /var/lib/apt/lists/*
+
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    /usr/local/bin/uv --version
+    
+    /usr/local/bin/uv python install 3.12.11
+    # Verify installation
+    /usr/local/bin/uv python list
+
+    cd /workspace/bigfish
+    /usr/local/bin/uv venv --python 3.12.11
+    /usr/local/bin/uv sync --python 3.12.11 --link-mode copy --cache-dir /usr/local/share/uv/cache --no-editable
+
+    # test torch installation
+    /usr/local/bin/uv run python -c "import torch; print(torch.__version__)"    

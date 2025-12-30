@@ -97,6 +97,7 @@ class MELTTrainer(Trainer):
             world_size=self._world_size,
         )
 
+        dataloader = self.accelerator.prepare(dataloader)
         return dataloader
 
     def get_eval_dataloader(self, eval_dataset=None) -> DataLoader:
