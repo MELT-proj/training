@@ -1,23 +1,23 @@
 import pytest
 import json
 
-from src.melt.configuration_melt import MELTConfig, MELTProjectorConfig
+from src.melt.configuration_melt import MELTConfig, MELTAdapterConfig
 from transformers import AutoConfig
 
 
-class TestMELTProjectorConfig:
+class TestMELTAdapterConfig:
     def test_default_initialization(self):
-        config = MELTProjectorConfig()
+        config = MELTAdapterConfig()
 
         assert config.hidden_size == 1024
         assert config.num_hidden_layers == 2
         assert config.intermediate_size == 4096
         assert config.hidden_act == "gelu"
         assert config.dropout == 0.1
-        assert config.model_type == "melt_projector"
+        assert config.model_type == "melt_adapter"
 
     def test_custom_initialization(self):
-        config = MELTProjectorConfig(
+        config = MELTAdapterConfig(
             hidden_size=512,
             num_hidden_layers=4,
             intermediate_size=2048,
@@ -30,6 +30,11 @@ class TestMELTProjectorConfig:
         assert config.intermediate_size == 2048
         assert config.hidden_act == "relu"
         assert config.dropout == 0.2
+
+    def test_qformer_params(self):
+        config = MELTAdapterConfig(downsample_rate=7, window_size=21)
+        assert config.downsample_rate == 7
+        assert config.window_size == 21
 
 
 class TestMELTConfig:
@@ -50,7 +55,7 @@ class TestMELTConfig:
         assert config.model_type == "melt"
         assert config.audio_encoder_config.model_type == "wav2vec2-bert"
         assert config.text_decoder_config.model_type == "qwen2"
-        assert isinstance(config.projector_config, MELTProjectorConfig)
+        assert isinstance(config.adapter_config, MELTAdapterConfig)
 
     def test_initialization_with_dicts(self):
         audio_encoder_dict = AutoConfig.from_pretrained("facebook/w2v-bert-2.0").to_dict()
@@ -66,26 +71,26 @@ class TestMELTConfig:
         assert config.text_decoder_config.model_type == "qwen2"
 
     def test_initialization_with_custom_projector(self, audio_encoder_config, text_decoder_config):
-        projector_config = MELTProjectorConfig(hidden_size=768, num_hidden_layers=3)
+        adapter_config = MELTAdapterConfig(hidden_size=768, num_hidden_layers=3)
 
         config = MELTConfig(
             audio_encoder_config=audio_encoder_config,
             text_decoder_config=text_decoder_config,
-            projector_config=projector_config,
+            adapter_config=adapter_config,
         )
 
-        assert config.projector_config.hidden_size == 768
-        assert config.projector_config.num_hidden_layers == 3
+        assert config.adapter_config.hidden_size == 768
+        assert config.adapter_config.num_hidden_layers == 3
 
     def test_initialization_with_projector_dict(self, audio_encoder_config, text_decoder_config):
         config = MELTConfig(
             audio_encoder_config=audio_encoder_config,
             text_decoder_config=text_decoder_config,
-            projector_config={"hidden_size": 512, "dropout": 0.3},
+            adapter_config={"hidden_size": 512, "dropout": 0.3},
         )
 
-        assert config.projector_config.hidden_size == 512
-        assert config.projector_config.dropout == 0.3
+        assert config.adapter_config.hidden_size == 512
+        assert config.adapter_config.dropout == 0.3
 
     def test_default_parameters(self, audio_encoder_config, text_decoder_config):
         config = MELTConfig(
@@ -93,7 +98,8 @@ class TestMELTConfig:
             text_decoder_config=text_decoder_config,
         )
 
-        assert config.audio_token_index == 32000
+        # audio_token_index removed from config; ensure defaults still set elsewhere
+        assert hasattr(config, "initializer_range") and config.initializer_range == 0.02
         assert config.initializer_range == 0.02
         assert config.has_lora_adapter is False
         assert config.adapter_type == "mlp"
@@ -104,14 +110,12 @@ class TestMELTConfig:
         config = MELTConfig(
             audio_encoder_config=audio_encoder_config,
             text_decoder_config=text_decoder_config,
-            audio_token_index=50000,
             initializer_range=0.01,
             has_lora_adapter=True,
             adapter_type="perceiver",
             num_latents=128,
         )
 
-        assert config.audio_token_index == 50000
         assert config.initializer_range == 0.01
         assert config.has_lora_adapter is True
         assert config.adapter_type == "perceiver"
@@ -147,6 +151,16 @@ class TestMELTConfig:
         )
 
         assert config.is_composition is True
+
+    def test_adapter_type_from_adapter_config(self, audio_encoder_config, text_decoder_config):
+        config = MELTConfig(
+            audio_encoder_config=audio_encoder_config,
+            text_decoder_config=text_decoder_config,
+            adapter_config={"type": "qformer", "downsample_rate": 7},
+        )
+
+        assert config.adapter_type == "qformer"
+        assert config.adapter_config.downsample_rate == 7
 
     def test_save_pretrained_writes_config_json(self, tmp_path):
         # Use local config objects (no network) but still exercise HF save_pretrained

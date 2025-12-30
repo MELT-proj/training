@@ -3,24 +3,28 @@ from transformers.configuration_utils import PretrainedConfig
 from transformers.utils import logging
 
 
-class MELTProjectorConfig(PretrainedConfig):
+class MELTAdapterConfig(PretrainedConfig):
     r"""
-    Configuration class for the MELT projector module.
+    Configuration class for MELT adapters (MLP, Q-Former, Conformer).
 
     Args:
         hidden_size (`int`, *optional*, defaults to 1024):
-            Dimensionality of the projector hidden layers.
+            Dimensionality of adapter hidden layers (used by Q-Former and other adapters).
         num_hidden_layers (`int`, *optional*, defaults to 2):
-            Number of hidden layers in the projector.
+            Number of hidden layers (if applicable).
         intermediate_size (`int`, *optional*, defaults to 4096):
-            Dimensionality of the intermediate (feed-forward) layer.
+            Intermediate (FFN) size for adapters that need it.
         hidden_act (`str`, *optional*, defaults to `"gelu"`):
-            The activation function in the projector.
+            Activation function.
         dropout (`float`, *optional*, defaults to 0.1):
-            The dropout probability for projector layers.
+            Dropout probability.
+        downsample_rate (`int`, *optional*, defaults to 5):
+            Q-Former downsample rate (used by Q-Former adapter).
+        window_size (`int`, *optional*, defaults to 15):
+            Q-Former window size (used by Q-Former adapter).
     """
 
-    model_type = "melt_projector"
+    model_type = "melt_adapter"
 
     def __init__(
         self,
@@ -29,6 +33,8 @@ class MELTProjectorConfig(PretrainedConfig):
         intermediate_size=4096,
         hidden_act="gelu",
         dropout=0.1,
+        downsample_rate=5,
+        window_size=15,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -37,6 +43,9 @@ class MELTProjectorConfig(PretrainedConfig):
         self.intermediate_size = intermediate_size
         self.hidden_act = hidden_act
         self.dropout = dropout
+        # Q-Former specific
+        self.downsample_rate = downsample_rate
+        self.window_size = window_size
 
 
 class MELTConfig(PretrainedConfig):
@@ -48,10 +57,9 @@ class MELTConfig(PretrainedConfig):
             The config object or dictionary of the audio encoder backbone.
         text_decoder_config (`Union[AutoConfig, dict]`, *optional*):
             The config object or dictionary of the text decoder backbone.
-        projector_config (`MELTProjectorConfig`, *optional*):
-            The config object or dictionary of the audio projector.
-        audio_token_index (`int`, *optional*, defaults to 32000):
-            The audio token index to encode the audio prompt.
+        adapter_config (`MELTAdapterConfig`, *optional*):
+            The config object or dictionary of the audio adapter.
+
         initializer_range (`float`, *optional*, defaults to 0.02):
             The standard deviation of the truncated_normal_initializer for initializing all weight matrices.
         has_lora_adapter (`bool`, *optional*, defaults to `False`):
@@ -73,7 +81,7 @@ class MELTConfig(PretrainedConfig):
     sub_configs = {
         "audio_encoder_config": AutoConfig,
         "text_decoder_config": AutoConfig,
-        "projector_config": MELTProjectorConfig,
+        "adapter_config": MELTAdapterConfig,
     }  # type: ignore
     is_composition = True
 
@@ -81,7 +89,7 @@ class MELTConfig(PretrainedConfig):
         self,
         audio_encoder_config=None,
         text_decoder_config=None,
-        projector_config=None,
+        adapter_config=None,
         initializer_range=0.02,
         has_lora_adapter=False,
         adapter_type="mlp",
@@ -116,12 +124,15 @@ class MELTConfig(PretrainedConfig):
         else:
             self.text_decoder_config = text_decoder_config
 
-        # Handle projector config
-        if not isinstance(projector_config, MELTProjectorConfig):
-            projector_config = {} if projector_config is None else projector_config
-            self.projector_config = MELTProjectorConfig(**projector_config)
+        # Handle adapter config
+        if not isinstance(adapter_config, MELTAdapterConfig):
+            adapter_cfg = {} if adapter_config is None else adapter_config
+            # If adapter_cfg is a dict and contains a 'type' entry, prefer that as adapter_type
+            if isinstance(adapter_cfg, dict) and "type" in adapter_cfg:
+                adapter_type = adapter_cfg.get("type", adapter_type)
+            self.adapter_config = MELTAdapterConfig(**adapter_cfg)
         else:
-            self.projector_config = projector_config
+            self.adapter_config = adapter_config
 
         self.initializer_range = initializer_range
         self.has_lora_adapter = has_lora_adapter
@@ -140,4 +151,4 @@ class MELTConfig(PretrainedConfig):
         return self.text_decoder_config.vocab_size
 
 
-__all__ = ["MELTConfig", "MELTProjectorConfig"]
+__all__ = ["MELTConfig", "MELTAdapterConfig"]

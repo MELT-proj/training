@@ -1,4 +1,4 @@
-from .configuration_melt import MELTConfig, MELTProjectorConfig
+from .configuration_melt import MELTConfig, MELTAdapterConfig
 from .modeling_melt import (
     MELTAudioAdapter,
     MELTAudioStack,
@@ -13,7 +13,7 @@ from .processing_melt import MELTProcessor
 
 __all__ = [
     "MELTConfig",
-    "MELTProjectorConfig",
+    "MELTAdapterConfig",
     "MELTPreTrainedModel",
     "MELTForConditionalGeneration",
     "MELTAudioAdapter",

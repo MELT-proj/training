@@ -270,6 +270,9 @@ def get_lhotse_dataloader_from_config(
     num_workers = config.get("num_workers", 0)
     pin_memory = config.get("pin_memory", True)
 
+    # Extract optional prefetch_factor for worker-level prefetching
+    prefetch_factor = int(config.get("prefetch_factor", 2)) if config.get("prefetch_factor") is not None else 2
+
     if use_iterable:
         # For tarred/shar data, wrap dataset with sampler
         # This moves sampling to worker processes
@@ -296,6 +299,7 @@ def get_lhotse_dataloader_from_config(
         batch_size=None,  # Batching handled by sampler
         num_workers=num_workers,
         pin_memory=pin_memory,
+        prefetch_factor=prefetch_factor if num_workers > 0 else 0,
     )
 
     return dataloader

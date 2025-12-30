@@ -74,20 +74,21 @@ class MELTQFormerAdapter(nn.Module):
 
     def __init__(self, config: MELTConfig):
         super().__init__()
-        self.hidden_size = config.projector_config.hidden_size
-        self.downsample_rate = getattr(config, "downsample_rate", 5)
-        self.window_size = getattr(config, "window_size", 15)
+        self.hidden_size = config.adapter_config.hidden_size
+        # Read Q-Former parameters from adapter_config when present
+        self.downsample_rate = getattr(config.adapter_config, "downsample_rate", getattr(config, "downsample_rate", 5))
+        self.window_size = getattr(config.adapter_config, "window_size", getattr(config, "window_size", 15))
         self.num_queries = self.window_size // self.downsample_rate
         self.output_hidden_size = config.text_decoder_config.hidden_size
 
-        self.query = nn.Parameter(torch.zeros(1, self.num_queries, config.projector_config.hidden_size))
+        self.query = nn.Parameter(torch.zeros(1, self.num_queries, config.adapter_config.hidden_size))
         self.query.data.normal_(mean=0.0, std=1.0)
 
         # Q-Former model from config (typically blip_2_qformer)
-        self.qformer = AutoModel.from_config(config.projector_config)
+        self.qformer = AutoModel.from_config(config.adapter_config)
 
         # Final projection to text decoder hidden size
-        self.linear = nn.Linear(config.projector_config.hidden_size, self.output_hidden_size)
+        self.linear = nn.Linear(config.adapter_config.hidden_size, self.output_hidden_size)
 
     def _get_output_features_shape(
         self,
@@ -260,7 +261,7 @@ class MELTAudioAdapter(nn.Module):
 
     def __init__(self, config: MELTConfig):
         super().__init__()
-        architecture = config.adapter_type
+        architecture = getattr(config, "adapter_type", getattr(config, "adapter", {}).get("type", "mlp"))
 
         if architecture == "mlp":
             self.adapter = MELTMLPAdapter(config)

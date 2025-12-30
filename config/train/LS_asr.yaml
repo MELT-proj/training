@@ -73,6 +73,7 @@ data:
     # DataLoader settings
     num_workers: 0
     pin_memory: true
+    prefetch_factor: 2
     sample_rate: ${data.sample_rate}
     text_field: text
     lang_field: lang
@@ -96,6 +97,7 @@ data:
     max_duration: 30.0
     num_workers: 4
     pin_memory: true
+    prefetch_factor: 2
     sample_rate: ${data.sample_rate}
     text_field: text
     lang_field: lang

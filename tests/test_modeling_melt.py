@@ -548,8 +548,8 @@ class TestAdapterOutputFeaturesShape:
         config = MagicMock(spec=MELTConfig)
         config.adapter_type = "qformer"
         # Mock projector config
-        config.projector_config = MagicMock()
-        config.projector_config.hidden_size = 768
+        config.adapter_config = MagicMock()
+        config.adapter_config.hidden_size = 768
         # Mock text decoder config
         config.text_decoder_config = MagicMock()
         config.text_decoder_config.hidden_size = 1024
