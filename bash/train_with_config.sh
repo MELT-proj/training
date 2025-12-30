@@ -145,7 +145,16 @@ SRUN_ARGS=" \
     "
 
 if [[ "$RUNNING_UNDER_SLURM" -eq 1 ]]; then
-    srun $SRUN_ARGS --jobid "$SLURM_JOB_ID" bash -c "$LAUNCHER --role \$SLURMD_NODENAME: $CMD" 2>&1
+    # If we're already inside an interactive srun allocation (a Slurm "step"),
+    # re-invoking srun from inside that step can fail or create nested steps.
+    # Detect that situation via SLURM_STEP_ID (set for srun steps) or SLURM_PROCID
+    # and simply run the launcher directly instead of wrapping it with srun.
+    if [[ -n "${SLURM_STEP_ID:-}" || -n "${SLURM_PROCID:-}" ]]; then
+        echo "Detected running inside an interactive srun step (SLURM_STEP_ID or SLURM_PROCID present); launching directly"
+        bash -c "$LAUNCHER --role \$SLURM_PROCID: $CMD" 2>&1
+    else
+        srun $SRUN_ARGS --jobid "$SLURM_JOB_ID" bash -c "$LAUNCHER --role \$SLURM_PROCID: $CMD" 2>&1
+    fi
 else
 # python -m pdb -c continue src/train.py --config-file $CONFIG_FILE --dry_run
     bash -c "$LAUNCHER $CMD" 2>&1

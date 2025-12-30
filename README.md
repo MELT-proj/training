@@ -41,3 +41,58 @@ $LHOTSE_DATA_SHAR_ROOT/librispeech/
 ```
 
 (or the default path if `LHOTSE_DATA_SHAR_ROOT` is not set). Check the corresponding directory for the created SHAR archives and a `.conversion_markers` entry that notes completion.
+
+---
+
+## Running training (config-driven) 🚀
+
+We provide several ways to launch training using a YAML config file (`--config-file`). The canonical helper is `bash/train_with_config.sh`, which wraps `accelerate` and sets useful environment defaults.
+
+### 1) Batch (SLURM + sbatch) ✅
+Use this when submitting a job to the cluster scheduler. Example:
+
+```bash
+sbatch bash/train_with_config.sh config/train/LS_asr.yaml config/accelerate/zero3.yaml
+```
+
+This submits a SLURM job and wraps `accelerate launch` with the correct node/process configuration.
+
+### 2) Interactive (inside an srun allocation) ✅
+If you already reserved an interactive allocation with `srun` (or `salloc`) do **not** re-run `srun` from inside the allocation — instead just run the same helper. The script detects interactive srun steps and will launch `accelerate` directly:
+
+```bash
+# reserve a node (interactive session)
+srun -N1 --gpus-per-node=4 --pty bash
+# inside that shell, launch training
+bash bash/train_with_config.sh config/train/LS_asr.yaml config/accelerate/zero3.yaml
+```
+
+You should see a message like "Detected running inside an interactive srun step..." if the script chooses the direct-launch path.
+
+### 3) Local single-machine run (no SLURM) 🖥️
+Launch training directly on your machine (it will start `accelerate` with local settings):
+
+```bash
+bash bash/train_with_config.sh config/train/LS_asr.yaml config/accelerate/fsdp.yaml
+```
+
+This is useful for small-scale debugging and development.
+
+### 4) Direct `accelerate` invocation (advanced) 🔧
+If you prefer to call `accelerate` yourself, you can run:
+
+```bash
+accelerate launch --config_file config/accelerate/zero3.yaml src/train.py --config-file config/train/LS_asr.yaml
+```
+
+This is equivalent to the helper but useful when experimenting with different `accelerate` flags.
+
+---
+
+### Notes & tips 💡
+- The helper script exports commonly useful env vars (e.g., `SCRATCH`, `HF_HOME`, `LOCAL_DATASETS_DIR`). You can override them at invocation time, e.g. `SCRATCH=/my/tmp bash bash/train_with_config.sh ...`.
+- The script parses `gradient_accumulation_steps` from the YAML to pass that through to `accelerate` when possible.
+- For interactive use, the script detects `SLURM_STEP_ID` / `SLURM_PROCID` and avoids creating nested `srun` steps.
+- If you need a dry run, use the `--dry_run` flag supported by `src/train.py` (see the training CLI for more options).
+
+If you'd like I can add a short example `sbatch` job script and a one-line `Makefile` target to make launching even easier.
