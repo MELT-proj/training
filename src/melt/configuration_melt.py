@@ -78,12 +78,11 @@ class MELTConfig(PretrainedConfig):
         audio_encoder_config=None,
         text_decoder_config=None,
         projector_config=None,
-        audio_token_index=32000,
         initializer_range=0.02,
         has_lora_adapter=False,
         adapter_type="mlp",
         num_latents=64,
-        max_audio_seq_len=750,
+        max_audio_seq_len=1500,  # for frames of 20ms, this is 30s
         **kwargs,
     ):
         if audio_encoder_config is None:
@@ -120,11 +119,8 @@ class MELTConfig(PretrainedConfig):
         else:
             self.projector_config = projector_config
 
-        self.audio_token_index = audio_token_index
         self.initializer_range = initializer_range
         self.has_lora_adapter = has_lora_adapter
-        # self.add_pre_adapter = add_pre_adapter
-        # self.num_pre_adapter_layers = num_pre_adapter_layers
         self.adapter_type = adapter_type
         self.num_latents = num_latents
 

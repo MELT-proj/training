@@ -248,6 +248,7 @@ class MELTProcessor(ProcessorMixin):
         audio: AudioInput | None = None,
         images: ImageInput | None = None,
         videos: VideoInput | None = None,
+        return_labels: bool = False,
         **kwargs: Unpack[MELTProcessorKwargs],
     ) -> BatchFeature:
         """
@@ -360,6 +361,14 @@ class MELTProcessor(ProcessorMixin):
                 output_data["audio_lengths"] = [
                     lengths + [-1] * (max_len - len(lengths)) for lengths in output_data["audio_lengths"]
                 ]
+
+        if return_labels:
+            output_data["labels"] = self.tokenizer.pad(
+                texts_inputs,
+                padding_side="left",
+                padding="longest",
+                return_tensors="pt",
+            )["input_ids"]
 
         return BatchFeature(
             data=output_data,  # , **images_inputs, **videos_inputs},

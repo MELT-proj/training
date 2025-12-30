@@ -62,7 +62,9 @@ def prepare_model(
     text_config = AutoConfig.from_pretrained(decoder_name, **decoder_cfg)
     config = MELTConfig(audio_encoder_config=audio_config, text_decoder_config=text_config)
 
+    # Set special tokens
     config.audio_bos_token_id = processor.tokenizer.convert_tokens_to_ids([processor.audio_bos_token])[0]
+    config.text_decoder_config.pad_token_id = processor.tokenizer.pad_token_id
 
     # Detect last checkpoint
     last_checkpoint = None
