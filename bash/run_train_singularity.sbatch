@@ -84,50 +84,42 @@ fi
 # ------------------------------------------------------------------
 
 # Bind / env mapping
-# - Your code expects SCRATCH_DIR/LOCAL_DATASETS_DIR.
+# - We avoid using SCRATCH_DIR directly; dataset defaults fall back to the submit dir.
 # - Inside the image, the venv exists at /workspace/training/venv.
 # ------------------------------------------------------------------
 HOST_PROJECT_DIR="${SUBMIT_DIR}"
-HOST_SCRATCH_DIR="${SCRATCH_DIR_HOST:-${SCRATCH_DIR:-${SUBMIT_DIR}/scratch}}"
-HOST_LOCAL_DATASETS_DIR="${LOCAL_DATASETS_DIR_HOST:-${LOCAL_DATASETS_DIR:-${HOST_SCRATCH_DIR}/shar}}"
+HOST_LOCAL_DATASETS_DIR="${LOCAL_DATASETS_DIR_HOST:-${LOCAL_DATASETS_DIR:-${SUBMIT_DIR}/shar}}"
 
 CONTAINER_PROJECT_DIR="/workspace/training"
-CONTAINER_SCRATCH_DIR="/workspace/scratch"
-CONTAINER_LOCAL_DATASETS_DIR="${CONTAINER_SCRATCH_DIR}/shar"
+CONTAINER_LOCAL_DATASETS_DIR="/workspace/shar"
 
-# Ensure host scratch exists (for logs/caches/checkpoints).
-mkdir -p "${HOST_SCRATCH_DIR}"
-mkdir -p "${HOST_SCRATCH_DIR}/logs"
+# Ensure host tmp/logs exist (for caches/checkpoints/logs).
+HOST_TMPDIR="${TMPDIR_HOST:-${SUBMIT_DIR}/tmp}"
+mkdir -p "${HOST_TMPDIR}"
+mkdir -p "${SUBMIT_DIR}/logs"
 
 # Export container-visible env vars. Using SINGULARITYENV_ makes this work even with --cleanenv.
-export SINGULARITYENV_SCRATCH_DIR="${CONTAINER_SCRATCH_DIR}"
 export SINGULARITYENV_LOCAL_DATASETS_DIR="${CONTAINER_LOCAL_DATASETS_DIR}"
 export SINGULARITYENV_VENV_PATH="${CONTAINER_PROJECT_DIR}/venv/bin/activate"
 
 # Optional: avoid filling /tmp inside the container by setting TMPDIR.
-# You can override TMPDIR_HOST when submitting.
-HOST_TMPDIR="${TMPDIR_HOST:-${HOST_SCRATCH_DIR}/tmp}"
 CONTAINER_TMPDIR="/workspace/tmp"
-mkdir -p "${HOST_TMPDIR}"
 export SINGULARITYENV_TMPDIR="${CONTAINER_TMPDIR}"
 
 # Also pass through commonly-used ML env vars if set on host.
 # (Inherited automatically unless --cleanenv is used.)
 export SINGULARITYENV_WANDB_PROJECT="${WANDB_PROJECT:-melt}"
 export SINGULARITYENV_WANDB_MODE="${WANDB_MODE:-online}"
-export SINGULARITYENV_HF_HOME="${HF_HOME:-${CONTAINER_SCRATCH_DIR}/hf_home_speech}"
-export SINGULARITYENV_HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${CONTAINER_SCRATCH_DIR}/hf_datasets_cache}"
 
 # Binds:
 # - Project dir (so you can edit code without rebuilding the image)
-# - Scratch + datasets
+# - tmp + datasets
 # - Config files (explicitly) to keep things simple
-BIND_ARGS="${HOST_PROJECT_DIR}:${CONTAINER_PROJECT_DIR},${HOST_SCRATCH_DIR}:${CONTAINER_SCRATCH_DIR},${HOST_TMPDIR}:${CONTAINER_TMPDIR},${HOST_LOCAL_DATASETS_DIR}:${CONTAINER_LOCAL_DATASETS_DIR},${CONFIG_FILE_HOST}:${CONTAINER_PROJECT_DIR}/_config.yaml,${ACCELERATE_CONFIG_HOST}:${CONTAINER_PROJECT_DIR}/_accelerate.yaml"
+BIND_ARGS="${HOST_PROJECT_DIR}:${CONTAINER_PROJECT_DIR},${HOST_TMPDIR}:${CONTAINER_TMPDIR},${HOST_LOCAL_DATASETS_DIR}:${CONTAINER_LOCAL_DATASETS_DIR},${CONFIG_FILE_HOST}:${CONTAINER_PROJECT_DIR}/_config.yaml,${ACCELERATE_CONFIG_HOST}:${CONTAINER_PROJECT_DIR}/_accelerate.yaml"
 
 echo "SINGULARITY_IMG: ${SINGULARITY_IMG}"
 echo "SINGULARITY_BIN: ${SINGULARITY_BIN}"
 echo "Host project: ${HOST_PROJECT_DIR} -> ${CONTAINER_PROJECT_DIR}"
-echo "Host scratch: ${HOST_SCRATCH_DIR} -> ${CONTAINER_SCRATCH_DIR}"
 echo "Host datasets: ${HOST_LOCAL_DATASETS_DIR} -> ${CONTAINER_LOCAL_DATASETS_DIR}"
 echo "Host tmp: ${HOST_TMPDIR} -> ${CONTAINER_TMPDIR}"
 

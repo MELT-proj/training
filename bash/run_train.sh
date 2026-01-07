@@ -10,15 +10,11 @@ set -euo pipefail
 
 
 # Two crucial environment variables to set up:
-# 1) SCRATCH_DIR: path to scratch space for this run
-# 2) VENV_PATH: path to the python virtualenv activate script
-# 3) LOCAL_DATASETS_DIR: path to local datasets storage
-SCRATCH_DIR="${SCRATCH_DIR:-/workspace/scratch}"
+# 1) VENV_PATH: path to the python virtualenv activate script
+# 2) LOCAL_DATASETS_DIR: path to local datasets storage
 VENV_PATH="${VENV_PATH:-/workspace/training/venv/bin/activate}"
-LOCAL_DATASETS_DIR="${LOCAL_DATASETS_DIR:-$SCRATCH_DIR/shar}"
+LOCAL_DATASETS_DIR="${LOCAL_DATASETS_DIR:-./shar}"
 
-HF_HOME="${HF_HOME:-$SCRATCH_DIR/hf_home_speech}"
-HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-$SCRATCH_DIR/hf_datasets_cache}"
 WANDB_PROJECT="${WANDB_PROJECT:-melt}"
 WANDB_MODE="${WANDB_MODE:-online}"
 TORCHDYNAMO_VERBOSE="${TORCHDYNAMO_VERBOSE:-1}"
@@ -61,7 +57,6 @@ echo "Using config file: $CONFIG_FILE"
 echo "Gradient Accumulation Steps: $GRAD_ACC_STEPS"
 
 # setup run-specific envs
-export SCRATCH_DIR
 export VENV_PATH
 export TMPDIR
 export LOCAL_DATASETS_DIR

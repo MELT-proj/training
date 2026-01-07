@@ -89,10 +89,43 @@ This is equivalent to the helper but useful when experimenting with different `a
 
 ---
 
+### Run inside a Singularity / Apptainer container (SLURM)
+If you built a container image (e.g., `melt_cuda126.sif`) you can run training inside the image using the provided wrapper `bash/run_train_singularity.sbatch`. The wrapper:
+
+- validates the image path (`SINGULARITY_IMG=/path/to/image.sif`)
+- binds your project, tmp and dataset directories into the container
+- exports the in-container venv path (`SINGULARITYENV_VENV_PATH`) so the runner auto-activates the virtualenv
+- runs the container under `srun` so multi-node jobs behave correctly
+
+Example submission (host-side):
+
+```bash
+SINGULARITY_IMG=/gpfs/projects/epor32/hugop/melt_cuda126.sif \
+  TMPDIR_HOST=/gpfs/scratch/epor32/hugop/tmp \
+  sbatch bash/run_train_singularity.sbatch config/train/LS_asr.yaml config/accelerate/fsdp.yaml
+```
+
+Notes:
+- The wrapper does **not** automatically set HF-related environment variables (`HF_HOME`, `HF_DATASETS_CACHE`); if you rely on these inside the container, set them explicitly with `SINGULARITYENV_HF_HOME` and `SINGULARITYENV_HF_DATASETS_CACHE` or provide them in a site init script.
+- To control where temporary files are stored inside the container, set `TMPDIR_HOST` when submitting; it will be bound into the container at `/workspace/tmp`.
+
+---
+
 ### Notes & tips 💡
-- The helper script exports commonly useful env vars (e.g., `SCRATCH`, `HF_HOME`, `LOCAL_DATASETS_DIR`). You can override them at invocation time, e.g. `SCRATCH=/my/tmp bash bash/train_with_config.sh ...`.
+- The helper script (`bash/run_train.sh`) exports commonly useful env vars when run directly (e.g., `SCRATCH_DIR`, `LOCAL_DATASETS_DIR`); you can override them at invocation time, e.g. `SCRATCH_DIR=/my/tmp bash bash/train_with_config.sh ...`.
 - The script parses `gradient_accumulation_steps` from the YAML to pass that through to `accelerate` when possible.
 - For interactive use, the script detects `SLURM_STEP_ID` / `SLURM_PROCID` and avoids creating nested `srun` steps.
 - If you need a dry run, use the `--dry_run` flag supported by `src/train.py` (see the training CLI for more options).
 
 If you'd like I can add a short example `sbatch` job script and a one-line `Makefile` target to make launching even easier.
+
+---
+
+### Example Commands on SARDINE's cluster
+
+Run locally after resource allocation with `srun`:
+
+VENV_PATH=/mnt/home/giuseppe/mydata/melt-proj/training/venv/bin/activate \
+  LOCAL_DATASETS_DIR=/mnt/scratch-artemis/giuseppe/melt-data/shar \
+  bash ./bash/run_train.sh \
+  config/train/LS_asr.yaml config/accelerate/zero3.yaml
