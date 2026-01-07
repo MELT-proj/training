@@ -11,7 +11,7 @@ license = {text = "MIT"}
 authors = [
     {name = "Giuseppe Attanasio", email = "gattanasio.work@gmail.com"}
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 dependencies = [
     "transformers==4.57.2",
     "wandb",

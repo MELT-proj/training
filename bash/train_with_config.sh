@@ -69,15 +69,12 @@ echo "Using config file: $CONFIG_FILE"
 echo "Gradient Accumulation Steps: $GRAD_ACC_STEPS"
 
 # setup run-specific envs
-# export LOCAL_DATASETS_DIR="/mnt/home/giuseppe/myscratch/speech_lm/datasets"
 export SCRATCH
 export BASEDIR
 export TMPDIR
 export LOCAL_DATASETS_DIR
 export HF_HOME
 export HF_DATASETS_CACHE
-# export HF_DATASETS_OFFLINE=1
-# export TRANSFORMERS_OFFLINE=1
 
 export WANDB_PROJECT
 # export WANDB_MODE=offline
@@ -109,9 +106,12 @@ fi
 NUM_NODES=${SLURM_NNODES:-1}
 WORLD_SIZE=$((NUM_NODES * GPUS_PER_NODE))
 MASTER_PORT=${MASTER_PORT:-6000}
-MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
 if [[ "$RUNNING_UNDER_SLURM" -eq 1 ]]; then
-    MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
+    # When running inside containers, `scontrol` might not be available.
+    # Allow passing MASTER_ADDR from the host/wrapper.
+    MASTER_ADDR=${MASTER_ADDR:-$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)}
+else
+    MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
 fi
 
 echo "Running under SLURM: $RUNNING_UNDER_SLURM"

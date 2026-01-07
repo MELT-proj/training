@@ -5,7 +5,7 @@ From: nvidia/cuda:12.6.1-runtime-ubuntu22.04
     mkdir -p ${APPTAINER_ROOTFS}/usr/local/share/uv/cache
 
 %files
-    /home/twigs/projects/bigfish  /workspace/bigfish
+    /mnt/data-poseidon/giuseppe/melt-proj/training  /workspace/training
 
 %environment
     export PATH=$PATH:/usr/local/bin
@@ -31,7 +31,7 @@ From: nvidia/cuda:12.6.1-runtime-ubuntu22.04
     # Verify installation
     /usr/local/bin/uv python list
 
-    cd /workspace/bigfish
+    cd /workspace/training
     /usr/local/bin/uv venv --python 3.12.11
     /usr/local/bin/uv sync --python 3.12.11 --link-mode copy --cache-dir /usr/local/share/uv/cache --no-editable
 
