@@ -23,6 +23,7 @@ dependencies = [
     "accelerate",
     "deepspeed",
     "lhotse",
+    "omegaconf"
 ]
 
 [project.optional-dependencies]
