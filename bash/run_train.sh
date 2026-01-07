@@ -1,14 +1,4 @@
 #!/bin/bash
-#SBATCH --job-name=MELT_PoC
-#SBATCH --output=./logs/%A.out
-#SBATCH --time=04:00:00
-#SBATCH --nodes=1
-#SBATCH --gpus-per-node=4
-#SBATCH --qos=gpu-short
-#SBATCH --partition=a6000
-#SBATCH --mem-per-gpu=32G
-#SBATCH --cpus-per-task=12
-#SBATCH --ntasks-per-node=1
 
 set -euo pipefail
 
@@ -18,26 +8,28 @@ set -euo pipefail
 # Override any of these at invocation time, e.g.:
 #   SCRATCH=/path WANDB_PROJECT=foo ./bash/train_with_config.sh ...
 
-VENV_PATH_DEFAULT="${VENV_PATH_DEFAULT:-/mnt/data-poseidon/giuseppe/melt-proj/training/venv/bin/activate}"
 
-SCRATCH="${SCRATCH:-/mnt/home/giuseppe/myscratch}"
-BASEDIR="${BASEDIR:-$SCRATCH/speech_lm}"
+# Two crucial environment variables to set up:
+# 1) SCRATCH_DIR: path to scratch space for this run
+# 2) VENV_PATH: path to the python virtualenv activate script
+# 3) LOCAL_DATASETS_DIR: path to local datasets storage
+SCRATCH_DIR="${SCRATCH_DIR:-/workspace/scratch}"
+VENV_PATH="${VENV_PATH:-/workspace/training/venv/bin/activate}"
+LOCAL_DATASETS_DIR="${LOCAL_DATASETS_DIR:-$SCRATCH_DIR/shar}"
 
-LOCAL_DATASETS_DIR="${LOCAL_DATASETS_DIR:-/mnt/home/giuseppe/myscratch/melt-data/shar}"
-HF_HOME="${HF_HOME:-$SCRATCH/hf_home_speech}"
-HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-$BASEDIR/hf_datasets_cache}"
-
-WANDB_PROJECT="${WANDB_PROJECT:-speech_lm}"
+HF_HOME="${HF_HOME:-$SCRATCH_DIR/hf_home_speech}"
+HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-$SCRATCH_DIR/hf_datasets_cache}"
+WANDB_PROJECT="${WANDB_PROJECT:-melt}"
+WANDB_MODE="${WANDB_MODE:-online}"
 TORCHDYNAMO_VERBOSE="${TORCHDYNAMO_VERBOSE:-1}"
 TORCH_NCCL_ASYNC_ERROR_HANDLING="${TORCH_NCCL_ASYNC_ERROR_HANDLING:-1}"
-
 HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-1}"
 ACCELERATE_LOG_LEVEL="${ACCELERATE_LOG_LEVEL:-info}"
 TRANSFORMERS_VERBOSITY="${TRANSFORMERS_VERBOSITY:-info}"
 
-if [[ -z "${VIRTUAL_ENV:-}" && -f "$VENV_PATH_DEFAULT" ]]; then
+if [[ -z "${VIRTUAL_ENV:-}" && -f "$VENV_PATH" ]]; then
     # shellcheck disable=SC1090
-    source "$VENV_PATH_DEFAULT"
+    source "$VENV_PATH"
 fi
 echo "Python is at:"
 command -v python || true
@@ -69,18 +61,16 @@ echo "Using config file: $CONFIG_FILE"
 echo "Gradient Accumulation Steps: $GRAD_ACC_STEPS"
 
 # setup run-specific envs
-export SCRATCH
-export BASEDIR
+export SCRATCH_DIR
+export VENV_PATH
 export TMPDIR
 export LOCAL_DATASETS_DIR
 export HF_HOME
 export HF_DATASETS_CACHE
-
-export WANDB_PROJECT
-# export WANDB_MODE=offline
+export WANDB_PROJECT 
+export WANDB_MODE
 export TORCHDYNAMO_VERBOSE
 export TORCH_NCCL_ASYNC_ERROR_HANDLING
-
 export HF_HUB_ENABLE_HF_TRANSFER
 export ACCELERATE_LOG_LEVEL
 export TRANSFORMERS_VERBOSITY
