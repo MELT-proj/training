@@ -824,7 +824,7 @@ class MELTForConditionalGeneration(MELTPreTrainedModel):
                 logits=decoder_outputs.logits,
                 labels=labels,
                 vocab_size=self.config.vocab_size,
-                ignore_index=self.config.pad_token_id,
+                ignore_index=self.config.loss_ignore_index,
                 **kwargs,
             )
 

@@ -65,7 +65,7 @@ def prepare_model(
 
     # Set special tokens
     config.audio_bos_token_id = processor.tokenizer.convert_tokens_to_ids([processor.audio_bos_token])[0]
-    config.pad_token_id = processor.tokenizer.pad_token_id
+    config.loss_ignore_index = processor.tokenizer.pad_token_id
 
     # Detect last checkpoint
     last_checkpoint = None
