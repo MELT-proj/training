@@ -1,11 +1,7 @@
 #!/bin/bash
-#SBATCH --time=40:00:00
-#SBATCH --partition=acc
-#SBATCH --qos=acc_ehpc
-#SBATCH --nodes=1
-#SBATCH --gpus-per-node=4
+#SBATCH --time=24:00:00
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=80
+#SBATCH --cpus-per-task=32
 #SBATCH --output="logs/%x.%j.out"
 #SBATCH --error="logs/%x.%j.err"
 #SBATCH --job-name=melt-train-container
@@ -84,10 +80,9 @@ fi
 # ------------------------------------------------------------------
 
 # Bind / env mapping
-# - We avoid using SCRATCH_DIR directly; dataset defaults fall back to the submit dir.
-# - Inside the image, the venv exists at /workspace/training/venv.
+# - Intentionally keep bindings minimal to avoid hiding the repo/venv baked into the image.
+# - We bind only: TMPDIR, LOCAL_DATASETS_DIR, and the two config files.
 # ------------------------------------------------------------------
-HOST_PROJECT_DIR="${SUBMIT_DIR}"
 HOST_LOCAL_DATASETS_DIR="${LOCAL_DATASETS_DIR_HOST:-${LOCAL_DATASETS_DIR:-${SUBMIT_DIR}/shar}}"
 
 CONTAINER_PROJECT_DIR="/workspace/training"
@@ -100,6 +95,8 @@ mkdir -p "${SUBMIT_DIR}/logs"
 
 # Export container-visible env vars. Using SINGULARITYENV_ makes this work even with --cleanenv.
 export SINGULARITYENV_LOCAL_DATASETS_DIR="${CONTAINER_LOCAL_DATASETS_DIR}"
+
+# Keep the default venv activation path used by bash/run_train.sh.
 export SINGULARITYENV_VENV_PATH="${CONTAINER_PROJECT_DIR}/venv/bin/activate"
 
 # Optional: avoid filling /tmp inside the container by setting TMPDIR.
@@ -111,17 +108,33 @@ export SINGULARITYENV_TMPDIR="${CONTAINER_TMPDIR}"
 export SINGULARITYENV_WANDB_PROJECT="${WANDB_PROJECT:-melt}"
 export SINGULARITYENV_WANDB_MODE="${WANDB_MODE:-online}"
 
+# Base output directory for runs (consumed in configs via ${oc.env:OUTPUT_DIR,...}).
+OUTPUT_DIR="${OUTPUT_DIR:-${SUBMIT_DIR}/outputs}"
+mkdir -p "${OUTPUT_DIR}"
+export SINGULARITYENV_OUTPUT_DIR="${OUTPUT_DIR}"
+
+# Multi-node: compute MASTER_ADDR on the host (scontrol is usually not available in the container)
+MASTER_PORT="${MASTER_PORT:-6000}"
+if [[ -n "${SLURM_JOB_NODELIST:-}" ]] && command -v scontrol >/dev/null 2>&1; then
+  MASTER_ADDR_HOST="$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | head -n 1)"
+else
+  MASTER_ADDR_HOST="${MASTER_ADDR:-127.0.0.1}"
+fi
+export SINGULARITYENV_MASTER_ADDR="${MASTER_ADDR_HOST}"
+export SINGULARITYENV_MASTER_PORT="${MASTER_PORT}"
+
 # Binds:
-# - Project dir (so you can edit code without rebuilding the image)
 # - tmp + datasets
 # - Config files (explicitly) to keep things simple
-BIND_ARGS="${HOST_PROJECT_DIR}:${CONTAINER_PROJECT_DIR},${HOST_TMPDIR}:${CONTAINER_TMPDIR},${HOST_LOCAL_DATASETS_DIR}:${CONTAINER_LOCAL_DATASETS_DIR},${CONFIG_FILE_HOST}:${CONTAINER_PROJECT_DIR}/_config.yaml,${ACCELERATE_CONFIG_HOST}:${CONTAINER_PROJECT_DIR}/_accelerate.yaml"
+BIND_ARGS="${HOST_TMPDIR}:${CONTAINER_TMPDIR},${HOST_LOCAL_DATASETS_DIR}:${CONTAINER_LOCAL_DATASETS_DIR},${CONFIG_FILE_HOST}:${CONTAINER_PROJECT_DIR}/_config.yaml,${ACCELERATE_CONFIG_HOST}:${CONTAINER_PROJECT_DIR}/_accelerate.yaml"
 
 echo "SINGULARITY_IMG: ${SINGULARITY_IMG}"
 echo "SINGULARITY_BIN: ${SINGULARITY_BIN}"
-echo "Host project: ${HOST_PROJECT_DIR} -> ${CONTAINER_PROJECT_DIR}"
 echo "Host datasets: ${HOST_LOCAL_DATASETS_DIR} -> ${CONTAINER_LOCAL_DATASETS_DIR}"
 echo "Host tmp: ${HOST_TMPDIR} -> ${CONTAINER_TMPDIR}"
+echo "OUTPUT_DIR: ${OUTPUT_DIR}"
+echo "MASTER_ADDR (host): ${MASTER_ADDR_HOST}"
+echo "MASTER_PORT: ${MASTER_PORT}"
 
 # ------------------------------------------------------------------
 # Run inside srun for multi-node support.
@@ -132,9 +145,18 @@ SRUN_ARGS=(
   --wait=60
 )
 
+echo "Starting training via srun + ${SINGULARITY_BIN} ..."
+
 srun "${SRUN_ARGS[@]}" \
   "${SINGULARITY_BIN}" exec --nv \
   --bind "${BIND_ARGS}" \
   --pwd "${CONTAINER_PROJECT_DIR}" \
   "${SINGULARITY_IMG}" \
-  bash -lc "./bash/run_train.sh ${CONTAINER_PROJECT_DIR}/_config.yaml ${CONTAINER_PROJECT_DIR}/_accelerate.yaml"
+  bash --noprofile --norc -c '
+    set -euo pipefail
+    echo "[container] pwd: $(pwd)"
+    echo "[container] listing /workspace/training:"; ls -la /workspace/training || true
+    echo "[container] listing /workspace/training/bash:"; ls -la /workspace/training/bash || true
+    test -f /workspace/training/bash/run_train.sh
+    exec /workspace/training/bash/run_train.sh /workspace/training/_config.yaml /workspace/training/_accelerate.yaml
+  '
