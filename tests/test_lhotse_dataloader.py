@@ -147,7 +147,7 @@ class TestSamplerAndDataloader:
             "shuffle": False,
             "min_duration": 0.5,
             "max_duration": 10.0,
-            "num_workers": 0,
+            "num_workers": 1,
         }
 
         dataloader = get_lhotse_dataloader_from_config(

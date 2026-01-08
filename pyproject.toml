@@ -23,7 +23,8 @@ dependencies = [
     "accelerate",
     "deepspeed",
     "lhotse",
-    "omegaconf"
+    "omegaconf",
+    "pytest"
 ]
 
 [project.optional-dependencies]

@@ -121,6 +121,16 @@ If you'd like I can add a short example `sbatch` job script and a one-line `Make
 
 ---
 
+## Useful commands
+
+### Build singularity container
+
+APPTAINER_TMPDIR=/mnt/scratch-artemis/giuseppe/tmp \
+  TMPDIR=/mnt/scratch-artemis/giuseppe/tmp \
+  apptainer build \
+  --bind /mnt/home/giuseppe/.cache/uv:/usr/local/share/uv/cache \
+  /mnt/scratch-artemis/giuseppe/melt-data/melt_cuda126.sif infra/Singularity.def
+
 ### Example Commands on SARDINE's cluster
 
 Run locally after resource allocation with `srun`:
@@ -128,4 +138,12 @@ Run locally after resource allocation with `srun`:
 VENV_PATH=/mnt/home/giuseppe/mydata/melt-proj/training/venv/bin/activate \
   LOCAL_DATASETS_DIR=/mnt/scratch-artemis/giuseppe/melt-data/shar \
   bash ./bash/run_train.sh \
+  config/train/LS_asr.yaml config/accelerate/zero3.yaml
+
+VENV_PATH=/mnt/home/giuseppe/mydata/melt-proj/training/venv/bin/activate \
+  OUTPUT_DIR=/mnt/scratch-artemis/giuseppe/melt-data/outputs \
+  LOCAL_DATASETS_DIR=/mnt/scratch-artemis/giuseppe/melt-data/shar \
+  SINGULARITY_IMG=/mnt/scratch-artemis/giuseppe/melt-data/melt_cuda126.sif \
+  TMPDIR_HOST=/mnt/scratch-artemis/giuseppe/melt-data/tmp \
+  sbatch --time=01:00:00 --gres=gpu:1 --qos=gpu-debug --partition a6000 bash/run_train_singularity.sbatch \
   config/train/LS_asr.yaml config/accelerate/zero3.yaml
