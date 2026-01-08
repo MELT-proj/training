@@ -106,7 +106,7 @@ data:
 # Trainer Configuration
 # =============================================================================
 trainer:
-  output_dir: ${oc.env:SCRATCH}/speech_lm/models/LS_asr
+  output_dir: /mnt/scratch-artemis/giuseppe/melt-data/models/LS_asr
   overwrite_output_dir: true
   seed: 42
   do_train: true
