@@ -12,6 +12,7 @@ Key functions:
 import logging
 import os
 import warnings
+from dataclasses import asdict
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -31,21 +32,32 @@ from lhotse.dataset import (
 from lhotse.dataset.dataloading import resolve_seed
 from lhotse.dataset.sampling.base import CutSampler, TimeConstraint
 from lhotse.utils import fix_random_seed
-from omegaconf import DictConfig, OmegaConf
+
+from src.config import DataConfig, DatasetConfig, DataSourceConfig
 
 
 logger = logging.getLogger(__name__)
 
 
-def _as_dictconfig(cfg: Any) -> DictConfig:
-    if isinstance(cfg, DictConfig):
-        return cfg
-    if isinstance(cfg, dict):
-        return OmegaConf.create(cfg)
-    return OmegaConf.create(cfg)
+def _get_config_value(config: Any, key: str, default: Any = None) -> Any:
+    """Get a value from config, supporting both dataclass and dict access."""
+    if hasattr(config, key):
+        return getattr(config, key)
+    elif isinstance(config, dict):
+        return config.get(key, default)
+    return default
 
 
-def read_cutset_from_config(config: DictConfig) -> tuple[CutSet, bool]:
+def _config_to_dict(config: Any) -> dict:
+    """Convert config to dict, handling dataclasses and dicts."""
+    if hasattr(config, "__dataclass_fields__"):
+        return asdict(config)
+    elif isinstance(config, dict):
+        return config
+    return dict(config)
+
+
+def read_cutset_from_config(config: DatasetConfig | dict) -> tuple[CutSet, bool]:
     """Read CutSet(s) from configuration.
 
     Args:
@@ -55,35 +67,38 @@ def read_cutset_from_config(config: DictConfig) -> tuple[CutSet, bool]:
         Tuple of (CutSet, use_iterable_dataset).
         use_iterable_dataset is True for tarred/shar data.
     """
-    if not config.get("input_cfg"):
+    input_cfg = _get_config_value(config, "input_cfg", [])
+    if not input_cfg:
         raise ValueError("No data sources specified in input_cfg")
 
     cutsets = []
     use_iterable = False
+    shuffle = _get_config_value(config, "shuffle", True)
 
-    for source_cfg in config.get("input_cfg"):
-        source_cfg = _as_dictconfig(source_cfg)
-        source_type = source_cfg.get("type")
+    for source_cfg in input_cfg:
+        source_type = _get_config_value(source_cfg, "type", "lhotse_shar")
 
         if source_type == "lhotse_shar":
-            if source_cfg.get("shar_path") is None:
+            shar_path = _get_config_value(source_cfg, "shar_path")
+            if shar_path is None:
                 raise ValueError("shar_path must be specified for lhotse_shar type")
 
             # Expand environment variables in path
-            shar_path = os.path.expandvars(str(source_cfg.get("shar_path")))
+            shar_path = os.path.expandvars(str(shar_path))
 
             if not Path(shar_path).exists():
                 raise FileNotFoundError(f"Shar path not found: {shar_path}")
 
             logger.info(f"Loading CutSet from shar: {shar_path}")
-            cuts = CutSet.from_shar(in_dir=shar_path, shuffle_shards=bool(config.get("shuffle", True)))
+            cuts = CutSet.from_shar(in_dir=shar_path, shuffle_shards=bool(shuffle))
             use_iterable = True  # Shar always uses iterable dataset
 
         elif source_type == "lhotse_cuts":
-            if source_cfg.get("cuts_path") is None:
+            cuts_path = _get_config_value(source_cfg, "cuts_path")
+            if cuts_path is None:
                 raise ValueError("cuts_path must be specified for lhotse_cuts type")
 
-            cuts_path = os.path.expandvars(str(source_cfg.get("cuts_path")))
+            cuts_path = os.path.expandvars(str(cuts_path))
 
             if not Path(cuts_path).exists():
                 raise FileNotFoundError(f"Cuts path not found: {cuts_path}")
@@ -95,9 +110,10 @@ def read_cutset_from_config(config: DictConfig) -> tuple[CutSet, bool]:
             raise ValueError(f"Unknown data source type: {source_type}")
 
         # Add tags to cuts if specified
-        tags = source_cfg.get("tags")
+        tags = _get_config_value(source_cfg, "tags", {})
         if tags:
-            cuts = cuts.map(partial(_add_tags_to_cut, tags=dict(tags)), apply_fn=None)
+            tag_dict = dict(tags) if not isinstance(tags, dict) else tags
+            cuts = cuts.map(partial(_add_tags_to_cut, tags=tag_dict), apply_fn=None)
 
         cutsets.append(cuts)
 
@@ -107,11 +123,9 @@ def read_cutset_from_config(config: DictConfig) -> tuple[CutSet, bool]:
     else:
         # Use mux for weighted combination if weights differ
         weights = []
-        for cfg in config.get("input_cfg"):
-            if isinstance(cfg, (DictConfig, dict)):
-                weights.append(float(cfg.get("weight", 1.0)))
-            else:
-                weights.append(1.0)
+        for cfg in input_cfg:
+            weight = _get_config_value(cfg, "weight", 1.0)
+            weights.append(float(weight))
         if all(w == weights[0] for w in weights):
             combined = CutSet.mux(*cutsets)
         else:
@@ -132,7 +146,7 @@ def _add_tags_to_cut(cut: Cut, tags: dict[str, str]) -> Cut:
 
 
 def get_lhotse_sampler_from_config(
-    config: DictConfig,
+    config: DatasetConfig | dict,
     global_rank: int = 0,
     world_size: int = 1,
     split_batches: bool = False,
@@ -147,14 +161,12 @@ def get_lhotse_sampler_from_config(
     Returns:
         Tuple of (CutSampler, use_iterable_dataset).
     """
-    config = _as_dictconfig(config)
-
     # Load cutset from config
     cuts, use_iterable = read_cutset_from_config(config)
 
     # Apply duration filtering
-    min_duration = config.get("min_duration", None)
-    max_duration = config.get("max_duration", None)
+    min_duration = _get_config_value(config, "min_duration")
+    max_duration = _get_config_value(config, "max_duration")
 
     if min_duration is not None or max_duration is not None:
         min_dur = min_duration if min_duration is not None else 0.0
@@ -166,15 +178,15 @@ def get_lhotse_sampler_from_config(
     # When training with an IterableDataset under Accelerate + `split_batches=True`,
     # the main process fetches a *global* batch and slices it across `world_size`.
     # To preserve the effective per-rank batch constraint, scale it by `world_size`.
-    max_cuts = config.get("batch_size", None)
-    max_duration = config.get("batch_duration", None)
-    quadratic_duration = config.get("quadratic_duration", None)
+    max_cuts = _get_config_value(config, "batch_size")
+    batch_duration = _get_config_value(config, "batch_duration")
+    quadratic_duration = _get_config_value(config, "quadratic_duration")
 
     if use_iterable and split_batches and world_size > 1:
         if max_cuts is not None:
             max_cuts = int(max_cuts) * int(world_size)
-        if max_duration is not None:
-            max_duration = float(max_duration) * float(world_size)
+        if batch_duration is not None:
+            batch_duration = float(batch_duration) * float(world_size)
         if quadratic_duration is not None:
             quadratic_duration = float(quadratic_duration) * float(world_size)
 
@@ -185,35 +197,35 @@ def get_lhotse_sampler_from_config(
 
     constraint = TimeConstraint(
         max_cuts=max_cuts,
-        max_duration=max_duration,
+        max_duration=batch_duration,
         quadratic_duration=quadratic_duration,
     )
 
     # Create sampler
-    shuffle = config.get("shuffle", True)
-    drop_last = config.get("drop_last", False)
-    shuffle_buffer_size = config.get("shuffle_buffer_size", 10000)
-    seed = resolve_seed(config.get("seed", 0))
-    shard_seed = config.get("shard_seed", "trng")
+    shuffle = _get_config_value(config, "shuffle", True)
+    drop_last = _get_config_value(config, "drop_last", False)
+    shuffle_buffer_size = _get_config_value(config, "shuffle_buffer_size", 10000)
+    seed = resolve_seed(_get_config_value(config, "seed", 0))
+    shard_seed = _get_config_value(config, "shard_seed", "trng")
     if isinstance(shard_seed, str) and shard_seed != "trng":
         shard_seed = resolve_seed(shard_seed)
 
-    if config.get("use_bucketing", False):
+    if _get_config_value(config, "use_bucketing", False):
         # Dynamic bucketing sampler for efficient batching
-        num_buckets = config.get("num_buckets", 30)
-        bucket_buffer_size = config.get("bucket_buffer_size", 10000)
-        bucket_duration_bins = config.get("bucket_duration_bins", None)
+        num_buckets = _get_config_value(config, "num_buckets", 30)
+        bucket_buffer_size = _get_config_value(config, "bucket_buffer_size", 10000)
+        bucket_duration_bins = _get_config_value(config, "bucket_duration_bins")
 
         # Auto-estimate duration bins if not provided
-        if bucket_duration_bins is None and max_duration is not None:
+        if bucket_duration_bins is None and batch_duration is not None:
             begin = min_duration if min_duration is not None and min_duration > 0 else 0.0
-            end = max_duration if max_duration < float("inf") else 30.0
+            end = max_duration if max_duration is not None and max_duration < float("inf") else 30.0
             bucket_duration_bins = np.linspace(begin, end, num_buckets + 1)[1:-1].tolist()
 
         logger.info(
             f"Creating DynamicBucketingSampler with "
-            f"batch_duration={config.get('batch_duration')}, "
-            f"batch_size={config.get('batch_size')}, "
+            f"batch_duration={batch_duration}, "
+            f"batch_size={max_cuts}, "
             f"num_buckets={num_buckets}"
         )
 
@@ -234,8 +246,8 @@ def get_lhotse_sampler_from_config(
         # Simple dynamic sampler (no bucketing)
         logger.info(
             f"Creating DynamicCutSampler with "
-            f"batch_duration={config.get('batch_duration')}, "
-            f"batch_size={config.get('batch_size')}"
+            f"batch_duration={batch_duration}, "
+            f"batch_size={max_cuts}"
         )
 
         sampler = DynamicCutSampler(
@@ -253,7 +265,7 @@ def get_lhotse_sampler_from_config(
 
 
 def get_lhotse_dataloader_from_config(
-    config: DictConfig,
+    config: DatasetConfig | dict,
     global_rank: int,
     world_size: int,
     dataset: torch.utils.data.Dataset,
@@ -270,15 +282,13 @@ def get_lhotse_dataloader_from_config(
     Returns:
         DataLoader configured for Lhotse data loading.
     """
-    config = _as_dictconfig(config)
-
     logger.info("Creating Lhotse DataLoader")
 
     # Set up CUDA expandable segments for better memory management
     _maybe_set_cuda_expandable_segments(enabled=True)
 
     # Resolve seed
-    seed = resolve_seed(config.get("seed", 0))
+    seed = resolve_seed(_get_config_value(config, "seed", 0))
     fix_random_seed(seed)
 
     # Get sampler
@@ -290,11 +300,12 @@ def get_lhotse_dataloader_from_config(
     )
 
     # Create dataloader
-    num_workers = config.get("num_workers", 0)
-    pin_memory = config.get("pin_memory", True)
+    num_workers = _get_config_value(config, "num_workers", 0)
+    pin_memory = _get_config_value(config, "pin_memory", True)
 
     # Extract optional prefetch_factor for worker-level prefetching
-    prefetch_factor = int(config.get("prefetch_factor", 2)) if config.get("prefetch_factor") is not None else 2
+    prefetch_factor_val = _get_config_value(config, "prefetch_factor", 2)
+    prefetch_factor = int(prefetch_factor_val) if prefetch_factor_val is not None else 2
 
     if use_iterable:
         # For tarred/shar data, wrap dataset with sampler
@@ -329,7 +340,7 @@ def get_lhotse_dataloader_from_config(
 
 
 def get_train_dataloader_from_config(
-    data_config: DictConfig,
+    data_config: DataConfig | dict,
     dataset: torch.utils.data.Dataset,
     global_rank: int = 0,
     world_size: int = 1,
@@ -346,8 +357,9 @@ def get_train_dataloader_from_config(
     Returns:
         Training DataLoader.
     """
+    train_ds = _get_config_value(data_config, "train_ds")
     return get_lhotse_dataloader_from_config(
-        config=_as_dictconfig(data_config.get("train_ds")),
+        config=train_ds,
         global_rank=global_rank,
         world_size=world_size,
         dataset=dataset,
@@ -356,7 +368,7 @@ def get_train_dataloader_from_config(
 
 
 def get_eval_dataloader_from_config(
-    data_config: DictConfig,
+    data_config: DataConfig | dict,
     dataset: torch.utils.data.Dataset,
     global_rank: int = 0,
     world_size: int = 1,
@@ -373,8 +385,9 @@ def get_eval_dataloader_from_config(
     Returns:
         Validation DataLoader.
     """
+    validation_ds = _get_config_value(data_config, "validation_ds")
     return get_lhotse_dataloader_from_config(
-        config=_as_dictconfig(data_config.get("validation_ds")),
+        config=validation_ds,
         global_rank=global_rank,
         world_size=world_size,
         dataset=dataset,

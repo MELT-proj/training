@@ -14,12 +14,21 @@ import torch
 import torch.utils.data
 from lhotse import CutSet
 from lhotse.cut import Cut
-from omegaconf import DictConfig
 
+from src.config import DataConfig
 from src.melt import MELTProcessor
 
 
 logger = logging.getLogger(__name__)
+
+
+def _get_config_value(config, key: str, default=None):
+    """Get a value from config, supporting both dataclass and dict access."""
+    if hasattr(config, key):
+        return getattr(config, key)
+    elif isinstance(config, dict):
+        return config.get(key, default)
+    return default
 
 
 class SpeechToTextDataset(torch.utils.data.Dataset):
@@ -50,15 +59,15 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
     def __init__(
         self,
         processor: MELTProcessor,
-        config: DictConfig,
+        config: DataConfig,
         is_train: bool = True,
     ) -> None:
         self.processor = processor
         self.config = config
         self.is_train = is_train
-        self.apply_chat_template = bool(config.get("apply_chat_template", False))
-        self.sample_rate = int(config.get("sample_rate", 16000))
-        self.min_chars = int(config.get("min_chars", 0))
+        self.apply_chat_template = bool(_get_config_value(config, "apply_chat_template", False))
+        self.sample_rate = int(_get_config_value(config, "sample_rate", 16000))
+        self.min_chars = int(_get_config_value(config, "min_chars", 0))
 
     def __getitem__(self, cuts: CutSet) -> dict[str, torch.Tensor] | None:
         """Process a batch of cuts into model inputs.

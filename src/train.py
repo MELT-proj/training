@@ -1,10 +1,19 @@
 """MELT training entrypoint.
 
-This script uses Lhotse-based data loading and hierarchical YAML configs.
+This script uses Lhotse-based data loading and dataclass-based configs with tyro.
 
 Usage:
+    # Use defaults
+    python src/train.py
+
+    # Load from YAML config file
     python src/train.py --config-file config/train/LS_asr.yaml
-    python src/train.py --config-file config/train/LS_asr.yaml trainer.max_steps=1000
+
+    # Override specific parameters
+    python src/train.py --trainer.max-steps 1000 --trainer.learning-rate 2e-5
+
+    # Combine YAML with CLI overrides
+    python src/train.py --config-file config/train/LS_asr.yaml --trainer.max-steps 500
 """
 
 import logging
@@ -13,13 +22,17 @@ from pathlib import Path
 
 import torch
 import tyro
-# Use standard logging module to avoid requiring accelerate state at import time
-
-from omegaconf import DictConfig
 
 import ddp
 import transformers
-from src.config import TrainingArgs, load_config, save_config, trainer_args_dict
+from src.config import (
+    TrainingConfig,
+    expand_env_vars_in_config,
+    load_config_from_yaml,
+    merge_configs,
+    save_config,
+    trainer_args_dict,
+)
 from src.melt import MELTConfig, MELTForConditionalGeneration, MELTProcessor
 from src.trainer import MELTTrainer, count_trainable_parameters
 from transformers import AutoConfig, AutoFeatureExtractor, AutoTokenizer, TrainingArguments, set_seed
@@ -36,7 +49,7 @@ torch.set_float32_matmul_precision("high")
 
 
 def prepare_model(
-    cfg: DictConfig,
+    cfg: TrainingConfig,
     targs: TrainingArguments,
     processor: MELTProcessor,
 ) -> tuple[MELTForConditionalGeneration, str | None]:
@@ -56,11 +69,11 @@ def prepare_model(
     decoder_cfg = model_cfg.decoder
     adapter_cfg = model_cfg.adapter
 
-    encoder_name = encoder_cfg.pop("name")
-    decoder_name = decoder_cfg.pop("name")
+    encoder_name = encoder_cfg.name
+    decoder_name = decoder_cfg.name
 
-    audio_config = AutoConfig.from_pretrained(encoder_name, **encoder_cfg)
-    text_config = AutoConfig.from_pretrained(decoder_name, **decoder_cfg)
+    audio_config = AutoConfig.from_pretrained(encoder_name)
+    text_config = AutoConfig.from_pretrained(decoder_name, attn_implementation=decoder_cfg.attn_implementation)
     config = MELTConfig(audio_encoder_config=audio_config, text_decoder_config=text_config)
 
     # Set special tokens
@@ -84,13 +97,14 @@ def prepare_model(
 
     # Load or create model
     logger.info("Loading model to CPU (before device placement)...")
-    if model_cfg.get("ckpt") is not None:
+    if model_cfg.ckpt is not None:
         logger.info(f"Loading model from checkpoint: {model_cfg.ckpt}")
         model = MELTForConditionalGeneration.from_pretrained(model_cfg.ckpt)
     else:
         model = MELTForConditionalGeneration(config)
         model.text_decoder.resize_token_embeddings(len(processor.tokenizer), mean_resizing=False, pad_to_multiple_of=8)
 
+    # TODO: move this utility in a separate module.
     # Print model layers for inspection/debugging and write to file
     def _print_model_layers(m, out_dir: str | None = None):
         """Log leaf-level model modules (layers) by name and type and optionally write to file."""
@@ -116,23 +130,23 @@ def prepare_model(
                 logger.warning("Could not write model layers to %s: %s", out_dir, e)
 
     # Pass through targs.output_dir if available so layers are saved alongside outputs
-    _print_model_layers(model, getattr(targs, "output_dir", None))
+    # _print_model_layers(model, getattr(targs, "output_dir", None))
 
     # Apply freezing
-    if bool(adapter_cfg.get("freeze", False)):
+    if adapter_cfg.freeze:
         logger.info("Freezing the adapter")
         model.freeze_adapter()
-    if bool(model_cfg.encoder.get("freeze", False)):
+    if encoder_cfg.freeze:
         logger.info("Freezing the encoder")
         model.freeze_encoder()
-    if bool(model_cfg.decoder.get("freeze", False)):
+    if decoder_cfg.freeze:
         logger.info("Freezing the decoder")
         model.freeze_decoder()
 
     return model, last_checkpoint
 
 
-def main(cfg: DictConfig, dry_run: bool = False) -> None:
+def main(cfg: TrainingConfig) -> None:
     """Run training from a loaded config."""
     if ddp.is_distributed():
         rank = ddp.get_global_rank()
@@ -158,7 +172,7 @@ def main(cfg: DictConfig, dry_run: bool = False) -> None:
     targs = TrainingArguments(**trainer_args_dict(cfg))
 
     # Set seed
-    set_seed(int(cfg.trainer.seed))
+    set_seed(cfg.trainer.seed)
 
     ##########################
     ## PROCESSOR SETUP
@@ -220,6 +234,21 @@ def main(cfg: DictConfig, dry_run: bool = False) -> None:
 
 
 if __name__ == "__main__":
-    cli_args, unknown = tyro.cli(TrainingArgs, return_unknown_args=True)
-    cfg = load_config(cli_args.config_file, dotlist_overrides=unknown)
-    main(cfg, dry_run=cli_args.dry_run)
+    # Parse CLI arguments using tyro
+    cli_cfg = tyro.cli(TrainingConfig)
+
+    # If a config file is specified, load it and merge with CLI overrides
+    if cli_cfg.config_file is not None:
+        base_cfg = load_config_from_yaml(cli_cfg.config_file)
+        cfg = merge_configs(base_cfg, cli_cfg)
+    else:
+        cfg = cli_cfg
+
+    # Expand environment variables in paths
+    cfg = expand_env_vars_in_config(cfg)
+
+    if cfg.dry_run:
+        logger.info("Dry run mode - config parsed successfully")
+        logger.info(f"Config: {cfg}")
+    else:
+        main(cfg)

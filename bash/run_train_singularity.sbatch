@@ -8,15 +8,74 @@
 
 set -euo pipefail
 
+echo "------------------------------------------------------------------"
+echo "WE ARE INSIDE RUN_TRAIN_SINGULARITY.SBATCH"
+echo "------------------------------------------------------------------"
+
 # ------------------------------------------------------------------
 # Host-side setup (modules, etc.)
 # ------------------------------------------------------------------
 if command -v module >/dev/null 2>&1; then
   module purge || true
-  # Many clusters provide either `singularity` or `apptainer` as a module name.
   module load apptainer 2>/dev/null || module load singularity 2>/dev/null || true
   module load cuda
 fi
+
+# ------------------------------------------------------------------
+# Optional: expose the host CUDA *toolkit* (nvcc, headers, libs) inside
+# the container. `--nv` typically forwards driver libraries, not nvcc.
+#
+# We detect the toolkit root on the host and bind-mount it to a stable
+# path in the container, then set CUDA_HOME/PATH/LD_LIBRARY_PATH.
+# ------------------------------------------------------------------
+HOST_CUDA_HOME="${CUDA_HOME:-${CUDA_PATH:-}}"
+if [[ -z "${HOST_CUDA_HOME}" ]] && command -v nvcc >/dev/null 2>&1; then
+  NVCC_REALPATH="$(readlink -f "$(command -v nvcc)")"
+  HOST_CUDA_HOME="$(dirname "$(dirname "${NVCC_REALPATH}")")"
+fi
+
+CUDA_BIND_ARG=""
+CONTAINER_CUDA_HOME=""
+if [[ -n "${HOST_CUDA_HOME}" ]] && [[ -d "${HOST_CUDA_HOME}" ]]; then
+  CONTAINER_CUDA_HOME="/workspace/cuda-host"
+  CUDA_BIND_ARG=",${HOST_CUDA_HOME}:${CONTAINER_CUDA_HOME}:ro"
+
+  # Prefer APPTAINERENV_ (new) but also set SINGULARITYENV_ (compat).
+  export APPTAINERENV_CUDA_HOME="${CONTAINER_CUDA_HOME}"
+  export SINGULARITYENV_CUDA_HOME="${CONTAINER_CUDA_HOME}"
+
+  # Make nvcc and toolkit libs visible.
+  export APPTAINERENV_PREPEND_PATH="${CONTAINER_CUDA_HOME}/bin:${APPTAINERENV_PREPEND_PATH:-}"
+  export SINGULARITYENV_PREPEND_PATH="${CONTAINER_CUDA_HOME}/bin:${SINGULARITYENV_PREPEND_PATH:-}"
+
+  export APPTAINERENV_PREPEND_LD_LIBRARY_PATH="${CONTAINER_CUDA_HOME}/lib64:${CONTAINER_CUDA_HOME}/lib:${APPTAINERENV_PREPEND_LD_LIBRARY_PATH:-}"
+  export SINGULARITYENV_PREPEND_LD_LIBRARY_PATH="${CONTAINER_CUDA_HOME}/lib64:${CONTAINER_CUDA_HOME}/lib:${SINGULARITYENV_PREPEND_LD_LIBRARY_PATH:-}"
+else
+  echo "WARNING: CUDA toolkit not detected on host (CUDA_HOME/CUDA_PATH/nvcc). nvcc will likely be unavailable in the container."
+fi
+
+# ------------------------------------------------------------------
+# Hugging Face cache: bind host HF_HOME into the container so model/
+# tokenizer downloads are shared across runs.
+# ------------------------------------------------------------------
+HOST_HF_HOME="${HF_HOME:-}"
+HF_BIND_ARG=""
+CONTAINER_HF_HOME=""
+if [[ -n "${HOST_HF_HOME}" ]]; then
+  mkdir -p "${HOST_HF_HOME}"
+  CONTAINER_HF_HOME="/workspace/hf_cache"
+  HF_BIND_ARG=",${HOST_HF_HOME}:${CONTAINER_HF_HOME}"
+
+  export APPTAINERENV_HF_HOME="${CONTAINER_HF_HOME}"
+  export SINGULARITYENV_HF_HOME="${CONTAINER_HF_HOME}"
+
+  # Be explicit: hub cache lives under HF_HOME/hub
+  export APPTAINERENV_HF_HUB_CACHE="${CONTAINER_HF_HOME}/hub"
+  export SINGULARITYENV_HF_HUB_CACHE="${CONTAINER_HF_HOME}/hub"
+else
+  echo "WARNING: HF_HOME is not set on host; not binding Hugging Face cache into container."
+fi
+echo "HF_BIND_ARG: ${HF_BIND_ARG}"
 
 # ------------------------------------------------------------------
 # Required: path to the .sif image on the host
@@ -48,56 +107,47 @@ fi
 
 # ------------------------------------------------------------------
 # Arguments: pass through to your existing runner
-#   sbatch bash/run_train_container.sbatch <config_file> <accelerate_config>
+#   sbatch bash/run_train_container.sbatch <accelerate_config> [train_args...]
 # ------------------------------------------------------------------
-if [[ -z "${1:-}" || -z "${2:-}" ]]; then
-  echo "Usage: $0 <config_file> <accelerate_config>"
-  echo "Example: sbatch $0 config/train/LS_asr.yaml config/accelerate/fsdp.yaml"
+if [[ -z "${1:-}" ]]; then
+  echo "Usage: $0 <accelerate_config> [train_args...]"
+  echo "Example: sbatch $0 config/accelerate/fsdp.yaml --config-file config/train/LS_asr.yaml"
+  echo "Example: sbatch $0 config/accelerate/fsdp.yaml --trainer.max-steps 1000"
   exit 2
 fi
 
-CONFIG_FILE_HOST="$1"
-ACCELERATE_CONFIG_HOST="$2"
-
-# Make these absolute for reliable binds.
-SUBMIT_DIR="${SLURM_SUBMIT_DIR:-$PWD}"
-if [[ "${CONFIG_FILE_HOST}" != /* ]]; then
-  CONFIG_FILE_HOST="${SUBMIT_DIR}/${CONFIG_FILE_HOST}"
-fi
-if [[ "${ACCELERATE_CONFIG_HOST}" != /* ]]; then
-  ACCELERATE_CONFIG_HOST="${SUBMIT_DIR}/${ACCELERATE_CONFIG_HOST}"
-fi
-
-if [[ ! -f "${CONFIG_FILE_HOST}" ]]; then
-  echo "ERROR: config file not found: ${CONFIG_FILE_HOST}"
-  exit 2
-fi
+ACCELERATE_CONFIG_HOST="$1"
 if [[ ! -f "${ACCELERATE_CONFIG_HOST}" ]]; then
   echo "ERROR: accelerate config not found: ${ACCELERATE_CONFIG_HOST}"
   exit 2
 fi
 
+shift  # Remove accelerate config, rest are train args
+TRAIN_ARGS="$*"
+SUBMIT_DIR="${SLURM_SUBMIT_DIR:-$PWD}"
+
 # ------------------------------------------------------------------
 
 # Bind / env mapping
-# - Intentionally keep bindings minimal to avoid hiding the repo/venv baked into the image.
-# - We bind only: TMPDIR, LOCAL_DATASETS_DIR, and the two config files.
+# - Bind the host project dir so container runs latest code.
+# - Keep the venv outside the project dir to avoid being hidden by the bind mount.
 # ------------------------------------------------------------------
+HOST_PROJECT_DIR="${SUBMIT_DIR}"
 HOST_LOCAL_DATASETS_DIR="${LOCAL_DATASETS_DIR_HOST:-${LOCAL_DATASETS_DIR:-${SUBMIT_DIR}/shar}}"
 
 CONTAINER_PROJECT_DIR="/workspace/training"
 CONTAINER_LOCAL_DATASETS_DIR="/workspace/shar"
 
 # Ensure host tmp/logs exist (for caches/checkpoints/logs).
-HOST_TMPDIR="${TMPDIR_HOST:-${SUBMIT_DIR}/tmp}"
+HOST_TMPDIR="${TMPDIR_HOST:-/tmp}"
 mkdir -p "${HOST_TMPDIR}"
 mkdir -p "${SUBMIT_DIR}/logs"
 
 # Export container-visible env vars. Using SINGULARITYENV_ makes this work even with --cleanenv.
 export SINGULARITYENV_LOCAL_DATASETS_DIR="${CONTAINER_LOCAL_DATASETS_DIR}"
 
-# Keep the default venv activation path used by bash/run_train.sh.
-export SINGULARITYENV_VENV_PATH="${CONTAINER_PROJECT_DIR}/venv/bin/activate"
+# Use the container venv at /workspace/venv
+export SINGULARITYENV_VENV_PATH="/workspace/venv/bin/activate"
 
 # Optional: avoid filling /tmp inside the container by setting TMPDIR.
 CONTAINER_TMPDIR="/workspace/tmp"
@@ -124,17 +174,27 @@ export SINGULARITYENV_MASTER_ADDR="${MASTER_ADDR_HOST}"
 export SINGULARITYENV_MASTER_PORT="${MASTER_PORT}"
 
 # Binds:
+# - project dir (latest code)
 # - tmp + datasets
-# - Config files (explicitly) to keep things simple
-BIND_ARGS="${HOST_TMPDIR}:${CONTAINER_TMPDIR},${HOST_LOCAL_DATASETS_DIR}:${CONTAINER_LOCAL_DATASETS_DIR},${CONFIG_FILE_HOST}:${CONTAINER_PROJECT_DIR}/_config.yaml,${ACCELERATE_CONFIG_HOST}:${CONTAINER_PROJECT_DIR}/_accelerate.yaml"
+# - Accelerate config file (explicitly) to keep things simple
+BIND_ARGS="${HOST_PROJECT_DIR}:${CONTAINER_PROJECT_DIR},${HOST_TMPDIR}:${CONTAINER_TMPDIR},${HOST_LOCAL_DATASETS_DIR}:${CONTAINER_LOCAL_DATASETS_DIR}${CUDA_BIND_ARG}"
+BIND_ARGS="${BIND_ARGS}${HF_BIND_ARG}"
 
 echo "SINGULARITY_IMG: ${SINGULARITY_IMG}"
 echo "SINGULARITY_BIN: ${SINGULARITY_BIN}"
+echo "Host project: ${HOST_PROJECT_DIR} -> ${CONTAINER_PROJECT_DIR}"
 echo "Host datasets: ${HOST_LOCAL_DATASETS_DIR} -> ${CONTAINER_LOCAL_DATASETS_DIR}"
 echo "Host tmp: ${HOST_TMPDIR} -> ${CONTAINER_TMPDIR}"
+if [[ -n "${CUDA_BIND_ARG}" ]]; then
+  echo "Host CUDA toolkit: ${HOST_CUDA_HOME} -> ${CONTAINER_CUDA_HOME}"
+fi
+if [[ -n "${HF_BIND_ARG}" ]]; then
+  echo "Host HF_HOME: ${HOST_HF_HOME} -> ${CONTAINER_HF_HOME}"
+fi
 echo "OUTPUT_DIR: ${OUTPUT_DIR}"
 echo "MASTER_ADDR (host): ${MASTER_ADDR_HOST}"
 echo "MASTER_PORT: ${MASTER_PORT}"
+echo "Train args: ${TRAIN_ARGS}"
 
 # ------------------------------------------------------------------
 # Run inside srun for multi-node support.
@@ -151,12 +211,11 @@ srun "${SRUN_ARGS[@]}" \
   "${SINGULARITY_BIN}" exec --nv \
   --bind "${BIND_ARGS}" \
   --pwd "${CONTAINER_PROJECT_DIR}" \
+  --cleanenv \
   "${SINGULARITY_IMG}" \
-  bash --noprofile --norc -c '
+  bash --noprofile --norc -c "
     set -euo pipefail
-    echo "[container] pwd: $(pwd)"
-    echo "[container] listing /workspace/training:"; ls -la /workspace/training || true
-    echo "[container] listing /workspace/training/bash:"; ls -la /workspace/training/bash || true
-    test -f /workspace/training/bash/run_train.sh
-    exec /workspace/training/bash/run_train.sh /workspace/training/_config.yaml /workspace/training/_accelerate.yaml
-  '
+    echo \"[container] pwd: \$(pwd)\"
+    echo \"[container] listing /workspace/training:\"; ls -la /workspace/training || true
+    exec /workspace/training/bash/run_train.sh ${ACCELERATE_CONFIG_HOST} ${TRAIN_ARGS}
+  "

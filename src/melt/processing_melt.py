@@ -148,7 +148,7 @@ class MELTProcessor(ProcessorMixin):
 
         for name in MELT_REQUIRED_SPECIAL_TOKENS:
             # First, try to find a configured token string
-            token_str = config.decoder.get(name, None)
+            token_str = getattr(config.decoder, name)
 
             # Not present in the current tokenizer
             if name not in all_special and name not in vocab:

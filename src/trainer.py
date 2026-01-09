@@ -11,11 +11,11 @@ import random
 from typing import Any
 
 import torch
-from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 import ddp
+from src.config import TrainingConfig
 from src.data.audio.lhotse import (
     FallbackDataset,
     SpeechToTextDataset,
@@ -54,7 +54,7 @@ class MELTTrainer(Trainer):
         self,
         model=None,
         args=None,
-        config: DictConfig | None = None,
+        config: TrainingConfig | None = None,
         processor: MELTProcessor | None = None,
         **kwargs,
     ):
@@ -218,12 +218,17 @@ class MELTTrainer(Trainer):
         adapter_lr = getattr(opt_cfg, "adapter_lr", None) if opt_cfg is not None else None
         if adapter_lr is None:
             adapter_lr = getattr(self.args, "adapter_lr", 1e-4)
+        adapter_lr = float(adapter_lr)
+        
         encoder_lr = getattr(opt_cfg, "encoder_lr", None) if opt_cfg is not None else None
         if encoder_lr is None:
             encoder_lr = getattr(self.args, "encoder_lr", 1e-5)
+        encoder_lr = float(encoder_lr)
+        
         decoder_lr = getattr(opt_cfg, "decoder_lr", None) if opt_cfg is not None else None
         if decoder_lr is None:
             decoder_lr = getattr(self.args, "decoder_lr", 1e-3)
+        decoder_lr = float(decoder_lr)
 
         groups = []
         if not getattr(self.args, "freeze_adapter", False) and adapter_params:

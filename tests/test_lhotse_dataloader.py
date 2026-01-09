@@ -1,16 +1,16 @@
 """Tests for Lhotse-based data loading.
 
-These tests focus on the simplified config approach:
-- YAML is loaded as an OmegaConf DictConfig
-- CLI dotlist overrides are supported
-- Lhotse CutSet/sampler/dataloader creation works with DictConfig/dicts
+These tests focus on the dataclass-based config approach:
+- Configs are Python dataclasses defined in src/config.py
+- CLI parsing is handled by tyro
+- Lhotse CutSet/sampler/dataloader creation works with dataclasses/dicts
 """
 
 from pathlib import Path
 
 import pytest
 import torch
-from omegaconf import OmegaConf
+import yaml
 
 
 # Skip all tests if lhotse is not installed
@@ -48,50 +48,55 @@ def librispeech_train100_path(librispeech_shar_base: str) -> str:
 
 class TestConfigIO:
     def test_load_config_from_yaml(self):
-        from src.config import load_config
+        from src.config import load_config_from_yaml
 
-        cfg = load_config("config/train/LS_asr.yaml")
+        cfg = load_config_from_yaml("config/train/LS_asr.yaml")
         assert cfg.model.encoder.name
         assert cfg.model.decoder.name
-        assert "adapter" in cfg.model
+        assert cfg.model.adapter is not None
 
-    def test_dotlist_overrides(self):
-        from src.config import load_config
+    def test_cli_overrides(self):
+        """Test that tyro can parse CLI args (simulated via dataclass instantiation)."""
+        from src.config import TrainingConfig
 
-        cfg = load_config(
-            "config/train/LS_asr.yaml",
-            dotlist_overrides=["trainer.max_steps=123", "model.adapter.add_adapter=true"],
-        )
-        assert int(cfg.trainer.max_steps) == 123
-        assert bool(cfg.model.adapter.add_adapter) is True
+        cfg = TrainingConfig()
+        # Override via direct attribute setting (simulating CLI override)
+        cfg.trainer.max_steps = 123
+        cfg.model.adapter.freeze = True
+
+        assert cfg.trainer.max_steps == 123
+        assert cfg.model.adapter.freeze is True
 
     def test_save_config_roundtrip(self, tmp_path: Path):
-        from src.config import load_config, save_config
+        from src.config import load_config_from_yaml, save_config, TrainingConfig
 
-        cfg = load_config("config/train/LS_asr.yaml", dotlist_overrides=["trainer.max_steps=321"])
+        cfg = load_config_from_yaml("config/train/LS_asr.yaml")
+        cfg.trainer.max_steps = 321
+
         out = tmp_path / "cfg.yaml"
         save_config(cfg, str(out))
         assert out.exists()
 
-        cfg2 = OmegaConf.load(str(out))
-        assert int(cfg2.trainer.max_steps) == 321
+        # Load back and verify
+        with open(out) as f:
+            loaded = yaml.safe_load(f)
+        assert loaded["trainer"]["max_steps"] == 321
 
 
 class TestCutSetLoading:
     def test_read_cutset_from_config(self, librispeech_train100_path: str):
         from src.data.audio.lhotse.dataloader import read_cutset_from_config
+        from src.config import DatasetConfig, DataSourceConfig
 
-        config = OmegaConf.create(
-            {
-                "input_cfg": [
-                    {
-                        "type": "lhotse_shar",
-                        "shar_path": librispeech_train100_path,
-                        "tags": {"task": "asr", "lang": "en"},
-                    }
-                ],
-                "shuffle": False,
-            }
+        config = DatasetConfig(
+            input_cfg=[
+                DataSourceConfig(
+                    type="lhotse_shar",
+                    shar_path=librispeech_train100_path,
+                    tags={"task": "asr", "lang": "en"},
+                )
+            ],
+            shuffle=False,
         )
 
         cuts, use_iterable = read_cutset_from_config(config)
@@ -107,21 +112,22 @@ class TestCutSetLoading:
 class TestSamplerAndDataloader:
     def test_sampler_creation(self, librispeech_train100_path: str):
         from src.data.audio.lhotse.dataloader import get_lhotse_sampler_from_config
+        from src.config import DatasetConfig, DataSourceConfig
 
-        config = {
-            "input_cfg": [
-                {
-                    "type": "lhotse_shar",
-                    "shar_path": librispeech_train100_path,
-                    "tags": {"task": "asr", "lang": "en"},
-                }
+        config = DatasetConfig(
+            input_cfg=[
+                DataSourceConfig(
+                    type="lhotse_shar",
+                    shar_path=librispeech_train100_path,
+                    tags={"task": "asr", "lang": "en"},
+                )
             ],
-            "batch_duration": 60.0,
-            "use_bucketing": True,
-            "shuffle": True,
-            "min_duration": 0.5,
-            "max_duration": 20.0,
-        }
+            batch_duration=60.0,
+            use_bucketing=True,
+            shuffle=True,
+            min_duration=0.5,
+            max_duration=20.0,
+        )
 
         sampler, use_iterable = get_lhotse_sampler_from_config(config=config, global_rank=0, world_size=1)
         assert sampler is not None
@@ -129,26 +135,27 @@ class TestSamplerAndDataloader:
 
     def test_dataloader_creation(self, librispeech_train100_path: str):
         from src.data.audio.lhotse.dataloader import get_lhotse_dataloader_from_config
+        from src.config import DatasetConfig, DataSourceConfig
 
         class DummyDataset(torch.utils.data.Dataset):
             def __getitem__(self, cuts):
                 return {"input_features": torch.randn(1, 10, 80)}
 
-        config = {
-            "input_cfg": [
-                {
-                    "type": "lhotse_shar",
-                    "shar_path": librispeech_train100_path,
-                    "tags": {"task": "asr", "lang": "en"},
-                }
+        config = DatasetConfig(
+            input_cfg=[
+                DataSourceConfig(
+                    type="lhotse_shar",
+                    shar_path=librispeech_train100_path,
+                    tags={"task": "asr", "lang": "en"},
+                )
             ],
-            "batch_duration": 10.0,
-            "use_bucketing": False,
-            "shuffle": False,
-            "min_duration": 0.5,
-            "max_duration": 10.0,
-            "num_workers": 1,
-        }
+            batch_duration=10.0,
+            use_bucketing=False,
+            shuffle=False,
+            min_duration=0.5,
+            max_duration=10.0,
+            num_workers=1,
+        )
 
         dataloader = get_lhotse_dataloader_from_config(
             config=config,

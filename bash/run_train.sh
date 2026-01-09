@@ -6,14 +6,19 @@ set -euo pipefail
 # User-overridable defaults
 # --------------------------
 # Override any of these at invocation time, e.g.:
-#   SCRATCH=/path WANDB_PROJECT=foo ./bash/train_with_config.sh ...
+#   SCRATCH=/path WANDB_PROJECT=foo ./bash/run_train.sh ...
 
+echo "------------------------------------------------------------------"
+echo "WE ARE INSIDE RUN_TRAIN.SH"
+echo "------------------------------------------------------------------"
 
 # Two crucial environment variables to set up:
 # 1) VENV_PATH: path to the python virtualenv activate script
 # 2) LOCAL_DATASETS_DIR: path to local datasets storage
-VENV_PATH="${VENV_PATH:-/workspace/training/venv/bin/activate}"
+VENV_PATH="${VENV_PATH:-/workspace/venv/bin/activate}"
 LOCAL_DATASETS_DIR="${LOCAL_DATASETS_DIR:-./shar}"
+echo "Using VENV_PATH: $VENV_PATH"
+echo "Using LOCAL_DATASETS_DIR: $LOCAL_DATASETS_DIR"
 
 WANDB_PROJECT="${WANDB_PROJECT:-melt}"
 WANDB_MODE="${WANDB_MODE:-online}"
@@ -23,10 +28,8 @@ HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-1}"
 ACCELERATE_LOG_LEVEL="${ACCELERATE_LOG_LEVEL:-info}"
 TRANSFORMERS_VERBOSITY="${TRANSFORMERS_VERBOSITY:-info}"
 
-if [[ -z "${VIRTUAL_ENV:-}" && -f "$VENV_PATH" ]]; then
-    # shellcheck disable=SC1090
-    source "$VENV_PATH"
-fi
+echo "Activating virtualenv at $VENV_PATH"
+source "$VENV_PATH"
 echo "Python is at:"
 command -v python || true
 
@@ -35,25 +38,39 @@ if [[ -f /etc/profile.d/02-lmod.sh ]]; then
     source /etc/profile.d/02-lmod.sh
 fi
 if command -v module >/dev/null 2>&1; then
-    module load cuda
+    module load cuda 2>/dev/null || true
 fi
 echo "CUDA version:"
-nvcc --version || true
+nvcc --version 2>/dev/null || echo "nvcc not found (may be running in container)"
 
-if [ -z "${1:-}" ] || [ -z "${2:-}" ]; then
-    echo "Usage: $0 <config_file> <accelerate_config>"
-    echo "Tip: run under SLURM with sbatch, or run locally on a node by executing this script directly."
+# Usage: $0 <accelerate_config> [extra_args...]
+# The new config system uses tyro dataclasses, so we pass arguments directly.
+# Example: $0 config/accelerate/zero3.yaml --config-file config/train/LS_asr.yaml --trainer.max-steps 1000
+
+if [ -z "${1:-}" ]; then
+    echo "Usage: $0 <accelerate_config> [train_args...]"
+    echo "Example: $0 config/accelerate/zero3.yaml --config-file config/train/LS_asr.yaml"
+    echo "Example: $0 config/accelerate/zero3.yaml --trainer.max-steps 1000 --trainer.learning-rate 2e-5"
     exit 1
 fi
 
-CONFIG_FILE=$1
-ACCELERATE_CONFIG=$2
-GRAD_ACC_STEPS=$(grep -m 1 'gradient_accumulation_steps' "$CONFIG_FILE" | awk '{print $2}' || true)
-if [[ -z "${GRAD_ACC_STEPS:-}" ]]; then
-    GRAD_ACC_STEPS=1
-    echo "Warning: could not parse gradient_accumulation_steps from $CONFIG_FILE; defaulting to $GRAD_ACC_STEPS"
-fi
-echo "Using config file: $CONFIG_FILE"
+ACCELERATE_CONFIG=$1
+shift  # Remove accelerate config from args, rest are passed to train.py
+
+# Parse gradient_accumulation_steps from CLI args if provided, else default to 4
+GRAD_ACC_STEPS=4
+for arg in "$@"; do
+    if [[ "$arg" == "--trainer.gradient-accumulation-steps" ]]; then
+        # Next arg should be the value
+        get_next=1
+    elif [[ "${get_next:-0}" == "1" ]]; then
+        GRAD_ACC_STEPS=$arg
+        get_next=0
+    elif [[ "$arg" == --trainer.gradient-accumulation-steps=* ]]; then
+        GRAD_ACC_STEPS="${arg#*=}"
+    fi
+done
+echo "Using accelerate config: $ACCELERATE_CONFIG"
 echo "Gradient Accumulation Steps: $GRAD_ACC_STEPS"
 
 # setup run-specific envs
@@ -61,7 +78,6 @@ export VENV_PATH
 export TMPDIR
 export LOCAL_DATASETS_DIR
 export HF_HOME
-export HF_DATASETS_CACHE
 export WANDB_PROJECT 
 export WANDB_MODE
 export TORCHDYNAMO_VERBOSE
@@ -69,6 +85,23 @@ export TORCH_NCCL_ASYNC_ERROR_HANDLING
 export HF_HUB_ENABLE_HF_TRANSFER
 export ACCELERATE_LOG_LEVEL
 export TRANSFORMERS_VERBOSITY
+
+echo "*** ENV VARIABLES ***"
+echo "WANDB_PROJECT=$WANDB_PROJECT"
+echo "WANDB_MODE=$WANDB_MODE"
+echo "TORCHDYNAMO_VERBOSE=$TORCHDYNAMO_VERBOSE"
+echo "TORCH_NCCL_ASYNC_ERROR_HANDLING=$TORCH_NCCL_ASYNC_ERROR_HANDLING"
+echo "ACCELERATE_LOG_LEVEL=$ACCELERATE_LOG_LEVEL"
+echo "TRANSFORMERS_VERBOSITY=$TRANSFORMERS_VERBOSITY"
+echo "HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-0}"
+echo "HF_HOME=$HF_HOME"
+echo "LOCAL_DATASETS_DIR=$LOCAL_DATASETS_DIR"
+echo "TMPDIR=$TMPDIR"
+echo "---------------------"
+
+echo "Listing what I see under ${HF_HOME}:"
+ls -lR "${HF_HOME}" || echo "No models cached yet."
+echo "---------------------"
 
 RUNNING_UNDER_SLURM=0
 if [[ -n "${SLURM_JOB_ID:-}" ]]; then
@@ -133,7 +166,7 @@ else
         "
 fi
 
-export CMD="src/train.py --config-file $CONFIG_FILE"
+export CMD="src/train.py $@"
 
 SRUN_ARGS=" \
     --wait=60 \
