@@ -15,10 +15,15 @@ echo "------------------------------------------------------------------"
 # ------------------------------------------------------------------
 # Host-side setup (modules, etc.)
 # ------------------------------------------------------------------
+if [[ -f /etc/profile.d/02-lmod.sh ]]; then
+    # shellcheck disable=SC1091
+    source /etc/profile.d/02-lmod.sh
+fi
+
 if command -v module >/dev/null 2>&1; then
   module purge || true
-  module load apptainer 2>/dev/null || module load singularity 2>/dev/null || true
-  module load cuda
+  module load singularity 2>/dev/null || true
+  module load cuda || true
 fi
 
 # ------------------------------------------------------------------
@@ -53,6 +58,7 @@ if [[ -n "${HOST_CUDA_HOME}" ]] && [[ -d "${HOST_CUDA_HOME}" ]]; then
 else
   echo "WARNING: CUDA toolkit not detected on host (CUDA_HOME/CUDA_PATH/nvcc). nvcc will likely be unavailable in the container."
 fi
+echo "CUDA_BIND_ARG: ${CUDA_BIND_ARG}"
 
 # ------------------------------------------------------------------
 # Hugging Face cache: bind host HF_HOME into the container so model/
@@ -158,10 +164,17 @@ export SINGULARITYENV_TMPDIR="${CONTAINER_TMPDIR}"
 export SINGULARITYENV_WANDB_PROJECT="${WANDB_PROJECT:-melt}"
 export SINGULARITYENV_WANDB_MODE="${WANDB_MODE:-online}"
 
-# Base output directory for runs (consumed in configs via ${oc.env:OUTPUT_DIR,...}).
-OUTPUT_DIR="${OUTPUT_DIR:-${SUBMIT_DIR}/outputs}"
-mkdir -p "${OUTPUT_DIR}"
-export SINGULARITYENV_OUTPUT_DIR="${OUTPUT_DIR}"
+# Base output directory for runs.
+# IMPORTANT: don't point the container at host paths like /mnt/scratch-... directly.
+# Some clusters bind those paths read-only inside the container. Instead, bind-mount
+# the host output directory to a known writable container path.
+HOST_OUTPUT_DIR="${OUTPUT_DIR:-${SUBMIT_DIR}/outputs}"
+mkdir -p "${HOST_OUTPUT_DIR}"
+CONTAINER_OUTPUT_DIR="/workspace/outputs"
+
+# Prefer APPTAINERENV_ (new) but also set SINGULARITYENV_ (compat).
+export APPTAINERENV_OUTPUT_DIR="${CONTAINER_OUTPUT_DIR}"
+export SINGULARITYENV_OUTPUT_DIR="${CONTAINER_OUTPUT_DIR}"
 
 # Multi-node: compute MASTER_ADDR on the host (scontrol is usually not available in the container)
 MASTER_PORT="${MASTER_PORT:-6000}"
@@ -177,7 +190,7 @@ export SINGULARITYENV_MASTER_PORT="${MASTER_PORT}"
 # - project dir (latest code)
 # - tmp + datasets
 # - Accelerate config file (explicitly) to keep things simple
-BIND_ARGS="${HOST_PROJECT_DIR}:${CONTAINER_PROJECT_DIR},${HOST_TMPDIR}:${CONTAINER_TMPDIR},${HOST_LOCAL_DATASETS_DIR}:${CONTAINER_LOCAL_DATASETS_DIR}${CUDA_BIND_ARG}"
+BIND_ARGS="${HOST_PROJECT_DIR}:${CONTAINER_PROJECT_DIR},${HOST_TMPDIR}:${CONTAINER_TMPDIR},${HOST_LOCAL_DATASETS_DIR}:${CONTAINER_LOCAL_DATASETS_DIR},${HOST_OUTPUT_DIR}:${CONTAINER_OUTPUT_DIR}:rw${CUDA_BIND_ARG}"
 BIND_ARGS="${BIND_ARGS}${HF_BIND_ARG}"
 
 echo "SINGULARITY_IMG: ${SINGULARITY_IMG}"
@@ -185,13 +198,14 @@ echo "SINGULARITY_BIN: ${SINGULARITY_BIN}"
 echo "Host project: ${HOST_PROJECT_DIR} -> ${CONTAINER_PROJECT_DIR}"
 echo "Host datasets: ${HOST_LOCAL_DATASETS_DIR} -> ${CONTAINER_LOCAL_DATASETS_DIR}"
 echo "Host tmp: ${HOST_TMPDIR} -> ${CONTAINER_TMPDIR}"
+echo "Host outputs: ${HOST_OUTPUT_DIR} -> ${CONTAINER_OUTPUT_DIR}"
 if [[ -n "${CUDA_BIND_ARG}" ]]; then
   echo "Host CUDA toolkit: ${HOST_CUDA_HOME} -> ${CONTAINER_CUDA_HOME}"
 fi
 if [[ -n "${HF_BIND_ARG}" ]]; then
   echo "Host HF_HOME: ${HOST_HF_HOME} -> ${CONTAINER_HF_HOME}"
 fi
-echo "OUTPUT_DIR: ${OUTPUT_DIR}"
+echo "OUTPUT_DIR (container): ${CONTAINER_OUTPUT_DIR}"
 echo "MASTER_ADDR (host): ${MASTER_ADDR_HOST}"
 echo "MASTER_PORT: ${MASTER_PORT}"
 echo "Train args: ${TRAIN_ARGS}"
