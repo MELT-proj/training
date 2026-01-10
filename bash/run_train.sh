@@ -168,10 +168,10 @@ fi
 echo "Launcher: $LAUNCHER"
 
 if [[ "${LAUNCHER%% *}" == "python" ]]; then
-    export CMD="-m melt.training.train $@"
+    export CMD="-m src.training.train $@"
 else
     # accelerate launch
-    export CMD="--module melt.training.train $@"
+    export CMD="--module src.training.train $@"
 fi
 
 SRUN_ARGS=" \
