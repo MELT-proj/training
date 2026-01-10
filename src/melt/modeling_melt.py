@@ -11,12 +11,13 @@ from transformers.generation.utils import GenerationMixin
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.modeling_utils import PreTrainedModel
 from transformers.models.wav2vec2_bert.modeling_wav2vec2_bert import Wav2Vec2BertAdapterLayer
-from transformers.utils import logging
+
+from src.logging_utils import get_logger
 
 from .configuration_melt import MELTConfig
 
 
-logger = logging.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 # =============================================================================

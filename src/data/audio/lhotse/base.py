@@ -14,14 +14,15 @@ Directory Structure Convention:
         Example: common_voice/en/train/ or mls/default/en/train/
 """
 
-import logging
 from abc import ABC
 from pathlib import Path
 from typing import Optional, Union
 
 from lhotse import CutSet
 
-logger = logging.getLogger(__name__)
+from src.logging_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 class BaseLhotseDataset(ABC):

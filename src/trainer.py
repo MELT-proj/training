@@ -5,7 +5,6 @@ This module provides a custom Trainer that integrates Lhotse dataloaders
 for efficient speech data loading with dynamic batching and bucketing.
 """
 
-import logging
 import os
 import random
 from typing import Any
@@ -22,11 +21,11 @@ from src.data.audio.lhotse import (
     get_eval_dataloader_from_config,
     get_train_dataloader_from_config,
 )
+from src.logging_utils import get_logger
 from src.melt import MELTProcessor
 from transformers import Trainer
 
-
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def current_cpumem_usage():

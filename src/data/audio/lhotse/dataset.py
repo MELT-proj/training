@@ -8,18 +8,16 @@ The dataset does not hold actual data; instead, it acts as a processing
 recipe that transforms CutSets into model inputs via the MELTProcessor.
 """
 
-import logging
-
 import torch
 import torch.utils.data
 from lhotse import CutSet
 from lhotse.cut import Cut
 
 from src.config import DataConfig
+from src.logging_utils import get_logger
 from src.melt import MELTProcessor
 
-
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _get_config_value(config, key: str, default=None):

@@ -9,7 +9,6 @@ Key functions:
 - get_lhotse_dataloader_from_config: Creates a full DataLoader from config
 """
 
-import logging
 import os
 import warnings
 from dataclasses import asdict
@@ -34,9 +33,9 @@ from lhotse.dataset.sampling.base import CutSampler, TimeConstraint
 from lhotse.utils import fix_random_seed
 
 from src.config import DataConfig, DatasetConfig, DataSourceConfig
+from src.logging_utils import get_logger
 
-
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _get_config_value(config: Any, key: str, default: Any = None) -> Any:

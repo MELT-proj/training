@@ -3,7 +3,6 @@ import time
 import json
 import glob
 import yaml
-import logging
 from transformers.models.speechlm import (
     SpeechLMProcessor,
     SpeechLMForConditionalGeneration,
@@ -17,10 +16,10 @@ from training_utils import AudioTextDataCollator
 import os
 import pdb
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger(__name__)
+from src.logging_utils import configure_logging, get_logger
+
+
+logger = get_logger(__name__)
 
 
 def get_transcripts(model, processor, dataset, target_lang: str, batch_size):
@@ -128,6 +127,7 @@ def main(
     dry_run: bool = False,
     batch_size: int = 1,
 ):
+    configure_logging()
     # 1. load the configuration file
     eval_configfile = "./config/eval_datasets.yaml"
     with open(eval_configfile) as file:

@@ -2,10 +2,11 @@
 Processor class for MELT.
 """
 
-import logging
 import re
 
 import torch
+
+from src.logging_utils import get_logger
 
 from transformers.feature_extraction_utils import BatchFeature
 from transformers.image_utils import ImageInput
@@ -14,7 +15,7 @@ from transformers.tokenization_utils_base import AudioInput, PreTokenizedInput, 
 from transformers.video_utils import VideoInput
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # Redefine kwargs for videos (optional, for future use)

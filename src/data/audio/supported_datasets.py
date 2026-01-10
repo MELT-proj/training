@@ -11,17 +11,12 @@ from datasets import (
 from tqdm import tqdm
 import os
 import random
-import logging
 import pandas as pd
 from . import _local_dataset_dir
 from sklearn.model_selection import train_test_split
+from src.logging_utils import get_logger
 
-
-# Setup logger
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def subsample_split(data, split: str | list[str], samples):

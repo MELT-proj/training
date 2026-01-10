@@ -38,12 +38,12 @@ data:
     # Data sources - list of datasets to load
     input_cfg:
       - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR,/mnt/home/giuseppe/myscratch/melt-data/shar}/librispeech/clean/train.100
+        shar_path: ${LOCAL_DATASETS_DIR:-/mnt/home/giuseppe/myscratch/melt-data/shar}/librispeech/clean/train.100
         tags:
           task: asr
           lang: en
       - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR,/mnt/home/giuseppe/myscratch/melt-data/shar}/librispeech/clean/train.360
+        shar_path: ${LOCAL_DATASETS_DIR:-/mnt/home/giuseppe/myscratch/melt-data/shar}/librispeech/clean/train.360
         tags:
           task: asr
           lang: en
@@ -74,14 +74,14 @@ data:
     num_workers: 2
     pin_memory: true
     prefetch_factor: 2
-    sample_rate: ${data.sample_rate}
+    sample_rate: 16000
     text_field: text
     lang_field: lang
 
   validation_ds:
     input_cfg:
       - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR,/mnt/home/giuseppe/myscratch/melt-data/shar}/librispeech/clean/validation
+        shar_path: ${LOCAL_DATASETS_DIR:-/mnt/home/giuseppe/myscratch/melt-data/shar}/librispeech/clean/validation
         tags:
           task: asr
           lang: en
@@ -98,7 +98,7 @@ data:
     num_workers: 4
     pin_memory: true
     prefetch_factor: 2
-    sample_rate: ${data.sample_rate}
+    sample_rate: 16000
     text_field: text
     lang_field: lang
 
@@ -106,7 +106,7 @@ data:
 # Trainer Configuration
 # =============================================================================
 trainer:
-  output_dir: ${oc.env:OUTPUT_DIR,/mnt/scratch-artemis/giuseppe/melt-data/models}/LS_asr
+  output_dir: ${OUTPUT_DIR:-/mnt/scratch-artemis/giuseppe/melt-data/models}/LS_asr
   overwrite_output_dir: true
   seed: 42
   do_train: true
@@ -134,11 +134,11 @@ trainer:
 
   # Duration
   num_train_epochs: 1
-  max_steps: 100
+  max_steps: 20
 
   # Logging
   logging_strategy: steps
-  logging_steps: 25
+  logging_steps: 5
   report_to: none
 
   # Evaluation

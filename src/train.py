@@ -16,7 +16,6 @@ Usage:
     python src/train.py --config-file config/train/LS_asr.yaml --trainer.max-steps 500
 """
 
-import logging
 import os
 from pathlib import Path
 
@@ -24,7 +23,6 @@ import torch
 import tyro
 
 import ddp
-import transformers
 from src.config import (
     TrainingConfig,
     expand_env_vars_in_config,
@@ -33,16 +31,13 @@ from src.config import (
     save_config,
     trainer_args_dict,
 )
+from src.logging_utils import configure_logging, get_logger
 from src.melt import MELTConfig, MELTForConditionalGeneration, MELTProcessor
 from src.trainer import MELTTrainer, count_trainable_parameters
 from transformers import AutoConfig, AutoFeatureExtractor, AutoTokenizer, TrainingArguments, set_seed
 from transformers.trainer_utils import get_last_checkpoint
 
-
-# Setup logger
-logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
-
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Optimize matmul precision
 torch.set_float32_matmul_precision("high")
@@ -148,6 +143,8 @@ def prepare_model(
 
 def main(cfg: TrainingConfig) -> None:
     """Run training from a loaded config."""
+    configure_logging()
+
     if ddp.is_distributed():
         rank = ddp.get_global_rank()
         world_size = ddp.get_world_size()
@@ -156,15 +153,11 @@ def main(cfg: TrainingConfig) -> None:
         is_global_master = ddp.is_global_master()
 
         logger.info(f"Distributed setup: rank {rank} out of {world_size}")
-        logging.info(
+        logger.info(
             f"world_size: {world_size}, local_world_size: {ddp.get_local_world_size()}"
             f" local_rank: {local_rank}, group_rank: {ddp.get_group_rank()}"
             f" is_local_master: {is_local_master}, is_global_master: {is_global_master}"
         )
-
-        # Reduce logging noise on non-master processes
-        logging.basicConfig(level=logging.INFO if is_local_master else logging.ERROR)
-        transformers.logging.set_verbosity(logging.WARNING if is_local_master else logging.ERROR)
     else:
         logger.info("Not in a distributed setup")
 
@@ -234,6 +227,7 @@ def main(cfg: TrainingConfig) -> None:
 
 
 if __name__ == "__main__":
+    configure_logging()
     # Parse CLI arguments using tyro
     cli_cfg = tyro.cli(TrainingConfig)
 
@@ -248,6 +242,7 @@ if __name__ == "__main__":
     cfg = expand_env_vars_in_config(cfg)
 
     if cfg.dry_run:
+        configure_logging()
         logger.info("Dry run mode - config parsed successfully")
         logger.info(f"Config: {cfg}")
     else:
