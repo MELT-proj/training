@@ -13,9 +13,9 @@ import torch.utils.data
 from lhotse import CutSet
 from lhotse.cut import Cut
 
-from src.config import DataConfig
-from src.logging_utils import get_logger
-from src.melt import MELTProcessor
+from ....config import DataConfig
+from .....logging_utils import get_logger
+from .....modeling import MELTProcessor
 
 logger = get_logger(__name__)
 

@@ -136,6 +136,7 @@ APPTAINER_TMPDIR=/mnt/scratch-artemis/giuseppe/tmp \
 Run locally after resource allocation with `srun`:
 
 VENV_PATH=/mnt/scratch-artemis/giuseppe/venvs/melt/bin/activate \
+  HF_HOME=/mnt/scratch-artemis/giuseppe/melt-data/hf_cache \
   LOCAL_DATASETS_DIR=/mnt/scratch-artemis/giuseppe/melt-data/shar \
   bash ./bash/run_train.sh config/accelerate/zero3.yaml \
   --config-file config/train/LS_asr.yaml

@@ -32,8 +32,8 @@ from lhotse.dataset.dataloading import resolve_seed
 from lhotse.dataset.sampling.base import CutSampler, TimeConstraint
 from lhotse.utils import fix_random_seed
 
-from src.config import DataConfig, DatasetConfig, DataSourceConfig
-from src.logging_utils import get_logger
+from ....config import DataConfig, DatasetConfig, DataSourceConfig
+from .....logging_utils import get_logger
 
 logger = get_logger(__name__)
 

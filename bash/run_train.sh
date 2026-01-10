@@ -99,8 +99,8 @@ echo "LOCAL_DATASETS_DIR=$LOCAL_DATASETS_DIR"
 echo "TMPDIR=$TMPDIR"
 echo "---------------------"
 
-echo "Listing what I see under ${HF_HOME}:"
-ls -lR "${HF_HOME}" || echo "No models cached yet."
+echo "Listing what I see under ${HF_HOME}/hub:"
+ls -l "${HF_HOME}/hub" || echo "No models cached yet."
 echo "---------------------"
 
 RUNNING_UNDER_SLURM=0
@@ -165,8 +165,14 @@ else
         --tee 3 \
         "
 fi
+echo "Launcher: $LAUNCHER"
 
-export CMD="src/train.py $@"
+if [[ "${LAUNCHER%% *}" == "python" ]]; then
+    export CMD="-m melt.training.train $@"
+else
+    # accelerate launch
+    export CMD="--module melt.training.train $@"
+fi
 
 SRUN_ARGS=" \
     --wait=60 \

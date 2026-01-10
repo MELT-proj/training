@@ -1,0 +1,118 @@
+# Weights & Biases Sweep Configuration
+# Uses Bayesian optimization for hyperparameter search
+#
+# Usage:
+#   wandb sweep config/sweep/hparam_search.yaml
+#   wandb agent <sweep_id>
+#
+# Reference: https://docs.wandb.ai/guides/sweeps
+
+program: src/train.py
+method: bayes  # Bayesian optimization - best for continuous hyperparameters
+metric:
+  name: eval/loss
+  goal: minimize
+
+# Early termination to stop poorly performing runs
+early_terminate:
+  type: hyperband
+  min_iter: 100
+  eta: 3
+  s: 2
+
+parameters:
+  # ===== Learning Rates =====
+  # These are the most important hyperparameters for fine-tuning
+  trainer.learning_rate:
+    distribution: log_uniform_values
+    min: 1e-6
+    max: 1e-4
+
+  optimization.adapter_lr:
+    distribution: log_uniform_values
+    min: 1e-5
+    max: 1e-3
+
+  optimization.encoder_lr:
+    distribution: log_uniform_values
+    min: 1e-7
+    max: 1e-5
+
+  optimization.decoder_lr:
+    distribution: log_uniform_values
+    min: 1e-6
+    max: 1e-4
+
+  # ===== Optimizer Parameters =====
+  trainer.adam_beta1:
+    values: [0.9, 0.95]
+
+  trainer.adam_beta2:
+    values: [0.95, 0.98, 0.99, 0.999]
+
+  # ===== Learning Rate Schedule =====
+  trainer.warmup_steps:
+    distribution: int_uniform
+    min: 500
+    max: 5000
+
+  trainer.lr_scheduler_type:
+    values: ["cosine", "linear", "constant_with_warmup"]
+
+  # ===== Batch Settings =====
+  trainer.gradient_accumulation_steps:
+    values: [1, 2, 4, 8]
+
+  data.train_ds.batch_duration:
+    distribution: uniform
+    min: 60.0
+    max: 180.0
+
+  # ===== Regularization =====
+  # Uncomment if your model supports these
+  # trainer.weight_decay:
+  #   distribution: log_uniform_values
+  #   min: 1e-5
+  #   max: 1e-1
+
+  # ===== Fixed Parameters =====
+  # These remain constant across all runs
+  trainer.max_steps:
+    value: 10000
+
+  trainer.eval_strategy:
+    value: "steps"
+
+  trainer.eval_steps:
+    value: 500
+
+  trainer.save_strategy:
+    value: "steps"
+
+  trainer.save_steps:
+    value: 1000
+
+  trainer.logging_steps:
+    value: 50
+
+  trainer.report_to:
+    value: ["wandb"]
+
+  trainer.bf16:
+    value: true
+
+  model.encoder.freeze:
+    value: true
+
+  model.decoder.freeze:
+    value: false
+
+  model.adapter.freeze:
+    value: false
+
+# Command to run - tyro uses --param.name format
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args}

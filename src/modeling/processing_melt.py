@@ -6,7 +6,7 @@ import re
 
 import torch
 
-from src.logging_utils import get_logger
+from ..logging_utils import get_logger
 
 from transformers.feature_extraction_utils import BatchFeature
 from transformers.image_utils import ImageInput

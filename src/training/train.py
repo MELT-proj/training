@@ -22,8 +22,8 @@ from pathlib import Path
 import torch
 import tyro
 
-import ddp
-from src.config import (
+from .. import ddp
+from .config import (
     TrainingConfig,
     expand_env_vars_in_config,
     load_config_from_yaml,
@@ -31,9 +31,9 @@ from src.config import (
     save_config,
     trainer_args_dict,
 )
-from src.logging_utils import configure_logging, get_logger
-from src.melt import MELTConfig, MELTForConditionalGeneration, MELTProcessor
-from src.trainer import MELTTrainer, count_trainable_parameters
+from .trainer import MELTTrainer, count_trainable_parameters
+from ..logging_utils import configure_logging, get_logger
+from ..modeling import MELTConfig, MELTForConditionalGeneration, MELTProcessor
 from transformers import AutoConfig, AutoFeatureExtractor, AutoTokenizer, TrainingArguments, set_seed
 from transformers.trainer_utils import get_last_checkpoint
 

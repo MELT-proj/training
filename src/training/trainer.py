@@ -13,16 +13,16 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-import ddp
-from src.config import TrainingConfig
-from src.data.audio.lhotse import (
+from .. import ddp
+from .config import TrainingConfig
+from .data.audio.lhotse import (
     FallbackDataset,
     SpeechToTextDataset,
     get_eval_dataloader_from_config,
     get_train_dataloader_from_config,
 )
-from src.logging_utils import get_logger
-from src.melt import MELTProcessor
+from ..logging_utils import get_logger
+from ..modeling import MELTProcessor
 from transformers import Trainer
 
 logger = get_logger(__name__)

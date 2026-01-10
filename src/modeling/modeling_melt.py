@@ -12,7 +12,7 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.modeling_utils import PreTrainedModel
 from transformers.models.wav2vec2_bert.modeling_wav2vec2_bert import Wav2Vec2BertAdapterLayer
 
-from src.logging_utils import get_logger
+from ..logging_utils import get_logger
 
 from .configuration_melt import MELTConfig
 

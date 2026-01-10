@@ -20,7 +20,7 @@ from typing import Optional, Union
 
 from lhotse import CutSet
 
-from src.logging_utils import get_logger
+from .....logging_utils import get_logger
 
 logger = get_logger(__name__)
 
