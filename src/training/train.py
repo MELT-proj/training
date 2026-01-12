@@ -99,34 +99,6 @@ def prepare_model(
         model = MELTForConditionalGeneration(config)
         model.text_decoder.resize_token_embeddings(len(processor.tokenizer), mean_resizing=False, pad_to_multiple_of=8)
 
-    # TODO: move this utility in a separate module.
-    # Print model layers for inspection/debugging and write to file
-    def _print_model_layers(m, out_dir: str | None = None):
-        """Log leaf-level model modules (layers) by name and type and optionally write to file."""
-        logger.info("Listing model layers (leaf modules):")
-        lines = []
-        for name, module in m.named_modules():
-            if not name:
-                continue
-            # Consider leaf modules only (no child modules)
-            if len(list(module.children())) == 0:
-                params = sum(p.numel() for p in module.parameters())
-                line = f"{name}: {module.__class__.__name__} | params={params:,}"
-                logger.info("  %s", line)
-                lines.append(line)
-        if out_dir is not None:
-            try:
-                out_path = Path(out_dir)
-                out_path.mkdir(parents=True, exist_ok=True)
-                file = out_path / "model_layers.txt"
-                file.write_text("\n".join(lines) + "\n")
-                logger.info("Wrote model layers list to %s", str(file))
-            except Exception as e:
-                logger.warning("Could not write model layers to %s: %s", out_dir, e)
-
-    # Pass through targs.output_dir if available so layers are saved alongside outputs
-    # _print_model_layers(model, getattr(targs, "output_dir", None))
-
     # Apply freezing
     if adapter_cfg.freeze:
         logger.info("Freezing the adapter")
@@ -214,9 +186,12 @@ def main(cfg: TrainingConfig) -> None:
     ##########################
     ## SAVING
     ##########################
+    # From: https://huggingface.co/blog/ram-efficient-pytorch-fsdp
     if trainer.is_fsdp_enabled:
+        logger.info("Setting FSDP state dict type to FULL_STATE_DICT for saving...")
         trainer.accelerator.state.fsdp_plugin.set_state_dict_type("FULL_STATE_DICT")
 
+    logger.info("Saving model and processor...")
     trainer.save_model()
     processor.save_pretrained(targs.output_dir)
 

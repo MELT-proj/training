@@ -71,3 +71,28 @@ def get_logger(name: str) -> logging.Logger:
     """
 
     return logging.getLogger(name)
+
+
+# Print model layers for inspection/debugging and write to file
+def _print_model_layers(m, out_dir: str | None = None):
+    """Log leaf-level model modules (layers) by name and type and optionally write to file."""
+    logger.info("Listing model layers (leaf modules):")
+    lines = []
+    for name, module in m.named_modules():
+        if not name:
+            continue
+        # Consider leaf modules only (no child modules)
+        if len(list(module.children())) == 0:
+            params = sum(p.numel() for p in module.parameters())
+            line = f"{name}: {module.__class__.__name__} | params={params:,}"
+            logger.info("  %s", line)
+            lines.append(line)
+    if out_dir is not None:
+        try:
+            out_path = Path(out_dir)
+            out_path.mkdir(parents=True, exist_ok=True)
+            file = out_path / "model_layers.txt"
+            file.write_text("\n".join(lines) + "\n")
+            logger.info("Wrote model layers list to %s", str(file))
+        except Exception as e:
+            logger.warning("Could not write model layers to %s: %s", out_dir, e)
