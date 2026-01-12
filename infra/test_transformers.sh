@@ -4,6 +4,7 @@ set -euo pipefail
 VENV_DIR="test-transformers"
 REPO_ID="Qwen/Qwen2.5-0.5B"
 export HF_HOME="./test_cache"
+export HF_HUB_ENABLE_HF_TRANSFER=0
 
 echo "[1/6] Creating uv venv: ${VENV_DIR}"
 uv venv "${VENV_DIR}"
@@ -11,7 +12,7 @@ uv venv "${VENV_DIR}"
 # shellcheck disable=SC1091
 source "${VENV_DIR}/bin/activate"
 
-echo "[2/6] Installing transformers==4.57.3 and torch"
+echo "[2/6] Installing transformers==4.57.1 and torch"
 uv pip install "transformers==4.57.1" torch
 
 echo "[3/5] Downloading repo via huggingface_hub.snapshot_download: ${REPO_ID}"
@@ -56,7 +57,7 @@ def run(name: str, fn) -> None:
 from transformers import AutoConfig, AutoTokenizer, AutoModel
 
 run("AutoConfig.from_pretrained", lambda: AutoConfig.from_pretrained(repo_id))
-run("AutoTokenizer.from_pretrained", lambda: AutoTokenizer.from_pretrained(repo_id))
+run("AutoTokenizer.from_pretrained", lambda: AutoTokenizer.from_pretrained(repo_id, local_files_only=True))
 run("AutoModel.from_pretrained", lambda: AutoModel.from_pretrained(repo_id))
 
 if failures:
