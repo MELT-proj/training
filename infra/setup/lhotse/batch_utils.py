@@ -37,6 +37,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
+from concurrent.futures import ThreadPoolExecutor
+
 from datasets import Audio, load_dataset
 from lhotse import CutSet, MonoCut, Recording, SupervisionSegment
 from lhotse.shar import SharWriter
@@ -113,6 +115,8 @@ class BatchedSharConverter:
         self,
         batch_size: int = 5000,
         num_workers: int = 4,
+        io_num_workers: int = 8,
+        prefetch_batches: int = 1,
         use_temp_cache: bool = False,
         hf_num_proc: int = 4,
     ):
@@ -123,6 +127,11 @@ class BatchedSharConverter:
                        Higher = faster but more memory. Default: 5000
             num_workers: Number of parallel workers for cut creation.
                         Set to 1 to disable parallelization. Default: 4
+            io_num_workers: Number of worker threads for IO-bound work when
+                           materializing a loaded batch (e.g., reading audio
+                           bytes from disk/cache). Default: 8
+            prefetch_batches: Number of batches to prefetch ahead. Currently
+                              supports 0 (disabled) or 1. Default: 1
             use_temp_cache: If True, use a temp directory for HF cache during
                            batch downloads (cleaned up after each batch).
             hf_num_proc: Number of processes for HuggingFace data loading.
@@ -130,8 +139,34 @@ class BatchedSharConverter:
         """
         self.batch_size = batch_size
         self.num_workers = num_workers
+        self.io_num_workers = io_num_workers
+        self.prefetch_batches = prefetch_batches
         self.use_temp_cache = use_temp_cache
         self.hf_num_proc = hf_num_proc
+
+    def _materialize_batch(
+        self,
+        batch_dataset,
+        *,
+        io_num_workers: int,
+    ) -> list[dict[str, Any]]:
+        """Materialize an in-memory HF Dataset into a list of python dicts.
+
+        This is where IO can happen for audio columns: with `Audio(decode=False)`
+        HuggingFace will typically read bytes on access (e.g., `row['audio']['bytes']`).
+        We parallelize *row materialization* with threads to overlap IO.
+        """
+        n_items = len(batch_dataset)
+        if io_num_workers <= 1 or n_items <= 1:
+            return list(batch_dataset)
+
+        def _get_row(i: int) -> dict[str, Any]:
+            return batch_dataset[i]
+
+        # Threads are intentional here: the hot path is file/network IO.
+        # Using processes would require pickling/copying the dataset object.
+        with ThreadPoolExecutor(max_workers=io_num_workers) as pool:
+            return list(pool.map(_get_row, range(n_items)))
 
     def _load_batch_range(
         self,
@@ -174,7 +209,12 @@ class BatchedSharConverter:
         # Don't decode audio - get raw bytes
         batch_dataset = batch_dataset.cast_column("audio", Audio(decode=False))
 
-        return list(batch_dataset)
+        # Materialize the batch as python dicts. This step can be IO-bound due
+        # to lazy audio byte loading; we optionally parallelize it.
+        return self._materialize_batch(
+            batch_dataset,
+            io_num_workers=self.io_num_workers,
+        )
 
     def _get_dataset_size(
         self,
@@ -303,12 +343,61 @@ class BatchedSharConverter:
         Yields:
             Tuple of (batch items, start index).
         """
-        for start_idx in range(0, total_size, self.batch_size):
-            end_idx = min(start_idx + self.batch_size, total_size)
-            batch = self._load_batch_range(
-                dataset_name, hf_config, hf_split, start_idx, end_idx, cache_dir
+        if self.prefetch_batches not in (0, 1):
+            raise ValueError("prefetch_batches currently supports only 0 or 1")
+
+        if self.prefetch_batches == 0:
+            for start_idx in range(0, total_size, self.batch_size):
+                end_idx = min(start_idx + self.batch_size, total_size)
+                batch = self._load_batch_range(
+                    dataset_name,
+                    hf_config,
+                    hf_split,
+                    start_idx,
+                    end_idx,
+                    cache_dir,
+                )
+                yield batch, start_idx
+            return
+
+        # Prefetch one batch ahead: overlaps HF download/reading + audio byte IO
+        # with CPU-bound cut creation/writing for the current batch.
+        with ThreadPoolExecutor(max_workers=1) as prefetch_pool:
+            start_idx = 0
+            end_idx = min(self.batch_size, total_size)
+            next_future = prefetch_pool.submit(
+                self._load_batch_range,
+                dataset_name,
+                hf_config,
+                hf_split,
+                start_idx,
+                end_idx,
+                cache_dir,
             )
-            yield batch, start_idx
+
+            while start_idx < total_size:
+                batch = next_future.result()
+
+                next_start = start_idx + self.batch_size
+                if next_start < total_size:
+                    next_end = min(next_start + self.batch_size, total_size)
+                    next_future = prefetch_pool.submit(
+                        self._load_batch_range,
+                        dataset_name,
+                        hf_config,
+                        hf_split,
+                        next_start,
+                        next_end,
+                        cache_dir,
+                    )
+                else:
+                    next_future = None
+
+                yield batch, start_idx
+
+                if next_future is None:
+                    break
+                start_idx = next_start
 
     def convert_to_shar(
         self,
@@ -425,6 +514,8 @@ def convert_subset_to_shar_batched(
     language: str = "en",
     batch_size: int = 5000,
     num_workers: int = 4,
+    io_num_workers: int = 8,
+    prefetch_batches: int = 1,
     hf_num_proc: int = 4,
     use_temp_cache: bool = False,
     id_field: str = "id",
@@ -445,6 +536,8 @@ def convert_subset_to_shar_batched(
         language: Language code for supervision segments.
         batch_size: Items per batch (default: 5000).
         num_workers: Parallel workers for cut creation (default: 4).
+        io_num_workers: Threads for IO-bound batch materialization (default: 8).
+        prefetch_batches: Prefetch batches ahead (0 or 1; default: 1).
         hf_num_proc: HuggingFace loading processes (default: 4).
         use_temp_cache: Use temp directory for HF cache (default: False).
         id_field: Field name for item ID.
@@ -457,6 +550,8 @@ def convert_subset_to_shar_batched(
     converter = BatchedSharConverter(
         batch_size=batch_size,
         num_workers=num_workers,
+        io_num_workers=io_num_workers,
+        prefetch_batches=prefetch_batches,
         use_temp_cache=use_temp_cache,
         hf_num_proc=hf_num_proc,
     )

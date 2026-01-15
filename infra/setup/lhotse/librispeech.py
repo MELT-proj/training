@@ -173,6 +173,8 @@ def convert_subset_to_shar(
     use_batched: bool = False,
     batch_size: int = 5000,
     num_workers: int = 4,
+    io_num_workers: int = 8,
+    prefetch_batches: int = 1,
     hf_num_proc: int = 4,
 ) -> tuple[int, int] | tuple[None, None]:
     """Convert a single configuration/split combination to Shar format.
@@ -213,7 +215,7 @@ def convert_subset_to_shar(
     if use_batched:
         # Use batched processing with parallelization
         logger.info(
-            f"Using BATCHED mode: batch_size={batch_size}, num_workers={num_workers}, hf_num_proc={hf_num_proc}"
+            f"Using BATCHED mode: batch_size={batch_size}, num_workers={num_workers}, io_num_workers={io_num_workers}, prefetch_batches={prefetch_batches}, hf_num_proc={hf_num_proc}"
         )
         from batch_utils import convert_subset_to_shar_batched
 
@@ -227,6 +229,8 @@ def convert_subset_to_shar(
             language=supervision_lang,
             batch_size=batch_size,
             num_workers=num_workers,
+            io_num_workers=io_num_workers,
+            prefetch_batches=prefetch_batches,
             hf_num_proc=hf_num_proc,
         )
     else:
@@ -326,6 +330,8 @@ def convert_all_to_shar(
     use_batched: bool = False,
     batch_size: int = 5000,
     num_workers: int = 4,
+    io_num_workers: int = 8,
+    prefetch_batches: int = 1,
     hf_num_proc: int = 4,
 ):
     """Convert all configurations and splits to Shar format.
@@ -346,7 +352,9 @@ def convert_all_to_shar(
     logger.info(f"Base output directory: {BASE_OUTPUT_DIR / DATASET_NICKNAME}")
 
     if use_batched:
-        logger.info(f"BATCHED MODE: batch_size={batch_size}, num_workers={num_workers}, hf_num_proc={hf_num_proc}")
+        logger.info(
+            f"BATCHED MODE: batch_size={batch_size}, num_workers={num_workers}, io_num_workers={io_num_workers}, prefetch_batches={prefetch_batches}, hf_num_proc={hf_num_proc}"
+        )
     else:
         logger.info("STREAMING MODE (sequential, memory-efficient)")
 
@@ -367,6 +375,8 @@ def convert_all_to_shar(
                 use_batched=use_batched,
                 batch_size=batch_size,
                 num_workers=num_workers,
+                io_num_workers=io_num_workers,
+                prefetch_batches=prefetch_batches,
                 hf_num_proc=hf_num_proc,
             )
             if count is None or errors is None:
@@ -424,6 +434,18 @@ Examples:
         help="Number of parallel workers for cut creation in batched mode (default: 4).",
     )
     parser.add_argument(
+        "--io-num-workers",
+        type=int,
+        default=8,
+        help="Number of worker threads for IO-bound batch materialization in batched mode (default: 8).",
+    )
+    parser.add_argument(
+        "--prefetch-batches",
+        type=int,
+        default=1,
+        help="Number of batches to prefetch ahead in batched mode (0 or 1; default: 1).",
+    )
+    parser.add_argument(
         "--hf-num-proc",
         type=int,
         default=4,
@@ -440,5 +462,7 @@ if __name__ == "__main__":
         use_batched=args.batched,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
+        io_num_workers=args.io_num_workers,
+        prefetch_batches=args.prefetch_batches,
         hf_num_proc=args.hf_num_proc,
     )
