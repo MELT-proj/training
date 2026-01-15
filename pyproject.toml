@@ -35,13 +35,13 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-# Only look inside the `src/` directory for packages and include *melt* packages.
-# Previously `where = ["."]` and `include = ["src*"]` caused setuptools to treat
-# the `src` directory itself as a package namespace (installing `src.melt`).
-# Use `where = ["src"]` and include package names under `melt` so installed
-# package files map to top-level `melt` instead of `src.melt`.
-where = ["src"]
-include = ["melt*"]
+# The repo uses a package named `src` (i.e. `src/__init__.py` exists), with
+# subpackages like `src.training`, `src.modeling`, and `src.evaluation`.
+#
+# Therefore, package discovery must run from the repository root and include
+# `src*` package names.
+where = ["."]
+include = ["src*"]
 
 [tool.ruff]
 target-version = "py310"

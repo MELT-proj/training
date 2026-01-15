@@ -1,28 +1,36 @@
-import tyro
-import time
-import json
 import glob
-import yaml
-from transformers.models.speechlm import (
-    SpeechLMProcessor,
-    SpeechLMForConditionalGeneration,
-)
-from tqdm import tqdm
-import torch
-from evaluation.normalizers import BasicTextNormalizer, EnglishTextNormalizer
-import jiwer
-from data_utils.utils import get_dataset
-from training_utils import AudioTextDataCollator
+import json
 import os
-import pdb
+import time
 
+import tyro
+import yaml
+from tqdm import tqdm
+
+from src.evaluation.normalizers import BasicTextNormalizer, EnglishTextNormalizer
 from src.logging_utils import configure_logging, get_logger
 
 
 logger = get_logger(__name__)
 
 
+def _require_dependency(module_name: str, exc: Exception) -> None:
+    raise ModuleNotFoundError(
+        f"Missing optional dependency '{module_name}' required for evaluation: {exc!r}"
+    )
+
+
 def get_transcripts(model, processor, dataset, target_lang: str, batch_size):
+
+    try:
+        import torch
+    except Exception as e:
+        _require_dependency("torch", e)
+
+    try:
+        from training_utils import AudioTextDataCollator  # legacy dependency
+    except Exception as e:
+        _require_dependency("training_utils (internal)", e)
 
     # wrap the dataset in a sequential dataloader
     data_collator = AudioTextDataCollator(
@@ -62,6 +70,14 @@ def get_transcripts(model, processor, dataset, target_lang: str, batch_size):
 
 
 def get_model_processor(model_name_or_path: str):
+    try:
+        from transformers.models.speechlm import (
+            SpeechLMForConditionalGeneration,
+            SpeechLMProcessor,
+        )
+    except Exception as e:
+        _require_dependency("transformers.models.speechlm", e)
+
     model = SpeechLMForConditionalGeneration.from_pretrained(
         model_name_or_path,
         attn_implementation="flash_attention_2",
@@ -113,10 +129,12 @@ def compute_metrics(
         # if the reference is empty after the normalization (it might happen if the whole text is in between parentheses), we set it to the transcription so that wer/cer are 0.0
         references = [t if r == "" else r for r, t in zip(references, transcripts)]
 
-    return {
-        "wer": jiwer.wer(references, transcripts),
-        "cer": jiwer.cer(references, transcripts),
-    }
+    try:
+        import jiwer
+    except Exception as e:
+        _require_dependency("jiwer", e)
+
+    return {"wer": jiwer.wer(references, transcripts), "cer": jiwer.cer(references, transcripts)}
 
 
 def main(
@@ -128,6 +146,11 @@ def main(
     batch_size: int = 1,
 ):
     configure_logging()
+
+    try:
+        from data_utils.utils import get_dataset  # legacy dependency
+    except Exception as e:
+        _require_dependency("data_utils (internal)", e)
     # 1. load the configuration file
     eval_configfile = "./config/eval_datasets.yaml"
     with open(eval_configfile) as file:
