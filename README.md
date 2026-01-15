@@ -1,6 +1,7 @@
-# MELT Training — Getting Started ✅
+# MELT Training
 
-## Datasets (creating Lhotse SHAR archives) 🔧
+
+## Datasets (creating Lhotse SHAR archives)
 
 This repository includes standalone scripts to download and convert speech datasets to Lhotse SHAR archives. The scripts live in:
 
@@ -19,7 +20,7 @@ Key points:
   - **Batched:** faster, uses more RAM and parallel workers. Enable with `--batched` and tune `--batch-size`/`--num-workers`.
 - Use `--force` to re-run conversion even when a completion marker or output files already exist.
 
-### Example: Download and convert LibriSpeech 📥
+### Example: Download and convert LibriSpeech
 
 To download and convert LibriSpeech to Lhotse SHAR archives, run the LibriSpeech converter script:
 
@@ -44,11 +45,11 @@ $LHOTSE_DATA_SHAR_ROOT/librispeech/
 
 ---
 
-## Running training (config-driven) 🚀
+## Running training (config-driven)
 
 We provide several ways to launch training using a YAML config file (`--config-file`). The canonical helper is `bash/train_with_config.sh`, which wraps `accelerate` and sets useful environment defaults.
 
-### 1) Batch (SLURM + sbatch) ✅
+### 1) Batch (SLURM + sbatch)
 Use this when submitting a job to the cluster scheduler. Example:
 
 ```bash
@@ -57,7 +58,7 @@ sbatch bash/train_with_config.sh config/train/LS_asr.yaml config/accelerate/zero
 
 This submits a SLURM job and wraps `accelerate launch` with the correct node/process configuration.
 
-### 2) Interactive (inside an srun allocation) ✅
+### 2) Interactive (inside an srun allocation)
 If you already reserved an interactive allocation with `srun` (or `salloc`) do **not** re-run `srun` from inside the allocation — instead just run the same helper. The script detects interactive srun steps and will launch `accelerate` directly:
 
 ```bash
@@ -69,7 +70,7 @@ bash bash/train_with_config.sh config/train/LS_asr.yaml config/accelerate/zero3.
 
 You should see a message like "Detected running inside an interactive srun step..." if the script chooses the direct-launch path.
 
-### 3) Local single-machine run (no SLURM) 🖥️
+### 3) Local single-machine run (no SLURM) 
 Launch training directly on your machine (it will start `accelerate` with local settings):
 
 ```bash
@@ -78,7 +79,7 @@ bash bash/train_with_config.sh config/train/LS_asr.yaml config/accelerate/fsdp.y
 
 This is useful for small-scale debugging and development.
 
-### 4) Direct `accelerate` invocation (advanced) 🔧
+### 4) Direct `accelerate` invocation (advanced)
 If you prefer to call `accelerate` yourself, you can run:
 
 ```bash
@@ -111,7 +112,7 @@ Notes:
 
 ---
 
-### Notes & tips 💡
+### Notes & tips 
 - The helper script (`bash/run_train.sh`) exports commonly useful env vars when run directly (e.g., `SCRATCH_DIR`, `LOCAL_DATASETS_DIR`); you can override them at invocation time, e.g. `SCRATCH_DIR=/my/tmp bash bash/train_with_config.sh ...`.
 - The script parses `gradient_accumulation_steps` from the YAML to pass that through to `accelerate` when possible.
 - For interactive use, the script detects `SLURM_STEP_ID` / `SLURM_PROCID` and avoids creating nested `srun` steps.
