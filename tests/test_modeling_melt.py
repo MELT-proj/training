@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import torch
 
-from src.melt import (
+from src.modeling import (
     MELTAudioAdapter,
     MELTConfig,
     MELTConformerAdapter,

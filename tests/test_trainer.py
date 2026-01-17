@@ -12,8 +12,8 @@ from transformers import AutoConfig
 # Ensure top-level `ddp` import used by src.trainer resolves during tests
 sys.modules["ddp"] = importlib.import_module("src.ddp")
 
-from src.melt import MELTConfig, MELTForConditionalGeneration
-from src.trainer import MELTTrainer
+from src.modeling import MELTConfig, MELTForConditionalGeneration
+from src.training.trainer import MELTTrainer
 
 
 def _make_minimal_model():

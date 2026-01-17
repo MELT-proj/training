@@ -1,7 +1,7 @@
 import pytest
 import json
 
-from src.melt.configuration_melt import MELTConfig, MELTAdapterConfig
+from src.modeling.configuration_melt import MELTConfig, MELTAdapterConfig
 from transformers import AutoConfig
 
 
