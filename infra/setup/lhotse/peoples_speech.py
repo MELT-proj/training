@@ -66,6 +66,8 @@ from lhotse import MonoCut, Recording, SupervisionSegment
 from lhotse.shar import SharWriter
 from tqdm.auto import tqdm
 
+from batch_utils import is_dataset_cached_locally
+
 
 # --- Configuration ---
 DATASET_NAME = "MLCommons/peoples_speech"
@@ -173,6 +175,16 @@ def convert_subset_to_shar(
     output_dir = get_output_dir(config, split, lang)
     lang_str = f"/{lang}" if lang else ""
 
+    dataset_cached = is_dataset_cached_locally(DATASET_NAME)
+    use_streaming = not dataset_cached
+
+    if not dataset_cached:
+        logger.info(
+            "Dataset %s not found in local HF cache; using streaming. To disable streaming, pre-download the dataset repo (e.g., hf download %s --repo-type dataset).",
+            DATASET_NAME,
+            DATASET_NAME,
+        )
+
     # Check if conversion is already complete
     if not force and is_conversion_complete(output_dir):
         marker = _marker_path_for_output(output_dir)
@@ -189,7 +201,7 @@ def convert_subset_to_shar(
     supervision_lang: str = lang if (IS_MULTILINGUAL and lang) else DEFAULT_LANGUAGE
 
     # Choose processing mode
-    if use_batched:
+    if use_batched and not use_streaming:
         # Use batched processing with parallelization
         logger.info(
             f"Using BATCHED mode: batch_size={batch_size}, num_workers={num_workers}, io_num_workers={io_num_workers}, prefetch_batches={prefetch_batches}, hf_num_proc={hf_num_proc}"
@@ -210,6 +222,22 @@ def convert_subset_to_shar(
             prefetch_batches=prefetch_batches,
             hf_num_proc=hf_num_proc,
         )
+    elif use_batched and use_streaming:
+        logger.info(
+            "Falling back to streaming mode because dataset is not cached locally; batching requires local data."
+        )
+        use_batched = False
+        count, errors = _convert_streaming(
+            hf_config=config,
+            hf_split=split,
+            output_dir=output_dir,
+            supervision_lang=supervision_lang,
+            config=config,
+            split=split,
+            lang_str=lang_str,
+            use_streaming=True,
+            hf_num_proc=hf_num_proc,
+        )
     else:
         # Use streaming mode (default)
         logger.info("Using STREAMING mode (memory-efficient, sequential)")
@@ -221,6 +249,8 @@ def convert_subset_to_shar(
             config=config,
             split=split,
             lang_str=lang_str,
+            use_streaming=use_streaming,
+            hf_num_proc=hf_num_proc,
         )
 
     logger.info(f"Finished {config}{lang_str}/{split}! Processed {count} cuts with {errors} errors.")
@@ -240,13 +270,33 @@ def _convert_streaming(
     config: str,
     split: str,
     lang_str: str,
+    *,
+    use_streaming: bool,
+    hf_num_proc: int,
 ) -> tuple[int, int]:
     """Convert using streaming mode (original implementation).
 
     Memory-efficient but sequential processing.
     """
-    logger.info(f"Initializing stream for {DATASET_NAME} ({config}/{split})...")
-    dataset = load_dataset(DATASET_NAME, hf_config, split=hf_split, streaming=True)
+    logger.info(
+        "Initializing %s load for %s (%s/%s)...",
+        "STREAMING" if use_streaming else "LOCAL",
+        DATASET_NAME,
+        config,
+        split,
+    )
+    load_kwargs = {
+        "path": DATASET_NAME,
+        "name": hf_config,
+        "split": hf_split,
+        "streaming": use_streaming,
+        "trust_remote_code": True,
+    }
+    if not use_streaming:
+        load_kwargs["download_mode"] = "reuse_dataset_if_exists"
+        load_kwargs["num_proc"] = hf_num_proc
+
+    dataset = load_dataset(**load_kwargs)
 
     # Prevent HF from decoding; get raw bytes
     dataset = dataset.cast_column("audio", Audio(decode=False))

@@ -26,12 +26,14 @@ from lhotse import MonoCut, Recording, SupervisionSegment
 from lhotse.shar import SharWriter
 from tqdm.auto import tqdm
 
+from batch_utils import is_dataset_cached_locally
+
 
 DATASET_NAME = "facebook/voxpopuli"
 DATASET_NICKNAME = "voxpopuli"
-BASE_OUTPUT_DIR = Path(os.environ.get("LHOTSE_DATA_SHAR_ROOT", "/mnt/home/giuseppe/myscratch/melt-data/shar"))
+BASE_OUTPUT_DIR = Path(os.environ.get("LHOTSE_DATA_SHAR_ROOT", "/mnt/scratch-nyx/giuseppe/melt/shar"))
 
-SHARD_SIZE = 1000
+SHARD_SIZE = 20000  # ~6 sec avg @ FLAC 16kHz → ~67 KB/sample → ~1.3 GB/shard
 AUDIO_FORMAT = "flac"
 MARKER_ROOT = BASE_OUTPUT_DIR / ".conversion_markers"
 
@@ -116,6 +118,16 @@ def convert_one(
 ) -> tuple[int, int] | tuple[None, None]:
     output_dir = get_output_dir(lang, split)
 
+    dataset_cached = is_dataset_cached_locally(DATASET_NAME)
+    use_streaming = not dataset_cached
+
+    if not dataset_cached:
+        logger.info(
+            "Dataset %s not found in local HF cache; using streaming. Pre-download to disable streaming: HF_HUB_ENABLE_HF_TRANSFER=1 HF_HOME=$HF_HOME hf download %s --repo-type dataset",
+            DATASET_NAME,
+            DATASET_NAME,
+        )
+
     if not force and is_conversion_complete(output_dir):
         marker = _marker_path_for_output(output_dir)
         logger.info("SKIPPING %s/%s - already complete (marker: %s)", lang, split, marker)
@@ -124,7 +136,7 @@ def convert_one(
     output_dir.mkdir(parents=True, exist_ok=True)
     logger.info("Saving %s/%s to: %s", lang, split, output_dir)
 
-    if use_batched:
+    if use_batched and not use_streaming:
         from batch_utils import convert_subset_to_shar_batched
 
         count, errors = convert_subset_to_shar_batched(
@@ -144,8 +156,23 @@ def convert_one(
             text_field="normalized_text",
             audio_field="audio",
         )
+    elif use_batched and use_streaming:
+        logger.info("Falling back to streaming mode because dataset is not cached locally; batching requires local data.")
+        use_batched = False
+        # fall through to streaming path
     else:
-        ds = load_dataset(DATASET_NAME, lang, split=split, streaming=True)
+        load_kwargs = {
+            "path": DATASET_NAME,
+            "name": lang,
+            "split": split,
+            "streaming": use_streaming,
+            "trust_remote_code": True,
+        }
+        if not use_streaming:
+            load_kwargs["download_mode"] = "reuse_dataset_if_exists"
+            load_kwargs["num_proc"] = hf_num_proc
+
+        ds = load_dataset(**load_kwargs)
         ds = ds.cast_column("audio", Audio(decode=False))
 
         writer = SharWriter(output_dir=output_dir, fields={"recording": AUDIO_FORMAT}, shard_size=SHARD_SIZE)

@@ -32,19 +32,48 @@ Usage:
 
 import logging
 import tempfile
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
-from concurrent.futures import ThreadPoolExecutor
-
 from datasets import Audio, load_dataset
+from huggingface_hub import snapshot_download
+from huggingface_hub.utils import LocalEntryNotFoundError
 from lhotse import CutSet, MonoCut, Recording, SupervisionSegment
 from lhotse.shar import SharWriter
 from tqdm.auto import tqdm
 
 logger = logging.getLogger(__name__)
+
+
+def is_dataset_cached_locally(
+    dataset_name: str,
+    *,
+    repo_type: str = "dataset",
+    cache_dir: str | None = None,
+) -> bool:
+    """Return True if the HF dataset repo is already present in the local cache.
+
+    Uses `snapshot_download(..., local_files_only=True)` which never fetches
+    from the network. Any cache path resolution honors HF_HOME/HF_HUB_CACHE
+    and the optional `cache_dir` argument.
+    """
+
+    try:
+        snapshot_download(
+            repo_id=dataset_name,
+            repo_type=repo_type,
+            cache_dir=cache_dir,
+            local_files_only=True,
+            allow_patterns=["*"],
+        )
+        return True
+    except LocalEntryNotFoundError:
+        return False
+    except Exception as err:  # pragma: no cover - defensive
+        logger.debug("Cache check for %s failed: %s", dataset_name, err)
+        return False
 
 
 @dataclass
@@ -204,6 +233,7 @@ class BatchedSharConverter:
             split=split_slice,
             num_proc=self.hf_num_proc,
             cache_dir=cache_dir,
+            trust_remote_code=True
         )
 
         # Don't decode audio - get raw bytes
@@ -221,21 +251,30 @@ class BatchedSharConverter:
         dataset_name: str,
         hf_config: str,
         hf_split: str,
+        *,
+        use_streaming: bool,
+        cache_dir: str | None = None,
     ) -> int:
         """Get the total number of items in a dataset split.
 
-        Uses streaming to avoid downloading the full dataset.
+        Uses streaming only when the dataset is not cached locally; otherwise
+        loads locally with `download_mode="reuse_dataset_if_exists"`.
         """
-        # Stream to get info without downloading
-        ds = load_dataset(
-            dataset_name,
-            hf_config,
-            split=hf_split,
-            streaming=True,
-        )
+        load_kwargs = {
+            "path": dataset_name,
+            "name": hf_config,
+            "split": hf_split,
+            "streaming": use_streaming,
+            "trust_remote_code": True,
+            "cache_dir": cache_dir,
+        }
+        if not use_streaming:
+            load_kwargs["download_mode"] = "reuse_dataset_if_exists"
+            load_kwargs["num_proc"] = self.hf_num_proc
+
+        ds = load_dataset(**load_kwargs)
 
         # Get the dataset info if available
-        # Type ignore needed because HF types are complex
         if hasattr(ds, "info") and getattr(ds.info, "splits", None):  # type: ignore
             split_info = ds.info.splits.get(hf_split)  # type: ignore
             if split_info and getattr(split_info, "num_examples", None):
@@ -276,7 +315,7 @@ class BatchedSharConverter:
         cut_data_list = []
         for i, item in enumerate(items):
             hf_id = item.get(id_field, f"no_id_{batch_start_idx + i}")
-            cut_id = hf_id.replace("/", "_").replace(".", "_")
+            cut_id = str(hf_id)
 
             cut_data_list.append(
                 CutData(
@@ -431,22 +470,38 @@ class BatchedSharConverter:
         """
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Get dataset size
-        logger.info(f"Getting dataset size for {hf_split}...")
-        total_size = self._get_dataset_size(dataset_name, hf_config, hf_split)
-        logger.info(f"Total items: {total_size}")
-
-        total_count = 0
-        total_errors = 0
-        num_batches = (total_size + self.batch_size - 1) // self.batch_size
-
-        # Setup temp cache if requested
+        # Setup temp cache if requested (applies to size probing and batches)
         temp_dir = None
         cache_dir = None
         if self.use_temp_cache:
             temp_dir = tempfile.TemporaryDirectory(prefix="hf_batch_cache_")
             cache_dir = temp_dir.name
             logger.info(f"Using temporary cache directory: {cache_dir}")
+
+        # Decide streaming based on local cache presence
+        dataset_cached = is_dataset_cached_locally(dataset_name, cache_dir=cache_dir)
+        use_streaming = not dataset_cached
+
+        if not dataset_cached:
+            logger.info(
+                "Dataset %s not found in local HF cache; using streaming to compute size.",
+                dataset_name,
+            )
+
+        # Get dataset size
+        logger.info(f"Getting dataset size for {hf_split} (streaming={use_streaming})...")
+        total_size = self._get_dataset_size(
+            dataset_name,
+            hf_config,
+            hf_split,
+            use_streaming=use_streaming,
+            cache_dir=cache_dir,
+        )
+        logger.info(f"Total items: {total_size}")
+
+        total_count = 0
+        total_errors = 0
+        num_batches = (total_size + self.batch_size - 1) // self.batch_size
 
         try:
             # Initialize SharWriter

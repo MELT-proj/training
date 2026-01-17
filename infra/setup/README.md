@@ -65,7 +65,7 @@ python infra/setup/lhotse/voxpopuli.py --configs en de it fr es pt --include-spe
 # Process these languages by default: en de it fr es pt
 # FLEURS uses locale-style config names (e.g., `it_it`, `pt_pt`, `en_us`); check available configs here:
 # https://huggingface.co/datasets/google/fleurs/blob/main/fleurs.py
-python infra/setup/lhotse/fleurs.py --configs en_us de_de it_it fr_fr es_es pt_pt --splits train validation test --batched --batch-size 5000 --num-workers 8
+python infra/setup/lhotse/fleurs.py --configs en_us de_de it_it fr_fr es_419 pt_br --splits train validation test --batched --batch-size 5000 --num-workers 8
 ```
 
 - CommonVoice22 (Sidon) — download snapshot from HF hub first, then run the per-language converter or the `prepare_CV22.sh` runner:

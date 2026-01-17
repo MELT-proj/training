@@ -15,7 +15,7 @@ set -euo pipefail
 # If you want split-separated outputs, use run_convert_webdataset_all_langs.sh instead.
 
 CV22_SIDON_SNAPSHOT_DIR_DEFAULT="/mnt/scratch-nyx/giuseppe/melt/hf_home/hub/datasets--sarulab-speech--commonvoice22_sidon/snapshots/7c06e40565468fda8c80a57c0ce4a7d9af97c095"
-OUTPUT_BASE_DEFAULT="/mnt/home/giuseppe/myscratch/melt-data/shar/cv22_sidon"
+OUTPUT_BASE_DEFAULT="/mnt/scratch-nyx/giuseppe/melt/shar/cv22_sidon"
 
 CV22_SIDON_SNAPSHOT_DIR="${CV22_SIDON_SNAPSHOT_DIR:-$CV22_SIDON_SNAPSHOT_DIR_DEFAULT}"
 OUTPUT_BASE="${OUTPUT_BASE:-$OUTPUT_BASE_DEFAULT}"
@@ -25,7 +25,7 @@ LANGUAGES=(en es fr it pt de)
 
 # Conversion knobs (can override via env vars)
 LOG_LEVEL="${LOG_LEVEL:-INFO}"
-SHARD_SIZE="${SHARD_SIZE:-4000}"
+SHARD_SIZE="${SHARD_SIZE:-25000}"
 AUDIO_FORMAT="${AUDIO_FORMAT:-flac}"
 RESAMPLE="${RESAMPLE:-1}"           # 1 enables resample
 ORIG_SR="${ORIG_SR:-48000}"
