@@ -665,7 +665,7 @@ class TestAdapterOutputFeaturesShape:
         # The real Wav2Vec2BertAdapterLayer depends on numeric fields in the
         # encoder config. Patch it to a lightweight identity module so we can
         # exercise the adapter's length math without constructing heavy layers.
-        with patch("src.melt.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
+        with patch("src.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
             adapter = MELTConformerAdapter(config)
 
         # Test the _compute_output_seq_len method
@@ -693,7 +693,7 @@ class TestAdapterOutputFeaturesShape:
         config.text_decoder_config = MagicMock()
         config.text_decoder_config.hidden_size = 1024
 
-        with patch("src.melt.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
+        with patch("src.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
             adapter = MELTConformerAdapter(config)
 
         seq_len = 100
@@ -724,7 +724,7 @@ class TestAdapterOutputFeaturesShape:
         config.text_decoder_config = MagicMock()
         config.text_decoder_config.hidden_size = 2048
 
-        with patch("src.melt.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
+        with patch("src.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
             adapter = MELTConformerAdapter(config)
 
         batch_size = 2
@@ -754,7 +754,7 @@ class TestAdapterOutputFeaturesShape:
         config.text_decoder_config = MagicMock()
         config.text_decoder_config.hidden_size = 1024
 
-        with patch("src.melt.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
+        with patch("src.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
             adapter = MELTConformerAdapter(config)
 
         batch_size = 2
