@@ -48,7 +48,7 @@ def librispeech_train100_path(librispeech_shar_base: str) -> str:
 
 class TestConfigIO:
     def test_load_config_from_yaml(self):
-        from src.config import load_config_from_yaml
+        from src.training.config import load_config_from_yaml
 
         cfg = load_config_from_yaml("config/train/LS_asr.yaml")
         assert cfg.model.encoder.name
@@ -57,7 +57,7 @@ class TestConfigIO:
 
     def test_cli_overrides(self):
         """Test that tyro can parse CLI args (simulated via dataclass instantiation)."""
-        from src.config import TrainingConfig
+        from src.training.config import TrainingConfig
 
         cfg = TrainingConfig()
         # Override via direct attribute setting (simulating CLI override)
@@ -68,7 +68,7 @@ class TestConfigIO:
         assert cfg.model.adapter.freeze is True
 
     def test_save_config_roundtrip(self, tmp_path: Path):
-        from src.config import load_config_from_yaml, save_config, TrainingConfig
+        from src.training.config import load_config_from_yaml, save_config, TrainingConfig
 
         cfg = load_config_from_yaml("config/train/LS_asr.yaml")
         cfg.trainer.max_steps = 321
@@ -85,8 +85,8 @@ class TestConfigIO:
 
 class TestCutSetLoading:
     def test_read_cutset_from_config(self, librispeech_train100_path: str):
-        from src.data.audio.lhotse.dataloader import read_cutset_from_config
-        from src.config import DatasetConfig, DataSourceConfig
+        from src.training.data.audio.lhotse.dataloader import read_cutset_from_config
+        from src.training.config import DatasetConfig, DataSourceConfig
 
         config = DatasetConfig(
             input_cfg=[
@@ -111,8 +111,8 @@ class TestCutSetLoading:
 
 class TestSamplerAndDataloader:
     def test_sampler_creation(self, librispeech_train100_path: str):
-        from src.data.audio.lhotse.dataloader import get_lhotse_sampler_from_config
-        from src.config import DatasetConfig, DataSourceConfig
+        from src.training.data.audio.lhotse.dataloader import get_lhotse_sampler_from_config
+        from src.training.config import DatasetConfig, DataSourceConfig
 
         config = DatasetConfig(
             input_cfg=[
@@ -134,8 +134,8 @@ class TestSamplerAndDataloader:
         assert use_iterable is True
 
     def test_dataloader_creation(self, librispeech_train100_path: str):
-        from src.data.audio.lhotse.dataloader import get_lhotse_dataloader_from_config
-        from src.config import DatasetConfig, DataSourceConfig
+        from src.training.data.audio.lhotse.dataloader import get_lhotse_dataloader_from_config
+        from src.training.config import DatasetConfig, DataSourceConfig
 
         class DummyDataset(torch.utils.data.Dataset):
             def __getitem__(self, cuts):
@@ -172,7 +172,7 @@ class TestFallbackDataset:
     def test_fallback_returns_last_good_batch(self):
         from unittest.mock import MagicMock
 
-        from src.data.audio.lhotse.dataset import FallbackDataset
+        from src.training.data.audio.lhotse.dataset import FallbackDataset
 
         inner_dataset = MagicMock()
         good_batch = {"input_features": torch.randn(2, 100, 80)}
