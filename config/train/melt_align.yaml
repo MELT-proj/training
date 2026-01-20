@@ -38,12 +38,12 @@ data:
     # Data sources - list of datasets to load
     input_cfg:
       - type: lhotse_shar
-        shar_path: ${LOCAL_DATASETS_DIR:-/mnt/home/giuseppe/myscratch/melt-data/shar}/librispeech/clean/train.100
+        shar_path: ${LOCAL_DATASETS_DIR}/librispeech/clean/train.100
         tags:
           task: asr
           lang: en
       - type: lhotse_shar
-        shar_path: ${LOCAL_DATASETS_DIR:-/mnt/home/giuseppe/myscratch/melt-data/shar}/librispeech/clean/train.360
+        shar_path: ${LOCAL_DATASETS_DIR}/librispeech/clean/train.360
         tags:
           task: asr
           lang: en
@@ -81,7 +81,7 @@ data:
   validation_ds:
     input_cfg:
       - type: lhotse_shar
-        shar_path: ${LOCAL_DATASETS_DIR:-/mnt/home/giuseppe/myscratch/melt-data/shar}/librispeech/clean/validation
+        shar_path: ${LOCAL_DATASETS_DIR}/librispeech/clean/validation
         tags:
           task: asr
           lang: en
@@ -106,7 +106,7 @@ data:
 # Trainer Configuration
 # =============================================================================
 trainer:
-  output_dir: ${OUTPUT_DIR:-/mnt/scratch-artemis/giuseppe/melt-data/models}/LS_asr
+  output_dir: ${OUTPUT_DIR}/melt_align
   overwrite_output_dir: true
   seed: 42
   do_train: true
