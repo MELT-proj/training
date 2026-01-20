@@ -478,6 +478,29 @@ class TestMergeCorrectness:
         # Positions 7-11 (after placeholder region) should be unchanged
         assert torch.allclose(result[0, 7:, :], original_text_data[0, 7:, :])
 
+    def test_mask_values_correctly_propagated(self, mock_model):
+        """Verify mask values from audio are correctly placed."""
+        batch_size = 1
+        seq_len = 10
+        audio_len = 4
+
+        audio_bos_token = mock_model.config.audio_bos_token_id
+        input_ids = torch.tensor([[3, audio_bos_token, 1, 1, 1, 1, 2, 3, 3, 3]])
+
+        # Text mask: all 1s
+        text_mask = torch.ones(batch_size, seq_len)
+
+        # Audio mask: pattern [1, 0, 1, 0] to verify correct ordering
+        audio_mask = torch.tensor([[1.0, 0.0, 1.0, 0.0]])
+
+        audio_lengths = torch.tensor([[audio_len]])
+
+        result = mock_model._replace_audio_placeholders(mock_model, text_mask, audio_mask, input_ids, audio_lengths)
+
+        # Verify pattern is preserved at positions 2-5
+        expected_pattern = torch.tensor([1.0, 0.0, 1.0, 0.0])
+        assert torch.allclose(result[0, 2:6], expected_pattern)
+
 
 def test_freeze_decoder_minimal():
     """Ensure freeze_decoder freezes all decoder parameters and returns self."""
@@ -501,28 +524,7 @@ def test_freeze_decoder_minimal():
     # All decoder params should be frozen
     assert all((not p.requires_grad) for p in model.text_decoder.parameters())
 
-    def test_mask_values_correctly_propagated(self, mock_model):
-        """Verify mask values from audio are correctly placed."""
-        batch_size = 1
-        seq_len = 10
-        audio_len = 4
-
-        audio_bos_token = mock_model.config.audio_bos_token_id
-        input_ids = torch.tensor([[3, audio_bos_token, 1, 1, 1, 1, 2, 3, 3, 3]])
-
-        # Text mask: all 1s
-        text_mask = torch.ones(batch_size, seq_len)
-
-        # Audio mask: pattern [1, 0, 1, 0] to verify correct ordering
-        audio_mask = torch.tensor([[1.0, 0.0, 1.0, 0.0]])
-
-        audio_lengths = torch.tensor([[audio_len]])
-
-        result = mock_model._replace_audio_placeholders(mock_model, text_mask, audio_mask, input_ids, audio_lengths)
-
-        # Verify pattern is preserved at positions 2-5
-        expected_pattern = torch.tensor([1.0, 0.0, 1.0, 0.0])
-        assert torch.allclose(result[0, 2:6], expected_pattern)
+    
 
 
 class TestAdapterOutputFeaturesShape:
