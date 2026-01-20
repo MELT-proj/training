@@ -3,6 +3,16 @@ from transformers.configuration_utils import PretrainedConfig
 from transformers.utils import logging
 
 
+# Required special token names (no hard-coded defaults).
+# These are the token *names* the model config is expected to provide under
+# `model.config.decoder.<name>` or that must already exist in the tokenizer.
+MELT_REQUIRED_SPECIAL_TOKENS = [
+    "audio_token",
+    "audio_bos_token",
+    "audio_eos_token",
+]
+
+
 class MELTAdapterConfig(PretrainedConfig):
     r"""
     Configuration class for MELT adapters (MLP, Q-Former, Conformer).

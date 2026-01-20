@@ -14,6 +14,8 @@ from transformers.processing_utils import ProcessingKwargs, ProcessorMixin, Unpa
 from transformers.tokenization_utils_base import AudioInput, PreTokenizedInput, TextInput
 from transformers.video_utils import VideoInput
 
+from .configuration_melt import MELT_REQUIRED_SPECIAL_TOKENS
+
 
 logger = get_logger(__name__)
 
@@ -51,16 +53,6 @@ class MELTProcessorKwargs(ProcessingKwargs, total=False):
         #     "use_audio_in_video": False,
         # },
     }  # type: ignore
-
-
-# Required special token names (no hard-coded defaults).
-# These are the token *names* the model config is expected to provide under
-# `model.config.decoder.<name>` or that must already exist in the tokenizer.
-MELT_REQUIRED_SPECIAL_TOKENS = [
-    "audio_token",
-    "audio_bos_token",
-    "audio_eos_token",
-]
 
 
 def _token_in_vocab(tokenizer, token_str: str) -> bool:

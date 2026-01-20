@@ -1,4 +1,4 @@
-from .configuration_melt import MELTConfig, MELTAdapterConfig
+from .configuration_melt import MELTConfig, MELTAdapterConfig, MELT_REQUIRED_SPECIAL_TOKENS
 from .modeling_melt import (
     MELTAudioAdapter,
     MELTAudioStack,
@@ -22,4 +22,5 @@ __all__ = [
     "MELTQFormerAdapter",
     "MELTConformerAdapter",
     "MELTProcessor",
+    "MELT_REQUIRED_SPECIAL_TOKENS",
 ]

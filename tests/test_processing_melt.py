@@ -5,8 +5,8 @@ import librosa
 import pytest
 from types import SimpleNamespace
 
-from src.modeling.processing_melt import MELT_REQUIRED_SPECIAL_TOKENS, MELTProcessor
-from transformers import AutoFeatureExtractor, AutoTokenizer
+from src.modeling import MELT_REQUIRED_SPECIAL_TOKENS, MELTProcessor, MELTConfig
+from transformers import AutoConfig, AutoFeatureExtractor, AutoTokenizer
 
 
 # Audio sample URL for testing
@@ -45,18 +45,24 @@ def tokenizer():
 
 @pytest.fixture(scope="module")
 def processor(feature_extractor, tokenizer):
-    """Create a MELTProcessor instance.
-
-    Provide a minimal config object with an empty `decoder` mapping to avoid
-    processor internals assuming a non-None config during token validation.
-    """
-    config = SimpleNamespace(decoder={
-        "image_token": "<|IMAGE|>",
-        "audio_token": "<|AUDIO|>",
-        "video_token": "<|VIDEO|>",
-        "audio_bos_token": "<|audio_bos|>",
-        "audio_eos_token": "<|audio_eos|>",
-    })
+    """Create a MELTProcessor instance with proper MELTConfig."""
+    audio_encoder_config = AutoConfig.from_pretrained("facebook/w2v-bert-2.0")
+    text_decoder_config = AutoConfig.from_pretrained("Qwen/Qwen2.5-1.5B")
+    
+    config = MELTConfig(
+        audio_encoder_config=audio_encoder_config,
+        text_decoder_config=text_decoder_config,
+    )
+    
+    # Add decoder attribute with special tokens
+    config.decoder = SimpleNamespace(
+        image_token="<|IMAGE|>",
+        audio_token="<|AUDIO|>",
+        video_token="<|VIDEO|>",
+        audio_bos_token="<|audio_bos|>",
+        audio_eos_token="<|audio_eos|>",
+    )
+    
     return MELTProcessor(
         feature_extractor=feature_extractor,
         tokenizer=tokenizer,
@@ -66,13 +72,21 @@ def processor(feature_extractor, tokenizer):
 
 class TestMELTProcessorInit:
     def test_init_with_required_components(self, feature_extractor, tokenizer):
-        # Provide a minimal config to avoid processor internals requiring
-        # `config.decoder` to exist when validating special tokens.
-        config = SimpleNamespace(decoder={
-            "audio_token": "<|AUDIO|>",
-            "audio_bos_token": "<|audio_bos|>",
-            "audio_eos_token": "<|audio_eos|>",
-        })
+        audio_encoder_config = AutoConfig.from_pretrained("facebook/w2v-bert-2.0")
+        text_decoder_config = AutoConfig.from_pretrained("Qwen/Qwen2.5-1.5B")
+        
+        config = MELTConfig(
+            audio_encoder_config=audio_encoder_config,
+            text_decoder_config=text_decoder_config,
+        )
+        
+        # Add decoder attribute with special tokens
+        config.decoder = SimpleNamespace(
+            audio_token="<|AUDIO|>",
+            audio_bos_token="<|audio_bos|>",
+            audio_eos_token="<|audio_eos|>",
+        )
+        
         processor = MELTProcessor(
             feature_extractor=feature_extractor,
             tokenizer=tokenizer,
