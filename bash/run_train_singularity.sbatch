@@ -176,6 +176,14 @@ CONTAINER_OUTPUT_DIR="/workspace/outputs"
 export APPTAINERENV_OUTPUT_DIR="${CONTAINER_OUTPUT_DIR}"
 export SINGULARITYENV_OUTPUT_DIR="${CONTAINER_OUTPUT_DIR}"
 
+# Weights & Biases directory: store wandb runs under the output directory
+HOST_WANDB_DIR="${HOST_OUTPUT_DIR}/wandb"
+mkdir -p "${HOST_WANDB_DIR}"
+CONTAINER_WANDB_DIR="${CONTAINER_OUTPUT_DIR}/wandb"
+
+export APPTAINERENV_WANDB_DIR="${CONTAINER_WANDB_DIR}"
+export SINGULARITYENV_WANDB_DIR="${CONTAINER_WANDB_DIR}"
+
 # Multi-node: compute MASTER_ADDR on the host (scontrol is usually not available in the container)
 MASTER_PORT="${MASTER_PORT:-6000}"
 if [[ -n "${SLURM_JOB_NODELIST:-}" ]] && command -v scontrol >/dev/null 2>&1; then
@@ -199,6 +207,7 @@ echo "Host project: ${HOST_PROJECT_DIR} -> ${CONTAINER_PROJECT_DIR}"
 echo "Host datasets: ${HOST_LOCAL_DATASETS_DIR} -> ${CONTAINER_LOCAL_DATASETS_DIR}"
 echo "Host tmp: ${HOST_TMPDIR} -> ${CONTAINER_TMPDIR}"
 echo "Host outputs: ${HOST_OUTPUT_DIR} -> ${CONTAINER_OUTPUT_DIR}"
+echo "Host wandb: ${HOST_WANDB_DIR} -> ${CONTAINER_WANDB_DIR}"
 if [[ -n "${CUDA_BIND_ARG}" ]]; then
   echo "Host CUDA toolkit: ${HOST_CUDA_HOME} -> ${CONTAINER_CUDA_HOME}"
 fi
