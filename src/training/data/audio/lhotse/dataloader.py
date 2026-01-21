@@ -192,14 +192,16 @@ def estimate_steps_per_epoch(
 ) -> tuple[int, float, int]:
     """Estimate the number of training steps per epoch.
 
-    Computes steps_per_epoch = total_duration / batch_duration / gradient_accumulation_steps.
-    For distributed training, the effective batch_duration is already per-device,
-    so world_size doesn't need to factor in here.
+    Computes steps based on how data is sharded across ranks:
+        steps_per_epoch = total_duration / (batch_duration * world_size * gradient_accumulation_steps)
+
+    Each rank processes 1/world_size of the data, and each optimizer step
+    requires gradient_accumulation_steps micro-batches.
 
     Args:
         config: DatasetConfig with batch_duration and data sources.
         gradient_accumulation_steps: Number of gradient accumulation steps.
-        world_size: Number of distributed processes (for logging only).
+        world_size: Number of distributed processes.
 
     Returns:
         Tuple of (steps_per_epoch, total_duration_hours, num_cuts).
@@ -216,15 +218,16 @@ def estimate_steps_per_epoch(
 
     total_hours = total_duration / 3600.0
 
-    # Micro-batches per epoch = total_duration / batch_duration
-    # Steps per epoch = micro_batches / gradient_accumulation_steps
-    micro_batches = total_duration / batch_duration
-    steps_per_epoch = int(micro_batches / gradient_accumulation_steps)
+    # Each rank sees total_duration / world_size of data.
+    # Each rank creates (total_duration / world_size) / batch_duration micro-batches.
+    # One optimizer step = gradient_accumulation_steps micro-batches.
+    # steps_per_epoch = total_duration / (batch_duration * world_size * gradient_accumulation_steps)
+    steps_per_epoch = int(total_duration / (batch_duration * world_size * gradient_accumulation_steps))
 
     logger.info(
         f"Dataset stats: {num_cuts} cuts, {total_hours:.2f} hours total, "
         f"~{steps_per_epoch} steps/epoch (batch_duration={batch_duration}s, "
-        f"grad_accum={gradient_accumulation_steps})"
+        f"grad_accum={gradient_accumulation_steps}, world_size={world_size})"
     )
 
     return steps_per_epoch, total_hours, num_cuts
