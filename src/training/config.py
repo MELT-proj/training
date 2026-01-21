@@ -637,9 +637,11 @@ def config_from_dict(d: dict) -> TrainingConfig:
     if "warmup_steps" in trainer_dict:
         trainer_kwargs["warmup_steps"] = int(trainer_dict["warmup_steps"])
     if "num_train_epochs" in trainer_dict:
-        trainer_kwargs["num_train_epochs"] = int(trainer_dict["num_train_epochs"])
+        if trainer_dict["num_train_epochs"] is not None:
+            trainer_kwargs["num_train_epochs"] = int(trainer_dict["num_train_epochs"])
     if "max_steps" in trainer_dict:
-        trainer_kwargs["max_steps"] = int(trainer_dict["max_steps"])
+        if trainer_dict["max_steps"] is not None:
+            trainer_kwargs["max_steps"] = int(trainer_dict["max_steps"])
     if "compute_max_steps_from_epochs" in trainer_dict:
         trainer_kwargs["compute_max_steps_from_epochs"] = bool(trainer_dict["compute_max_steps_from_epochs"])
     if "logging_strategy" in trainer_dict:
