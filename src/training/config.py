@@ -294,10 +294,10 @@ class TrainerConfig:
     """Number of warmup steps."""
 
     # Duration
-    num_train_epochs: int = 1
+    num_train_epochs: int | None = None
     """Number of training epochs."""
 
-    max_steps: int = 100
+    max_steps: int | None = None
     """Maximum number of training steps (-1 for unlimited)."""
 
     compute_max_steps_from_epochs: bool = False

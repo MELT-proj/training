@@ -130,10 +130,10 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         # Format texts with audio token for the processor
         # This adds <|AUDIO|> token to indicate where audio embeddings go
         if self.apply_chat_template:
-            texts = self._apply_chat_template(texts, tasks, langs)
+            formatted_texts = self._apply_chat_template(texts, tasks, langs)
         else:
             # Simple format: audio token + transcription
-            texts = [self._format_text_with_audio_token(t, task, lang) for t, task, lang in zip(texts, tasks, langs)]
+            formatted_texts = [self._format_text_with_audio_token(t, task, lang) for t, task, lang in zip(texts, tasks, langs)]
 
         # Process through MELTProcessor
         try:
@@ -141,13 +141,24 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
             audio_inputs = [[a] for a in audios]
 
             inputs = self.processor(
-                text=texts,
+                text=formatted_texts,
                 audio=audio_inputs,
                 sampling_rate=self.sample_rate,
                 padding=True,
                 return_tensors="pt",
                 return_labels=True,
             )
+
+            # Add the labels for loss computation. The labels for this class or exclusively the text token IDs. 
+            # The modeling code will handle  logit slicing based on this tensor's shape and loss masking as needed
+            # (Crucial: the training code must set loss_ignore_index to match the padding token ID of the tokenizer).
+            inputs["labels"] = self.processor.tokenizer.pad(
+                texts,
+                padding_side="left",
+                padding="longest",
+                return_tensors="pt",
+            )["input_ids"]
+
             return inputs
 
         except Exception as e:
@@ -227,6 +238,8 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         """
         audio_token = self.processor.audio_token
 
+        # TODO: update this logic by supporting a config-specified template or prefix
+        # E.g., "Transcribe the following audio: {audio_token}{text}" for ASR
         if task in ("transcribe", "asr"):
             # For ASR: audio followed by transcription
             return f"{audio_token}{text}"
