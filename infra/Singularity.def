@@ -1,0 +1,44 @@
+Bootstrap: docker
+From: nvidia/cuda:12.6.1-runtime-ubuntu22.04
+
+%setup
+    mkdir -p ${APPTAINER_ROOTFS}/usr/local/share/uv/cache
+    mkdir -p ${APPTAINER_ROOTFS}/workspace/training
+
+%files
+    . /workspace/training
+
+%environment
+    export PATH=$PATH:/usr/local/bin
+    export UV_PYTHON_INSTALL_DIR=/usr/local/share/uv/python
+    export VENV_PATH=/workspace/venv/bin/activate
+    
+%post
+    #!/bin/bash
+    set -eux
+
+    export UV_PYTHON_INSTALL_DIR=/usr/local/share/uv/python
+    export UV_INSTALL_DIR=/usr/local/bin
+    export PATH=$PATH:/usr/local/bin
+
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        git build-essential curl ca-certificates \
+        && rm -rf /var/lib/apt/lists/*
+
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    /usr/local/bin/uv --version
+    
+    /usr/local/bin/uv python install 3.11.11
+    # Verify installation
+    /usr/local/bin/uv python list
+
+    cd /workspace/training
+    # Create the venv outside the project directory so it won't be hidden
+    # when /workspace/training is bind-mounted from the host.
+    /usr/local/bin/uv venv /workspace/venv --python 3.11.11
+    export UV_PROJECT_ENVIRONMENT=/workspace/venv
+    /usr/local/bin/uv sync --python 3.11.11 --link-mode copy --cache-dir /usr/local/share/uv/cache --no-editable
+
+    # test torch installation
+    /usr/local/bin/uv run python -c "import torch; print(torch.__version__)"

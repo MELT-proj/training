@@ -1,0 +1,164 @@
+# MELT Training Configuration
+# Following NeMo SpeechLM2 configuration structure
+#
+# Usage:
+#   python src/train.py --config-file config/train/LS_asr.yaml
+#   python src/train.py --config-file config/train/LS_asr.yaml trainer.max_steps=1000
+
+# =============================================================================
+# Model Configuration
+# =============================================================================
+model:
+  encoder:
+    name: facebook/w2v-bert-2.0
+    freeze: true
+
+  decoder:
+    name: Qwen/Qwen2.5-0.5B
+    attn_implementation: flash_attention_2
+    audio_bos_token: <|audio_bos|>
+    audio_eos_token: <|audio_eos|>
+    audio_token: <|AUDIO|>
+    freeze: true
+  
+  adapter:
+    type: mlp
+
+  ckpt: null  # Path to checkpoint to resume from
+
+# =============================================================================
+# Data Configuration
+# =============================================================================
+data:
+  sample_rate: 16000
+  apply_chat_template: false
+  min_chars: 3
+
+  train_ds:
+    # Data sources - list of datasets to load
+    input_cfg:
+      - type: lhotse_shar
+        shar_path: ${LOCAL_DATASETS_DIR}/librispeech/clean/train.100
+        tags:
+          task: asr
+          lang: en
+      - type: lhotse_shar
+        shar_path: ${LOCAL_DATASETS_DIR}/librispeech/clean/train.360
+        tags:
+          task: asr
+          lang: en
+
+    # Batch settings
+    batch_size: null  # Use batch_duration instead for dynamic batching
+    batch_duration: 120.0  # seconds of audio per batch
+    quadratic_duration: null
+
+    # Bucketing for efficient batching
+    use_bucketing: true
+    num_buckets: 30
+    bucket_buffer_size: 10000
+    bucket_duration_bins: null  # Auto-estimated if null
+
+    # Sampling
+    shuffle: true
+    shuffle_buffer_size: 10000
+    drop_last: false
+    seed: 42
+    shard_seed: trng
+
+    # Duration filtering
+    min_duration: 0.5
+    max_duration: 30.0
+
+    # DataLoader settings
+    num_workers: 2
+    pin_memory: true
+    prefetch_factor: 2
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+  validation_ds:
+    input_cfg:
+      - type: lhotse_shar
+        shar_path: ${LOCAL_DATASETS_DIR}/librispeech/clean/validation
+        tags:
+          task: asr
+          lang: en
+
+    batch_size: 8
+    batch_duration: null
+    use_bucketing: false
+    shuffle: false
+    drop_last: false
+    seed: 42
+    shard_seed: trng
+    min_duration: 0.5
+    max_duration: 30.0
+    num_workers: 4
+    pin_memory: true
+    prefetch_factor: 2
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+# =============================================================================
+# Trainer Configuration
+# =============================================================================
+trainer:
+  output_dir: ${OUTPUT_DIR}/melt_align
+  overwrite_output_dir: true
+  seed: 42
+  do_train: true
+  do_eval: true
+
+  # Accelerate DataLoader behavior under Transformers Trainer.
+  # If you hit errors about different-shaped batches being concatenated,
+  # set `split_batches: true` (slice one big batch per step).
+  # accelerator_config:
+  #   split_batches: true
+
+  # Batch and accumulation
+  per_device_train_batch_size: 1  # Handled by Lhotse, set to 1
+  per_device_eval_batch_size: 1   # Handled by Lhotse, set to 1
+  gradient_accumulation_steps: 4
+
+  # Optimizer
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  learning_rate: 2e-5
+
+  # LR schedule
+  lr_scheduler_type: cosine
+  warmup_steps: 2000
+
+  # Duration
+  num_train_epochs: 1
+  max_steps: 20
+
+  # Logging
+  logging_strategy: steps
+  logging_steps: 5
+  report_to: none
+
+  # Evaluation
+  eval_strategy: "no" # steps
+  eval_steps: 3000
+
+  # Checkpointing
+  save_strategy: steps
+  save_steps: 1000
+  save_total_limit: 5
+
+  # Performance
+  bf16: true
+  group_by_length: false  # Handled by Lhotse bucketing
+  dataloader_num_workers: 0  # Workers handled by Lhotse
+  remove_unused_columns: false
+  ddp_find_unused_parameters: false
+
+optimization:
+    encoder_lr: 6e-6
+    decoder_lr: 2e-5
+    adapter_lr: 2e-4
+    min_lr_scale: 0.1

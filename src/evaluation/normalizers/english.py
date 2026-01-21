@@ -4,7 +4,18 @@ import re
 from fractions import Fraction
 from typing import Iterator, List, Match, Optional, Union
 
-from more_itertools import windowed
+
+def windowed(seq, n: int):
+    window = []
+    it = iter(seq)
+    for _ in range(n):
+        window.append(next(it, None))
+    if len(window) < n:
+        return
+    yield tuple(window)
+    for x in it:
+        window = window[1:] + [x]
+        yield tuple(window)
 
 from .basic import remove_symbols_and_diacritics
 

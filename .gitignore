@@ -2,6 +2,7 @@ wandb/
 logs/
 src/transformers
 results/
+recording*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
