@@ -4,9 +4,9 @@ set -euo pipefail
 # Prepare CommonVoice22 Sidon WebDataset -> Lhotse SHAR.
 #
 # Input layout (HF snapshot):
-#   ${CV22_SIDON_SNAPSHOT_DIR}/{lang}/train-00000.tar.gz
-#   ${CV22_SIDON_SNAPSHOT_DIR}/{lang}/validation-00000.tar.gz
-#   ${CV22_SIDON_SNAPSHOT_DIR}/{lang}/test-00000.tar.gz
+#   ${MLS_SIDON_SNAPSHOT_DIR}/{lang}/train-00000.tar.gz
+#   ${MLS_SIDON_SNAPSHOT_DIR}/{lang}/validation-00000.tar.gz
+#   ${MLS_SIDON_SNAPSHOT_DIR}/{lang}/test-00000.tar.gz
 #
 # Output layout:
 #   /mnt/home/giuseppe/myscratch/melt-data/shar/cv22_sidon/{lang}/
@@ -14,18 +14,18 @@ set -euo pipefail
 # This script converts ALL splits together per-language (single output dir per lang).
 # If you want split-separated outputs, use run_convert_webdataset_all_langs.sh instead.
 
-CV22_SIDON_SNAPSHOT_DIR_DEFAULT="/mnt/scratch-nyx/giuseppe/melt/hf_home/hub/datasets--sarulab-speech--commonvoice22_sidon/snapshots/7c06e40565468fda8c80a57c0ce4a7d9af97c095"
-OUTPUT_BASE_DEFAULT="/mnt/scratch-nyx/giuseppe/melt/shar/cv22_sidon"
+SIDON_SNAPSHOT_DIR_DEFAULT="/mnt/scratch-nyx/giuseppe/melt/hf_home/hub/datasets--sarulab-speech--mls_sidon/snapshots/a9abb3a85d5ca67f92ed29f65003b420169e2732"
+OUTPUT_BASE_DEFAULT="/mnt/scratch-nyx/giuseppe/melt/shar/mls_sidon"
 
-CV22_SIDON_SNAPSHOT_DIR="${CV22_SIDON_SNAPSHOT_DIR:-$CV22_SIDON_SNAPSHOT_DIR_DEFAULT}"
+MLS_SIDON_SNAPSHOT_DIR="${MLS_SIDON_SNAPSHOT_DIR:-$SIDON_SNAPSHOT_DIR_DEFAULT}"
 OUTPUT_BASE="${OUTPUT_BASE:-$OUTPUT_BASE_DEFAULT}"
 
 # Languages to convert (edit as needed)
-LANGUAGES=(en es fr it pt de)
+LANGUAGES=(dutch english french german italian polish portuguese spanish)
 
 # Conversion knobs (can override via env vars)
 LOG_LEVEL="${LOG_LEVEL:-INFO}"
-SHARD_SIZE="${SHARD_SIZE:-25000}"
+SHARD_SIZE="${SHARD_SIZE:-4000}"
 AUDIO_FORMAT="${AUDIO_FORMAT:-flac}"
 RESAMPLE="${RESAMPLE:-1}"           # 1 enables resample
 ORIG_SR="${ORIG_SR:-48000}"
@@ -40,22 +40,22 @@ if [[ ! -f "$CONVERTER" ]]; then
   exit 2
 fi
 
-if [[ ! -d "$CV22_SIDON_SNAPSHOT_DIR" ]]; then
-  echo "Snapshot dir not found: $CV22_SIDON_SNAPSHOT_DIR" >&2
-  echo "Set CV22_SIDON_SNAPSHOT_DIR to override." >&2
+if [[ ! -d "$MLS_SIDON_SNAPSHOT_DIR" ]]; then
+  echo "Snapshot dir not found: $MLS_SIDON_SNAPSHOT_DIR" >&2
+  echo "Set MLS_SIDON_SNAPSHOT_DIR to override." >&2
   exit 2
 fi
 
 mkdir -p "$OUTPUT_BASE"
 
-echo "Input snapshot: $CV22_SIDON_SNAPSHOT_DIR"
+echo "Input snapshot: $MLS_SIDON_SNAPSHOT_DIR"
 echo "Output base  : $OUTPUT_BASE"
 echo "Languages    : ${LANGUAGES[*]}"
 
 echo "Settings: shard_size=$SHARD_SIZE audio_format=$AUDIO_FORMAT resample=$RESAMPLE orig_sr=$ORIG_SR target_sr=$TARGET_SR force=$FORCE log_level=$LOG_LEVEL"
 
 for lang in "${LANGUAGES[@]}"; do
-  lang_dir="$CV22_SIDON_SNAPSHOT_DIR/$lang"
+  lang_dir="$MLS_SIDON_SNAPSHOT_DIR/$lang"
   if [[ ! -d "$lang_dir" ]]; then
     echo "[skip] missing lang dir: $lang_dir" >&2
     continue
