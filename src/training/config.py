@@ -300,6 +300,15 @@ class TrainerConfig:
     max_steps: int = 100
     """Maximum number of training steps (-1 for unlimited)."""
 
+    compute_max_steps_from_epochs: bool = False
+    """If True, compute max_steps from num_train_epochs and dataset duration.
+    
+    When enabled, max_steps will be calculated as:
+        max_steps = num_train_epochs * (total_dataset_duration / batch_duration / gradient_accumulation_steps)
+    
+    This requires the data config to have batch_duration set.
+    """
+
     # Logging
     logging_strategy: str = "steps"
     """Logging strategy ('steps' or 'epoch')."""

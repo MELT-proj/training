@@ -3,6 +3,11 @@ MELT Trainer with Lhotse-based data loading.
 
 This module provides a custom Trainer that integrates Lhotse dataloaders
 for efficient speech data loading with dynamic batching and bucketing.
+
+Key features:
+- Dynamic batching based on audio duration (batch_duration)
+- Epoch estimation from total dataset duration
+- Proper step/epoch tracking for Lhotse's infinite dataloaders
 """
 
 import os
@@ -18,6 +23,7 @@ from .config import TrainingConfig
 from .data.audio.lhotse import (
     FallbackDataset,
     SpeechToTextDataset,
+    estimate_steps_per_epoch,
     get_eval_dataloader_from_config,
     get_train_dataloader_from_config,
 )
@@ -40,13 +46,19 @@ class MELTTrainer(Trainer):
 
     This trainer overrides the dataloader creation methods to use
     Lhotse samplers for dynamic batching and efficient speech data loading.
+    It also provides epoch estimation for Lhotse's infinite dataloaders.
 
     Args:
         model: The model to train.
         args: Training arguments.
-        data_config: DataConfig with Lhotse data loading settings.
+        config: TrainingConfig with Lhotse data loading settings.
         processor: MELTProcessor for audio/text processing.
         **kwargs: Additional arguments passed to Trainer.
+
+    Attributes:
+        steps_per_epoch: Estimated steps per epoch based on dataset duration.
+        dataset_duration_hours: Total dataset duration in hours.
+        dataset_num_cuts: Number of cuts in the dataset.
     """
 
     def __init__(
@@ -64,6 +76,54 @@ class MELTTrainer(Trainer):
         # Always use ddp.py for distributed information
         self._global_rank = ddp.get_global_rank()
         self._world_size = ddp.get_world_size()
+
+        # Compute epoch estimation from dataset duration
+        self.steps_per_epoch = -1
+        self.dataset_duration_hours = 0.0
+        self.dataset_num_cuts = 0
+
+        if config is not None and hasattr(config, "data") and hasattr(config.data, "train_ds"):
+            grad_accum = getattr(args, "gradient_accumulation_steps", 1) if args else 1
+            self.steps_per_epoch, self.dataset_duration_hours, self.dataset_num_cuts = (
+                estimate_steps_per_epoch(
+                    config=config.data.train_ds,
+                    gradient_accumulation_steps=grad_accum,
+                    world_size=self._world_size,
+                )
+            )
+
+            # Log epoch estimation info
+            if self.steps_per_epoch > 0:
+                logger.info(
+                    f"Epoch estimation: {self.dataset_num_cuts} cuts, "
+                    f"{self.dataset_duration_hours:.2f} hours, "
+                    f"~{self.steps_per_epoch} steps/epoch"
+                )
+
+                # Check if we should compute max_steps from epochs
+                compute_from_epochs = (
+                    hasattr(config, "trainer")
+                    and getattr(config.trainer, "compute_max_steps_from_epochs", False)
+                )
+
+                if compute_from_epochs:
+                    num_epochs = getattr(config.trainer, "num_train_epochs", 1)
+                    computed_max_steps = int(self.steps_per_epoch * num_epochs)
+                    logger.info(
+                        f"Computing max_steps from epochs: "
+                        f"{num_epochs} epochs * {self.steps_per_epoch} steps/epoch = {computed_max_steps} steps"
+                    )
+                    # Update args.max_steps so HF Trainer uses it
+                    if args is not None:
+                        args.max_steps = computed_max_steps
+                else:
+                    # If max_steps is set, compute how many epochs that represents
+                    max_steps = getattr(args, "max_steps", -1) if args else -1
+                    if max_steps > 0:
+                        total_epochs = max_steps / self.steps_per_epoch
+                        logger.info(
+                            f"Training for {max_steps} steps = ~{total_epochs:.2f} epochs"
+                        )
 
         # Initialize parent (may set up distributed)
         super().__init__(model=model, args=args, **kwargs)

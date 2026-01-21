@@ -7,12 +7,16 @@ from configuration objects, following patterns from NeMo's dataloader utilities.
 Key functions:
 - get_lhotse_sampler_from_config: Creates a CutSampler from config
 - get_lhotse_dataloader_from_config: Creates a full DataLoader from config
+- compute_dataset_duration: Computes total dataset duration for epoch estimation
 """
 
+import gzip
+import json
 import os
 import warnings
 from dataclasses import asdict
 from functools import partial
+from glob import glob
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +58,176 @@ def _config_to_dict(config: Any) -> dict:
     elif isinstance(config, dict):
         return config
     return dict(config)
+
+
+def _read_shar_manifest_durations(
+    shar_path: str | Path,
+    min_duration: float = 0.0,
+    max_duration: float = float("inf"),
+) -> tuple[float, int]:
+    """Read total duration and cut count from SHAR manifest files.
+
+    SHAR format stores cut manifests as gzipped JSONL files in the shar directory.
+    This function reads only the manifest files (not audio) to extract durations.
+
+    Args:
+        shar_path: Path to the SHAR directory.
+        min_duration: Minimum cut duration to include (default: 0.0).
+        max_duration: Maximum cut duration to include (default: inf).
+
+    Returns:
+        Tuple of (total_duration_seconds, num_cuts).
+    """
+    shar_path = Path(shar_path)
+    total_duration = 0.0
+    num_cuts = 0
+
+    # Find all cuts manifest files (cuts.*.jsonl.gz pattern)
+    manifest_files = sorted(glob(str(shar_path / "cuts.*.jsonl.gz")))
+
+    if not manifest_files:
+        logger.warning(f"No manifest files found in {shar_path}")
+        return 0.0, 0
+
+    for manifest_file in manifest_files:
+        try:
+            with gzip.open(manifest_file, "rt", encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        cut_data = json.loads(line)
+                        duration = cut_data.get("duration", 0.0)
+                        # Apply duration filter
+                        if min_duration <= duration <= max_duration:
+                            total_duration += duration
+                            num_cuts += 1
+        except Exception as e:
+            logger.warning(f"Error reading manifest {manifest_file}: {e}")
+            continue
+
+    return total_duration, num_cuts
+
+
+def compute_dataset_duration(
+    config: DatasetConfig | dict,
+    min_duration: float | None = None,
+    max_duration: float | None = None,
+) -> tuple[float, int]:
+    """Compute total dataset duration from configuration.
+
+    Reads SHAR manifest files to compute total duration without loading audio.
+    Applies duration filtering if min/max_duration are specified.
+
+    Args:
+        config: DatasetConfig with input_cfg specifying data sources.
+        min_duration: Minimum cut duration filter (from config if None).
+        max_duration: Maximum cut duration filter (from config if None).
+
+    Returns:
+        Tuple of (total_duration_seconds, num_cuts) after filtering.
+    """
+    input_cfg = _get_config_value(config, "input_cfg", [])
+    if not input_cfg:
+        return 0.0, 0
+
+    # Get duration filters from config if not explicitly provided
+    if min_duration is None:
+        min_duration = _get_config_value(config, "min_duration", 0.0)
+    if max_duration is None:
+        max_duration = _get_config_value(config, "max_duration", float("inf"))
+
+    total_duration = 0.0
+    num_cuts = 0
+
+    for source_cfg in input_cfg:
+        source_type = _get_config_value(source_cfg, "type", "lhotse_shar")
+
+        if source_type == "lhotse_shar":
+            shar_path = _get_config_value(source_cfg, "shar_path")
+            if shar_path is None:
+                continue
+
+            # Expand environment variables in path
+            shar_path = os.path.expandvars(str(shar_path))
+
+            if not Path(shar_path).exists():
+                logger.warning(f"Shar path not found: {shar_path}")
+                continue
+
+            # Use helper function to read manifest durations
+            source_duration, source_cuts = _read_shar_manifest_durations(
+                shar_path, min_duration, max_duration
+            )
+            total_duration += source_duration
+            num_cuts += source_cuts
+
+        elif source_type == "lhotse_cuts":
+            cuts_path = _get_config_value(source_cfg, "cuts_path")
+            if cuts_path is None:
+                continue
+
+            cuts_path = os.path.expandvars(str(cuts_path))
+
+            if not Path(cuts_path).exists():
+                logger.warning(f"Cuts path not found: {cuts_path}")
+                continue
+
+            # Load cuts and compute duration
+            try:
+                cuts = CutSet.from_file(cuts_path)
+                for cut in cuts:
+                    if min_duration <= cut.duration <= max_duration:
+                        total_duration += cut.duration
+                        num_cuts += 1
+            except Exception as e:
+                logger.warning(f"Error reading cuts {cuts_path}: {e}")
+                continue
+
+    return total_duration, num_cuts
+
+
+def estimate_steps_per_epoch(
+    config: DatasetConfig | dict,
+    gradient_accumulation_steps: int = 1,
+    world_size: int = 1,
+) -> tuple[int, float, int]:
+    """Estimate the number of training steps per epoch.
+
+    Computes steps_per_epoch = total_duration / batch_duration / gradient_accumulation_steps.
+    For distributed training, the effective batch_duration is already per-device,
+    so world_size doesn't need to factor in here.
+
+    Args:
+        config: DatasetConfig with batch_duration and data sources.
+        gradient_accumulation_steps: Number of gradient accumulation steps.
+        world_size: Number of distributed processes (for logging only).
+
+    Returns:
+        Tuple of (steps_per_epoch, total_duration_hours, num_cuts).
+    """
+    batch_duration = _get_config_value(config, "batch_duration")
+    if batch_duration is None:
+        # Fixed batch size mode - can't estimate without more info
+        logger.warning("batch_duration not set, cannot estimate steps per epoch")
+        return -1, 0.0, 0
+
+    total_duration, num_cuts = compute_dataset_duration(config)
+    if total_duration <= 0:
+        return 0, 0.0, 0
+
+    total_hours = total_duration / 3600.0
+
+    # Micro-batches per epoch = total_duration / batch_duration
+    # Steps per epoch = micro_batches / gradient_accumulation_steps
+    micro_batches = total_duration / batch_duration
+    steps_per_epoch = int(micro_batches / gradient_accumulation_steps)
+
+    logger.info(
+        f"Dataset stats: {num_cuts} cuts, {total_hours:.2f} hours total, "
+        f"~{steps_per_epoch} steps/epoch (batch_duration={batch_duration}s, "
+        f"grad_accum={gradient_accumulation_steps})"
+    )
+
+    return steps_per_epoch, total_hours, num_cuts
 
 
 def read_cutset_from_config(config: DatasetConfig | dict) -> tuple[CutSet, bool]:
@@ -417,4 +591,6 @@ __all__ = [
     "get_lhotse_dataloader_from_config",
     "get_train_dataloader_from_config",
     "get_eval_dataloader_from_config",
+    "compute_dataset_duration",
+    "estimate_steps_per_epoch",
 ]

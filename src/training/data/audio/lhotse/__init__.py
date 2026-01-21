@@ -49,6 +49,8 @@ Adding a new dataset:
 
 from .base import BaseLhotseDataset
 from .dataloader import (
+    compute_dataset_duration,
+    estimate_steps_per_epoch,
     get_eval_dataloader_from_config,
     get_lhotse_dataloader_from_config,
     get_lhotse_sampler_from_config,
@@ -78,6 +80,9 @@ __all__ = [
     "get_lhotse_dataloader_from_config",
     "get_train_dataloader_from_config",
     "get_eval_dataloader_from_config",
+    # Epoch estimation utilities
+    "compute_dataset_duration",
+    "estimate_steps_per_epoch",
 ]
 
 # Registry mapping dataset nicknames to their loader classes
