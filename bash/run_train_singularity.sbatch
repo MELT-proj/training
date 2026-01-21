@@ -83,6 +83,11 @@ else
 fi
 echo "HF_BIND_ARG: ${HF_BIND_ARG}"
 
+export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-0}"
+export SINGULARITYENV_HF_HUB_OFFLINE="${HF_HUB_OFFLINE}"
+export APPTAINERENV_HF_HUB_OFFLINE="${HF_HUB_OFFLINE}"
+echo "HF_HUB_OFFLINE: ${HF_HUB_OFFLINE}"
+
 # ------------------------------------------------------------------
 # Required: path to the .sif image on the host
 # ------------------------------------------------------------------
