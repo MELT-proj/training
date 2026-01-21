@@ -54,7 +54,7 @@ python infra/setup/lhotse/multilingual_librispeech.py --configs german french it
 
 ```bash
 # Process these languages by default: en de it fr es pt
-python infra/setup/lhotse/voxpopuli.py --configs en de it fr es pt --include-special-configs --batched --batch-size 5000 --num-workers 8 --io-num-workers 8
+python infra/setup/lhotse/voxpopuli.py --configs en de it fr es --include-special-configs --batched --batch-size 2000 --num-workers 1 --io-num-workers 4
 ```
 
 *Note:* VoxPopuli uses short ISO language codes (e.g., `de`, `it`) for configs.

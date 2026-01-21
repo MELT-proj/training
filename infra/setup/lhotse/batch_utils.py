@@ -190,7 +190,17 @@ class BatchedSharConverter:
             return list(batch_dataset)
 
         def _get_row(i: int) -> dict[str, Any]:
-            return batch_dataset[i]
+            row = batch_dataset[i]
+            # Some HF datasets like HF leave row["audio"]["bytes"] to None when the column is casted with Audio(decode=False)
+            # Check if this is the case, and if so, read the raw bytes manually using standard python IO
+            if row.get("audio") and row["audio"].get("bytes") is None:
+                audio_path = row["audio"].get("path")
+                if audio_path:
+                    with open(audio_path, "rb") as f:
+                        row["audio"]["bytes"] = f.read()
+            
+            # print(row["audio"]["bytes"] == None)
+            return row
 
         # Threads are intentional here: the hot path is file/network IO.
         # Using processes would require pickling/copying the dataset object.
