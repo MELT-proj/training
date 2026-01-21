@@ -804,8 +804,6 @@ class MELTForConditionalGeneration(MELTPreTrainedModel):
 
         # TODO: Below this point (logits to keep and loss computation) only works 
         # for causal language modeling with a single text response.
-        logits = decoder_outputs.logits
-        
         # For training, we keep only the last `logits_to_keep` logits for computing loss on text tokens.
         # For generation, we typically only need the last token's logits.
         if logits_to_keep == 0:
@@ -823,6 +821,8 @@ class MELTForConditionalGeneration(MELTPreTrainedModel):
             logits_to_keep=logits_to_keep,
             **kwargs_decoder,
         )
+
+        logits = decoder_outputs.logits
 
         loss = None
         if labels is not None:

@@ -333,14 +333,16 @@ class MELTProcessor(ProcessorMixin):
             else:
                 audio_lengths_flat = iter([])
 
-            text = self.replace_multimodal_special_tokens(
+            # Here is where we expand each audio_token into a sequence 
+            # depending on audio_lengths_flat.
+            expanded_text = self.replace_multimodal_special_tokens(
                 text,
                 audio_lengths=audio_lengths_flat,
                 # image_grid_thw=image_grid_thw,
                 # video_grid_thw=video_grid_thw,
             )
 
-        texts_inputs = self.tokenizer(text, **output_kwargs["text_kwargs"])
+        texts_inputs = self.tokenizer(expanded_text, **output_kwargs["text_kwargs"])
 
         output_data = {**texts_inputs, **audio_inputs}
         if audio_lengths_output is not None:
