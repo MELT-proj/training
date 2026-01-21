@@ -146,18 +146,18 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
                 sampling_rate=self.sample_rate,
                 padding=True,
                 return_tensors="pt",
-                return_labels=True,
             )
 
             # Add the labels for loss computation. The labels for this class or exclusively the text token IDs. 
             # The modeling code will handle  logit slicing based on this tensor's shape and loss masking as needed
             # (Crucial: the training code must set loss_ignore_index to match the padding token ID of the tokenizer).
-            inputs["labels"] = self.processor.tokenizer.pad(
+            inputs.data["labels"] = self.processor.tokenizer.pad(
                 texts,
                 padding_side="left",
                 padding="longest",
                 return_tensors="pt",
             )["input_ids"]
+            inputs = inputs.convert_to_tensors("pt")
 
             return inputs
 

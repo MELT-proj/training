@@ -241,6 +241,7 @@ class MELTProcessor(ProcessorMixin):
         audio: AudioInput | None = None,
         images: ImageInput | None = None,
         videos: VideoInput | None = None,
+        return_dict: bool = False,
         **kwargs: Unpack[MELTProcessorKwargs],
     ) -> BatchFeature:
         """
@@ -354,7 +355,7 @@ class MELTProcessor(ProcessorMixin):
                     lengths + [-1] * (max_len - len(lengths)) for lengths in output_data["audio_lengths"]
                 ]
 
-        return BatchFeature(
+        return output_data if return_dict else BatchFeature(
             data=output_data,  # , **images_inputs, **videos_inputs},
             tensor_type=kwargs.get("return_tensors"),
         )
