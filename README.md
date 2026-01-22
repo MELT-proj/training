@@ -1,4 +1,4 @@
-[![Tests](https://img.shields.io/github/actions/workflow/status/MELT-proj/training/test.yml?label=tests&logo=github)](https://github.com/MELT-proj/training/actions)
+[![Tests](https://img.shields.io/github/actions/workflow/status/MELT-proj/training/ci.yml?label=tests&logo=github)](https://github.com/MELT-proj/training/actions)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-lightgrey)
 
@@ -7,7 +7,7 @@
 MELT is a training and modeling stack built on Hugging Face components with Lhotse-based speech dataloading.
 
 ## Milestones
-- [2025/07] v1 of the model was accepted and published as system paper at IWLST 2025. [Link](https://aclanthology.org/2025.iwslt-1.36/) 
+- [**2025/07**] v1 of the model was accepted and published as system paper at IWLST 2025. [Link](https://aclanthology.org/2025.iwslt-1.36/) 
 
 ## Getting Started
 For setup and usage details, see the folder-specific guides:
