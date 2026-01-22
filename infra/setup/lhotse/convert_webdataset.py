@@ -32,6 +32,9 @@ import json
 import logging
 import os
 from collections.abc import Iterator
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from dataclasses import dataclass
+from multiprocessing import cpu_count
 from pathlib import Path
 from typing import Any
 
@@ -205,6 +208,163 @@ def _maybe_resample_recording(
     return resampled, True
 
 
+def _process_sample(
+    cut_id: str,
+    audio_bytes: bytes,
+    metadata: dict[str, Any],
+    language: str,
+    resample: bool,
+    orig_sr: int,
+    target_sr: int,
+) -> MonoCut:
+    """Process a single sample into a MonoCut. Thread-safe."""
+    transcript = metadata.get("transcript", "")
+    if not isinstance(transcript, str):
+        transcript = str(transcript)
+
+    recording = Recording.from_bytes(data=audio_bytes, recording_id=cut_id)
+
+    recording, did_resample = _maybe_resample_recording(
+        recording,
+        enable=bool(resample),
+        orig_sr_expected=int(orig_sr),
+        target_sr=int(target_sr),
+    )
+
+    metadata = dict(metadata)
+    if did_resample:
+        metadata["resampled_from_hz"] = int(orig_sr)
+        metadata["resampled_to_hz"] = int(target_sr)
+    else:
+        sr_now = getattr(recording, "sampling_rate", None)
+        if isinstance(sr_now, int) and sr_now > 0:
+            metadata.setdefault("sample_rate_hz", int(sr_now))
+
+    supervision = SupervisionSegment(
+        id=cut_id,
+        recording_id=cut_id,
+        start=0.0,
+        duration=recording.duration,
+        text=transcript,
+        language=language,
+    )
+    cut = MonoCut(
+        id=cut_id,
+        start=0.0,
+        duration=recording.duration,
+        channel=0,
+        recording=recording,
+        supervisions=[supervision],
+        custom={"metadata": metadata},
+    )
+    return cut
+
+
+@dataclass
+class ChunkTask:
+    """A chunk of samples to be processed by a worker."""
+    chunk_id: int
+    samples: list[tuple[str, bytes, dict[str, Any]]]
+
+
+def _process_chunk(
+    chunk: ChunkTask,
+    output_dir: str,
+    audio_format: str,
+    shard_size: int,
+    language: str,
+    resample: bool,
+    orig_sr: int,
+    target_sr: int,
+) -> tuple[int, int, list[str]]:
+    """Process a chunk of samples and write to a temporary shard directory.
+    
+    Each worker writes to its own subdirectory to avoid conflicts.
+    Returns (count, errors, output_paths).
+    """
+    chunk_output_dir = Path(output_dir) / f"chunk_{chunk.chunk_id:04d}"
+    chunk_output_dir.mkdir(parents=True, exist_ok=True)
+    
+    count = 0
+    errors = 0
+    
+    writer = SharWriter(
+        output_dir=chunk_output_dir,
+        fields={"recording": audio_format},
+        shard_size=shard_size,
+    )
+    
+    with writer:
+        for cut_id, audio_bytes, metadata in chunk.samples:
+            try:
+                cut = _process_sample(
+                    cut_id,
+                    audio_bytes,
+                    metadata,
+                    language,
+                    resample,
+                    orig_sr,
+                    target_sr,
+                )
+                writer.write(cut)
+                count += 1
+            except Exception as e:
+                errors += 1
+                # Log to stderr since we're in a subprocess
+                print(f"[ERROR] Failed to convert cut {cut_id}: {e}")
+    
+    return count, errors, [str(chunk_output_dir)]
+
+
+def _merge_chunk_outputs(
+    chunk_dirs: list[str],
+    final_output_dir: Path,
+) -> None:
+    """Merge all chunk outputs into the final output directory with proper shard numbering."""
+    import shutil
+    
+    final_output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Determine next shard index based on existing files to ensure continuous numbering
+    def _next_shard_index(dir_path: Path) -> int:
+        existing = sorted(dir_path.glob("recording.*.tar"))
+        max_idx = -1
+        for f in existing:
+            try:
+                # Expect pattern recording.%06d.tar
+                idx_str = f.stem.split(".")[-1]
+                idx = int(idx_str)
+                max_idx = max(max_idx, idx)
+            except Exception:
+                continue
+        return max_idx + 1
+
+    shard_idx = _next_shard_index(final_output_dir)
+    for chunk_dir in sorted(chunk_dirs):
+        chunk_path = Path(chunk_dir)
+        if not chunk_path.exists():
+            continue
+        
+        # Find all shard files in this chunk
+        tar_files = sorted(chunk_path.glob("recording.*.tar"))
+        cuts_files = sorted(chunk_path.glob("cuts.*.jsonl.gz"))
+        
+        for tar_file, cuts_file in zip(tar_files, cuts_files):
+            # Rename with new shard index
+            new_tar = final_output_dir / f"recording.{shard_idx:06d}.tar"
+            new_cuts = final_output_dir / f"cuts.{shard_idx:06d}.jsonl.gz"
+            
+            shutil.move(str(tar_file), str(new_tar))
+            shutil.move(str(cuts_file), str(new_cuts))
+            shard_idx += 1
+        
+        # Clean up empty chunk directory
+        try:
+            shutil.rmtree(chunk_path)
+        except Exception:
+            pass
+
+
 def convert_webdataset_to_shar(
     *,
     shards_parent_dir: Path,
@@ -219,6 +379,8 @@ def convert_webdataset_to_shar(
     target_sr: int,
     max_pending: int,
     force: bool,
+    num_workers: int | None = None,
+    max_cuts_in_memory: int | None = None,
 ) -> tuple[int, int] | tuple[None, None]:
     if not force and is_conversion_complete(output_dir):
         marker = _marker_path_for_output(output_dir)
@@ -229,72 +391,116 @@ def convert_webdataset_to_shar(
     if not shards:
         raise SystemExit(f"No shards found under {shards_parent_dir} with pattern {shards_pattern!r}")
 
+    # Default to cpu_count if not specified
+    if num_workers is None:
+        num_workers = cpu_count()
+
     output_dir.mkdir(parents=True, exist_ok=True)
     logger.info("Found %s shard files", len(shards))
-    logger.info("Writing Shar to: %s", output_dir)
-
-    writer = SharWriter(output_dir=output_dir, fields={"recording": audio_format}, shard_size=shard_size)
+    logger.info("Writing Shar to: %s (using %s worker processes)", output_dir, num_workers)
 
     count = 0
     errors = 0
 
-    with writer:
-        for cut_id, audio_bytes, metadata in tqdm(
-            _iter_merged_webdataset_samples(shards, max_pending=max_pending),
-            desc="Converting webdataset",
-            unit="cut",
-        ):
-            try:
-                transcript = metadata.get("transcript", "")
-                if not isinstance(transcript, str):
-                    transcript = str(transcript)
+    # Helper: process a batch of samples using worker processes
+    def _process_samples_batch(batch_samples: list[tuple[str, bytes, dict[str, Any]]]) -> list[str]:
+        nonlocal count, errors, num_workers
+        batch_total = len(batch_samples)
+        if batch_total == 0:
+            return []
 
-                recording = Recording.from_bytes(data=audio_bytes, recording_id=cut_id)
-
-                recording, did_resample = _maybe_resample_recording(
-                    recording,
-                    enable=bool(resample),
-                    orig_sr_expected=int(orig_sr),
-                    target_sr=int(target_sr),
+        # Adjust number of workers per-batch to avoid undersized shards
+        local_num_workers = num_workers
+        if shard_size and shard_size > 0:
+            max_workers_by_shards = max(1, batch_total // shard_size)
+            if local_num_workers > max_workers_by_shards:
+                logger.info(
+                    "Adjusting workers (batch): %s -> %s (shard_size=%s, batch_total=%s)",
+                    local_num_workers,
+                    max_workers_by_shards,
+                    shard_size,
+                    batch_total,
                 )
+                local_num_workers = max_workers_by_shards
 
-                metadata = dict(metadata)
-                if did_resample:
-                    metadata["resampled_from_hz"] = int(orig_sr)
-                    metadata["resampled_to_hz"] = int(target_sr)
-                else:
-                    sr_now = getattr(recording, "sampling_rate", None)
-                    if isinstance(sr_now, int) and sr_now > 0:
-                        metadata.setdefault("sample_rate_hz", int(sr_now))
-                supervision = SupervisionSegment(
-                    id=cut_id,
-                    recording_id=cut_id,
-                    start=0.0,
-                    duration=recording.duration,
-                    text=transcript,
-                    language=language,
-                )
-                cut = MonoCut(
-                    id=cut_id,
-                    start=0.0,
-                    duration=recording.duration,
-                    channel=0,
-                    recording=recording,
-                    supervisions=[supervision],
-                    custom={"metadata": metadata},
-                )
+        # Create chunks for this batch
+        chunk_size = max(1, (batch_total + local_num_workers - 1) // local_num_workers)
+        chunks: list[ChunkTask] = []
+        for i in range(0, batch_total, chunk_size):
+            chunk_samples = batch_samples[i : i + chunk_size]
+            chunks.append(ChunkTask(chunk_id=len(chunks), samples=chunk_samples))
 
-                writer.write(cut)
-                count += 1
-            except Exception as e:
-                errors += 1
-                logger.error("Failed to convert cut %s: %s", cut_id, e)
-                if errors > 100:
-                    logger.critical("Too many errors, stopping.")
-                    break
+        logger.info("Processing batch: %s chunks (~%s samples/chunk)", len(chunks), chunk_size)
+
+        batch_chunk_outputs: list[str] = []
+        with ProcessPoolExecutor(max_workers=local_num_workers) as executor:
+            futures = {}
+            for chunk in chunks:
+                future = executor.submit(
+                    _process_chunk,
+                    chunk,
+                    str(output_dir),
+                    audio_format,
+                    shard_size,
+                    language,
+                    resample,
+                    orig_sr,
+                    target_sr,
+                )
+                futures[future] = chunk.chunk_id
+
+            with tqdm(total=len(chunks), desc="Processing batch", unit="chunk") as pbar:
+                for future in as_completed(futures):
+                    chunk_id = futures[future]
+                    try:
+                        chunk_count, chunk_errors, chunk_paths = future.result()
+                        count += chunk_count
+                        errors += chunk_errors
+                        batch_chunk_outputs.extend(chunk_paths)
+                        pbar.update(1)
+                        pbar.set_postfix({"processed": count, "errors": errors})
+                    except Exception as e:
+                        logger.error("Batch chunk %s failed: %s", chunk_id, e)
+                        errors += 1
+
+        return batch_chunk_outputs
+
+    # Iterate samples and process in batches to limit RAM usage
+    sample_iter = _iter_merged_webdataset_samples(shards, max_pending=max_pending)
+    chunk_outputs_all: list[str] = []
+    current_batch: list[tuple[str, bytes, dict[str, Any]]] = []
+
+    # Use a streaming progress bar for reading samples
+    pbar_read = tqdm(desc="Reading samples", unit="sample")
+    for cut_id, audio_bytes, metadata in sample_iter:
+        current_batch.append((cut_id, audio_bytes, metadata))
+        pbar_read.update(1)
+        if max_cuts_in_memory is not None and len(current_batch) >= max_cuts_in_memory:
+            logger.info("Batch size %s reached; offloading to disk via workers", len(current_batch))
+            batch_outputs = _process_samples_batch(current_batch)
+            chunk_outputs_all.extend(batch_outputs)
+            current_batch.clear()
+
+    pbar_read.close()
+
+    # Process any remaining samples
+    if current_batch:
+        logger.info("Processing final batch of %s samples", len(current_batch))
+        batch_outputs = _process_samples_batch(current_batch)
+        chunk_outputs_all.extend(batch_outputs)
+        current_batch.clear()
+
+    # Merge chunk outputs into final directory structure
+    logger.info("Merging %s chunk outputs...", len(chunk_outputs_all))
+    _merge_chunk_outputs(chunk_outputs_all, output_dir)
 
     logger.info("Finished conversion. Processed %s cuts with %s errors.", count, errors)
-    mark_conversion_complete(output_dir, count, errors)
+    # Only mark as complete if no errors occurred
+    # This ensures runs with any errors are retried on next invocation
+    if errors == 0:
+        mark_conversion_complete(output_dir, count, errors)
+    else:
+        logger.error("Conversion had %s errors, not marking as complete", errors)
     return count, errors
 
 
@@ -365,6 +571,18 @@ def parse_args() -> argparse.Namespace:
         default=20000,
         help="Max number of incomplete samples buffered when merging audio+metadata (default: 20000).",
     )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=None,
+        help="Number of worker processes for parallel processing (default: cpu_count).",
+    )
+    parser.add_argument(
+        "--max-cuts-in-memory",
+        type=int,
+        default=None,
+        help="Maximum number of cuts to buffer in RAM before offloading to disk (default: unlimited).",
+    )
 
     parser.add_argument("--force", action="store_true", help="Re-run conversion even if already complete.")
     parser.add_argument("--log-level", default="INFO", help="Logging level (INFO, DEBUG, ...).")
@@ -389,6 +607,8 @@ def main() -> None:
         target_sr=int(args.target_sr),
         max_pending=int(args.max_pending),
         force=bool(args.force),
+        num_workers=int(args.num_workers) if args.num_workers else cpu_count(),
+        max_cuts_in_memory=int(args.max_cuts_in_memory) if args.max_cuts_in_memory else None,
     )
 
 

@@ -100,30 +100,41 @@ class MELTTrainer(Trainer):
                     f"~{self.steps_per_epoch} steps/epoch"
                 )
 
+                # Get max_steps and num_train_epochs from args
+                max_steps = getattr(args, "max_steps", None) if args else None
+                num_train_epochs = getattr(args, "num_train_epochs", None) if args else None
+                
+                # Validate: at least one must be set
+                if max_steps is None and num_train_epochs is None:
+                    raise ValueError(
+                        "Either max_steps or num_train_epochs must be set. "
+                        "Both cannot be None."
+                    )
+                
                 # Check if we should compute max_steps from epochs
                 compute_from_epochs = (
                     hasattr(config, "trainer")
                     and getattr(config.trainer, "compute_max_steps_from_epochs", False)
                 )
 
-                if compute_from_epochs:
-                    num_epochs = getattr(config.trainer, "num_train_epochs", 1)
-                    computed_max_steps = int(self.steps_per_epoch * num_epochs)
+                if compute_from_epochs or max_steps is None:
+                    # Compute max_steps from num_train_epochs
+                    if num_train_epochs is None:
+                        num_train_epochs = getattr(config.trainer, "num_train_epochs", 1)
+                    computed_max_steps = int(self.steps_per_epoch * num_train_epochs)
                     logger.info(
                         f"Computing max_steps from epochs: "
-                        f"{num_epochs} epochs * {self.steps_per_epoch} steps/epoch = {computed_max_steps} steps"
+                        f"{num_train_epochs} epochs * {self.steps_per_epoch} steps/epoch = {computed_max_steps} steps"
                     )
                     # Update args.max_steps so HF Trainer uses it
                     if args is not None:
                         args.max_steps = computed_max_steps
-                else:
+                elif max_steps is not None and max_steps > 0:
                     # If max_steps is set, compute how many epochs that represents
-                    max_steps = getattr(args, "max_steps", -1) if args else -1
-                    if max_steps > 0:
-                        total_epochs = max_steps / self.steps_per_epoch
-                        logger.info(
-                            f"Training for {max_steps} steps = ~{total_epochs:.2f} epochs"
-                        )
+                    total_epochs = max_steps / self.steps_per_epoch
+                    logger.info(
+                        f"Training for {max_steps} steps = ~{total_epochs:.2f} epochs"
+                    )
 
         # Initialize parent (may set up distributed)
         super().__init__(model=model, args=args, **kwargs)

@@ -802,9 +802,14 @@ class MELTForConditionalGeneration(MELTPreTrainedModel):
                         audio_lengths,
                     )
 
+        # TODO: Below this point (logits to keep and loss computation) only works 
+        # for causal language modeling with a single text response.
+        # For training, we keep only the last `logits_to_keep` logits for computing loss on text tokens.
+        # For generation, we typically only need the last token's logits.
         if logits_to_keep == 0:
             logits_to_keep = labels.shape[1] if labels is not None else input_ids.shape[1]
 
+        # We do not pass labels to the LLM and compute the loss ourselves
         decoder_outputs = self.text_decoder(
             inputs_embeds=decoder_input_embs,
             attention_mask=attention_mask,
@@ -822,7 +827,7 @@ class MELTForConditionalGeneration(MELTPreTrainedModel):
         loss = None
         if labels is not None:
             loss = self.loss_function(
-                logits=decoder_outputs.logits,
+                logits=logits,
                 labels=labels,
                 vocab_size=self.config.vocab_size,
                 ignore_index=self.config.loss_ignore_index,

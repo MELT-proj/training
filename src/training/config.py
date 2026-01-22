@@ -294,10 +294,10 @@ class TrainerConfig:
     """Number of warmup steps."""
 
     # Duration
-    num_train_epochs: int = 1
+    num_train_epochs: int | None = None
     """Number of training epochs."""
 
-    max_steps: int = 100
+    max_steps: int | None = None
     """Maximum number of training steps (-1 for unlimited)."""
 
     compute_max_steps_from_epochs: bool = False
@@ -486,131 +486,221 @@ def config_from_dict(d: dict) -> TrainingConfig:
     """Create a TrainingConfig from a dict."""
 
     def parse_data_source(src: dict) -> DataSourceConfig:
-        return DataSourceConfig(
-            type=src.get("type", "lhotse_shar"),
-            shar_path=src.get("shar_path"),
-            cuts_path=src.get("cuts_path"),
-            weight=src.get("weight", 1.0),
-            tags=src.get("tags", {"task": "asr", "lang": "en"}),
-        )
+        kwargs = {}
+        if "type" in src:
+            kwargs["type"] = src["type"]
+        if "shar_path" in src:
+            kwargs["shar_path"] = src["shar_path"]
+        if "cuts_path" in src:
+            kwargs["cuts_path"] = src["cuts_path"]
+        if "weight" in src:
+            kwargs["weight"] = src["weight"]
+        if "tags" in src:
+            kwargs["tags"] = src["tags"]
+        return DataSourceConfig(**kwargs)
 
     def parse_dataset_config(ds: dict) -> DatasetConfig:
-        input_cfg = [parse_data_source(src) for src in ds.get("input_cfg", [])]
-        return DatasetConfig(
-            input_cfg=input_cfg,
-            batch_size=ds.get("batch_size"),
-            batch_duration=ds.get("batch_duration", 120.0),
-            quadratic_duration=ds.get("quadratic_duration"),
-            use_bucketing=ds.get("use_bucketing", True),
-            num_buckets=ds.get("num_buckets", 30),
-            bucket_buffer_size=ds.get("bucket_buffer_size", 10000),
-            bucket_duration_bins=ds.get("bucket_duration_bins"),
-            shuffle=ds.get("shuffle", True),
-            shuffle_buffer_size=ds.get("shuffle_buffer_size", 10000),
-            drop_last=ds.get("drop_last", False),
-            seed=ds.get("seed", 42),
-            shard_seed=ds.get("shard_seed", "trng"),
-            min_duration=ds.get("min_duration", 0.5),
-            max_duration=ds.get("max_duration", 30.0),
-            num_workers=ds.get("num_workers", 2),
-            pin_memory=ds.get("pin_memory", True),
-            prefetch_factor=ds.get("prefetch_factor", 2),
-            sample_rate=ds.get("sample_rate", 16000),
-            text_field=ds.get("text_field", "text"),
-            lang_field=ds.get("lang_field", "lang"),
-        )
+        kwargs = {}
+        if "input_cfg" in ds:
+            kwargs["input_cfg"] = [parse_data_source(src) for src in ds["input_cfg"]]
+        if "batch_size" in ds:
+            kwargs["batch_size"] = ds["batch_size"]
+        if "batch_duration" in ds:
+            kwargs["batch_duration"] = ds["batch_duration"]
+        if "quadratic_duration" in ds:
+            kwargs["quadratic_duration"] = ds["quadratic_duration"]
+        if "use_bucketing" in ds:
+            kwargs["use_bucketing"] = ds["use_bucketing"]
+        if "num_buckets" in ds:
+            kwargs["num_buckets"] = ds["num_buckets"]
+        if "bucket_buffer_size" in ds:
+            kwargs["bucket_buffer_size"] = ds["bucket_buffer_size"]
+        if "bucket_duration_bins" in ds:
+            kwargs["bucket_duration_bins"] = ds["bucket_duration_bins"]
+        if "shuffle" in ds:
+            kwargs["shuffle"] = ds["shuffle"]
+        if "shuffle_buffer_size" in ds:
+            kwargs["shuffle_buffer_size"] = ds["shuffle_buffer_size"]
+        if "drop_last" in ds:
+            kwargs["drop_last"] = ds["drop_last"]
+        if "seed" in ds:
+            kwargs["seed"] = ds["seed"]
+        if "shard_seed" in ds:
+            kwargs["shard_seed"] = ds["shard_seed"]
+        if "min_duration" in ds:
+            kwargs["min_duration"] = ds["min_duration"]
+        if "max_duration" in ds:
+            kwargs["max_duration"] = ds["max_duration"]
+        if "num_workers" in ds:
+            kwargs["num_workers"] = ds["num_workers"]
+        if "pin_memory" in ds:
+            kwargs["pin_memory"] = ds["pin_memory"]
+        if "prefetch_factor" in ds:
+            kwargs["prefetch_factor"] = ds["prefetch_factor"]
+        if "sample_rate" in ds:
+            kwargs["sample_rate"] = ds["sample_rate"]
+        if "text_field" in ds:
+            kwargs["text_field"] = ds["text_field"]
+        if "lang_field" in ds:
+            kwargs["lang_field"] = ds["lang_field"]
+        return DatasetConfig(**kwargs)
 
     # Parse model config
     model_dict = d.get("model", {})
-    encoder = EncoderConfig(
-        name=model_dict.get("encoder", {}).get("name", "facebook/w2v-bert-2.0"),
-        freeze=model_dict.get("encoder", {}).get("freeze", True),
-    )
-    decoder = DecoderConfig(
-        name=model_dict.get("decoder", {}).get("name", "Qwen/Qwen2.5-0.5B"),
-        attn_implementation=model_dict.get("decoder", {}).get("attn_implementation", "flash_attention_2"),
-        audio_bos_token=model_dict.get("decoder", {}).get("audio_bos_token", "<|audio_bos|>"),
-        audio_eos_token=model_dict.get("decoder", {}).get("audio_eos_token", "<|audio_eos|>"),
-        audio_token=model_dict.get("decoder", {}).get("audio_token", "<|AUDIO|>"),
-        freeze=model_dict.get("decoder", {}).get("freeze", True),
-    )
-    adapter = AdapterConfig(
-        type=model_dict.get("adapter", {}).get("type", "mlp"),
-        freeze=model_dict.get("adapter", {}).get("freeze", False),
-    )
-    model = ModelConfig(
-        encoder=encoder,
-        decoder=decoder,
-        adapter=adapter,
-        ckpt=model_dict.get("ckpt"),
-    )
+    
+    encoder_kwargs = {}
+    if "encoder" in model_dict:
+        enc_dict = model_dict["encoder"]
+        if "name" in enc_dict:
+            encoder_kwargs["name"] = enc_dict["name"]
+        if "freeze" in enc_dict:
+            encoder_kwargs["freeze"] = enc_dict["freeze"]
+    encoder = EncoderConfig(**encoder_kwargs)
+    
+    decoder_kwargs = {}
+    if "decoder" in model_dict:
+        dec_dict = model_dict["decoder"]
+        if "name" in dec_dict:
+            decoder_kwargs["name"] = dec_dict["name"]
+        if "attn_implementation" in dec_dict:
+            decoder_kwargs["attn_implementation"] = dec_dict["attn_implementation"]
+        if "audio_bos_token" in dec_dict:
+            decoder_kwargs["audio_bos_token"] = dec_dict["audio_bos_token"]
+        if "audio_eos_token" in dec_dict:
+            decoder_kwargs["audio_eos_token"] = dec_dict["audio_eos_token"]
+        if "audio_token" in dec_dict:
+            decoder_kwargs["audio_token"] = dec_dict["audio_token"]
+        if "freeze" in dec_dict:
+            decoder_kwargs["freeze"] = dec_dict["freeze"]
+    decoder = DecoderConfig(**decoder_kwargs)
+    
+    adapter_kwargs = {}
+    if "adapter" in model_dict:
+        adp_dict = model_dict["adapter"]
+        if "type" in adp_dict:
+            adapter_kwargs["type"] = adp_dict["type"]
+        if "freeze" in adp_dict:
+            adapter_kwargs["freeze"] = adp_dict["freeze"]
+    adapter = AdapterConfig(**adapter_kwargs)
+    
+    model_kwargs = {
+        "encoder": encoder,
+        "decoder": decoder,
+        "adapter": adapter,
+    }
+    if "ckpt" in model_dict:
+        model_kwargs["ckpt"] = model_dict["ckpt"]
+    model = ModelConfig(**model_kwargs)
 
     # Parse data config
     data_dict = d.get("data", {})
-    train_ds = parse_dataset_config(data_dict.get("train_ds", {}))
-    validation_ds = parse_dataset_config(data_dict.get("validation_ds", {}))
-    data = DataConfig(
-        sample_rate=data_dict.get("sample_rate", 16000),
-        apply_chat_template=data_dict.get("apply_chat_template", False),
-        min_chars=data_dict.get("min_chars", 3),
-        train_ds=train_ds,
-        validation_ds=validation_ds,
-    )
+    data_kwargs = {}
+    if "sample_rate" in data_dict:
+        data_kwargs["sample_rate"] = data_dict["sample_rate"]
+    if "apply_chat_template" in data_dict:
+        data_kwargs["apply_chat_template"] = data_dict["apply_chat_template"]
+    if "min_chars" in data_dict:
+        data_kwargs["min_chars"] = data_dict["min_chars"]
+    if "train_ds" in data_dict:
+        data_kwargs["train_ds"] = parse_dataset_config(data_dict["train_ds"])
+    if "validation_ds" in data_dict:
+        data_kwargs["validation_ds"] = parse_dataset_config(data_dict["validation_ds"])
+    data = DataConfig(**data_kwargs)
 
     # Parse trainer config
     trainer_dict = d.get("trainer", {})
-    report_to = trainer_dict.get("report_to", ["none"])
-    if isinstance(report_to, str):
-        report_to = [report_to]
-    trainer = TrainerConfig(
-        output_dir=trainer_dict.get("output_dir", "${OUTPUT_DIR}/LS_asr"),
-        overwrite_output_dir=bool(trainer_dict.get("overwrite_output_dir", True)),
-        seed=int(trainer_dict.get("seed", 42)),
-        do_train=bool(trainer_dict.get("do_train", True)),
-        do_eval=bool(trainer_dict.get("do_eval", True)),
-        per_device_train_batch_size=int(trainer_dict.get("per_device_train_batch_size", 1)),
-        per_device_eval_batch_size=int(trainer_dict.get("per_device_eval_batch_size", 1)),
-        gradient_accumulation_steps=int(trainer_dict.get("gradient_accumulation_steps", 4)),
-        adam_beta1=float(trainer_dict.get("adam_beta1", 0.9)),
-        adam_beta2=float(trainer_dict.get("adam_beta2", 0.95)),
-        learning_rate=float(trainer_dict.get("learning_rate", 2e-5)),
-        lr_scheduler_type=str(trainer_dict.get("lr_scheduler_type", "cosine")),
-        warmup_steps=int(trainer_dict.get("warmup_steps", 2000)),
-        num_train_epochs=int(trainer_dict.get("num_train_epochs", 1)),
-        max_steps=int(trainer_dict.get("max_steps", 100)),
-        logging_strategy=str(trainer_dict.get("logging_strategy", "steps")),
-        logging_steps=int(trainer_dict.get("logging_steps", 25)),
-        report_to=report_to,
-        eval_strategy=str(trainer_dict.get("eval_strategy", "no")),
-        eval_steps=int(trainer_dict.get("eval_steps", 3000)),
-        save_strategy=str(trainer_dict.get("save_strategy", "steps")),
-        save_steps=int(trainer_dict.get("save_steps", 1000)),
-        save_total_limit=int(trainer_dict.get("save_total_limit", 5)),
-        bf16=bool(trainer_dict.get("bf16", True)),
-        group_by_length=bool(trainer_dict.get("group_by_length", False)),
-        dataloader_num_workers=int(trainer_dict.get("dataloader_num_workers", 0)),
-        remove_unused_columns=bool(trainer_dict.get("remove_unused_columns", False)),
-        ddp_find_unused_parameters=bool(trainer_dict.get("ddp_find_unused_parameters", False)),
-        resume_from_checkpoint=trainer_dict.get("resume_from_checkpoint"),
-    )
+    trainer_kwargs = {}
+    if "output_dir" in trainer_dict:
+        trainer_kwargs["output_dir"] = trainer_dict["output_dir"]
+    if "overwrite_output_dir" in trainer_dict:
+        trainer_kwargs["overwrite_output_dir"] = bool(trainer_dict["overwrite_output_dir"])
+    if "seed" in trainer_dict:
+        trainer_kwargs["seed"] = int(trainer_dict["seed"])
+    if "do_train" in trainer_dict:
+        trainer_kwargs["do_train"] = bool(trainer_dict["do_train"])
+    if "do_eval" in trainer_dict:
+        trainer_kwargs["do_eval"] = bool(trainer_dict["do_eval"])
+    if "per_device_train_batch_size" in trainer_dict:
+        trainer_kwargs["per_device_train_batch_size"] = int(trainer_dict["per_device_train_batch_size"])
+    if "per_device_eval_batch_size" in trainer_dict:
+        trainer_kwargs["per_device_eval_batch_size"] = int(trainer_dict["per_device_eval_batch_size"])
+    if "gradient_accumulation_steps" in trainer_dict:
+        trainer_kwargs["gradient_accumulation_steps"] = int(trainer_dict["gradient_accumulation_steps"])
+    if "adam_beta1" in trainer_dict:
+        trainer_kwargs["adam_beta1"] = float(trainer_dict["adam_beta1"])
+    if "adam_beta2" in trainer_dict:
+        trainer_kwargs["adam_beta2"] = float(trainer_dict["adam_beta2"])
+    if "learning_rate" in trainer_dict:
+        trainer_kwargs["learning_rate"] = float(trainer_dict["learning_rate"])
+    if "lr_scheduler_type" in trainer_dict:
+        trainer_kwargs["lr_scheduler_type"] = str(trainer_dict["lr_scheduler_type"])
+    if "warmup_steps" in trainer_dict:
+        trainer_kwargs["warmup_steps"] = int(trainer_dict["warmup_steps"])
+    if "num_train_epochs" in trainer_dict:
+        if trainer_dict["num_train_epochs"] is not None:
+            trainer_kwargs["num_train_epochs"] = int(trainer_dict["num_train_epochs"])
+    if "max_steps" in trainer_dict:
+        if trainer_dict["max_steps"] is not None:
+            trainer_kwargs["max_steps"] = int(trainer_dict["max_steps"])
+    if "compute_max_steps_from_epochs" in trainer_dict:
+        trainer_kwargs["compute_max_steps_from_epochs"] = bool(trainer_dict["compute_max_steps_from_epochs"])
+    if "logging_strategy" in trainer_dict:
+        trainer_kwargs["logging_strategy"] = str(trainer_dict["logging_strategy"])
+    if "logging_steps" in trainer_dict:
+        trainer_kwargs["logging_steps"] = int(trainer_dict["logging_steps"])
+    if "report_to" in trainer_dict:
+        report_to = trainer_dict["report_to"]
+        if isinstance(report_to, str):
+            report_to = [report_to]
+        trainer_kwargs["report_to"] = report_to
+    if "eval_strategy" in trainer_dict:
+        trainer_kwargs["eval_strategy"] = str(trainer_dict["eval_strategy"])
+    if "eval_steps" in trainer_dict:
+        trainer_kwargs["eval_steps"] = int(trainer_dict["eval_steps"])
+    if "save_strategy" in trainer_dict:
+        trainer_kwargs["save_strategy"] = str(trainer_dict["save_strategy"])
+    if "save_steps" in trainer_dict:
+        trainer_kwargs["save_steps"] = int(trainer_dict["save_steps"])
+    if "save_total_limit" in trainer_dict:
+        trainer_kwargs["save_total_limit"] = int(trainer_dict["save_total_limit"])
+    if "bf16" in trainer_dict:
+        trainer_kwargs["bf16"] = bool(trainer_dict["bf16"])
+    if "group_by_length" in trainer_dict:
+        trainer_kwargs["group_by_length"] = bool(trainer_dict["group_by_length"])
+    if "dataloader_num_workers" in trainer_dict:
+        trainer_kwargs["dataloader_num_workers"] = int(trainer_dict["dataloader_num_workers"])
+    if "remove_unused_columns" in trainer_dict:
+        trainer_kwargs["remove_unused_columns"] = bool(trainer_dict["remove_unused_columns"])
+    if "ddp_find_unused_parameters" in trainer_dict:
+        trainer_kwargs["ddp_find_unused_parameters"] = bool(trainer_dict["ddp_find_unused_parameters"])
+    if "resume_from_checkpoint" in trainer_dict:
+        trainer_kwargs["resume_from_checkpoint"] = trainer_dict["resume_from_checkpoint"]
+    trainer = TrainerConfig(**trainer_kwargs)
 
     # Parse optimization config
     opt_dict = d.get("optimization", {})
-    optimization = OptimizationConfig(
-        encoder_lr=float(opt_dict.get("encoder_lr", 6e-6)),
-        decoder_lr=float(opt_dict.get("decoder_lr", 2e-5)),
-        adapter_lr=float(opt_dict.get("adapter_lr", 2e-4)),
-        min_lr_scale=float(opt_dict.get("min_lr_scale", 0.1)),
-    )
+    opt_kwargs = {}
+    if "encoder_lr" in opt_dict:
+        opt_kwargs["encoder_lr"] = float(opt_dict["encoder_lr"])
+    if "decoder_lr" in opt_dict:
+        opt_kwargs["decoder_lr"] = float(opt_dict["decoder_lr"])
+    if "adapter_lr" in opt_dict:
+        opt_kwargs["adapter_lr"] = float(opt_dict["adapter_lr"])
+    if "min_lr_scale" in opt_dict:
+        opt_kwargs["min_lr_scale"] = float(opt_dict["min_lr_scale"])
+    optimization = OptimizationConfig(**opt_kwargs)
 
-    return TrainingConfig(
-        model=model,
-        data=data,
-        trainer=trainer,
-        optimization=optimization,
-        dry_run=d.get("dry_run", False),
-        config_file=d.get("config_file"),
-    )
+    config_kwargs = {
+        "model": model,
+        "data": data,
+        "trainer": trainer,
+        "optimization": optimization,
+    }
+    if "dry_run" in d:
+        config_kwargs["dry_run"] = d["dry_run"]
+    if "config_file" in d:
+        config_kwargs["config_file"] = d["config_file"]
+    return TrainingConfig(**config_kwargs)
 
 
 def load_config_from_yaml(config_file: str) -> TrainingConfig:

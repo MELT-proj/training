@@ -25,32 +25,21 @@ python infra/setup/lhotse/convert_webdataset.py \
 	--resample --orig-sr 48000 --target-sr 16000
 ```
 
-- Per-dataset commands: run the specific converter or runner for the dataset you need (the earlier `run_convert_webdataset_all_langs.sh` is not part of this repo anymore).
-
 Dataset prepare command examples (run inside the repo root):
 
-- LibriSpeech (batched):
+### LibriSpeech (batched):
 
 ```bash
 python infra/setup/lhotse/librispeech.py --batched --batch-size 5000 --num-workers 8 --hf-num-proc 4 --log-level INFO
 ```
 
-- People's Speech (batched, specific config):
+### People's Speech (batched, specific config):
 
 ```bash
 python infra/setup/lhotse/peoples_speech.py --configs clean --splits train validation test --batched --batch-size 5000 --num-workers 8 --hf-num-proc 4
 ```
 
-- Multilingual LibriSpeech (MLS):
-
-```bash
-# Process these languages by default: en de it fr es pt
-python infra/setup/lhotse/multilingual_librispeech.py --configs german french italian spanish portuguese german --splits train dev test --batched --batch-size 5000 --num-workers 8 --io-num-workers 8
-```
-
-*Note:* MLS uses language names (e.g., `german`, `italian`) rather than short ISO codes.
-
-- VoxPopuli (per-language configs; optional accented tests):
+### VoxPopuli (per-language configs; optional accented tests):
 
 ```bash
 # Process these languages by default: en de it fr es pt
@@ -59,7 +48,7 @@ python infra/setup/lhotse/voxpopuli.py --configs en de it fr es --include-specia
 
 *Note:* VoxPopuli uses short ISO language codes (e.g., `de`, `it`) for configs.
 
-- FLEURS (select a few configs or use `--all-configs` very carefully):
+### FLEURS (select a few configs or use `--all-configs` very carefully):
 
 ```bash
 # Process these languages by default: en de it fr es pt
@@ -68,7 +57,9 @@ python infra/setup/lhotse/voxpopuli.py --configs en de it fr es --include-specia
 python infra/setup/lhotse/fleurs.py --configs en_us de_de it_it fr_fr es_419 pt_br --splits train validation test --batched --batch-size 5000 --num-workers 8
 ```
 
-- CommonVoice22 (Sidon) — download snapshot from HF hub first, then run the per-language converter or the `prepare_CV22.sh` runner:
+## CommonVoice22 (Sidon)
+
+Download snapshot from HF hub first, then run the per-language converter or the `prepare_CV22.sh` runner:
 
 ```bash
 # Download snapshot for selected languages into your HF cache (run once):
@@ -79,10 +70,20 @@ HF_HUB_ENABLE_HF_TRANSFER=1 HF_HOME=/mnt/scratch-nyx/giuseppe/melt/hf_home \
 infra/setup/lhotse/prepare_CV22.sh
 ```
 
-Notes
-- These examples assume the converter scripts live under `infra/setup/lhotse/` and that the necessary HF snapshots or local shards are present.
-- When converting large datasets prefer `--batched` + `--io-num-workers` to overlap HF IO and local decoding.
+### Multilingual LibriSpeech (MLS):
+
+Download snapshot from HF hub first, then run the per-language converter or the `prepare_CV22.sh` runner:
+
+```bash
+HF_HUB_ENABLE_HF_TRANSFER=1 HF_HOME=/mnt/scratch-nyx/giuseppe/melt/hf_home \
+  hf download sarulab-speech/mls_sidon --repo-type dataset
+
+infra/setup/lhotse/prepare_MLS.sh
+# Old script
+# python infra/setup/lhotse/multilingual_librispeech.py --configs german french italian spanish portuguese german --splits train dev test --batched --batch-size 5000 --num-workers 8 --io-num-workers 8
+```
+*Note:* MLS uses language names (e.g., `german`, `italian`) rather than short ISO codes.
 
 Notes
-- These examples assume the converter script and runners live under `infra/setup/lhotse/`.
+- These examples assume the converter scripts live under `infra/setup/lhotse/` and that the necessary HF snapshots or local shards are present.
 - When converting large datasets prefer `--batched` + `--io-num-workers` to overlap HF IO and local decoding.

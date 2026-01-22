@@ -133,13 +133,13 @@ trainer:
   warmup_steps: 2000
 
   # Duration
-  num_train_epochs: 1
+  # num_train_epochs: 1
   max_steps: 20
 
   # Logging
   logging_strategy: steps
   logging_steps: 5
-  report_to: none
+  report_to: wandb
 
   # Evaluation
   eval_strategy: "no" # steps

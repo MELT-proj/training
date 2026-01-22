@@ -241,7 +241,7 @@ class MELTProcessor(ProcessorMixin):
         audio: AudioInput | None = None,
         images: ImageInput | None = None,
         videos: VideoInput | None = None,
-        return_labels: bool = False,
+        return_dict: bool = False,
         **kwargs: Unpack[MELTProcessorKwargs],
     ) -> BatchFeature:
         """
@@ -313,6 +313,7 @@ class MELTProcessor(ProcessorMixin):
         #     video_grid_thw = None  # iter([])
 
         # Replace multimodal special tokens with appropriate number of placeholders
+        text_to_tokenize = text
         if audio is not None or images is not None or videos is not None:
             # Flatten audio_lengths for token replacement
             if audio_lengths_output is not None:
@@ -333,14 +334,17 @@ class MELTProcessor(ProcessorMixin):
             else:
                 audio_lengths_flat = iter([])
 
-            text = self.replace_multimodal_special_tokens(
-                text,
+            # Here is where we expand each audio_token into a sequence 
+            # depending on audio_lengths_flat.
+            expanded_text = self.replace_multimodal_special_tokens(
+                text_to_tokenize,
                 audio_lengths=audio_lengths_flat,
-                # image_grid_thw=image_grid_thw,
+                # image_grid_thw=image_grid_thw,  # TODO: to support in future
                 # video_grid_thw=video_grid_thw,
             )
+            text_to_tokenize = expanded_text
 
-        texts_inputs = self.tokenizer(text, **output_kwargs["text_kwargs"])
+        texts_inputs = self.tokenizer(text_to_tokenize, **output_kwargs["text_kwargs"])
 
         output_data = {**texts_inputs, **audio_inputs}
         if audio_lengths_output is not None:
@@ -355,15 +359,7 @@ class MELTProcessor(ProcessorMixin):
                     lengths + [-1] * (max_len - len(lengths)) for lengths in output_data["audio_lengths"]
                 ]
 
-        if return_labels:
-            output_data["labels"] = self.tokenizer.pad(
-                texts_inputs,
-                padding_side="left",
-                padding="longest",
-                return_tensors="pt",
-            )["input_ids"]
-
-        return BatchFeature(
+        return output_data if return_dict else BatchFeature(
             data=output_data,  # , **images_inputs, **videos_inputs},
             tensor_type=kwargs.get("return_tensors"),
         )
