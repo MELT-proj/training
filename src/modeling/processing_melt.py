@@ -313,6 +313,7 @@ class MELTProcessor(ProcessorMixin):
         #     video_grid_thw = None  # iter([])
 
         # Replace multimodal special tokens with appropriate number of placeholders
+        text_to_tokenize = text
         if audio is not None or images is not None or videos is not None:
             # Flatten audio_lengths for token replacement
             if audio_lengths_output is not None:
@@ -336,13 +337,14 @@ class MELTProcessor(ProcessorMixin):
             # Here is where we expand each audio_token into a sequence 
             # depending on audio_lengths_flat.
             expanded_text = self.replace_multimodal_special_tokens(
-                text,
+                text_to_tokenize,
                 audio_lengths=audio_lengths_flat,
-                # image_grid_thw=image_grid_thw,
+                # image_grid_thw=image_grid_thw,  # TODO: to support in future
                 # video_grid_thw=video_grid_thw,
             )
+            text_to_tokenize = expanded_text
 
-        texts_inputs = self.tokenizer(expanded_text, **output_kwargs["text_kwargs"])
+        texts_inputs = self.tokenizer(text_to_tokenize, **output_kwargs["text_kwargs"])
 
         output_data = {**texts_inputs, **audio_inputs}
         if audio_lengths_output is not None:
