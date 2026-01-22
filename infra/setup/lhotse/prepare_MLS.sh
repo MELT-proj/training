@@ -15,13 +15,13 @@ set -euo pipefail
 # If you want split-separated outputs, use run_convert_webdataset_all_langs.sh instead.
 
 SIDON_SNAPSHOT_DIR_DEFAULT="/mnt/scratch-nyx/giuseppe/melt/hf_home/hub/datasets--sarulab-speech--mls_sidon/snapshots/a9abb3a85d5ca67f92ed29f65003b420169e2732"
-OUTPUT_BASE_DEFAULT="/mnt/scratch-nyx/giuseppe/melt/shar/mls_sidon"
+OUTPUT_BASE_DEFAULT="/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/mls_sidon"
 
 MLS_SIDON_SNAPSHOT_DIR="${MLS_SIDON_SNAPSHOT_DIR:-$SIDON_SNAPSHOT_DIR_DEFAULT}"
 OUTPUT_BASE="${OUTPUT_BASE:-$OUTPUT_BASE_DEFAULT}"
 
 # Languages to convert (edit as needed)
-LANGUAGES=(dutch english french german italian polish portuguese spanish)
+LANGUAGES=(dutch french german italian polish portuguese spanish english)
 
 # Conversion knobs (can override via env vars)
 LOG_LEVEL="${LOG_LEVEL:-INFO}"
@@ -61,7 +61,7 @@ for lang in "${LANGUAGES[@]}"; do
     continue
   fi
 
-  for split in train validation test; do
+  for split in train dev test; do
     out_dir="$OUTPUT_BASE/$lang/$split"
 
     cmd=(
@@ -74,6 +74,8 @@ for lang in "${LANGUAGES[@]}"; do
       --audio-format "$AUDIO_FORMAT"
       --language "$lang"
       --log-level "$LOG_LEVEL"
+      --num-workers 4
+      --max-cuts-in-memory 16000
     )
 
     if [[ "$FORCE" == "1" ]]; then
