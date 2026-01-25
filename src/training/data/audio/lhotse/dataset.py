@@ -94,38 +94,39 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         failed_indices = []
 
         for idx, cut in enumerate(cuts):
-            try:
-                # Load audio
-                audio = self._load_audio(cut)
-                if audio is None:
-                    failed_indices.append(idx)
-                    continue
-
-                # Get text transcript
-                text = self._get_text(cut)
-                if text is None or len(text.strip()) < self.min_chars:
-                    failed_indices.append(idx)
-                    continue
-
-                # Get task and language tags
-                task, lang = self._get_tags(cut)
-
-                audios.append(audio)
-                texts.append(text)
-                tasks.append(task)
-                langs.append(lang)
-
-            except Exception as e:
-                logger.warning(f"Failed to process cut {cut.id}: {e}")
+            # try:
+            # Load audio
+            audio = self._load_audio(cut)
+            if audio is None:
                 failed_indices.append(idx)
                 continue
 
-        if len(audios) == 0:
-            logger.warning("All cuts in batch failed to load")
-            return None
+            # Get text transcript
+            text = self._get_text(cut)
+            assert text != None, f"No text found for cut {cut.id}. Cut: {cut}"
+            # if text is None or len(text.strip()) < self.min_chars:
+            #     failed_indices.append(idx)
+            #     continue
 
-        if failed_indices:
-            logger.debug(f"Skipped {len(failed_indices)} cuts due to loading errors")
+            # Get task and language tags
+            task, lang = self._get_tags(cut)
+
+            audios.append(audio)
+            texts.append(text)
+            tasks.append(task)
+            langs.append(lang)
+
+            # except Exception as e:
+            #     logger.warning(f"Failed to process cut {cut.id}: {e}")
+            #     failed_indices.append(idx)
+            #     continue
+
+        # if len(audios) == 0:
+        #     logger.warning("All cuts in batch failed to load")
+        #     return None
+
+        # if failed_indices:
+        #     logger.debug(f"Skipped {len(failed_indices)} cuts due to loading errors")
 
         # Format texts with audio token for the processor
         # This adds <|AUDIO|> token to indicate where audio embeddings go
@@ -222,8 +223,11 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
 
         # Try custom field
         if text is None and hasattr(cut, "custom") and cut.custom:
-            train_ds = self.config.get("train_ds") or {}
-            text_field = train_ds.get("text_field", "text") if hasattr(train_ds, "get") else "text"
+            # Get the appropriate dataset config based on is_train
+            ds_config = _get_config_value(
+                self.config, "train_ds" if self.is_train else "validation_ds", None
+            )
+            text_field = _get_config_value(ds_config, "text_field", "text") if ds_config else "text"
             if text_field in cut.custom:
                 text = cut.custom[text_field]
 
