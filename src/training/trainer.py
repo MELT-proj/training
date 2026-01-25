@@ -187,16 +187,15 @@ class MELTTrainer(Trainer):
             raise ValueError("processor must be provided for Lhotse data loading")
 
         # Check if validation data is configured
-        if not self.data_config.validation_ds.input_cfg:
-            logger.warning("No validation data configured, skipping eval dataloader")
-            return None
+        if not self.config.data.validation_ds.input_cfg:
+            raise ValueError("No validation data configured, skipping eval dataloader")
 
         logger.info("Creating Lhotse evaluation dataloader")
 
         # Create dataset
         dataset = SpeechToTextDataset(
             processor=self.processor,
-            config=self.data_config,
+            config=self.config.data,
             is_train=False,
         )
 
@@ -204,11 +203,13 @@ class MELTTrainer(Trainer):
         dataset = FallbackDataset(dataset)
 
         # Create dataloader from config
+        split_batches = bool(getattr(getattr(self.args, "accelerator_config", None), "split_batches", False))
         dataloader = get_eval_dataloader_from_config(
-            data_config=self.config,
+            data_config=self.config.data,
             dataset=dataset,
             global_rank=self._global_rank,
             world_size=self._world_size,
+            split_batches=split_batches,
         )
 
         return dataloader
