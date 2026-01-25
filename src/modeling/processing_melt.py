@@ -269,7 +269,7 @@ class MELTProcessor(ProcessorMixin):
             - **input_ids** -- List of token ids to be fed to the model.
             - **attention_mask** -- List of indices specifying which tokens should be attended to by the model.
             - **input_features** -- Audio features to be fed to the model (if audio is provided).
-            - **feature_attention_mask** -- Attention mask for audio features (if audio is provided).
+            - **features_attention_mask** -- Attention mask for audio features (if audio is provided).
         """
         if text is None:
             raise ValueError("You need to specify a `text` input to process.")
@@ -376,7 +376,7 @@ class MELTProcessor(ProcessorMixin):
 
         Returns:
             Tuple of (audio_inputs dict, audio_lengths).
-            - audio_inputs contains 'input_features' and 'feature_attention_mask' with shape (batch_size, *).
+            - audio_inputs contains 'input_features' and 'features_attention_mask' with shape (batch_size, *).
             - audio_lengths is a list of lists for batched input, or a single int/list for single input.
         """
 
@@ -448,7 +448,7 @@ class MELTProcessor(ProcessorMixin):
 
             audio_inputs = {
                 "input_features": torch.cat(padded_features, dim=0),
-                "feature_attention_mask": torch.cat(padded_masks, dim=0) if padded_masks else None,
+                "features_attention_mask": torch.cat(padded_masks, dim=0) if padded_masks else None,
             }
         else:
             # Single item: here audio is a single array or a list of arrays
@@ -456,7 +456,7 @@ class MELTProcessor(ProcessorMixin):
 
             audio_inputs = {
                 "input_features": input_features,
-                "feature_attention_mask": attention_mask,
+                "features_attention_mask": attention_mask,
             }
 
         return audio_inputs, audio_lengths_output
@@ -568,7 +568,7 @@ class MELTProcessor(ProcessorMixin):
     def model_input_names(self):
         tokenizer_input_names = self.tokenizer.model_input_names
         feature_extractor_input_names = self.feature_extractor.model_input_names
-        names = list(dict.fromkeys(tokenizer_input_names + feature_extractor_input_names + ["feature_attention_mask"]))
+        names = list(dict.fromkeys(tokenizer_input_names + feature_extractor_input_names + ["features_attention_mask"]))
 
         if getattr(self, "image_processor", None) is not None:
             names.extend(self.image_processor.model_input_names)

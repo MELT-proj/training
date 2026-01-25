@@ -210,7 +210,7 @@ class TestMELTProcessorModelInputNames:
         input_names = processor.model_input_names
         assert "input_ids" in input_names
         assert "attention_mask" in input_names
-        assert "feature_attention_mask" in input_names
+        assert "features_attention_mask" in input_names
 
 
 class TestMELTProcessorChatTemplate:

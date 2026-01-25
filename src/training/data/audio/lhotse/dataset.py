@@ -76,7 +76,7 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         Returns:
             Dictionary with model inputs:
                 - input_features: Audio features [B, T, F]
-                - feature_attention_mask: Audio attention mask [B, T]
+                - features_attention_mask: Audio attention mask [B, T]
                 - input_ids: Text token IDs [B, S]
                 - attention_mask: Text attention mask [B, S]
                 - labels: Target labels for training [B, S]
@@ -167,7 +167,6 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
 
             # TODO: this should not be needed
             # inputs = inputs.convert_to_tensors("pt")
-
             return inputs
 
         except Exception as e:

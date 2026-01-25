@@ -169,7 +169,8 @@ def main(cfg: TrainingConfig) -> None:
         args=targs,
         config=cfg,
         processor=processor,
-        # No train_dataset/eval_dataset - handled by Lhotse
+        eval_dataset="",  # Dummy eval dataset
+        # No train_dataset/eval_dataset - they are handled by Lhotse
     )
 
     # Determine checkpoint to resume from
