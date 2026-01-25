@@ -19,7 +19,7 @@ ACCELERATE_CONFIG="config/accelerate/zero3.yaml"
 
 
 # Submit batch job with Artemis-specific SLURM settings
-sbatch --time=00:10:00 --nodes=1 --gres=gpu:1 \
-    -A epor48 --qos=acc_debug -c 20 \
+sbatch --time=00:30:00 --nodes=1 --gres=gpu:2 \
+    -A epor48 --qos=acc_debug -c 40 \
     ./bash/run_train_singularity.sbatch $ACCELERATE_CONFIG \
-    --config-file config/train/LS_asr.yaml
+    --config-file config/train/asr.yaml

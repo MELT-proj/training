@@ -32,11 +32,12 @@ model:
 data:
   sample_rate: 16000
   apply_chat_template: false
-  min_chars: 3
 
   train_ds:
     # Data sources - list of datasets to load
     input_cfg:
+
+      # Librispeech
       - type: lhotse_shar
         shar_path: ${LOCAL_DATASETS_DIR}/librispeech/clean/train.100
         tags:
@@ -47,6 +48,58 @@ data:
         tags:
           task: asr
           lang: en
+
+      # MLS Sidon
+      - type: lhotse_shar
+        shar_path: ${LOCAL_DATASETS_DIR}/mls_sidon/english/train
+        tags:
+          task: asr
+          lang: en
+      - type: lhotse_shar
+        shar_path: ${LOCAL_DATASETS_DIR}/mls_sidon/german/train
+        tags:
+          task: asr
+          lang: de
+      - type: lhotse_shar
+        shar_path: ${LOCAL_DATASETS_DIR}/mls_sidon/italian/train
+        tags:
+          task: asr
+          lang: it
+
+      # FLEURS
+      - type: lhotse_shar
+        shar_path: ${LOCAL_DATASETS_DIR}/fleurs/de_de/train
+        tags:
+          task: asr
+          lang: de
+      - type: lhotse_shar
+        shar_path: ${LOCAL_DATASETS_DIR}/fleurs/it_it/train
+        tags:
+          task: asr
+          lang: it
+      - type: lhotse_shar
+        shar_path: ${LOCAL_DATASETS_DIR}/fleurs/en_us/train
+        tags:
+          task: asr
+          lang: en
+
+      # CV 22 Sidon
+      - type: lhotse_shar
+        shar_path: ${LOCAL_DATASETS_DIR}/cv22_sidon/de/train
+        tags:
+          task: asr
+          lang: de
+      - type: lhotse_shar
+        shar_path: ${LOCAL_DATASETS_DIR}/cv22_sidon/en/train
+        tags:
+          task: asr
+          lang: en
+      - type: lhotse_shar
+        shar_path: ${LOCAL_DATASETS_DIR}/cv22_sidon/it/train
+        tags:
+          task: asr
+          lang: it
+
 
     # Batch settings
     batch_size: null  # Use batch_duration instead for dynamic batching
@@ -85,17 +138,22 @@ data:
         tags:
           task: asr
           lang: en
+      - type: lhotse_shar
+        shar_path: ${LOCAL_DATASETS_DIR}/cv22_sidon/en/validation
+        tags:
+          task: asr
+          lang: en
 
-    batch_size: 8
-    batch_duration: null
-    use_bucketing: false
+    batch_size: null
+    batch_duration: 120.0
+    use_bucketing: true
     shuffle: false
     drop_last: false
     seed: 42
     shard_seed: trng
     min_duration: 0.5
     max_duration: 30.0
-    num_workers: 4
+    num_workers: 2
     pin_memory: true
     prefetch_factor: 2
     sample_rate: 16000
@@ -142,8 +200,8 @@ trainer:
   report_to: wandb
 
   # Evaluation
-  eval_strategy: "no" # steps
-  eval_steps: 3000
+  eval_strategy: steps # "no" # steps
+  eval_steps: 10
 
   # Checkpointing
   save_strategy: steps
