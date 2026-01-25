@@ -1,9 +1,9 @@
-"""Batch processing utilities for faster HuggingFace to Lhotse Shar conversion.
+"""Batch processing utilities for faster dataset to Lhotse Shar conversion.
 
 This module provides multiprocessing-based parallel conversion of HuggingFace
-datasets to Lhotse Shar format. The key feature is memory-efficient processing:
-each worker loads its own shard of the dataset and processes it incrementally,
-avoiding materializing the entire dataset in memory.
+datasets and WebDataset archives to Lhotse Shar format. The key feature is
+memory-efficient processing: each worker loads its own shard of the dataset
+and processes it incrementally, avoiding materializing the entire dataset in memory.
 
 Key Features:
 -------------
@@ -13,6 +13,7 @@ Key Features:
 4. Temporary directories: Workers write to chunk_XXXX subdirectories
 5. Merge phase: After all workers complete, shards are renumbered and moved
 6. Shard-size aware: Number of workers adapts to avoid undersized shards
+7. Resampling support: Optional audio resampling during conversion
 
 Architecture:
 -------------
@@ -35,6 +36,17 @@ Usage:
         audio_format="flac",
         shard_size=4000,
         language="en",
+    )
+
+    # WebDataset conversion with resampling:
+    from batch_utils import convert_webdataset_to_shar_batched
+
+    count, errors = convert_webdataset_to_shar_batched(
+        shards_parent_dir=Path("/path/to/webdataset"),
+        output_dir=Path("/path/to/output"),
+        resample=True,
+        orig_sr=48000,
+        target_sr=16000,
     )
 """
 
@@ -69,6 +81,16 @@ class CutData:
     audio_bytes: bytes
     text: str
     language: str
+    custom: dict | None = None  # Optional custom metadata
+
+
+@dataclass
+class ResampleConfig:
+    """Configuration for audio resampling."""
+
+    enabled: bool = False
+    orig_sr: int = 48000  # Expected original sample rate
+    target_sr: int = 16000  # Target sample rate
 
 
 @dataclass
@@ -92,11 +114,57 @@ class ChunkTask:
 # -----------------------------------------------------------------------------
 
 
-def _create_cut_from_data(data: CutData) -> MonoCut:
+def _maybe_resample_recording(
+    recording: Recording,
+    resample_config: ResampleConfig,
+) -> tuple[Recording, bool]:
+    """Optionally resample a Lhotse Recording.
+
+    Args:
+        recording: The recording to potentially resample.
+        resample_config: Resampling configuration.
+
+    Returns:
+        Tuple of (recording, did_resample).
+    """
+    if not resample_config.enabled:
+        return recording, False
+
+    target_sr = resample_config.target_sr
+    if target_sr <= 0:
+        raise ValueError("target_sr must be > 0")
+
+    sr = getattr(recording, "sampling_rate", None)
+    if isinstance(sr, int) and sr == target_sr:
+        return recording, False
+
+    if not hasattr(recording, "resample"):
+        raise RuntimeError(
+            "This Lhotse version does not expose Recording.resample(...). "
+            "Either upgrade lhotse or disable resampling."
+        )
+
+    # Be defensive about the signature across Lhotse versions.
+    try:
+        resampled = recording.resample(target_sr)
+    except TypeError:
+        try:
+            resampled = recording.resample(sampling_rate=target_sr)
+        except TypeError:
+            resampled = recording.resample(new_sampling_rate=target_sr)
+
+    return resampled, True
+
+
+def _create_cut_from_data(
+    data: CutData,
+    resample_config: ResampleConfig | None = None,
+) -> MonoCut:
     """Create a MonoCut from CutData.
 
     Args:
         data: CutData containing all info needed to create a cut.
+        resample_config: Optional resampling configuration.
 
     Returns:
         MonoCut object.
@@ -105,6 +173,11 @@ def _create_cut_from_data(data: CutData) -> MonoCut:
         Exception if cut creation fails.
     """
     recording = Recording.from_bytes(data=data.audio_bytes, recording_id=data.cut_id)
+
+    # Apply resampling if configured
+    did_resample = False
+    if resample_config is not None:
+        recording, did_resample = _maybe_resample_recording(recording, resample_config)
 
     supervision = SupervisionSegment(
         id=data.cut_id,
@@ -115,6 +188,12 @@ def _create_cut_from_data(data: CutData) -> MonoCut:
         language=data.language,
     )
 
+    # Build custom metadata
+    custom = dict(data.custom) if data.custom else {}
+    if did_resample:
+        custom["resampled_from_hz"] = resample_config.orig_sr
+        custom["resampled_to_hz"] = resample_config.target_sr
+
     cut = MonoCut(
         id=data.cut_id,
         start=0.0,
@@ -122,6 +201,7 @@ def _create_cut_from_data(data: CutData) -> MonoCut:
         channel=0,
         recording=recording,
         supervisions=[supervision],
+        custom=custom if custom else None,
     )
 
     return cut
@@ -557,3 +637,302 @@ def convert_subset_to_shar_batched(
         text_field=text_field,
         audio_field=audio_field,
     )
+
+
+# -----------------------------------------------------------------------------
+# WebDataset support
+# -----------------------------------------------------------------------------
+
+
+@dataclass
+class WebDatasetChunkTask:
+    """A chunk task for WebDataset processing."""
+
+    chunk_id: int
+    shards: list[str]  # List of shard file paths for this worker
+    language: str
+    resample_config: ResampleConfig
+
+
+def _find_shards(parent_dir: Path, pattern: str, recursive: bool) -> list[str]:
+    """Find shard files matching the pattern."""
+    if recursive:
+        paths = sorted(parent_dir.rglob(pattern))
+    else:
+        paths = sorted(parent_dir.glob(pattern))
+    return [str(p) for p in paths if p.is_file()]
+
+
+def _iter_merged_webdataset_samples(
+    shards: list[str],
+    max_pending: int = 20000,
+):
+    """Yield merged samples of (cut_id, audio_bytes, metadata_dict) from WebDataset.
+
+    WebDataset samples are stored as paired files:
+        123456.flac           # audio bytes (mono)
+        123456.metadata.json  # JSON metadata; transcript in "transcript" field
+
+    This function merges audio and metadata samples by filename stem.
+    """
+    try:
+        import webdataset as wds
+    except ModuleNotFoundError as e:
+        raise ModuleNotFoundError(
+            "Missing dependency 'webdataset'. Install it (e.g. `uv pip install webdataset`)."
+        ) from e
+
+    import json
+
+    ds = wds.WebDataset(shards, shardshuffle=False)
+    pending: dict[str, dict[str, Any]] = {}
+
+    def _touch_entry(key: str) -> dict[str, Any]:
+        entry = pending.get(key)
+        if entry is None:
+            entry = {}
+            pending[key] = entry
+        return entry
+
+    for sample in ds:
+        if not isinstance(sample, dict):
+            continue
+
+        key = sample.get("__key__")
+        if not isinstance(key, str) or not key:
+            continue
+
+        # Audio sample: key like "123456" and field "flac"
+        if "flac" in sample and isinstance(sample["flac"], (bytes, bytearray)):
+            entry = _touch_entry(key)
+            entry["audio_bytes"] = bytes(sample["flac"])
+
+            metadata = entry.get("metadata")
+            audio_bytes = entry.get("audio_bytes")
+            if metadata is not None and audio_bytes is not None:
+                pending.pop(key, None)
+                yield key, audio_bytes, metadata
+
+        # Metadata sample: key like "123456.metadata" and field "json"
+        json_bytes = None
+        if "json" in sample and isinstance(sample["json"], (bytes, bytearray)):
+            json_bytes = bytes(sample["json"])
+        else:
+            for k, v in sample.items():
+                if isinstance(k, str) and k.endswith("json") and isinstance(v, (bytes, bytearray)):
+                    json_bytes = bytes(v)
+                    break
+
+        if json_bytes is not None:
+            base_key = key
+            if base_key.endswith(".metadata"):
+                base_key = base_key[: -len(".metadata")]
+
+            try:
+                metadata = json.loads(json_bytes.decode("utf-8"))
+            except Exception:
+                metadata = {}
+
+            entry = _touch_entry(base_key)
+            entry["metadata"] = metadata
+
+            audio_bytes = entry.get("audio_bytes")
+            if audio_bytes is not None:
+                pending.pop(base_key, None)
+                yield base_key, audio_bytes, metadata
+
+        if len(pending) > max_pending:
+            dropped_key, _ = pending.popitem()
+            print(f"[WARNING] Pending cache overflow; dropping incomplete sample: {dropped_key}")
+
+    if pending:
+        print(f"[WARNING] Finished with {len(pending)} incomplete samples (missing audio or metadata)")
+
+
+def _process_webdataset_chunk(
+    chunk: WebDatasetChunkTask,
+    output_dir: str,
+    audio_format: str,
+    shard_size: int,
+    max_pending: int,
+) -> tuple[int, int, str]:
+    """Process a WebDataset chunk by iterating over its shards.
+
+    Args:
+        chunk: WebDatasetChunkTask with shard files for this worker.
+        output_dir: Base output directory.
+        audio_format: Audio format for Shar.
+        shard_size: Number of cuts per shard file.
+        max_pending: Max pending samples for merging.
+
+    Returns:
+        Tuple of (count, errors, chunk_output_dir).
+    """
+    chunk_output_dir = Path(output_dir) / f"chunk_{chunk.chunk_id:04d}"
+    chunk_output_dir.mkdir(parents=True, exist_ok=True)
+
+    count = 0
+    errors = 0
+
+    writer = SharWriter(
+        output_dir=chunk_output_dir,
+        fields={"recording": audio_format},
+        shard_size=shard_size,
+    )
+
+    with writer:
+        sample_iter = _iter_merged_webdataset_samples(chunk.shards, max_pending=max_pending)
+        pbar = tqdm(
+            sample_iter,
+            desc=f"Worker {chunk.chunk_id}",
+            unit="item",
+            position=chunk.chunk_id,
+            leave=True,
+        )
+        for cut_id, audio_bytes, metadata in pbar:
+            try:
+                transcript = metadata.get("transcript", "")
+                if not isinstance(transcript, str):
+                    transcript = str(transcript)
+
+                data = CutData(
+                    cut_id=cut_id,
+                    audio_bytes=audio_bytes,
+                    text=transcript,
+                    language=chunk.language,
+                    custom={"metadata": metadata},
+                )
+
+                cut = _create_cut_from_data(data, chunk.resample_config)
+                writer.write(cut)
+                count += 1
+                pbar.set_postfix({"processed": count, "errors": errors})
+
+            except Exception as e:
+                errors += 1
+                print(f"[ERROR] Failed to convert cut {cut_id}: {e}")
+                pbar.set_postfix({"processed": count, "errors": errors})
+
+    return count, errors, str(chunk_output_dir)
+
+
+def convert_webdataset_to_shar_batched(
+    shards_parent_dir: Path,
+    output_dir: Path,
+    shards_pattern: str = "*.tar*",
+    recursive: bool = False,
+    shard_size: int = 4000,
+    audio_format: str = "flac",
+    language: str = "und",
+    num_workers: int | None = None,
+    max_pending: int = 20000,
+    resample: bool = False,
+    orig_sr: int = 48000,
+    target_sr: int = 16000,
+) -> tuple[int, int]:
+    """Convert WebDataset tar shards to Lhotse Shar format using multiprocessing.
+
+    Args:
+        shards_parent_dir: Directory containing WebDataset tar shards.
+        output_dir: Output directory for Shar archives.
+        shards_pattern: Glob pattern for shard files (default: "*.tar*").
+        recursive: Search for shards recursively (default: False).
+        shard_size: Number of cuts per shard file (default: 4000).
+        audio_format: Audio format for Shar (default: "flac").
+        language: Language code for supervision segments (default: "und").
+        num_workers: Number of worker processes (default: cpu_count()).
+        max_pending: Max pending samples for merging audio+metadata (default: 20000).
+        resample: Whether to resample audio (default: False).
+        orig_sr: Expected original sample rate (default: 48000).
+        target_sr: Target sample rate when resampling (default: 16000).
+
+    Returns:
+        Tuple of (total cuts processed, total errors).
+    """
+    if num_workers is None:
+        num_workers = cpu_count()
+
+    # Find all shard files
+    shards = _find_shards(shards_parent_dir, shards_pattern, recursive)
+    if not shards:
+        raise SystemExit(f"No shards found under {shards_parent_dir} with pattern {shards_pattern!r}")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    logger.info("Found %s shard files", len(shards))
+    logger.info("Writing Shar to: %s (using %s workers)", output_dir, num_workers)
+
+    # Create resample config
+    resample_config = ResampleConfig(
+        enabled=resample,
+        orig_sr=orig_sr,
+        target_sr=target_sr,
+    )
+
+    # Distribute shards across workers
+    shards_per_worker = max(1, (len(shards) + num_workers - 1) // num_workers)
+    chunks: list[WebDatasetChunkTask] = []
+    for i in range(num_workers):
+        start_idx = i * shards_per_worker
+        end_idx = min(start_idx + shards_per_worker, len(shards))
+        if start_idx >= len(shards):
+            break
+        worker_shards = shards[start_idx:end_idx]
+        chunks.append(
+            WebDatasetChunkTask(
+                chunk_id=i,
+                shards=worker_shards,
+                language=language,
+                resample_config=resample_config,
+            )
+        )
+
+    logger.info(
+        "Processing %s shards with %s workers (~%s shards/worker)",
+        len(shards),
+        len(chunks),
+        shards_per_worker,
+    )
+
+    # Process chunks in parallel
+    count = 0
+    errors = 0
+    chunk_outputs: list[str] = []
+
+    with ProcessPoolExecutor(max_workers=len(chunks)) as executor:
+        futures = {}
+        for chunk in chunks:
+            future = executor.submit(
+                _process_webdataset_chunk,
+                chunk,
+                str(output_dir),
+                audio_format,
+                shard_size,
+                max_pending,
+            )
+            futures[future] = chunk.chunk_id
+
+        with tqdm(total=len(chunks), desc="Processing chunks", unit="chunk") as pbar:
+            for future in as_completed(futures):
+                chunk_id = futures[future]
+                try:
+                    chunk_count, chunk_errors, chunk_path = future.result()
+                    count += chunk_count
+                    errors += chunk_errors
+                    chunk_outputs.append(chunk_path)
+                    pbar.update(1)
+                    pbar.set_postfix({"processed": count, "errors": errors})
+                except Exception as e:
+                    logger.error("Chunk %s failed: %s", chunk_id, e)
+                    errors += 1
+
+    # Merge chunk outputs
+    logger.info("Merging %s chunk outputs...", len(chunk_outputs))
+    _merge_chunk_outputs(chunk_outputs, output_dir)
+
+    logger.info(
+        "Conversion complete: %s cuts processed, %s errors",
+        count,
+        errors,
+    )
+
+    return count, errors
