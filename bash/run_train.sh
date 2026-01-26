@@ -138,6 +138,7 @@ echo "Num nodes: $NUM_NODES"
 echo "World size (total GPUs): $WORLD_SIZE"
 echo "Master addr: $MASTER_ADDR"
 echo "Master port: $MASTER_PORT"
+echo "Machine rank (SLURM_PROCID): ${SLURM_PROCID:-N/A}"
 
 if [[ "$RUNNING_UNDER_SLURM" -eq 1 ]]; then
     export LAUNCHER="accelerate launch \
