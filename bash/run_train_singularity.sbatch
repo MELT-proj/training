@@ -1,5 +1,4 @@
 #!/bin/bash
-#SBATCH --time=24:00:00
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=32
 #SBATCH --output="logs/%x.%j.out"
@@ -198,6 +197,32 @@ else
 fi
 export SINGULARITYENV_MASTER_ADDR="${MASTER_ADDR_HOST}"
 export SINGULARITYENV_MASTER_PORT="${MASTER_PORT}"
+
+# ------------------------------------------------------------------
+# SLURM variables: pass through to container (--cleanenv strips them)
+# These are critical for multi-node training to detect world size.
+# ------------------------------------------------------------------
+export SINGULARITYENV_SLURM_JOB_ID="${SLURM_JOB_ID:-}"
+export SINGULARITYENV_SLURM_NNODES="${SLURM_NNODES:-1}"
+export SINGULARITYENV_SLURM_GPUS_ON_NODE="${SLURM_GPUS_ON_NODE:-}"
+export SINGULARITYENV_SLURM_JOB_NODELIST="${SLURM_JOB_NODELIST:-}"
+export SINGULARITYENV_SLURM_NODEID="${SLURM_NODEID:-}"
+export SINGULARITYENV_SLURM_PROCID="${SLURM_PROCID:-}"
+export SINGULARITYENV_SLURM_LOCALID="${SLURM_LOCALID:-}"
+export SINGULARITYENV_SLURM_STEP_ID="${SLURM_STEP_ID:-}"
+
+# Also set APPTAINERENV_ for newer apptainer versions
+export APPTAINERENV_SLURM_JOB_ID="${SLURM_JOB_ID:-}"
+export APPTAINERENV_SLURM_NNODES="${SLURM_NNODES:-1}"
+export APPTAINERENV_SLURM_GPUS_ON_NODE="${SLURM_GPUS_ON_NODE:-}"
+export APPTAINERENV_SLURM_JOB_NODELIST="${SLURM_JOB_NODELIST:-}"
+export APPTAINERENV_SLURM_NODEID="${SLURM_NODEID:-}"
+export APPTAINERENV_SLURM_PROCID="${SLURM_PROCID:-}"
+export APPTAINERENV_SLURM_LOCALID="${SLURM_LOCALID:-}"
+export APPTAINERENV_SLURM_STEP_ID="${SLURM_STEP_ID:-}"
+
+echo "SLURM_NNODES: ${SLURM_NNODES:-1}"
+echo "SLURM_GPUS_ON_NODE: ${SLURM_GPUS_ON_NODE:-unset}"
 
 # Binds:
 # - project dir (latest code)
