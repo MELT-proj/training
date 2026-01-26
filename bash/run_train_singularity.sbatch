@@ -201,25 +201,22 @@ export SINGULARITYENV_MASTER_PORT="${MASTER_PORT}"
 # ------------------------------------------------------------------
 # SLURM variables: pass through to container (--cleanenv strips them)
 # These are critical for multi-node training to detect world size.
+#
+# NOTE: Variables set at sbatch time (JOB_ID, NNODES, GPUS_ON_NODE, NODELIST)
+# can be exported here. Variables set at srun time (PROCID, NODEID, LOCALID,
+# STEP_ID) must be passed via --env flags in the singularity exec command
+# to capture the per-node values correctly.
 # ------------------------------------------------------------------
 export SINGULARITYENV_SLURM_JOB_ID="${SLURM_JOB_ID:-}"
 export SINGULARITYENV_SLURM_NNODES="${SLURM_NNODES:-1}"
 export SINGULARITYENV_SLURM_GPUS_ON_NODE="${SLURM_GPUS_ON_NODE:-}"
 export SINGULARITYENV_SLURM_JOB_NODELIST="${SLURM_JOB_NODELIST:-}"
-export SINGULARITYENV_SLURM_NODEID="${SLURM_NODEID:-}"
-export SINGULARITYENV_SLURM_PROCID="${SLURM_PROCID:-}"
-export SINGULARITYENV_SLURM_LOCALID="${SLURM_LOCALID:-}"
-export SINGULARITYENV_SLURM_STEP_ID="${SLURM_STEP_ID:-}"
 
 # Also set APPTAINERENV_ for newer apptainer versions
 export APPTAINERENV_SLURM_JOB_ID="${SLURM_JOB_ID:-}"
 export APPTAINERENV_SLURM_NNODES="${SLURM_NNODES:-1}"
 export APPTAINERENV_SLURM_GPUS_ON_NODE="${SLURM_GPUS_ON_NODE:-}"
 export APPTAINERENV_SLURM_JOB_NODELIST="${SLURM_JOB_NODELIST:-}"
-export APPTAINERENV_SLURM_NODEID="${SLURM_NODEID:-}"
-export APPTAINERENV_SLURM_PROCID="${SLURM_PROCID:-}"
-export APPTAINERENV_SLURM_LOCALID="${SLURM_LOCALID:-}"
-export APPTAINERENV_SLURM_STEP_ID="${SLURM_STEP_ID:-}"
 
 echo "SLURM_NNODES: ${SLURM_NNODES:-1}"
 echo "SLURM_GPUS_ON_NODE: ${SLURM_GPUS_ON_NODE:-unset}"
@@ -260,15 +257,29 @@ SRUN_ARGS=(
 
 echo "Starting training via srun + ${SINGULARITY_BIN} ..."
 
+# NOTE: SLURM_PROCID, SLURM_NODEID, SLURM_LOCALID, SLURM_STEP_ID are set by srun
+# at runtime (different value per node). We wrap the singularity call in a bash -c
+# so these variables are evaluated INSIDE the srun step, not at sbatch parse time.
+#
+# The outer 'bash -c' runs inside srun (where SLURM_PROCID is set correctly).
+# We then pass these values to singularity via --env.
 srun "${SRUN_ARGS[@]}" \
-  "${SINGULARITY_BIN}" exec --nv \
-  --bind "${BIND_ARGS}" \
-  --pwd "${CONTAINER_PROJECT_DIR}" \
-  --cleanenv \
-  "${SINGULARITY_IMG}" \
-  bash --noprofile --norc -c "
-    set -euo pipefail
-    echo \"[container] pwd: \$(pwd)\"
-    echo \"[container] listing /workspace/training:\"; ls -la /workspace/training || true
-    exec /workspace/training/bash/run_train.sh ${ACCELERATE_CONFIG_HOST} ${TRAIN_ARGS}
-  "
+  bash -c '
+    echo "[srun step] SLURM_PROCID=${SLURM_PROCID:-unset} SLURM_NODEID=${SLURM_NODEID:-unset}"
+    '"${SINGULARITY_BIN}"' exec --nv \
+      --bind "'"${BIND_ARGS}"'" \
+      --pwd "'"${CONTAINER_PROJECT_DIR}"'" \
+      --cleanenv \
+      --env SLURM_PROCID="${SLURM_PROCID:-0}" \
+      --env SLURM_NODEID="${SLURM_NODEID:-0}" \
+      --env SLURM_LOCALID="${SLURM_LOCALID:-0}" \
+      --env SLURM_STEP_ID="${SLURM_STEP_ID:-}" \
+      "'"${SINGULARITY_IMG}"'" \
+      bash --noprofile --norc -c "
+        set -euo pipefail
+        echo \"[container] SLURM_PROCID=\${SLURM_PROCID:-unset} SLURM_NODEID=\${SLURM_NODEID:-unset}\"
+        echo \"[container] pwd: \$(pwd)\"
+        echo \"[container] listing /workspace/training:\"; ls -la /workspace/training || true
+        exec /workspace/training/bash/run_train.sh '"${ACCELERATE_CONFIG_HOST}"' '"${TRAIN_ARGS}"'
+      "
+  '
