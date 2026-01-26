@@ -49,9 +49,13 @@ Adding a new dataset:
 
 from .base import BaseLhotseDataset
 from .dataloader import (
+    FiniteIterableDatasetWrapper,
     compute_dataset_duration,
+    estimate_num_batches,
     estimate_steps_per_epoch,
     get_eval_dataloader_from_config,
+    get_eval_sampler_from_config,
+    get_finite_dataloader_from_config,
     get_lhotse_dataloader_from_config,
     get_lhotse_sampler_from_config,
     get_train_dataloader_from_config,
@@ -72,17 +76,22 @@ __all__ = [
     "get_lhotse_dataset",
     "list_available_datasets",
     "LHOTSE_DATASET_REGISTRY",
-    # New dataloader API
+    # Dataset classes
     "SpeechToTextDataset",
     "FallbackDataset",
+    # Sampler/dataloader functions
     "read_cutset_from_config",
     "get_lhotse_sampler_from_config",
+    "get_eval_sampler_from_config",
     "get_lhotse_dataloader_from_config",
     "get_train_dataloader_from_config",
     "get_eval_dataloader_from_config",
+    "get_finite_dataloader_from_config",
+    "FiniteIterableDatasetWrapper",
     # Epoch estimation utilities
     "compute_dataset_duration",
     "estimate_steps_per_epoch",
+    "estimate_num_batches",
 ]
 
 # Registry mapping dataset nicknames to their loader classes

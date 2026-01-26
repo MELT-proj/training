@@ -169,7 +169,6 @@ def main(cfg: TrainingConfig) -> None:
         args=targs,
         config=cfg,
         processor=processor,
-        eval_dataset="",  # Dummy eval dataset
         # No train_dataset/eval_dataset - they are handled by Lhotse
     )
 

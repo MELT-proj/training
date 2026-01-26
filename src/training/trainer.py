@@ -23,6 +23,7 @@ from .config import TrainingConfig
 from .data.audio.lhotse import (
     FallbackDataset,
     SpeechToTextDataset,
+    estimate_num_batches,
     estimate_steps_per_epoch,
     get_eval_dataloader_from_config,
     get_train_dataloader_from_config,
@@ -30,6 +31,7 @@ from .data.audio.lhotse import (
 from ..logging_utils import get_logger
 from ..modeling import MELTProcessor
 from transformers import Trainer
+from transformers.trainer_utils import has_length
 
 logger = get_logger(__name__)
 
@@ -58,7 +60,9 @@ class MELTTrainer(Trainer):
     Attributes:
         steps_per_epoch: Estimated steps per epoch based on dataset duration.
         dataset_duration_hours: Total dataset duration in hours.
-        dataset_num_cuts: Number of cuts in the dataset.
+        dataset_num_cuts: Number of cuts in the training dataset.
+        eval_num_cuts: Number of cuts in the evaluation dataset.
+        eval_num_batches: Estimated number of eval batches.
     """
 
     def __init__(
@@ -81,16 +85,34 @@ class MELTTrainer(Trainer):
         self.steps_per_epoch = -1
         self.dataset_duration_hours = 0.0
         self.dataset_num_cuts = 0
+        self.eval_num_cuts = 0
+        self.eval_num_batches = 0
 
-        if config is not None and hasattr(config, "data") and hasattr(config.data, "train_ds"):
-            grad_accum = getattr(args, "gradient_accumulation_steps", 1) if args else 1
-            self.steps_per_epoch, self.dataset_duration_hours, self.dataset_num_cuts = (
-                estimate_steps_per_epoch(
-                    config=config.data.train_ds,
-                    gradient_accumulation_steps=grad_accum,
+        if config is not None and hasattr(config, "data"):
+            # Training dataset stats
+            if hasattr(config.data, "train_ds"):
+                grad_accum = getattr(args, "gradient_accumulation_steps", 1) if args else 1
+                self.steps_per_epoch, self.dataset_duration_hours, self.dataset_num_cuts = (
+                    estimate_steps_per_epoch(
+                        config=config.data.train_ds,
+                        gradient_accumulation_steps=grad_accum,
+                        world_size=self._world_size,
+                    )
+                )
+
+            # Evaluation dataset stats
+            if hasattr(config.data, "validation_ds") and config.data.validation_ds.input_cfg:
+                from .data.audio.lhotse import compute_dataset_duration
+                
+                _, self.eval_num_cuts = compute_dataset_duration(config.data.validation_ds)
+                self.eval_num_batches = estimate_num_batches(
+                    config.data.validation_ds,
                     world_size=self._world_size,
                 )
-            )
+                logger.info(
+                    f"Evaluation dataset: {self.eval_num_cuts} cuts, "
+                    f"~{self.eval_num_batches} batches"
+                )
 
             # Log epoch estimation info
             if self.steps_per_epoch > 0:
@@ -136,8 +158,31 @@ class MELTTrainer(Trainer):
                         f"Training for {max_steps} steps = ~{total_epochs:.2f} epochs"
                     )
 
+        # Create eval dataset before super().__init__() so HF Trainer can use it
+        # Uses Lhotse's DynamicBucketingSampler for memory-efficient evaluation
+        # (supports lazy CutSets from shar/webdataset without materialization)
+        eval_dataset = None
+        if (
+            processor is not None
+            and config is not None
+            and hasattr(config, "data")
+            and hasattr(config.data, "validation_ds")
+            and config.data.validation_ds.input_cfg
+        ):
+            # Create SpeechToTextDataset for evaluation (same class as training)
+            # The finite iteration is handled by the dataloader, not the dataset
+            logger.info("Creating evaluation SpeechToTextDataset...")
+            eval_dataset = SpeechToTextDataset(
+                processor=processor,
+                config=config.data,
+                is_train=False,
+            )
+            # Wrap with fallback for fault tolerance
+            eval_dataset = FallbackDataset(eval_dataset)
+            logger.info(f"Eval dataset ready ({self.eval_num_cuts} cuts)")
+
         # Initialize parent (may set up distributed)
-        super().__init__(model=model, args=args, **kwargs)
+        super().__init__(model=model, args=args, eval_dataset=eval_dataset, **kwargs)
 
     def get_train_dataloader(self) -> DataLoader:
         """Create training dataloader using Lhotse.
@@ -178,41 +223,84 @@ class MELTTrainer(Trainer):
     def get_eval_dataloader(self, eval_dataset=None) -> DataLoader:
         """Create evaluation dataloader using Lhotse.
 
+        This overrides the default HF Trainer method to use Lhotse's
+        distributed-aware samplers with proper bucketing for efficiency.
+
+        Key characteristics:
+        - Finite iteration: iterates exactly once through the eval data
+        - Distributed: properly shards data across ranks
+        - Efficient: uses DynamicBucketingSampler for batching by duration
+        - Multi-worker: supports num_workers > 0 via Lhotse's worker_init_fn
+        - Progress bars: has __len__ for proper progress tracking
+
         Args:
             eval_dataset: Ignored when using Lhotse (config specifies data).
+                         If provided, uses self.eval_dataset instead.
 
-        Returns the evaluation DataLoader configured with Lhotse sampler.
+        Returns:
+            DataLoader for evaluation.
         """
         if self.processor is None:
             raise ValueError("processor must be provided for Lhotse data loading")
 
         # Check if validation data is configured
         if not self.config.data.validation_ds.input_cfg:
-            raise ValueError("No validation data configured, skipping eval dataloader")
+            raise ValueError("No validation data configured (validation_ds.input_cfg is empty)")
 
         logger.info("Creating Lhotse evaluation dataloader")
 
-        # Create dataset
-        dataset = SpeechToTextDataset(
-            processor=self.processor,
-            config=self.config.data,
-            is_train=False,
-        )
+        # Use the eval_dataset created in __init__ (SpeechToTextDataset wrapped in FallbackDataset)
+        dataset = self.eval_dataset if self.eval_dataset is not None else eval_dataset
+        if dataset is None:
+            # Create it now if not available
+            dataset = SpeechToTextDataset(
+                processor=self.processor,
+                config=self.config.data,
+                is_train=False,
+            )
+            dataset = FallbackDataset(dataset)
 
-        # Wrap with fallback for fault tolerance
-        dataset = FallbackDataset(dataset)
-
-        # Create dataloader from config
-        split_batches = bool(getattr(getattr(self.args, "accelerator_config", None), "split_batches", False))
+        # Create finite dataloader using Lhotse's distributed-aware sampler
         dataloader = get_eval_dataloader_from_config(
             data_config=self.config.data,
             dataset=dataset,
             global_rank=self._global_rank,
             world_size=self._world_size,
-            split_batches=split_batches,
         )
 
         return dataloader
+
+    def num_examples(self, dataloader: DataLoader) -> int:
+        """Return the number of examples in the dataloader.
+
+        For Lhotse dataloaders, we use the pre-computed dataset_num_cuts
+        since the dataloader may be infinite or not have __len__.
+
+        Args:
+            dataloader: The dataloader to count examples from.
+
+        Returns:
+            Number of examples (cuts) in the dataset.
+        """
+        # First try to get length from the dataset directly
+        if has_length(dataloader):
+            try:
+                dataset = dataloader.dataset
+                if hasattr(dataset, "__len__"):
+                    # For EvalCutSetDataset, __len__ returns num_cuts directly
+                    return len(dataset)
+            except (TypeError, AttributeError):
+                pass
+
+        # For Lhotse infinite dataloaders (training), use pre-computed count
+        if self.dataset_num_cuts > 0:
+            return self.dataset_num_cuts
+
+        # Fallback: try to get from parent
+        try:
+            return super().num_examples(dataloader)
+        except (TypeError, ValueError):
+            return 0
 
     @staticmethod
     def num_tokens(train_dl: DataLoader, max_steps: None | int = None) -> int:
