@@ -158,6 +158,48 @@ class MELTTrainer(Trainer):
                         f"Training for {max_steps} steps = ~{total_epochs:.2f} epochs"
                     )
 
+                # Compute and log checkpoint/logging/eval intervals in hours
+                if self.dataset_duration_hours > 0 and self.steps_per_epoch > 0:
+                    hours_per_step = self.dataset_duration_hours / self.steps_per_epoch
+                    
+                    logger.info("=" * 80)
+                    logger.info("CHECKPOINT & LOGGING SCHEDULE (in wall-clock time):")
+                    logger.info("=" * 80)
+                    
+                    # Logging frequency
+                    if args and hasattr(args, "logging_steps") and args.logging_steps > 0:
+                        logging_hours = args.logging_steps * hours_per_step
+                        logging_minutes = logging_hours * 60
+                        if logging_hours >= 1.0:
+                            logger.info(f"  📊 Logging every {args.logging_steps} steps = ~{logging_hours:.2f} hours")
+                        else:
+                            logger.info(f"  📊 Logging every {args.logging_steps} steps = ~{logging_minutes:.1f} minutes")
+                    
+                    # Evaluation frequency
+                    if args and hasattr(args, "eval_steps") and args.eval_steps > 0:
+                        eval_hours = args.eval_steps * hours_per_step
+                        if eval_hours >= 1.0:
+                            logger.info(f"  📈 Evaluation every {args.eval_steps} steps = ~{eval_hours:.2f} hours")
+                        else:
+                            eval_minutes = eval_hours * 60
+                            logger.info(f"  📈 Evaluation every {args.eval_steps} steps = ~{eval_minutes:.1f} minutes")
+                    
+                    # Save frequency
+                    if args and hasattr(args, "save_steps") and args.save_steps > 0:
+                        save_hours = args.save_steps * hours_per_step
+                        if save_hours >= 1.0:
+                            logger.info(f"  💾 Checkpoints every {args.save_steps} steps = ~{save_hours:.2f} hours")
+                        else:
+                            save_minutes = save_hours * 60
+                            logger.info(f"  💾 Checkpoints every {args.save_steps} steps = ~{save_minutes:.1f} minutes")
+                    
+                    logger.info("=" * 80)
+                    logger.info(
+                        f"Note: Time estimates based on {self.dataset_duration_hours:.2f}h dataset, "
+                        f"{self._world_size} GPUs, grad_accum={grad_accum}"
+                    )
+                    logger.info("=" * 80)
+
         # Create eval dataset before super().__init__() so HF Trainer can use it
         # Uses Lhotse's DynamicBucketingSampler for memory-efficient evaluation
         # (supports lazy CutSets from shar/webdataset without materialization)
