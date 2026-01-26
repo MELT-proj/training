@@ -29,6 +29,42 @@ def _get_config_value(config, key: str, default=None):
     return default
 
 
+def _get_nested_value(obj, path: str, default=None):
+    """Get a nested value from an object using dot notation.
+
+    Supports both attribute access and dict key access at each level.
+
+    Args:
+        obj: Object to traverse (can have nested dicts/objects).
+        path: Dot-separated path like "custom.metadata.sentence".
+        default: Default value if path not found.
+
+    Returns:
+        The value at the path, or default if not found.
+
+    Example:
+        >>> cut.custom = {"metadata": {"sentence": "Hello world"}}
+        >>> _get_nested_value(cut, "custom.metadata.sentence")
+        "Hello world"
+    """
+    parts = path.split(".")
+    current = obj
+
+    for part in parts:
+        if current is None:
+            return default
+        # Try attribute access first
+        if hasattr(current, part):
+            current = getattr(current, part)
+        # Then try dict access
+        elif isinstance(current, dict) and part in current:
+            current = current[part]
+        else:
+            return default
+
+    return current if current is not None else default
+
+
 class SpeechToTextDataset(torch.utils.data.Dataset):
     """A dataset for Speech-to-Text tasks that processes Lhotse CutSets.
 
@@ -204,16 +240,48 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
     def _get_text(self, cut: Cut) -> str | None:
         """Extract text transcript from a cut.
 
+        Supports multiple sources for text extraction:
+        1. Per-cut `text_field` override from cut.custom.tags (highest priority)
+        2. Global `text_field` from dataset config
+        3. Supervision text (if non-empty)
+
+        The text_field can be a nested path like "custom.metadata.sentence"
+        using dot notation to access nested dicts/attributes.
+
         Args:
             cut: Lhotse Cut object.
 
         Returns:
             Text transcript or None if not available.
         """
+        # Determine text_field to use:
+        # 1. Check per-cut override in tags
+        # 2. Fall back to global dataset config
+        text_field = None
+        if hasattr(cut, "custom") and cut.custom:
+            tags = cut.custom.get("tags", {})
+            if isinstance(tags, dict):
+                text_field = tags.get("text_field")
+
+        if text_field is None:
+            # Get the appropriate dataset config based on is_train
+            ds_config = _get_config_value(
+                self.config, "train_ds" if self.is_train else "validation_ds", None
+            )
+            text_field = _get_config_value(ds_config, "text_field", "text") if ds_config else "text"
+
         text = None
 
-        # Try to get text from supervisions
-        if cut.supervisions:
+        # Try to get text using the text_field path (supports nested access)
+        if text_field and text_field != "text":
+            # Use nested value extraction for custom paths like "custom.metadata.sentence"
+            text = _get_nested_value(cut, text_field)
+            if text is None and hasattr(cut, "custom") and cut.custom:
+                # Also try directly in custom dict for simple field names
+                text = cut.custom.get(text_field)
+
+        # Fall back to supervision text if no custom text_field found text
+        if text is None and cut.supervisions:
             texts = []
             for sup in cut.supervisions:
                 if sup.text:
@@ -221,15 +289,9 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
             if texts:
                 text = " ".join(texts)
 
-        # Try custom field
+        # Final fallback: try default "text" field in custom
         if text is None and hasattr(cut, "custom") and cut.custom:
-            # Get the appropriate dataset config based on is_train
-            ds_config = _get_config_value(
-                self.config, "train_ds" if self.is_train else "validation_ds", None
-            )
-            text_field = _get_config_value(ds_config, "text_field", "text") if ds_config else "text"
-            if text_field in cut.custom:
-                text = cut.custom[text_field]
+            text = cut.custom.get("text")
 
         return text
 

@@ -11,8 +11,9 @@ set -euo pipefail
 
 : "${MELT_DATA_ROOT:=/mnt/home/giuseppe/myscratch/melt-data}"
 
-# Parse args (simple): support --dry-run / -n and --help
+# Parse args (support --dry-run / -n, --help, and arbitrary rsync args)
 DRY_RUN=false
+RSYNC_EXTRA_ARGS=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -n|--dry-run)
@@ -20,16 +21,26 @@ while [ "$#" -gt 0 ]; do
       shift
       ;;
     -h|--help)
-      echo "Usage: $0 [--dry-run|-n]"
+      echo "Usage: $0 [--dry-run|-n] [-- <RSYNC ARGS>]"
       echo
       echo "Sync \\${MELT_DATA_ROOT} to ${MN5USER:-}<MN5USER>@transfer1.bsc.es:/gpfs/projects/${MN5PROJ:-}<MN5PROJ>/"
       echo
+      echo "Any additional arguments are passed directly to rsync (e.g., --exclude 'path')."
+      echo
       exit 0
       ;;
+    --)
+      # Treat remaining args as rsync args
+      shift
+      while [ "$#" -gt 0 ]; do
+        RSYNC_EXTRA_ARGS+=("$1")
+        shift
+      done
+      ;;
     *)
-      echo "Unknown option: $1"
-      echo "Usage: $0 [--dry-run|-n]"
-      exit 1
+      # Unknown options are treated as rsync args (allows passing --exclude, --include, etc.)
+      RSYNC_EXTRA_ARGS+=("$1")
+      shift
       ;;
   esac
 done
@@ -50,6 +61,7 @@ DEST="${MN5USER}@transfer1.bsc.es:/gpfs/projects/${MN5PROJ}/"
 
 echo "Syncing ${SRC} -> ${DEST} (excluding tmp/ and models/)"
 # Exclude the 'tmp/' and 'models/' folders inside MELT_DATA_ROOT to avoid copying transient files and large model files.
-rsync -avh --progress ${RSYNC_DRY_RUN_FLAG} -e ssh --exclude 'tmp/' --exclude 'models/' "${SRC}" "${DEST}"
+# Append any user-provided rsync args after the default options. Use array expansion to preserve quoting.
+rsync -avh --progress ${RSYNC_DRY_RUN_FLAG} -e ssh --exclude 'tmp/' --exclude 'models/' "${RSYNC_EXTRA_ARGS[@]}" "${SRC}" "${DEST}"
 
 echo "Done."
