@@ -144,6 +144,7 @@ class MELTConformerAdapter(nn.Module):
     def __init__(self, config: MELTConfig):
         super().__init__()
         encoder_config = config.audio_encoder_config
+        adapter_config = config.adapter_config
 
         # Feature projection if output_hidden_size differs from hidden_size
         output_hidden_size = getattr(encoder_config, "output_hidden_size", encoder_config.hidden_size)
@@ -154,13 +155,14 @@ class MELTConformerAdapter(nn.Module):
             self.proj = None
             self.proj_layer_norm = None
 
-        num_adapter_layers = getattr(encoder_config, "num_adapter_layers", 1)
+        # Prefer adapter_config values, fall back to encoder_config, then defaults
+        num_adapter_layers = getattr(adapter_config, "num_adapter_layers", getattr(encoder_config, "num_adapter_layers", 1))
         self.num_adapter_layers = num_adapter_layers
         self.layers = nn.ModuleList(Wav2Vec2BertAdapterLayer(encoder_config) for _ in range(num_adapter_layers))
-        self.layerdrop = getattr(encoder_config, "layerdrop", 0.0)
+        self.layerdrop = getattr(adapter_config, "layerdrop", getattr(encoder_config, "layerdrop", 0.0))
 
-        self.kernel_size = getattr(encoder_config, "adapter_kernel_size", 3)
-        self.stride = getattr(encoder_config, "adapter_stride", 2)
+        self.kernel_size = getattr(adapter_config, "adapter_kernel_size", getattr(encoder_config, "adapter_kernel_size", 3))
+        self.stride = getattr(adapter_config, "adapter_stride", getattr(encoder_config, "adapter_stride", 2))
 
         # Final projection to text decoder hidden size
         adapter_output_size = output_hidden_size
@@ -267,10 +269,8 @@ class MELTAudioAdapter(nn.Module):
         if architecture == "mlp":
             self.adapter = MELTMLPAdapter(config)
         elif architecture == "qformer":
-            raise NotImplementedError("Q-Former adapter is not yet implemented.")
             self.adapter = MELTQFormerAdapter(config)
         elif architecture == "conformer":
-            raise NotImplementedError("Conformer adapter is not yet implemented.")
             self.adapter = MELTConformerAdapter(config)
         else:
             raise ValueError(
@@ -834,6 +834,7 @@ class MELTForConditionalGeneration(MELTPreTrainedModel):
                 **kwargs,
             )
 
+        print(loss)
         if not return_dict:
             output = (logits,) + decoder_outputs[1:]
             return (loss,) + output if loss is not None else output

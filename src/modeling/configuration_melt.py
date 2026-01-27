@@ -32,6 +32,14 @@ class MELTAdapterConfig(PretrainedConfig):
             Q-Former downsample rate (used by Q-Former adapter).
         window_size (`int`, *optional*, defaults to 15):
             Q-Former window size (used by Q-Former adapter).
+        num_adapter_layers (`int`, *optional*, defaults to 1):
+            Number of conformer adapter layers (used by Conformer adapter).
+        layerdrop (`float`, *optional*, defaults to 0.0):
+            Layer drop probability for conformer layers (used by Conformer adapter).
+        adapter_kernel_size (`int`, *optional*, defaults to 3):
+            Kernel size for conformer convolutions (used by Conformer adapter).
+        adapter_stride (`int`, *optional*, defaults to 2):
+            Stride for conformer convolutions (used by Conformer adapter).
     """
 
     model_type = "melt_adapter"
@@ -45,6 +53,10 @@ class MELTAdapterConfig(PretrainedConfig):
         dropout=0.1,
         downsample_rate=5,
         window_size=15,
+        num_adapter_layers=1,
+        layerdrop=0.0,
+        adapter_kernel_size=3,
+        adapter_stride=2,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -56,6 +68,11 @@ class MELTAdapterConfig(PretrainedConfig):
         # Q-Former specific
         self.downsample_rate = downsample_rate
         self.window_size = window_size
+        # Conformer specific
+        self.num_adapter_layers = num_adapter_layers
+        self.layerdrop = layerdrop
+        self.adapter_kernel_size = adapter_kernel_size
+        self.adapter_stride = adapter_stride
 
 
 class MELTConfig(PretrainedConfig):
