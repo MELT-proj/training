@@ -335,9 +335,9 @@ def _unfold_tensor(tensor: torch.Tensor, max_seq_len: int) -> torch.Tensor:
     tensor = F.unfold(tensor[..., None, :], kernel_size=(1, max_seq_len), stride=(1, max_seq_len))
 
     new_bsz, _, slen = tensor.shape
-    tensor = tensor.view(new_bsz, -1, max_seq_len, slen)
+    tensor = tensor.reshape(new_bsz, -1, max_seq_len, slen)
     tensor = tensor.permute(0, 3, 2, 1)
-    tensor = tensor.view(-1, max_seq_len, D).contiguous()
+    tensor = tensor.reshape(-1, max_seq_len, D)
     return tensor
 
 

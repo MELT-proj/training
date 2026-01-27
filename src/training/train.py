@@ -69,7 +69,11 @@ def prepare_model(
 
     audio_config = AutoConfig.from_pretrained(encoder_name)
     text_config = AutoConfig.from_pretrained(decoder_name, attn_implementation=decoder_cfg.attn_implementation)
-    config = MELTConfig(audio_encoder_config=audio_config, text_decoder_config=text_config)
+    config = MELTConfig(
+        audio_encoder_config=audio_config, 
+        text_decoder_config=text_config,
+        max_audio_seq_len=encoder_cfg.get("max_audio_seq_len", 1500),
+    )
 
     # Set special tokens
     config.audio_bos_token_id = processor.tokenizer.convert_tokens_to_ids([processor.audio_bos_token])[0]

@@ -148,7 +148,7 @@ if [[ "$RUNNING_UNDER_SLURM" -eq 1 ]]; then
         --num_processes $WORLD_SIZE \
         --main_process_ip $MASTER_ADDR \
         --main_process_port $MASTER_PORT \
-        --machine_rank \$SLURM_PROCID \
+        --machine_rank \${SLURM_PROCID} \
         --rdzv_conf \"rdzv_backend=c10d,rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT\" \
         --max_restarts 1 \
         --role \$(hostname -s): \
