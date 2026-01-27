@@ -64,15 +64,20 @@ def prepare_model(
     decoder_cfg = model_cfg.decoder
     adapter_cfg = model_cfg.adapter
 
+    # Two HF ID model names
     encoder_name = encoder_cfg.name
     decoder_name = decoder_cfg.name
 
     audio_config = AutoConfig.from_pretrained(encoder_name)
     text_config = AutoConfig.from_pretrained(decoder_name, attn_implementation=decoder_cfg.attn_implementation)
+
+    # Beyond this length in frames, the encoder will unfold the input in chunks
+    max_audio_seq_len = getattr(encoder_cfg, "max_audio_seq_len", 1500)
+
     config = MELTConfig(
         audio_encoder_config=audio_config, 
         text_decoder_config=text_config,
-        max_audio_seq_len=encoder_cfg.get("max_audio_seq_len", 1500),
+        max_audio_seq_len=max_audio_seq_len,
     )
 
     # Set special tokens
