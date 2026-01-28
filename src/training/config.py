@@ -355,6 +355,9 @@ class TrainerConfig:
     resume_from_checkpoint: str | None = None
     """Path to checkpoint to resume from."""
 
+    extra_args: dict = field(default_factory=dict)
+    """Additional TrainingArguments not explicitly defined above."""
+
 
 # =============================================================================
 # Optimization Configuration
@@ -610,6 +613,25 @@ def config_from_dict(d: dict) -> TrainingConfig:
     # Parse trainer config
     trainer_dict = d.get("trainer", {})
     trainer_kwargs = {}
+    
+    # Define known trainer fields
+    known_trainer_fields = {
+        "output_dir", "overwrite_output_dir", "seed", "do_train", "do_eval",
+        "per_device_train_batch_size", "per_device_eval_batch_size", "gradient_accumulation_steps",
+        "adam_beta1", "adam_beta2", "learning_rate", "lr_scheduler_type", "warmup_steps",
+        "num_train_epochs", "max_steps", "compute_max_steps_from_epochs",
+        "logging_strategy", "logging_steps", "report_to",
+        "eval_strategy", "eval_steps",
+        "save_strategy", "save_steps", "save_total_limit",
+        "bf16", "group_by_length", "dataloader_num_workers",
+        "remove_unused_columns", "ddp_find_unused_parameters", "resume_from_checkpoint",
+        "extra_args"  # Don't collect extra_args into itself
+    }
+    
+    # Collect extra args (fields not in known list)
+    extra_args = {k: v for k, v in trainer_dict.items() if k not in known_trainer_fields}
+    if extra_args:
+        trainer_kwargs["extra_args"] = extra_args
     if "output_dir" in trainer_dict:
         trainer_kwargs["output_dir"] = trainer_dict["output_dir"]
     if "overwrite_output_dir" in trainer_dict:
@@ -790,6 +812,10 @@ def trainer_args_dict(config: TrainingConfig) -> dict:
 
     if trainer_cfg.resume_from_checkpoint is not None:
         result["resume_from_checkpoint"] = trainer_cfg.resume_from_checkpoint
+
+    # Add any extra arguments not explicitly defined
+    if trainer_cfg.extra_args:
+        result.update(trainer_cfg.extra_args)
 
     return result
 
