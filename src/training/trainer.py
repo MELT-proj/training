@@ -344,23 +344,6 @@ class MELTTrainer(Trainer):
         except (TypeError, ValueError):
             return 0
 
-    @staticmethod
-    def num_tokens(train_dl: DataLoader, max_steps: None | int = None) -> int:
-        """
-        Helper to get number of tokens in a [`~torch.utils.data.DataLoader`] by enumerating dataloader.
-        """
-        train_tokens = 0
-        try:
-            dataset = train_dl.dataset
-            words_by_row = [
-                len(t.split(" ")) for t in tqdm(dataset["text"], total=len(dataset), desc="Counting tokens")
-            ]
-            train_tokens = sum(words_by_row)  # it's not tokens, but it's a good approximation
-        except KeyError:
-            logger.warning("Cannot get num_tokens from dataloader")
-
-        return train_tokens
-
     def create_optimizer(self):
         """Create optimizer groups respecting freeze flags and modular audio stack.
 

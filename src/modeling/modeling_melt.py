@@ -830,11 +830,9 @@ class MELTForConditionalGeneration(MELTPreTrainedModel):
                 logits=logits,
                 labels=labels,
                 vocab_size=self.config.vocab_size,
-                ignore_index=self.config.loss_ignore_index,
                 **kwargs,
             )
 
-        print(loss)
         if not return_dict:
             output = (logits,) + decoder_outputs[1:]
             return (loss,) + output if loss is not None else output
