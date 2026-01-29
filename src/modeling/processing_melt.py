@@ -119,6 +119,11 @@ class MELTProcessor(ProcessorMixin):
         # silently introducing defaults.
         self._validate_required_special_tokens(tokenizer, config)
 
+        for name in MELT_REQUIRED_SPECIAL_TOKENS:
+            setattr(self, name + "_id", tokenizer.convert_tokens_to_ids([getattr(self, name)])[0])
+
+        self.config = config
+
         # self.image_token = None
         # self.video_token = None
         # self.vision_bos_token = None
@@ -140,48 +145,39 @@ class MELTProcessor(ProcessorMixin):
         vocab = set(tokenizer.get_vocab().keys())
 
         for name in MELT_REQUIRED_SPECIAL_TOKENS:
-            # First, try to find a configured token string
-            token_str = getattr(config.decoder, name)
+            token_str = getattr(config.decoder, name, None)
+            if token_str is None or not isinstance(token_str, str):
+                raise ValueError(
+                    f"Token string for required special token '{name}' not found in config.decoder. "
+                    "Please provide this token in the model config under `config.decoder.<name>`."
+                )
 
-            # Not present in the current tokenizer
-            if name not in all_special and name not in vocab:
-                if token_str is None:
+            # If the tokenizer has the attribute set already, don't touch anything
+            if hasattr(self.tokenizer, name):
+                # check if the pre-existing value matches the config value. If not, raise an error.
+                existing_token = getattr(self.tokenizer, name)
+                if existing_token != token_str:
                     raise ValueError(
-                        f"Configured token for '{name}' ('{token_str}') was not found in tokenizer vocabulary. "
-                        "Please add this token to the tokenizer before creating the processor."
+                        f"Tokenizer already has a value for special token '{name}': '{existing_token}'. "
+                        f"This does not match the config value: '{token_str}'. "
+                        "Please ensure consistency between the tokenizer and model config."
                     )
-                else:
-                    # Add it to the tokenizer's special tokens
-                    logger.info("Adding special token: %s -> %s", name, token_str)
-                    self.tokenizer.add_tokens([token_str])
-                    setattr(self.tokenizer, name, token_str)
-                    setattr(self, name, token_str)
+                continue
+
+            # If it doesn't but the token is in the vocab, we just reuse it and set the attribute to the tokenizer
+            if token_str in vocab:
+                setattr(self.tokenizer, name, token_str)
+                logger.info("Reusing existing token: %s -> %s", name, token_str)
+                continue
+
+            # If it doesn't and the token isn't in the vocab, we add it to the tokenizer
             else:
-                # Token name exists in tokenizer. Ensure config value (if any) matches the tokenizer's token string.
-                # Try to resolve the token string from common tokenizer places.
-                tokenizer_token_str = getattr(tokenizer, name, None)
-                if tokenizer_token_str is None and hasattr(tokenizer, "special_tokens_map"):
-                    tokenizer_token_str = tokenizer.special_tokens_map.get(name, None)
-
-                # If tokenizer expresses the token as a vocab entry (literal name), use that.
-                if tokenizer_token_str is None and name in vocab:
-                    tokenizer_token_str = name
-
-                if token_str is not None and tokenizer_token_str is not None and tokenizer_token_str != token_str:
-                    raise ValueError(
-                        f"Configured token for '{name}' ('{token_str}') does not match the token found in "
-                        f"the tokenizer ('{tokenizer_token_str}'). Please ensure the tokenizer and config agree."
-                    )
-
-                if tokenizer_token_str is None:
-                    raise ValueError(
-                        f"Could not resolve token string for '{name}' in the tokenizer. "
-                        "Please add this token to the tokenizer or set it in the config."
-                    )
-
-                # Expose the resolved token strings on the processor for later use (e.g., replacement).
-                setattr(self, name, tokenizer_token_str)
-
+                # Add it to the tokenizer's special tokens
+                logger.info("Adding special token: %s -> %s", name, token_str)
+                self.tokenizer.add_tokens([token_str])
+                setattr(self.tokenizer, name, token_str)
+                setattr(self, name, token_str)
+            
     def _validate_audio_token_count(self, text: list[str], audio, is_batched: bool) -> None:
         """Validate that the number of audio tokens in text matches the number of audio inputs.
 
@@ -563,6 +559,13 @@ class MELTProcessor(ProcessorMixin):
         Please refer to the docstring of this method for more information.
         """
         return self.tokenizer.decode(*args, **kwargs)
+
+    def encode(self, *args, **kwargs):
+        """
+        This method forwards all its arguments to the tokenizer's [`~PreTrainedTokenizer.encode`].
+        Please refer to the docstring of this method for more information.
+        """
+        return self.tokenizer.encode(*args, **kwargs)
 
     @property
     def model_input_names(self):

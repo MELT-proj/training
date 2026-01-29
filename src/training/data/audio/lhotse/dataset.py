@@ -190,23 +190,39 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
 
             # TODO: we need to improve this label construction strategy, it does not
             # really work for anything besides {audio_token}{text} formatting
-
-            # We tokenize only the text to construct the labels
-            labels = self.processor.tokenizer(
-                texts,
-                padding_side="left",
-                padding="longest",
-                return_tensors="pt",
-            )["input_ids"]
-            # Replace pad tokens with -100 for **num_items_in_batch** estimation and loss masking
-            labels[labels == self.processor.tokenizer.pad_token_id] = -100
-            inputs["labels"] = labels
-
+            if self.is_train:
+                labels = self._build_labels(inputs["input_ids"])
+                inputs["labels"] = labels
+            
             return inputs
 
         except Exception as e:
             logger.error(f"Failed to process batch through processor: {e}")
             return None
+
+    def _build_labels(self, input_ids: torch.Tensor) -> torch.Tensor:
+        """Build labels tensor for loss computation.
+
+        The labels tensor contains -100 for audio token positions, audio_bos_token_id, audio_eos_token_id,
+        and pad tokens, and actual token IDs for text positions.
+
+        Args:
+            input_ids: Input token IDs tensor [B, S].
+            audio_token_id: Token ID representing the audio token.
+        Returns:
+            Labels tensor [B, S] with -100 for audio tokens.
+        """
+        labels = input_ids.clone()
+        # Create a single mask for all tokens to be ignored
+
+        mask = (
+            (labels == self.processor.audio_token_id) |
+            (labels == self.processor.audio_bos_token_id) |
+            (labels == self.processor.audio_eos_token_id) |
+            (labels == self.processor.tokenizer.pad_token_id)
+        )
+        labels[mask] = -100
+        return labels
 
     def _load_audio(self, cut: Cut) -> torch.Tensor | None:
         """Load audio from a cut.

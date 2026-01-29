@@ -207,16 +207,54 @@ class DecoderConfig:
 
 @dataclass
 class AdapterConfig:
-    """Adapter configuration."""
+    """Adapter configuration.
+
+    Mirrors `MELTAdapterConfig` fields from `configuration_melt.py` so YAML/CLI can
+    fully specify adapter behavior used by the modeling code.
+    """
 
     type: str = "mlp"
-    """Adapter type (e.g., 'mlp', 'linear')."""
+    """Adapter type (e.g., 'mlp', 'qformer', 'conformer')."""
 
     freeze: bool = False
     """Whether to freeze adapter weights."""
 
-    # add_adapter: bool = False
-    # """Whether to add adapter layers."""
+    # MLP / Q-Former / Conformer specific params (defaults mirror MELTAdapterConfig)
+    hidden_size: int = 1024
+    """Adapter hidden dimensionality (Q-Former hidden size)."""
+
+    num_hidden_layers: int = 2
+    """Number of hidden layers for adapters where applicable."""
+
+    intermediate_size: int = 4096
+    """Intermediate (FFN) size for adapters that use it."""
+
+    hidden_act: str = "gelu"
+    """Activation function for adapter MLPs (e.g., 'gelu')."""
+
+    dropout: float = 0.1
+    """Dropout probability inside adapter modules."""
+
+    downsample_rate: int = 5
+    """Q-Former downsample rate (used by Q-Former adapter)."""
+
+    window_size: int = 15
+    """Q-Former window size (used by Q-Former adapter)."""
+
+    num_adapter_layers: int = 1
+    """Number of conformer adapter layers (used by Conformer adapter)."""
+
+    layerdrop: float = 0.0
+    """Layer drop probability for conformer layers."""
+
+    adapter_kernel_size: int = 3
+    """Kernel size for conformer convolutions."""
+
+    adapter_stride: int = 2
+    """Stride for conformer convolutions."""
+
+    mlp_hidden_size: int | None = None
+    """Optional hidden size for 2-layer MLP adapter projection (if provided)."""
 
 
 @dataclass
@@ -581,9 +619,33 @@ def config_from_dict(d: dict) -> TrainingConfig:
     if "adapter" in model_dict:
         adp_dict = model_dict["adapter"]
         if "type" in adp_dict:
-            adapter_kwargs["type"] = adp_dict["type"]
+            adapter_kwargs["type"] = str(adp_dict["type"])
         if "freeze" in adp_dict:
-            adapter_kwargs["freeze"] = adp_dict["freeze"]
+            adapter_kwargs["freeze"] = bool(adp_dict["freeze"])
+        if "hidden_size" in adp_dict:
+            adapter_kwargs["hidden_size"] = int(adp_dict["hidden_size"])
+        if "num_hidden_layers" in adp_dict:
+            adapter_kwargs["num_hidden_layers"] = int(adp_dict["num_hidden_layers"])
+        if "intermediate_size" in adp_dict:
+            adapter_kwargs["intermediate_size"] = int(adp_dict["intermediate_size"])
+        if "hidden_act" in adp_dict:
+            adapter_kwargs["hidden_act"] = str(adp_dict["hidden_act"])
+        if "dropout" in adp_dict:
+            adapter_kwargs["dropout"] = float(adp_dict["dropout"])
+        if "downsample_rate" in adp_dict:
+            adapter_kwargs["downsample_rate"] = int(adp_dict["downsample_rate"])
+        if "window_size" in adp_dict:
+            adapter_kwargs["window_size"] = int(adp_dict["window_size"])
+        if "num_adapter_layers" in adp_dict:
+            adapter_kwargs["num_adapter_layers"] = int(adp_dict["num_adapter_layers"])
+        if "layerdrop" in adp_dict:
+            adapter_kwargs["layerdrop"] = float(adp_dict["layerdrop"])
+        if "adapter_kernel_size" in adp_dict:
+            adapter_kwargs["adapter_kernel_size"] = int(adp_dict["adapter_kernel_size"])
+        if "adapter_stride" in adp_dict:
+            adapter_kwargs["adapter_stride"] = int(adp_dict["adapter_stride"])
+        if "mlp_hidden_size" in adp_dict:
+            adapter_kwargs["mlp_hidden_size"] = int(adp_dict["mlp_hidden_size"]) if adp_dict["mlp_hidden_size"] is not None else None
     adapter = AdapterConfig(**adapter_kwargs)
     
     model_kwargs = {

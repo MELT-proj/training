@@ -70,6 +70,7 @@ def prepare_model(
 
     audio_config = AutoConfig.from_pretrained(encoder_name)
     text_config = AutoConfig.from_pretrained(decoder_name, attn_implementation=decoder_cfg.attn_implementation)
+    adapter_config = cfg.model.adapter # Used in MELTConfig init
 
     # Beyond this length in frames, the encoder will unfold the input in chunks
     max_audio_seq_len = getattr(encoder_cfg, "max_audio_seq_len", 1500)
@@ -77,11 +78,13 @@ def prepare_model(
     config = MELTConfig(
         audio_encoder_config=audio_config, 
         text_decoder_config=text_config,
-        max_audio_seq_len=max_audio_seq_len,
+        adapter_config=adapter_config,
     )
 
     # Set special tokens
     config.audio_bos_token_id = processor.tokenizer.convert_tokens_to_ids([processor.audio_bos_token])[0]
+    config.audio_eos_token_id = processor.tokenizer.convert_tokens_to_ids([processor.audio_eos_token])[0]
+    config.audio_token_id = processor.tokenizer.convert_tokens_to_ids([processor.audio_token])[0]
 
     # Detect last checkpoint
     last_checkpoint = None
@@ -105,7 +108,23 @@ def prepare_model(
         model = MELTForConditionalGeneration.from_pretrained(model_cfg.ckpt)
     else:
         model = MELTForConditionalGeneration(config)
-        model.text_decoder.resize_token_embeddings(len(processor.tokenizer), mean_resizing=False, pad_to_multiple_of=8)
+
+    # Ensure decoder embeddings match tokenizer size.
+    # If special tokens were added to the tokenizer (e.g., audio tokens), failing to resize
+    # will cause CUDA device-side asserts from embedding lookup (out-of-range indices).
+    target_vocab_size = len(processor.tokenizer)
+    current_vocab_size = model.text_decoder.get_input_embeddings().num_embeddings
+    if current_vocab_size < target_vocab_size:
+        logger.warning(
+            "Resizing text decoder token embeddings to match tokenizer: "
+            f"{current_vocab_size} -> {target_vocab_size}"
+        )
+        model.text_decoder.resize_token_embeddings(target_vocab_size, mean_resizing=False, pad_to_multiple_of=8)
+    elif current_vocab_size > target_vocab_size:
+        logger.warning(
+            "Text decoder embedding table is larger than tokenizer vocab: "
+            f"{current_vocab_size} > {target_vocab_size}. Keeping existing embeddings."
+        )
 
     # Apply freezing
     if adapter_cfg.freeze:

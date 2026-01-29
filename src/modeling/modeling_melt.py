@@ -26,10 +26,7 @@ logger = get_logger(__name__)
 
 
 class MELTMLPAdapter(nn.Module):
-    """
-    Simple MLP-based audio adapter (similar to Qwen2AudioMultiModalProjector).
-    Projects audio encoder hidden states to the text decoder hidden size.
-    """
+    """2-layer MLP projector with normalization for stable LLM injection."""
 
     def __init__(self, config: MELTConfig):
         super().__init__()
@@ -38,8 +35,19 @@ class MELTMLPAdapter(nn.Module):
             "output_hidden_size",
             getattr(config.audio_encoder_config, "hidden_size", config.audio_encoder_config.output_hidden_size),
         )
-        self.output_hidden_size = config.text_decoder_config.hidden_size
-        self.linear = nn.Linear(audio_hidden_size, self.output_hidden_size, bias=True)
+        out = config.text_decoder_config.hidden_size
+        adapter_cfg = getattr(config, "adapter_config", None)
+        mid = getattr(adapter_cfg, "mlp_hidden_size", out) if adapter_cfg is not None else out
+        if mid is None:
+            mid = out
+
+        self.fc1 = nn.Linear(audio_hidden_size, mid, bias=True)
+        self.act = nn.GELU()
+        self.fc2 = nn.Linear(mid, out, bias=True)
+
+        self.post_norm = nn.LayerNorm(out)
+        self.gain = nn.Parameter(torch.tensor(0.1, dtype=torch.float32))
+        self.output_hidden_size = out
 
     def _get_output_features_shape(
         self,
@@ -63,7 +71,10 @@ class MELTMLPAdapter(nn.Module):
         return output_shape, features_attention_mask
 
     def forward(self, audio_features: torch.Tensor) -> torch.Tensor:
-        hidden_states = self.linear(audio_features)
+        hidden_states = self.fc1(audio_features)
+        hidden_states = self.act(hidden_states)
+        hidden_states = self.fc2(hidden_states)
+        hidden_states = self.post_norm(hidden_states) * self.gain.to(dtype=hidden_states.dtype)
         return hidden_states
 
 
@@ -75,21 +86,25 @@ class MELTQFormerAdapter(nn.Module):
 
     def __init__(self, config: MELTConfig):
         super().__init__()
-        self.hidden_size = config.adapter_config.hidden_size
+        adapter_cfg = getattr(config, "adapter_config", None)
+        if adapter_cfg is None:
+            raise ValueError("MELTQFormerAdapter requires config.adapter_config to be set")
+
+        self.hidden_size = adapter_cfg.hidden_size
         # Read Q-Former parameters from adapter_config when present
-        self.downsample_rate = getattr(config.adapter_config, "downsample_rate", getattr(config, "downsample_rate", 5))
-        self.window_size = getattr(config.adapter_config, "window_size", getattr(config, "window_size", 15))
+        self.downsample_rate = getattr(adapter_cfg, "downsample_rate", getattr(config, "downsample_rate", 5))
+        self.window_size = getattr(adapter_cfg, "window_size", getattr(config, "window_size", 15))
         self.num_queries = self.window_size // self.downsample_rate
         self.output_hidden_size = config.text_decoder_config.hidden_size
 
-        self.query = nn.Parameter(torch.zeros(1, self.num_queries, config.adapter_config.hidden_size))
+        self.query = nn.Parameter(torch.zeros(1, self.num_queries, adapter_cfg.hidden_size))
         self.query.data.normal_(mean=0.0, std=1.0)
 
         # Q-Former model from config (typically blip_2_qformer)
-        self.qformer = AutoModel.from_config(config.adapter_config)
+        self.qformer = AutoModel.from_config(adapter_cfg)
 
         # Final projection to text decoder hidden size
-        self.linear = nn.Linear(config.adapter_config.hidden_size, self.output_hidden_size)
+        self.linear = nn.Linear(adapter_cfg.hidden_size, self.output_hidden_size)
 
     def _get_output_features_shape(
         self,
@@ -144,7 +159,7 @@ class MELTConformerAdapter(nn.Module):
     def __init__(self, config: MELTConfig):
         super().__init__()
         encoder_config = config.audio_encoder_config
-        adapter_config = config.adapter_config
+        adapter_config = getattr(config, "adapter_config", None) or encoder_config
 
         # Feature projection if output_hidden_size differs from hidden_size
         output_hidden_size = getattr(encoder_config, "output_hidden_size", encoder_config.hidden_size)
@@ -213,17 +228,28 @@ class MELTConformerAdapter(nn.Module):
         output_seq_len = self._compute_output_seq_len(seq_len)
         output_shape = (batch_size, output_seq_len, self.output_hidden_size)
 
-        # Compute subsampled attention mask
         output_attention_mask = None
         if features_attention_mask is not None:
-            # Compute effective lengths from attention mask
-            seq_lens = (features_attention_mask.size(1) - (1 - features_attention_mask.int()).sum(1)).float()
-            # Apply subsampling for each layer
+            # Non-padded lengths (robust, standard)
+            non_padded_lengths = features_attention_mask.to(torch.long).sum(dim=-1).to(torch.float32)
+
+            # Apply subsampling for each adapter layer
+            out_lengths = non_padded_lengths
             for _ in range(self.num_adapter_layers):
-                seq_lens = self._compute_sub_sample_lengths_from_attention_mask(seq_lens)
-            # Create output attention mask from computed lengths
-            output_attention_mask = torch.arange(output_seq_len, device=input_features.device).unsqueeze(0)
-            output_attention_mask = (output_attention_mask < seq_lens.unsqueeze(1)).float()
+                out_lengths = self._compute_sub_sample_lengths_from_attention_mask(out_lengths)
+
+            out_lengths = out_lengths.to(torch.long).clamp(min=0, max=output_seq_len)
+
+            # Build boolean prefix mask of shape (B, output_seq_len)
+            output_attention_mask = torch.zeros(
+                (batch_size, output_seq_len),
+                dtype=torch.bool,
+                device=input_features.device,
+            )
+            valid = out_lengths > 0
+            if valid.any():
+                output_attention_mask[torch.arange(batch_size, device=input_features.device)[valid], out_lengths[valid] - 1] = True
+                output_attention_mask = output_attention_mask.flip([-1]).cumsum(-1).flip([-1]).bool()
 
         return output_shape, output_attention_mask
 
@@ -358,7 +384,7 @@ class MELTAudioEncoder(nn.Module):
         self.config = config
 
         # Maximum sequence length for chunking (default 500 like Phi4)
-        self.max_seq_len = getattr(config, "max_audio_seq_len", 500)
+        self.max_seq_len = getattr(config.audio_encoder_config, "max_audio_seq_len", 500)
 
         # Initialize the audio encoder
         self.model = AutoModel.from_config(config.audio_encoder_config)
@@ -526,9 +552,19 @@ class MELTPreTrainedModel(PreTrainedModel, GenerationMixin):
 
         # MLP adapter initialization (Qwen2Audio style)
         elif isinstance(module, MELTMLPAdapter):
-            module.linear.weight.data.normal_(mean=0.0, std=std)
-            if module.linear.bias is not None:
-                module.linear.bias.data.zero_()
+            module.fc1.weight.data.normal_(mean=0.0, std=std)
+            if module.fc1.bias is not None:
+                module.fc1.bias.data.zero_()
+
+            module.fc2.weight.data.normal_(mean=0.0, std=std)
+            if module.fc2.bias is not None:
+                module.fc2.bias.data.zero_()
+
+            module.post_norm.weight.data.fill_(1.0)
+            module.post_norm.bias.data.zero_()
+
+            # Keep the initial injected-audio scale small for stability.
+            module.gain.data.fill_(0.1)
 
         # Conformer adapter initialization (Wav2Vec2Bert style)
         elif isinstance(module, MELTConformerAdapter):
@@ -729,8 +765,8 @@ class MELTForConditionalGeneration(MELTPreTrainedModel):
 
     def forward(
         self,
-        input_ids: torch.FloatTensor | None = None,
-        attention_mask: torch.FloatTensor | None = None,
+        input_ids: torch.LongTensor | None = None,
+        attention_mask: torch.Tensor | None = None,
         input_features: torch.FloatTensor | None = None,
         features_attention_mask: torch.FloatTensor | None = None,
         audio_lengths: torch.LongTensor | None = None,
@@ -750,11 +786,18 @@ class MELTForConditionalGeneration(MELTPreTrainedModel):
         kwargs_decoder = {
             argument[len("decoder_") :]: value for argument, value in kwargs.items() if argument.startswith("decoder_")
         }
-        if "num_items_in_batch" in kwargs_encoder:
-            kwargs_decoder["num_items_in_batch"] = kwargs_encoder.pop("num_items_in_batch", None)
 
-        # extract input embeds from the decoder
-        decoder_input_embs = self.text_decoder.get_input_embeddings()(input_ids)
+        # HF Trainer passes `num_items_in_batch` (not prefixed); forward it to the decoder if present.
+        if "num_items_in_batch" in kwargs:
+            kwargs_decoder["num_items_in_batch"] = kwargs["num_items_in_batch"]
+
+        if input_ids is None:
+            raise ValueError("input_ids must be provided")
+        if input_ids.dtype != torch.long:
+            raise TypeError(f"input_ids must be torch.long, got {input_ids.dtype}")
+
+        embedding = self.text_decoder.get_input_embeddings()
+        decoder_input_embs = embedding(input_ids)
 
         # Process audio through encoder (includes chunking and adapter projection)
         # We assume that if we are using cache then we are caching encoder_outputs
@@ -770,10 +813,14 @@ class MELTForConditionalGeneration(MELTPreTrainedModel):
                     **kwargs_encoder,
                 )
 
+
                 # Create attention mask for encoder outputs
                 if features_attention_mask is not None:
-                    encoder_outputs_mask = self.audio_stack.encoder.model._get_feature_vector_attention_mask(
-                        encoder_hidden_states.shape[1], features_attention_mask
+                    # encoder_outputs_mask = self.audio_stack.encoder.model._get_feature_vector_attention_mask(
+                    #     encoder_hidden_states.shape[1], features_attention_mask
+                    # )
+                    _, encoder_outputs_mask = self.audio_stack.adapter._get_output_features_shape(
+                        input_features, features_attention_mask
                     )
                 else:
                     encoder_outputs_mask = torch.ones(
@@ -806,8 +853,8 @@ class MELTForConditionalGeneration(MELTPreTrainedModel):
         # for causal language modeling with a single text response.
         # For training, we keep only the last `logits_to_keep` logits for computing loss on text tokens.
         # For generation, we typically only need the last token's logits.
-        if logits_to_keep == 0:
-            logits_to_keep = labels.shape[1] if labels is not None else input_ids.shape[1]
+        # if logits_to_keep == 0:
+        #     logits_to_keep = labels.shape[1] if labels is not None else input_ids.shape[1]
 
         # We do not pass labels to the LLM and compute the loss ourselves
         decoder_outputs = self.text_decoder(
@@ -830,6 +877,7 @@ class MELTForConditionalGeneration(MELTPreTrainedModel):
                 logits=logits,
                 labels=labels,
                 vocab_size=self.config.vocab_size,
+                ignore_index=-100,
                 **kwargs,
             )
 

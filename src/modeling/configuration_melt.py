@@ -86,18 +86,10 @@ class MELTConfig(PretrainedConfig):
             The config object or dictionary of the text decoder backbone.
         adapter_config (`MELTAdapterConfig`, *optional*):
             The config object or dictionary of the audio adapter.
-
         initializer_range (`float`, *optional*, defaults to 0.02):
             The standard deviation of the truncated_normal_initializer for initializing all weight matrices.
-        has_lora_adapter (`bool`, *optional*, defaults to `False`):
-            Indicates whether or not the model has a LoRA adapter.
         adapter_type (`str`, *optional*, defaults to `"mlp"`):
             Type of adapter to use for modality projection. One of: "mlp", "qformer", or "conformer".
-        num_latents (`int`, *optional*, defaults to 64):
-            Number of latent vectors for perceiver-style adapters.
-        max_audio_seq_len (`int`, *optional*, defaults to 500):
-            Maximum sequence length for audio features before chunking is applied.
-            Sequences longer than this will be split into chunks.
     """
 
     model_type = "melt"
@@ -118,10 +110,6 @@ class MELTConfig(PretrainedConfig):
         text_decoder_config=None,
         adapter_config=None,
         initializer_range=0.02,
-        has_lora_adapter=False,
-        adapter_type="mlp",
-        num_latents=64,
-        max_audio_seq_len=1500,  # for frames of 20ms, this is 30s
         **kwargs,
     ):
         if audio_encoder_config is None:
@@ -153,21 +141,36 @@ class MELTConfig(PretrainedConfig):
 
         # Handle adapter config
         if not isinstance(adapter_config, MELTAdapterConfig):
-            adapter_cfg = {} if adapter_config is None else adapter_config
-            # If adapter_cfg is a dict and contains a 'type' entry, prefer that as adapter_type
-            if isinstance(adapter_cfg, dict) and "type" in adapter_cfg:
-                adapter_type = adapter_cfg.get("type", adapter_type)
+            # Accept mapping, dataclass (e.g., Training's AdapterConfig), or namespace-like objects
+            if adapter_config is None:
+                adapter_cfg = {}
+            elif isinstance(adapter_config, dict):
+                adapter_cfg = dict(adapter_config)
+            else:
+                # Defer importing dataclasses utilities lazily to avoid import cycles
+                from dataclasses import is_dataclass, asdict
+
+                if is_dataclass(adapter_config):
+                    adapter_cfg = asdict(adapter_config)
+                elif hasattr(adapter_config, "__dict__"):
+                    adapter_cfg = dict(adapter_config.__dict__)
+                else:
+                    raise TypeError(
+                        "adapter_config must be a MELTAdapterConfig, dict, or dataclass/namespace-like object"
+                    )
+
+            # Extract user-provided adapter `type` (mlp/qformer/conformer) if present.
+            adapter_type = adapter_cfg.pop("type", getattr(self, "adapter_type", "mlp"))
+            self.adapter_type = adapter_type
+
+            # Initialize MELTAdapterConfig with remaining adapter kwargs
             self.adapter_config = MELTAdapterConfig(**adapter_cfg)
         else:
             self.adapter_config = adapter_config
+            # Ensure adapter_type attribute exists and defaults to 'mlp' if not present
+            self.adapter_type = getattr(self, "adapter_type", "mlp")
 
         self.initializer_range = initializer_range
-        self.has_lora_adapter = has_lora_adapter
-        self.adapter_type = adapter_type
-        self.num_latents = num_latents
-
-        # Audio encoder chunking settings
-        self.max_audio_seq_len = max_audio_seq_len
 
         # Set decoder-related attributes
         self.loss_type = "ForCausalLMLoss"
