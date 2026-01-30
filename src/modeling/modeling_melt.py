@@ -416,7 +416,7 @@ class MELTAudioEncoder(nn.Module):
         self.max_seq_len = getattr(config.audio_encoder_config, "max_audio_seq_len", 500)
 
         # Initialize the audio encoder
-        self.model = AutoModel.from_pretrained(config.audio_encoder)
+        self.model = AutoModel.from_pretrained(config.audio_encoder, config=config.audio_encoder_config)
 
         # Validate that the encoder doesn't have an LM head
         if self.model.get_output_embeddings() is not None:
@@ -645,7 +645,9 @@ class MELTForCausalLM(MELTPreTrainedModel):
         super().__init__(config)
 
         # Initialize the text decoder (language model)
-        self.text_decoder = AutoModelForCausalLM.from_pretrained(config.text_decoder)
+        self.text_decoder = AutoModelForCausalLM.from_pretrained(
+            config.text_decoder, config=config.text_decoder_config
+        )
 
         # Propagate tied weights keys if present
         if self.text_decoder._tied_weights_keys is not None:

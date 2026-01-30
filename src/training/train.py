@@ -81,6 +81,7 @@ def prepare_model(
         audio_encoder=encoder_cfg.name,
         text_decoder=decoder_cfg.name,
         adapter_config=cfg.model.adapter,
+        decoder_kwargs={"attn_implementation": "flash_attention_2"},
         max_audio_seq_len=max_audio_seq_len,
     )
 
