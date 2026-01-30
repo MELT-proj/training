@@ -137,6 +137,9 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
             if text == "" or text is None:
                 raise RuntimeError(f"Empty or missing text for cut {cut.id}. Cut: {cut}")
 
+            # Strip leading/trailing whitespace and make it lowercase
+            text = text.strip().lower()
+
             # Get task and language tags
             task, lang = self._get_tags(cut)
             audios.append(audio)
