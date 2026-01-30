@@ -18,7 +18,12 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+from transformers import Trainer
+from transformers.trainer_utils import has_length
+
 from .. import ddp
+from ..logging_utils import get_logger
+from ..modeling import MELTProcessor
 from .config import TrainingConfig
 from .data.audio.lhotse import (
     FallbackDataset,
@@ -28,10 +33,7 @@ from .data.audio.lhotse import (
     get_eval_dataloader_from_config,
     get_train_dataloader_from_config,
 )
-from ..logging_utils import get_logger
-from ..modeling import MELTProcessor
-from transformers import Trainer
-from transformers.trainer_utils import has_length
+
 
 logger = get_logger(__name__)
 
@@ -92,27 +94,22 @@ class MELTTrainer(Trainer):
             # Training dataset stats
             if hasattr(config.data, "train_ds"):
                 grad_accum = getattr(args, "gradient_accumulation_steps", 1) if args else 1
-                self.steps_per_epoch, self.dataset_duration_hours, self.dataset_num_cuts = (
-                    estimate_steps_per_epoch(
-                        config=config.data.train_ds,
-                        gradient_accumulation_steps=grad_accum,
-                        world_size=self._world_size,
-                    )
+                self.steps_per_epoch, self.dataset_duration_hours, self.dataset_num_cuts = estimate_steps_per_epoch(
+                    config=config.data.train_ds,
+                    gradient_accumulation_steps=grad_accum,
+                    world_size=self._world_size,
                 )
 
             # Evaluation dataset stats
             if hasattr(config.data, "validation_ds") and config.data.validation_ds.input_cfg:
                 from .data.audio.lhotse import compute_dataset_duration
-                
+
                 _, self.eval_num_cuts = compute_dataset_duration(config.data.validation_ds)
                 self.eval_num_batches = estimate_num_batches(
                     config.data.validation_ds,
                     world_size=self._world_size,
                 )
-                logger.info(
-                    f"Evaluation dataset: {self.eval_num_cuts} cuts, "
-                    f"~{self.eval_num_batches} batches"
-                )
+                logger.info(f"Evaluation dataset: {self.eval_num_cuts} cuts, ~{self.eval_num_batches} batches")
 
             # Log epoch estimation info
             if self.steps_per_epoch > 0:
@@ -125,18 +122,14 @@ class MELTTrainer(Trainer):
                 # Get max_steps and num_train_epochs from args
                 max_steps = getattr(args, "max_steps", None) if args else None
                 num_train_epochs = getattr(args, "num_train_epochs", None) if args else None
-                
+
                 # Validate: at least one must be set
                 if max_steps is None and num_train_epochs is None:
-                    raise ValueError(
-                        "Either max_steps or num_train_epochs must be set. "
-                        "Both cannot be None."
-                    )
-                
+                    raise ValueError("Either max_steps or num_train_epochs must be set. Both cannot be None.")
+
                 # Check if we should compute max_steps from epochs
-                compute_from_epochs = (
-                    hasattr(config, "trainer")
-                    and getattr(config.trainer, "compute_max_steps_from_epochs", False)
+                compute_from_epochs = hasattr(config, "trainer") and getattr(
+                    config.trainer, "compute_max_steps_from_epochs", False
                 )
 
                 if compute_from_epochs or max_steps is None:
@@ -154,49 +147,59 @@ class MELTTrainer(Trainer):
                 elif max_steps is not None and max_steps > 0:
                     # If max_steps is set, compute how many epochs that represents
                     total_epochs = max_steps / self.steps_per_epoch
-                    logger.info(
-                        f"Training for {max_steps} steps = ~{total_epochs:.2f} epochs"
-                    )
+                    logger.info(f"Training for {max_steps} steps = ~{total_epochs:.2f} epochs")
 
                 # Compute and log checkpoint/logging/eval intervals in hours
                 if self.dataset_duration_hours > 0 and self.steps_per_epoch > 0:
                     hours_per_step = self.dataset_duration_hours / self.steps_per_epoch
-                    
+
                     logger.info("=" * 80)
-                    logger.info("CHECKPOINT & LOGGING SCHEDULE (in wall-clock time):")
+                    logger.info("CHECKPOINT & LOGGING SCHEDULE (in input audio hours):")
                     logger.info("=" * 80)
-                    
+
                     # Logging frequency
                     if args and hasattr(args, "logging_steps") and args.logging_steps > 0:
                         logging_hours = args.logging_steps * hours_per_step
                         logging_minutes = logging_hours * 60
                         if logging_hours >= 1.0:
-                            logger.info(f"  📊 Logging every {args.logging_steps} steps = ~{logging_hours:.2f} hours")
+                            logger.info(
+                                f"  📊 Logging every {args.logging_steps} steps = ~{logging_hours:.2f} input hours"
+                            )
                         else:
-                            logger.info(f"  📊 Logging every {args.logging_steps} steps = ~{logging_minutes:.1f} minutes")
-                    
+                            logger.info(
+                                f"  📊 Logging every {args.logging_steps} steps = ~{logging_minutes:.1f} input minutes"
+                            )
+
                     # Evaluation frequency
                     if args and hasattr(args, "eval_steps") and args.eval_steps > 0:
                         eval_hours = args.eval_steps * hours_per_step
                         if eval_hours >= 1.0:
-                            logger.info(f"  📈 Evaluation every {args.eval_steps} steps = ~{eval_hours:.2f} hours")
+                            logger.info(
+                                f"  📈 Evaluation every {args.eval_steps} steps = ~{eval_hours:.2f} input hours"
+                            )
                         else:
                             eval_minutes = eval_hours * 60
-                            logger.info(f"  📈 Evaluation every {args.eval_steps} steps = ~{eval_minutes:.1f} minutes")
-                    
+                            logger.info(
+                                f"  📈 Evaluation every {args.eval_steps} steps = ~{eval_minutes:.1f} input minutes"
+                            )
+
                     # Save frequency
                     if args and hasattr(args, "save_steps") and args.save_steps > 0:
                         save_hours = args.save_steps * hours_per_step
                         if save_hours >= 1.0:
-                            logger.info(f"  💾 Checkpoints every {args.save_steps} steps = ~{save_hours:.2f} hours")
+                            logger.info(
+                                f"  💾 Checkpoints every {args.save_steps} steps = ~{save_hours:.2f} input hours"
+                            )
                         else:
                             save_minutes = save_hours * 60
-                            logger.info(f"  💾 Checkpoints every {args.save_steps} steps = ~{save_minutes:.1f} minutes")
-                    
+                            logger.info(
+                                f"  💾 Checkpoints every {args.save_steps} steps = ~{save_minutes:.1f} input minutes"
+                            )
+
                     logger.info("=" * 80)
                     logger.info(
                         f"Note: Time estimates based on {self.dataset_duration_hours:.2f}h dataset, "
-                        f"{self._world_size} GPUs, grad_accum={grad_accum}"
+                        f"{self._world_size} world size, grad_accum={grad_accum}"
                     )
                     logger.info("=" * 80)
 
@@ -403,12 +406,12 @@ class MELTTrainer(Trainer):
         if adapter_lr is None:
             adapter_lr = getattr(self.args, "adapter_lr", 1e-4)
         adapter_lr = float(adapter_lr)
-        
+
         encoder_lr = getattr(opt_cfg, "encoder_lr", None) if opt_cfg is not None else None
         if encoder_lr is None:
             encoder_lr = getattr(self.args, "encoder_lr", 1e-5)
         encoder_lr = float(encoder_lr)
-        
+
         decoder_lr = getattr(opt_cfg, "decoder_lr", None) if opt_cfg is not None else None
         if decoder_lr is None:
             decoder_lr = getattr(self.args, "decoder_lr", 1e-3)

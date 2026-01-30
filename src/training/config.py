@@ -13,9 +13,10 @@ from __future__ import annotations
 
 import os
 import re
-import yaml
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
+
+import yaml
 
 
 # =============================================================================
@@ -50,6 +51,15 @@ class DatasetConfig:
     # Data sources
     input_cfg: list[DataSourceConfig] = field(default_factory=list)
     """List of data source configurations."""
+
+    total_hours: float | None = None
+    """Total hours of data (optional, for estimation)."""
+
+    total_cuts: int | None = None
+    """Total number of cuts (optional, for estimation)."""
+
+    force_estimate: bool | None = None
+    """Whether to force estimation of total_hours at start (overrides provided value)."""
 
     # Batch settings
     batch_size: int | None = None
@@ -130,39 +140,43 @@ class DataConfig:
     min_chars: int = 3
     """Minimum number of characters for valid text."""
 
-    train_ds: DatasetConfig = field(default_factory=lambda: DatasetConfig(
-        input_cfg=[
-            DataSourceConfig(
-                type="lhotse_shar",
-                shar_path="${LOCAL_DATASETS_DIR}/librispeech/clean/train.100",
-                tags={"task": "asr", "lang": "en"},
-            ),
-            DataSourceConfig(
-                type="lhotse_shar",
-                shar_path="${LOCAL_DATASETS_DIR}/librispeech/clean/train.360",
-                tags={"task": "asr", "lang": "en"},
-            ),
-        ],
-        batch_duration=120.0,
-        use_bucketing=True,
-        shuffle=True,
-    ))
+    train_ds: DatasetConfig = field(
+        default_factory=lambda: DatasetConfig(
+            input_cfg=[
+                DataSourceConfig(
+                    type="lhotse_shar",
+                    shar_path="${LOCAL_DATASETS_DIR}/librispeech/clean/train.100",
+                    tags={"task": "asr", "lang": "en"},
+                ),
+                DataSourceConfig(
+                    type="lhotse_shar",
+                    shar_path="${LOCAL_DATASETS_DIR}/librispeech/clean/train.360",
+                    tags={"task": "asr", "lang": "en"},
+                ),
+            ],
+            batch_duration=120.0,
+            use_bucketing=True,
+            shuffle=True,
+        )
+    )
     """Training dataset configuration."""
 
-    validation_ds: DatasetConfig = field(default_factory=lambda: DatasetConfig(
-        input_cfg=[
-            DataSourceConfig(
-                type="lhotse_shar",
-                shar_path="${LOCAL_DATASETS_DIR}/librispeech/clean/validation",
-                tags={"task": "asr", "lang": "en"},
-            ),
-        ],
-        batch_size=8,
-        batch_duration=None,
-        use_bucketing=False,
-        shuffle=False,
-        num_workers=4,
-    ))
+    validation_ds: DatasetConfig = field(
+        default_factory=lambda: DatasetConfig(
+            input_cfg=[
+                DataSourceConfig(
+                    type="lhotse_shar",
+                    shar_path="${LOCAL_DATASETS_DIR}/librispeech/clean/validation",
+                    tags={"task": "asr", "lang": "en"},
+                ),
+            ],
+            batch_size=8,
+            batch_duration=None,
+            use_bucketing=False,
+            shuffle=False,
+            num_workers=4,
+        )
+    )
     """Validation dataset configuration."""
 
 
@@ -476,7 +490,7 @@ def expand_env_vars(value: str) -> str:
         return os.environ.get(var_name, default)
 
     # Replace ${VAR:-default} patterns
-    value = re.sub(r'\$\{([^}:]+)(?::-([^}]*))?\}', replace_with_default, value)
+    value = re.sub(r"\$\{([^}:]+)(?::-([^}]*))?\}", replace_with_default, value)
 
     # Also expand standard $VAR and ${VAR} patterns
     value = os.path.expandvars(value)
@@ -548,6 +562,12 @@ def config_from_dict(d: dict) -> TrainingConfig:
             kwargs["batch_size"] = ds["batch_size"]
         if "batch_duration" in ds:
             kwargs["batch_duration"] = ds["batch_duration"]
+        if "total_hours" in ds:
+            kwargs["total_hours"] = ds["total_hours"]
+        if "total_cuts" in ds:
+            kwargs["total_cuts"] = ds["total_cuts"]
+        if "force_estimate" in ds:
+            kwargs["force_estimate"] = ds["force_estimate"]
         if "quadratic_duration" in ds:
             kwargs["quadratic_duration"] = ds["quadratic_duration"]
         if "use_bucketing" in ds:
@@ -588,7 +608,7 @@ def config_from_dict(d: dict) -> TrainingConfig:
 
     # Parse model config
     model_dict = d.get("model", {})
-    
+
     encoder_kwargs = {}
     if "encoder" in model_dict:
         enc_dict = model_dict["encoder"]
@@ -597,7 +617,7 @@ def config_from_dict(d: dict) -> TrainingConfig:
         if "freeze" in enc_dict:
             encoder_kwargs["freeze"] = enc_dict["freeze"]
     encoder = EncoderConfig(**encoder_kwargs)
-    
+
     decoder_kwargs = {}
     if "decoder" in model_dict:
         dec_dict = model_dict["decoder"]
@@ -614,7 +634,7 @@ def config_from_dict(d: dict) -> TrainingConfig:
         if "freeze" in dec_dict:
             decoder_kwargs["freeze"] = dec_dict["freeze"]
     decoder = DecoderConfig(**decoder_kwargs)
-    
+
     adapter_kwargs = {}
     if "adapter" in model_dict:
         adp_dict = model_dict["adapter"]
@@ -645,9 +665,11 @@ def config_from_dict(d: dict) -> TrainingConfig:
         if "adapter_stride" in adp_dict:
             adapter_kwargs["adapter_stride"] = int(adp_dict["adapter_stride"])
         if "mlp_hidden_size" in adp_dict:
-            adapter_kwargs["mlp_hidden_size"] = int(adp_dict["mlp_hidden_size"]) if adp_dict["mlp_hidden_size"] is not None else None
+            adapter_kwargs["mlp_hidden_size"] = (
+                int(adp_dict["mlp_hidden_size"]) if adp_dict["mlp_hidden_size"] is not None else None
+            )
     adapter = AdapterConfig(**adapter_kwargs)
-    
+
     model_kwargs = {
         "encoder": encoder,
         "decoder": decoder,
@@ -675,21 +697,42 @@ def config_from_dict(d: dict) -> TrainingConfig:
     # Parse trainer config
     trainer_dict = d.get("trainer", {})
     trainer_kwargs = {}
-    
+
     # Define known trainer fields
     known_trainer_fields = {
-        "output_dir", "overwrite_output_dir", "seed", "do_train", "do_eval",
-        "per_device_train_batch_size", "per_device_eval_batch_size", "gradient_accumulation_steps",
-        "adam_beta1", "adam_beta2", "learning_rate", "lr_scheduler_type", "warmup_steps",
-        "num_train_epochs", "max_steps", "compute_max_steps_from_epochs",
-        "logging_strategy", "logging_steps", "report_to",
-        "eval_strategy", "eval_steps",
-        "save_strategy", "save_steps", "save_total_limit",
-        "bf16", "group_by_length", "dataloader_num_workers",
-        "remove_unused_columns", "ddp_find_unused_parameters", "resume_from_checkpoint",
-        "extra_args"  # Don't collect extra_args into itself
+        "output_dir",
+        "overwrite_output_dir",
+        "seed",
+        "do_train",
+        "do_eval",
+        "per_device_train_batch_size",
+        "per_device_eval_batch_size",
+        "gradient_accumulation_steps",
+        "adam_beta1",
+        "adam_beta2",
+        "learning_rate",
+        "lr_scheduler_type",
+        "warmup_steps",
+        "num_train_epochs",
+        "max_steps",
+        "compute_max_steps_from_epochs",
+        "logging_strategy",
+        "logging_steps",
+        "report_to",
+        "eval_strategy",
+        "eval_steps",
+        "save_strategy",
+        "save_steps",
+        "save_total_limit",
+        "bf16",
+        "group_by_length",
+        "dataloader_num_workers",
+        "remove_unused_columns",
+        "ddp_find_unused_parameters",
+        "resume_from_checkpoint",
+        "extra_args",  # Don't collect extra_args into itself
     }
-    
+
     # Collect extra args (fields not in known list)
     extra_args = {k: v for k, v in trainer_dict.items() if k not in known_trainer_fields}
     if extra_args:

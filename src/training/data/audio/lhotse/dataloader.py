@@ -36,8 +36,9 @@ from lhotse.dataset.dataloading import resolve_seed
 from lhotse.dataset.sampling.base import CutSampler, TimeConstraint
 from lhotse.utils import fix_random_seed
 
-from ....config import DataConfig, DatasetConfig, DataSourceConfig
 from .....logging_utils import get_logger
+from ....config import DataConfig, DatasetConfig, DataSourceConfig
+
 
 logger = get_logger(__name__)
 
@@ -62,7 +63,7 @@ class FiniteIterableDatasetWrapper(torch.utils.data.IterableDataset):
     When num_workers > 0, each worker gets a copy of this dataset. To avoid
     duplicate processing, each worker only yields batches where:
         batch_idx % num_workers == worker_id
-    
+
     This ensures all batches are processed exactly once across all workers.
 
     Args:
@@ -122,11 +123,8 @@ class FiniteIterableDatasetWrapper(torch.utils.data.IterableDataset):
             return len(self.sampler)
         except TypeError:
             raise TypeError(
-                "FiniteIterableDatasetWrapper length unknown. "
-                "Provide num_batches or use a sampler with __len__."
+                "FiniteIterableDatasetWrapper length unknown. Provide num_batches or use a sampler with __len__."
             )
-
-
 
 
 def _get_config_value(config: Any, key: str, default: Any = None) -> Any:
@@ -241,9 +239,7 @@ def compute_dataset_duration(
                 continue
 
             # Use helper function to read manifest durations
-            source_duration, source_cuts = _read_shar_manifest_durations(
-                shar_path, min_duration, max_duration
-            )
+            source_duration, source_cuts = _read_shar_manifest_durations(shar_path, min_duration, max_duration)
             total_duration += source_duration
             num_cuts += source_cuts
 
@@ -299,11 +295,25 @@ def estimate_steps_per_epoch(
         logger.warning("batch_duration not set, cannot estimate steps per epoch")
         return -1, 0.0, 0
 
-    total_duration, num_cuts = compute_dataset_duration(config)
-    if total_duration <= 0:
-        return 0, 0.0, 0
+    total_hours = _get_config_value(config, "total_hours", None)
+    total_cuts = _get_config_value(config, "total_cuts", None)
+    force_estimate = _get_config_value(config, "force_estimate", None)
+    if total_hours is None:
+        if force_estimate:
+            logger.info(
+                "Users requested forced estimation of total_hours; proceeding with estimation (disable `force_estimate` if your training starts gets delayed too much)."
+            )
+            total_duration, total_cuts = compute_dataset_duration(config)
 
-    total_hours = total_duration / 3600.0
+            if total_duration <= 0:
+                return 0, 0.0, 0
+
+            total_hours = total_duration / 3600.0
+        else:
+            logger.info("`total_hours` and `force_estimate` not set; cannot estimate steps per epoch")
+            return -1, 0.0, 0
+    else:
+        total_duration = total_hours * 3600.0
 
     # Each rank sees total_duration / world_size of data.
     # Each rank creates (total_duration / world_size) / batch_duration micro-batches.
@@ -312,12 +322,11 @@ def estimate_steps_per_epoch(
     steps_per_epoch = int(total_duration / (batch_duration * world_size * gradient_accumulation_steps))
 
     logger.info(
-        f"Dataset stats: {num_cuts} cuts, {total_hours:.2f} hours total, "
+        f"Dataset stats: {total_cuts} cuts, {total_hours:.2f} hours total, "
         f"~{steps_per_epoch} steps/epoch (batch_duration={batch_duration}s, "
         f"grad_accum={gradient_accumulation_steps}, world_size={world_size})"
     )
-
-    return steps_per_epoch, total_hours, num_cuts
+    return steps_per_epoch, total_hours, total_cuts
 
 
 def read_cutset_from_config(config: DatasetConfig | dict) -> tuple[CutSet, bool]:
@@ -507,11 +516,7 @@ def get_lhotse_sampler_from_config(
         )
     else:
         # Simple dynamic sampler (no bucketing)
-        logger.info(
-            f"Creating DynamicCutSampler with "
-            f"batch_duration={batch_duration}, "
-            f"batch_size={max_cuts}"
-        )
+        logger.info(f"Creating DynamicCutSampler with batch_duration={batch_duration}, batch_size={max_cuts}")
 
         sampler = DynamicCutSampler(
             cuts,
@@ -826,8 +831,7 @@ def get_finite_dataloader_from_config(
         # For shar/tarred data, use FiniteIterableDatasetWrapper
         # Worker sharding is handled via round-robin in FiniteIterableDatasetWrapper.__iter__
         logger.info(
-            f"Using FiniteIterableDatasetWrapper for eval "
-            f"(num_workers={num_workers}, num_batches={num_batches})"
+            f"Using FiniteIterableDatasetWrapper for eval (num_workers={num_workers}, num_batches={num_batches})"
         )
 
         wrapped_dataset = FiniteIterableDatasetWrapper(
