@@ -1,19 +1,27 @@
 """MELT (Multimodal Encoder Language Transformer) architecture"""
 
 import math
+from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
 from torch import nn
 
 from transformers import AutoModel, AutoModelForCausalLM
+from transformers.cache_utils import Cache, DynamicCache
 from transformers.generation.utils import GenerationMixin
-from transformers.modeling_outputs import CausalLMOutputWithPast
+from transformers.modeling_outputs import (
+    BaseModelOutputWithPast,
+    CausalLMOutputWithPast,
+)
 from transformers.modeling_utils import PreTrainedModel
-from transformers.models.wav2vec2_bert.modeling_wav2vec2_bert import Wav2Vec2BertAdapterLayer
+from transformers.models.wav2vec2_bert.modeling_wav2vec2_bert import (
+    Wav2Vec2BertAdapterLayer,
+)
+from transformers.processing_utils import Unpack
+from transformers.utils import TransformersKwargs
 
 from ..logging_utils import get_logger
-
 from .configuration_melt import MELTConfig
 
 
@@ -33,7 +41,11 @@ class MELTMLPAdapter(nn.Module):
         audio_hidden_size = getattr(
             config.audio_encoder_config,
             "output_hidden_size",
-            getattr(config.audio_encoder_config, "hidden_size", config.audio_encoder_config.output_hidden_size),
+            getattr(
+                config.audio_encoder_config,
+                "hidden_size",
+                config.audio_encoder_config.output_hidden_size,
+            ),
         )
         out = config.text_decoder_config.hidden_size
         adapter_cfg = getattr(config, "adapter_config", None)
@@ -171,13 +183,25 @@ class MELTConformerAdapter(nn.Module):
             self.proj_layer_norm = None
 
         # Prefer adapter_config values, fall back to encoder_config, then defaults
-        num_adapter_layers = getattr(adapter_config, "num_adapter_layers", getattr(encoder_config, "num_adapter_layers", 1))
+        num_adapter_layers = getattr(
+            adapter_config,
+            "num_adapter_layers",
+            getattr(encoder_config, "num_adapter_layers", 1),
+        )
         self.num_adapter_layers = num_adapter_layers
         self.layers = nn.ModuleList(Wav2Vec2BertAdapterLayer(encoder_config) for _ in range(num_adapter_layers))
         self.layerdrop = getattr(adapter_config, "layerdrop", getattr(encoder_config, "layerdrop", 0.0))
 
-        self.kernel_size = getattr(adapter_config, "adapter_kernel_size", getattr(encoder_config, "adapter_kernel_size", 3))
-        self.stride = getattr(adapter_config, "adapter_stride", getattr(encoder_config, "adapter_stride", 2))
+        self.kernel_size = getattr(
+            adapter_config,
+            "adapter_kernel_size",
+            getattr(encoder_config, "adapter_kernel_size", 3),
+        )
+        self.stride = getattr(
+            adapter_config,
+            "adapter_stride",
+            getattr(encoder_config, "adapter_stride", 2),
+        )
 
         # Final projection to text decoder hidden size
         adapter_output_size = output_hidden_size
@@ -248,7 +272,10 @@ class MELTConformerAdapter(nn.Module):
             )
             valid = out_lengths > 0
             if valid.any():
-                output_attention_mask[torch.arange(batch_size, device=input_features.device)[valid], out_lengths[valid] - 1] = True
+                output_attention_mask[
+                    torch.arange(batch_size, device=input_features.device)[valid],
+                    out_lengths[valid] - 1,
+                ] = True
                 output_attention_mask = output_attention_mask.flip([-1]).cumsum(-1).flip([-1]).bool()
 
         return output_shape, output_attention_mask
@@ -268,7 +295,9 @@ class MELTConformerAdapter(nn.Module):
             sub_sampled_lengths = self._compute_sub_sample_lengths_from_attention_mask(sub_sampled_lengths)
             if not self.training or (layerdrop_prob > self.layerdrop):
                 hidden_states = layer(
-                    hidden_states, attention_mask=attention_mask, sub_sampled_lengths=sub_sampled_lengths
+                    hidden_states,
+                    attention_mask=attention_mask,
+                    sub_sampled_lengths=sub_sampled_lengths,
                 )
 
         # Final projection to text decoder hidden size
@@ -387,7 +416,7 @@ class MELTAudioEncoder(nn.Module):
         self.max_seq_len = getattr(config.audio_encoder_config, "max_audio_seq_len", 500)
 
         # Initialize the audio encoder
-        self.model = AutoModel.from_config(config.audio_encoder_config)
+        self.model = AutoModel.from_pretrained(config.audio_encoder)
 
         # Validate that the encoder doesn't have an LM head
         if self.model.get_output_embeddings() is not None:
@@ -520,7 +549,7 @@ class MELTAudioStack(nn.Module):
 # =============================================================================
 
 
-class MELTPreTrainedModel(PreTrainedModel, GenerationMixin):
+class MELTPreTrainedModel(PreTrainedModel):
     """Base class for MELT models."""
 
     config_class = MELTConfig
@@ -604,7 +633,7 @@ class MELTPreTrainedModel(PreTrainedModel, GenerationMixin):
                 module.weight.data[module.padding_idx].zero_()
 
 
-class MELTForConditionalGeneration(MELTPreTrainedModel):
+class MELTForCausalLM(MELTPreTrainedModel):
     r"""
     MELT model for conditional generation, consisting of an audio encoder, audio adapter, and text decoder.
 
@@ -616,7 +645,7 @@ class MELTForConditionalGeneration(MELTPreTrainedModel):
         super().__init__(config)
 
         # Initialize the text decoder (language model)
-        self.text_decoder = AutoModelForCausalLM.from_config(config.text_decoder_config)
+        self.text_decoder = AutoModelForCausalLM.from_pretrained(config.text_decoder)
 
         # Propagate tied weights keys if present
         if self.text_decoder._tied_weights_keys is not None:
@@ -636,12 +665,6 @@ class MELTForConditionalGeneration(MELTPreTrainedModel):
         # Initialize weights and apply final processing
         self.post_init()
 
-    def get_encoder(self):
-        return self.audio_stack.encoder.model
-
-    def get_decoder(self):
-        return self.text_decoder
-
     def get_input_embeddings(self):
         return self.text_decoder.get_input_embeddings()
 
@@ -654,109 +677,141 @@ class MELTForConditionalGeneration(MELTPreTrainedModel):
     def set_output_embeddings(self, new_embeddings):
         return self.text_decoder.set_output_embeddings(new_embeddings)
 
-    def freeze_decoder(self):
-        """Freeze all decoder (text) parameters."""
-        for param in self.text_decoder.parameters():
-            param.requires_grad = False
-
-        return self
-
-    def freeze_encoder(self):
-        self.audio_stack.encoder.freeze()
-        return self
-
-    def get_audio_features(
-        self, input_features: torch.Tensor, attention_mask: torch.Tensor | None = None
-    ) -> torch.Tensor:
-        """Get the audio features projected to the text decoder embedding space."""
-        return self.audio_stack(input_features, features_attention_mask=attention_mask)
-
-    def _replace_audio_placeholders(
+    def _inject_embeddings(
         self,
-        text_data: torch.Tensor,
-        audio_data: torch.Tensor,
-        input_ids: torch.Tensor,
-        audio_lengths: torch.Tensor,
+        source_tensor: torch.Tensor,  # audio embeddings (b, s_a, d) or masks (b, s_a)
+        target_tensor: torch.Tensor,  # text embeddings (b, s_t, d) or masks (b, s_t)
+        inject_token_id: int,  # token id to inject at
+        input_ids: torch.Tensor,  # token ids (b, s_t), with inject_token_id in them
+        source_lengths: torch.Tensor,  # lengths of source tensor (b, max_num_injects), where max_num_injects is the max number of inject_token_id in input_ids
+        source_tensor_mask: torch.Tensor | None = None,  # mask for source tensor (b, s_a), only used for embeddings
     ) -> torch.Tensor:
         """
-        Replace placeholder <|AUDIO|> tokens with actual audio data (embeddings or masks).
+        Inject source_tensor embeddings or masks into target_tensor at positions specified by input_ids.
+        For each batch item [i], for each occurrence of inject_token_id in input_ids [i,j] we inject a part of source_tensor
+        dictated by source_lengths[i, j].
 
-        The text data is expected to contain placeholder tokens after each <audio_bos>:
-        <audio_bos> <|AUDIO|> <|AUDIO|> ... <audio_eos>
+        This function inserts source slices into the middle of target_tensor (rather than replacing),
+        so the resulting sequences may be longer than the original. The output is left-padded to
+        the longest sequence.
 
-        This function replaces the <|AUDIO|> placeholders with actual audio data.
-
-        Args:
-            text_data: Text data of shape (batch_size, seq_len, ...) - embeddings or masks
-            audio_data: Audio data of shape (batch_size, audio_seq_len, ...) - embeddings or masks
-            input_ids: Token IDs of shape (batch_size, seq_len)
-            audio_lengths: Audio lengths of shape (batch_size, num_audios) where -1 means empty slot
+        For embeddings (ndim=3): uses the decoder's eos_token embedding for padding.
+        For attention masks (ndim=2): uses 0.0 for padding.
 
         Returns:
-            Data with <|AUDIO|> placeholders replaced by actual audio data
+            Tensor of shape (batch_size, max_new_seq_len, hidden_size) for embeddings,
+            or (batch_size, max_new_seq_len) for masks, with left-padding.
         """
-        batch_size = text_data.shape[0]
+        ndim = target_tensor.ndim
+        batch_size = target_tensor.shape[0]
 
-        # Get audio_bos token ID from tokenizer
-        audio_bos_token = self.config.audio_bos_token_id
+        # Determine pad_item based on tensor type
+        if ndim == 3:
+            # Embeddings: use eos embedding for padding
+            hidden_size = target_tensor.shape[-1]
+            eos_token_id = self.text_decoder.config.eos_token_id
+            pad_item = self.text_decoder.get_input_embeddings()(
+                torch.tensor([eos_token_id], device=target_tensor.device, dtype=torch.long)
+            ).squeeze(0)  # (hidden_size,)
+        else:
+            # Attention masks: use 0.0 for padding (masked positions)
+            pad_item = torch.tensor(0.0, device=target_tensor.device, dtype=target_tensor.dtype)
 
-        # Clone text data to avoid in-place modification
-        merged_data = text_data.clone()
-
-        # Track current position in audio_data
-        audio_pos = 0
+        merged_sequences = []
 
         for batch_idx in range(batch_size):
             input_id_seq = input_ids[batch_idx]  # (seq_len,)
-            audio_lens = audio_lengths[batch_idx]  # (num_audios,)
+            item_lengths = source_lengths[batch_idx]  # (max_num_injects,)
 
-            # Find positions of audio_bos token in this sequence
-            audio_bos_positions = torch.where(input_id_seq == audio_bos_token)[0]
+            # Filter valid audio lengths (remove -1 or 0 padding)
+            valid_audio_lens = item_lengths[item_lengths > 0].tolist()
 
-            # Filter valid audio lengths (remove -1 padding)
-            valid_audio_lens = audio_lens[audio_lens > 0].tolist()
+            # Filter valid source tensor based on source mask
+            if ndim == 3 and source_tensor_mask is not None:
+                item_source_mask = source_tensor_mask[batch_idx]  # (s_a,)
+                valid_source_tensor = source_tensor[batch_idx][item_source_mask]  # (valid_s_a, d)
+            else:
+                valid_source_tensor = source_tensor[batch_idx]  # (d)
 
-            # If no audio tokens or no audio lengths, keep text data as-is
-            if len(audio_bos_positions) == 0 or len(valid_audio_lens) == 0:
+            # Find positions where injection should happen
+            inject_positions = torch.where(input_id_seq == inject_token_id)[0]
+
+            # If no inject tokens or no audio lengths, keep target data as-is
+            if len(inject_positions) == 0 or len(valid_audio_lens) == 0:
+                merged_sequences.append(target_tensor[batch_idx])
                 continue
 
-            # Replace placeholder tokens with actual audio data
-            for audio_idx, pos in enumerate(audio_bos_positions):
+            # Build the merged sequence by concatenating slices
+            slices = []
+            prev_pos = 0
+            source_pos = 0
+
+            for audio_idx, pos in enumerate(inject_positions):
                 if audio_idx >= len(valid_audio_lens):
+                    # No more audio to inject, but there may be more inject tokens
+                    # Skip remaining inject tokens
                     break
 
-                audio_len = valid_audio_lens[audio_idx]
+                pos = pos.item()
+                audio_len = int(valid_audio_lens[audio_idx])
 
-                # Get the audio data for this segment
-                if audio_data.ndim == 3:  # Embeddings (batch, seq, hidden)
-                    audio_slice = audio_data[batch_idx, audio_pos : audio_pos + audio_len, :]
-                else:  # Masks (batch, seq)
-                    audio_slice = audio_data[batch_idx, audio_pos : audio_pos + audio_len]
+                # Add target slice before the inject position (excluding the inject token itself)
+                if pos > prev_pos:
+                    slices.append(target_tensor[batch_idx, prev_pos:pos])
 
-                # Replace the placeholder tokens (positions after audio_bos)
-                # Placeholders are at positions: pos+1, pos+2, ..., pos+audio_len
-                placeholder_start = pos + 1
-                placeholder_end = pos + 1 + audio_len
+                # Add the source (audio) slice
+                audio_slice = valid_source_tensor[source_pos : source_pos + audio_len]
+                slices.append(audio_slice)
 
-                if audio_data.ndim == 3:
-                    merged_data[batch_idx, placeholder_start:placeholder_end, :] = audio_slice
+                # Update positions: skip the inject_token_id in target
+                prev_pos = pos + 1
+                source_pos += audio_len
+
+            # Add remaining target slice after the last injection
+            if prev_pos < target_tensor.shape[1]:
+                slices.append(target_tensor[batch_idx, prev_pos:])
+
+            # Concatenate all slices for this batch item
+            if slices:
+                merged_seq = torch.cat(slices, dim=0)  # (new_seq_len, hidden_size)
+            else:
+                merged_seq = target_tensor[batch_idx]
+
+            merged_sequences.append(merged_seq)
+
+        # Find max sequence length for padding
+        max_seq_len = max(seq.shape[0] for seq in merged_sequences)
+
+        # Left-pad all sequences to max_seq_len
+        padded_sequences = []
+        for seq in merged_sequences:
+            seq_len = seq.shape[0]
+            if seq_len < max_seq_len:
+                pad_len = max_seq_len - seq_len
+                if ndim == 3:
+                    # Embeddings: expand pad_item to (pad_len, hidden_size)
+                    padding = pad_item.unsqueeze(0).expand(pad_len, hidden_size)
                 else:
-                    merged_data[batch_idx, placeholder_start:placeholder_end] = audio_slice
+                    # Masks: create tensor of zeros with shape (pad_len,)
+                    padding = pad_item.expand(pad_len)
+                padded_seq = torch.cat([padding, seq], dim=0)
+            else:
+                padded_seq = seq
+            padded_sequences.append(padded_seq)
 
-                # Update audio position for next iteration
-                audio_pos += audio_len
+        # Stack into batch tensor
+        # Shape: (batch_size, max_seq_len, hidden_size) for embeddings
+        # Shape: (batch_size, max_seq_len) for masks
+        merged_tensor = torch.stack(padded_sequences, dim=0)
 
-            # Reset audio_pos for next batch item
-            audio_pos = 0
-
-        return merged_data
+        return merged_tensor
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
         # At the moment fast initialization is not supported for composite models
         if kwargs.get("_fast_init", False):
             logger.warning(
-                "Fast initialization is currently not supported for MELTForConditionalGeneration. "
+                "Fast initialization is currently not supported for MELTForCausalLM. "
                 "Falling back to slow initialization..."
             )
         kwargs["_fast_init"] = False
@@ -779,10 +834,14 @@ class MELTForConditionalGeneration(MELTPreTrainedModel):
         logits_to_keep: int | torch.Tensor = 0,
         **kwargs,
     ) -> tuple[torch.FloatTensor] | CausalLMOutputWithPast:
+        if input_ids is None:
+            raise ValueError("input_ids must be provided")
+        if input_ids.dtype != torch.long:
+            raise TypeError(f"input_ids must be torch.long, got {input_ids.dtype}")
+
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         kwargs_encoder = {argument: value for argument, value in kwargs.items() if argument.startswith("encoder_")}
-
         kwargs_decoder = {
             argument[len("decoder_") :]: value for argument, value in kwargs.items() if argument.startswith("decoder_")
         }
@@ -791,17 +850,15 @@ class MELTForConditionalGeneration(MELTPreTrainedModel):
         if "num_items_in_batch" in kwargs:
             kwargs_decoder["num_items_in_batch"] = kwargs["num_items_in_batch"]
 
-        if input_ids is None:
-            raise ValueError("input_ids must be provided")
-        if input_ids.dtype != torch.long:
-            raise TypeError(f"input_ids must be torch.long, got {input_ids.dtype}")
-
         embedding = self.text_decoder.get_input_embeddings()
         decoder_input_embs = embedding(input_ids)
 
-        # Process audio through encoder (includes chunking and adapter projection)
+        # Extract audio embeddings (includes chunking and adapter projection)
         # We assume that if we are using cache then we are caching encoder_outputs
+
+        # TODO: before removing the cache checks, we need to verify if all audio models support them internally
         if input_features is not None:
+            # First, we extract audio embeddings
             encoder_hidden_states = None
             if not use_cache or (use_cache and past_key_values is None):
                 encoder_hidden_states = self.audio_stack(
@@ -813,43 +870,69 @@ class MELTForConditionalGeneration(MELTPreTrainedModel):
                     **kwargs_encoder,
                 )
 
-
                 # Create attention mask for encoder outputs
                 if features_attention_mask is not None:
-                    # encoder_outputs_mask = self.audio_stack.encoder.model._get_feature_vector_attention_mask(
-                    #     encoder_hidden_states.shape[1], features_attention_mask
-                    # )
-                    _, encoder_outputs_mask = self.audio_stack.adapter._get_output_features_shape(
+                    # Tuple of (output_shape, output_attention_mask):
+                    # - output_shape: (batch_size, output_seq_len, output_hidden_size)
+                    # - output_attention_mask: Subsampled attention mask matching output_seq_len
+                    output_shape, encoder_outputs_mask = self.audio_stack.adapter._get_output_features_shape(
                         input_features, features_attention_mask
                     )
                 else:
+                    output_shape = encoder_hidden_states.shape
                     encoder_outputs_mask = torch.ones(
                         encoder_hidden_states.shape[:2],
                         dtype=attention_mask.dtype if attention_mask is not None else torch.float32,
                         device=encoder_hidden_states.device,
                     )
 
+            # The audio stack might have modified the audio lengths (e.g., subsampling in conformer).
+            # We need to compute the new audio lengths after the audio stack.
+
+            # TODO: IMPORTANT -- this implementation only works if the is only one audio per batch item!
+            # The reason why it breaks is with more than one is because audio_lengths should be
+            # a list of lists of lenghts. Moreover, since we concatenate them and process them together in the audio encoder
+            # we will have to compute the new lengths for each audio accordingly.
+            audio_lengths = encoder_outputs_mask.sum(dim=1).unsqueeze(-1)
+
             # If we are not using the cache, or it's the first pass with the cache on.
             # Hence, we need to build new inputs for the decoder
             if not use_cache or (use_cache and past_key_values is None):
                 # Replace placeholder audio tokens with actual audio embeddings
                 if audio_lengths is not None and encoder_hidden_states is not None:
-                    decoder_input_embs = self._replace_audio_placeholders(
-                        decoder_input_embs,
-                        encoder_hidden_states,
-                        input_ids,
-                        audio_lengths,
+                    decoder_input_embs = self._inject_embeddings(
+                        source_tensor=encoder_hidden_states,
+                        target_tensor=decoder_input_embs,
+                        inject_token_id=self.config.audio_token_id,
+                        input_ids=input_ids,
+                        source_lengths=audio_lengths,
+                        source_tensor_mask=encoder_outputs_mask,  # not all encoder outputs are valid, this is used to filter them
                     )
 
-                if attention_mask is not None and encoder_outputs_mask is not None:
-                    attention_mask = self._replace_audio_placeholders(
-                        attention_mask,
-                        encoder_outputs_mask,
-                        input_ids,
-                        audio_lengths,
-                    )
+                    if attention_mask is not None and encoder_outputs_mask is not None:
+                        attention_mask = self._inject_embeddings(
+                            encoder_outputs_mask,
+                            attention_mask,
+                            self.config.audio_token_id,
+                            input_ids,
+                            audio_lengths,
+                        )
 
-        # TODO: Below this point (logits to keep and loss computation) only works 
+                    if labels is not None:
+                        labels = self._inject_embeddings(
+                            torch.full(
+                                encoder_outputs_mask.shape,
+                                -100,
+                                device=labels.device,
+                                dtype=labels.dtype,
+                            ),
+                            labels,
+                            self.config.audio_token_id,
+                            input_ids,
+                            audio_lengths,
+                        )  # type: ignore
+
+        # TODO: Below this point (logits to keep and loss computation) only works
         # for causal language modeling with a single text response.
         # For training, we keep only the last `logits_to_keep` logits for computing loss on text tokens.
         # For generation, we typically only need the last token's logits.
@@ -857,19 +940,24 @@ class MELTForConditionalGeneration(MELTPreTrainedModel):
         #     logits_to_keep = labels.shape[1] if labels is not None else input_ids.shape[1]
 
         # We do not pass labels to the LLM and compute the loss ourselves
-        decoder_outputs = self.text_decoder(
+        outputs: CausalLMOutputWithPast = self.text_decoder(
             inputs_embeds=decoder_input_embs,
             attention_mask=attention_mask,
+            input_features=input_features,
+            features_attention_mask=features_attention_mask,
+            audio_lengths=audio_lengths,
+            past_key_values=past_key_values,
+            use_cache=use_cache,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
-            use_cache=use_cache,
-            past_key_values=past_key_values,
             return_dict=return_dict,
             logits_to_keep=logits_to_keep,
-            **kwargs_decoder,
+            **kwargs,
         )
 
-        logits = decoder_outputs.logits
+        # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
+        slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
+        logits = outputs.logits[:, slice_indices, :]
 
         loss = None
         if labels is not None:
@@ -881,23 +969,23 @@ class MELTForConditionalGeneration(MELTPreTrainedModel):
                 **kwargs,
             )
 
+        import pdb
+
+        pdb.set_trace()
+
+        print(f"Input shape: {input_ids.shape}")
+        print(f"Labels shape: {labels.shape}")
+        print(f"Loss: {loss}")
         if not return_dict:
-            output = (logits,) + decoder_outputs[1:]
+            output = (logits,) + outputs[1:]
             return (loss,) + output if loss is not None else output
 
         return CausalLMOutputWithPast(
             loss=loss,
             logits=logits,
-            past_key_values=decoder_outputs.past_key_values,
-            hidden_states=decoder_outputs.hidden_states,
-            attentions=decoder_outputs.attentions,
-        )
-
-    def resize_token_embeddings(self, *args, **kwargs):
-        raise NotImplementedError(
-            "Resizing the embedding layers via MELTForConditionalGeneration directly is not supported. "
-            "Please use the respective methods of the wrapped decoder object "
-            "(model.text_decoder.resize_token_embeddings(...))"
+            past_key_values=outputs.past_key_values,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
         )
 
     def _reorder_cache(self, past_key_values, beam_idx):
@@ -905,17 +993,15 @@ class MELTForConditionalGeneration(MELTPreTrainedModel):
         return self.text_decoder._reorder_cache(past_key_values, beam_idx)
 
     def generate(self, *args, **kwargs):
+        # TODO this needs to be improved using cache in output classes
         if hasattr(self, "audio_attention_mask"):
             del self.audio_attention_mask
         return super().generate(*args, **kwargs)
 
-    def can_generate(self):
-        return True
-
 
 __all__ = [
     "MELTPreTrainedModel",
-    "MELTForConditionalGeneration",
+    "MELTForCausalLM",
     "MELTAudioEncoder",
     "MELTAudioStack",
     "MELTAudioAdapter",

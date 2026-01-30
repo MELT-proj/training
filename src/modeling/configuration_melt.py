@@ -106,38 +106,21 @@ class MELTConfig(PretrainedConfig):
 
     def __init__(
         self,
-        audio_encoder_config=None,
-        text_decoder_config=None,
-        adapter_config=None,
-        initializer_range=0.02,
+        audio_encoder: str,
+        text_decoder: str,
+        adapter_config: MELTAdapterConfig,
+        initializer_range: float = 0.02,
+        encoder_kwargs: dict = {},
+        decoder_kwargs: dict = {},
         **kwargs,
     ):
-        if audio_encoder_config is None:
-            raise ValueError("audio_encoder_config must be provided")
-        if text_decoder_config is None:
-            raise ValueError("text_decoder_config must be provided")
+        audio_config = AutoConfig.from_pretrained(audio_encoder, **encoder_kwargs)
+        text_config = AutoConfig.from_pretrained(text_decoder, **decoder_kwargs)
 
-        # Handle audio encoder config
-        if isinstance(audio_encoder_config, dict):
-            encoder_model_type = audio_encoder_config.get("model_type")
-            if encoder_model_type is None:
-                raise ValueError("audio_encoder_config dict must contain 'model_type'")
-            encoder_cfg = dict(audio_encoder_config)
-            encoder_cfg.pop("model_type", None)
-            self.audio_encoder_config = AutoConfig.for_model(encoder_model_type, **encoder_cfg)
-        else:
-            self.audio_encoder_config = audio_encoder_config
-
-        # Handle text decoder config
-        if isinstance(text_decoder_config, dict):
-            decoder_model_type = text_decoder_config.get("model_type")
-            if decoder_model_type is None:
-                raise ValueError("text_decoder_config dict must contain 'model_type'")
-            decoder_cfg = dict(text_decoder_config)
-            decoder_cfg.pop("model_type", None)
-            self.text_decoder_config = AutoConfig.for_model(decoder_model_type, **decoder_cfg)
-        else:
-            self.text_decoder_config = text_decoder_config
+        self.audio_encoder = audio_encoder
+        self.text_decoder = text_decoder
+        self.audio_encoder_config = audio_config
+        self.text_decoder_config = text_config
 
         # Handle adapter config
         if not isinstance(adapter_config, MELTAdapterConfig):
@@ -148,7 +131,7 @@ class MELTConfig(PretrainedConfig):
                 adapter_cfg = dict(adapter_config)
             else:
                 # Defer importing dataclasses utilities lazily to avoid import cycles
-                from dataclasses import is_dataclass, asdict
+                from dataclasses import asdict, is_dataclass
 
                 if is_dataclass(adapter_config):
                     adapter_cfg = asdict(adapter_config)

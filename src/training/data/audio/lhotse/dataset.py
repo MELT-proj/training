@@ -13,9 +13,10 @@ import torch.utils.data
 from lhotse import CutSet
 from lhotse.cut import Cut
 
-from ....config import DataConfig
 from .....logging_utils import get_logger
 from .....modeling import MELTProcessor
+from ....config import DataConfig
+
 
 logger = get_logger(__name__)
 
@@ -127,50 +128,31 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         texts = []
         tasks = []
         langs = []
-        failed_indices = []
-
         for idx, cut in enumerate(cuts):
-            # try:
             # Load audio
             audio = self._load_audio(cut)
-            if audio is None:
-                failed_indices.append(idx)
-                continue
 
             # Get text transcript
             text = self._get_text(cut)
-            assert text != None, f"No text found for cut {cut.id}. Cut: {cut}"
-            # if text is None or len(text.strip()) < self.min_chars:
-            #     failed_indices.append(idx)
-            #     continue
+            if text == "" or text is None:
+                raise RuntimeError(f"Empty or missing text for cut {cut.id}. Cut: {cut}")
 
             # Get task and language tags
             task, lang = self._get_tags(cut)
-
             audios.append(audio)
             texts.append(text)
             tasks.append(task)
             langs.append(lang)
 
-            # except Exception as e:
-            #     logger.warning(f"Failed to process cut {cut.id}: {e}")
-            #     failed_indices.append(idx)
-            #     continue
-
-        # if len(audios) == 0:
-        #     logger.warning("All cuts in batch failed to load")
-        #     return None
-
-        # if failed_indices:
-        #     logger.debug(f"Skipped {len(failed_indices)} cuts due to loading errors")
-
         # Format texts with audio token for the processor
-        # This adds <|AUDIO|> token to indicate where audio embeddings go
+        # This adds <|audio|> token to indicate where audio embeddings go
         if self.apply_chat_template:
+            raise RuntimeError("Not yet implemented.")
             formatted_texts = self._apply_chat_template(texts, tasks, langs)
         else:
             # Simple format: audio token + transcription
-            formatted_texts = [self._format_text_with_audio_token(t, task, lang) for t, task, lang in zip(texts, tasks, langs)]
+            # formatted_texts = [f"{self.processor.tokenizer.bos_token}{self.processor.audio_token}{t}" for t in texts]
+            formatted_texts = [f"{self.processor.audio_token}{t}" for t in texts]
 
         # Process through MELTProcessor
         try:
@@ -185,44 +167,47 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
                 return_tensors="pt",
             )
 
-            # Add the labels for loss computation. The labels for this class or exclusively the text token IDs. 
-            # The modeling code will handle logit slicing based on this tensor's shape and loss masking as needed
-
-            # TODO: we need to improve this label construction strategy, it does not
-            # really work for anything besides {audio_token}{text} formatting
             if self.is_train:
-                labels = self._build_labels(inputs["input_ids"])
+                labels = inputs["input_ids"].clone()
+                mask = (
+                    (labels == self.processor.audio_token_id)
+                    | (labels == self.processor.audio_bos_token_id)
+                    | (labels == self.processor.audio_eos_token_id)
+                    | (labels == self.processor.tokenizer.pad_token_id)
+                    | (labels == self.processor.tokenizer.bos_token_id)
+                )
+                labels[mask] = -100
                 inputs["labels"] = labels
-            
+
             return inputs
 
         except Exception as e:
             logger.error(f"Failed to process batch through processor: {e}")
             return None
 
-    def _build_labels(self, input_ids: torch.Tensor) -> torch.Tensor:
-        """Build labels tensor for loss computation.
+    # def _build_labels(self, input_ids: torch.Tensor) -> torch.Tensor:
+    #     """Build labels tensor for loss computation.
 
-        The labels tensor contains -100 for audio token positions, audio_bos_token_id, audio_eos_token_id,
-        and pad tokens, and actual token IDs for text positions.
+    #     The labels tensor contains -100 for audio token positions, audio_bos_token_id, audio_eos_token_id,
+    #     and pad tokens, and actual token IDs for text positions.
 
-        Args:
-            input_ids: Input token IDs tensor [B, S].
-            audio_token_id: Token ID representing the audio token.
-        Returns:
-            Labels tensor [B, S] with -100 for audio tokens.
-        """
-        labels = input_ids.clone()
-        # Create a single mask for all tokens to be ignored
+    #     Args:
+    #         input_ids: Input token IDs tensor [B, S].
+    #         audio_token_id: Token ID representing the audio token.
+    #     Returns:
+    #         Labels tensor [B, S] with -100 for audio tokens.
+    #     """
+    #     labels = input_ids.clone()
+    #     # Create a single mask for all tokens to be ignored
 
-        mask = (
-            (labels == self.processor.audio_token_id) |
-            (labels == self.processor.audio_bos_token_id) |
-            (labels == self.processor.audio_eos_token_id) |
-            (labels == self.processor.tokenizer.pad_token_id)
-        )
-        labels[mask] = -100
-        return labels
+    #     mask = (
+    #         (labels == self.processor.audio_token_id)
+    #         | (labels == self.processor.audio_bos_token_id)
+    #         | (labels == self.processor.audio_eos_token_id)
+    #         | (labels == self.processor.tokenizer.pad_token_id)
+    #     )
+    #     labels[mask] = -100
+    #     return labels
 
     def _load_audio(self, cut: Cut) -> torch.Tensor | None:
         """Load audio from a cut.
@@ -279,9 +264,7 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
 
         if text_field is None:
             # Get the appropriate dataset config based on is_train
-            ds_config = _get_config_value(
-                self.config, "train_ds" if self.is_train else "validation_ds", None
-            )
+            ds_config = _get_config_value(self.config, "train_ds" if self.is_train else "validation_ds", None)
             text_field = _get_config_value(ds_config, "text_field", "text") if ds_config else "text"
 
         text = None
@@ -308,35 +291,6 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
             text = cut.custom.get("text")
 
         return text
-
-    def _format_text_with_audio_token(self, text: str, task: str, lang: str) -> str:
-        """Format text with audio token for the processor.
-
-        The processor expects text to contain <|AUDIO|> token(s) indicating where
-        audio embeddings should be inserted. This formats the text appropriately
-        based on the task.
-
-        Args:
-            text: Raw transcript text.
-            task: Task identifier (e.g., "transcribe", "asr", "translate", "st").
-            lang: Language code.
-
-        Returns:
-            Formatted text with audio token.
-        """
-        audio_token = self.processor.audio_token
-
-        # TODO: update this logic by supporting a config-specified template or prefix
-        # E.g., "Transcribe the following audio: {audio_token}{text}" for ASR
-        if task in ("transcribe", "asr"):
-            # For ASR: audio followed by transcription
-            return f"{audio_token}{text}"
-        elif task in ("translate", "st"):
-            # For translation: audio followed by translation
-            return f"{audio_token}{text}"
-        else:
-            # Default: audio followed by text
-            return f"{audio_token}{text}"
 
     def _get_tags(self, cut: Cut) -> tuple[str, str]:
         """Extract task and language tags from a cut.

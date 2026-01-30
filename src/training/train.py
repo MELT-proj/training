@@ -22,7 +22,19 @@ from pathlib import Path
 import torch
 import tyro
 
+from transformers import (
+    AutoConfig,
+    AutoFeatureExtractor,
+    AutoTokenizer,
+    TrainingArguments,
+    set_seed,
+)
+from transformers.modeling_utils import find_tied_parameters
+from transformers.trainer_utils import get_last_checkpoint
+
 from .. import ddp
+from ..logging_utils import configure_logging, get_logger
+from ..modeling import MELTConfig, MELTForCausalLM, MELTProcessor
 from .config import (
     TrainingConfig,
     expand_env_vars_in_config,
@@ -32,12 +44,10 @@ from .config import (
     trainer_args_dict,
 )
 from .trainer import MELTTrainer, count_trainable_parameters
-from ..logging_utils import configure_logging, get_logger
-from ..modeling import MELTConfig, MELTForConditionalGeneration, MELTProcessor
-from transformers import AutoConfig, AutoFeatureExtractor, AutoTokenizer, TrainingArguments, set_seed
-from transformers.trainer_utils import get_last_checkpoint
+
 
 logger = get_logger(__name__)
+
 
 # Optimize matmul precision
 torch.set_float32_matmul_precision("high")
@@ -47,7 +57,7 @@ def prepare_model(
     cfg: TrainingConfig,
     targs: TrainingArguments,
     processor: MELTProcessor,
-) -> tuple[MELTForConditionalGeneration, str | None]:
+) -> tuple[MELTForCausalLM, str | None]:
     """Prepare the model for training.
 
     Args:
@@ -64,27 +74,21 @@ def prepare_model(
     decoder_cfg = model_cfg.decoder
     adapter_cfg = model_cfg.adapter
 
-    # Two HF ID model names
-    encoder_name = encoder_cfg.name
-    decoder_name = decoder_cfg.name
-
-    audio_config = AutoConfig.from_pretrained(encoder_name)
-    text_config = AutoConfig.from_pretrained(decoder_name, attn_implementation=decoder_cfg.attn_implementation)
-    adapter_config = cfg.model.adapter # Used in MELTConfig init
-
     # Beyond this length in frames, the encoder will unfold the input in chunks
     max_audio_seq_len = getattr(encoder_cfg, "max_audio_seq_len", 1500)
 
     config = MELTConfig(
-        audio_encoder_config=audio_config, 
-        text_decoder_config=text_config,
-        adapter_config=adapter_config,
+        audio_encoder=encoder_cfg.name,
+        text_decoder=decoder_cfg.name,
+        adapter_config=cfg.model.adapter,
+        max_audio_seq_len=max_audio_seq_len,
     )
 
     # Set special tokens
     config.audio_bos_token_id = processor.tokenizer.convert_tokens_to_ids([processor.audio_bos_token])[0]
     config.audio_eos_token_id = processor.tokenizer.convert_tokens_to_ids([processor.audio_eos_token])[0]
     config.audio_token_id = processor.tokenizer.convert_tokens_to_ids([processor.audio_token])[0]
+    config.audio_encoder_config.max_audio_seq_len = max_audio_seq_len
 
     # Detect last checkpoint
     last_checkpoint = None
@@ -105,37 +109,35 @@ def prepare_model(
     logger.info("Loading model to CPU (before device placement)...")
     if model_cfg.ckpt is not None:
         logger.info(f"Loading model from checkpoint: {model_cfg.ckpt}")
-        model = MELTForConditionalGeneration.from_pretrained(model_cfg.ckpt)
+        model = MELTForCausalLM.from_pretrained(model_cfg.ckpt)
     else:
-        model = MELTForConditionalGeneration(config)
+        model = MELTForCausalLM(config)
 
-    # Ensure decoder embeddings match tokenizer size.
-    # If special tokens were added to the tokenizer (e.g., audio tokens), failing to resize
-    # will cause CUDA device-side asserts from embedding lookup (out-of-range indices).
-    target_vocab_size = len(processor.tokenizer)
-    current_vocab_size = model.text_decoder.get_input_embeddings().num_embeddings
-    if current_vocab_size < target_vocab_size:
-        logger.warning(
-            "Resizing text decoder token embeddings to match tokenizer: "
-            f"{current_vocab_size} -> {target_vocab_size}"
-        )
-        model.text_decoder.resize_token_embeddings(target_vocab_size, mean_resizing=False, pad_to_multiple_of=8)
-    elif current_vocab_size > target_vocab_size:
-        logger.warning(
-            "Text decoder embedding table is larger than tokenizer vocab: "
-            f"{current_vocab_size} > {target_vocab_size}. Keeping existing embeddings."
-        )
+    logger.info("Tied model weights:")
+    for tied_pair in find_tied_parameters(model):
+        logger.info(f"  {tied_pair[0]} <--> {tied_pair[1]}")
 
-    # Apply freezing
+    # If we added new tokens and the model did not have spare embedding entries,
+    # we need to resize the token embeddings
+    if len(processor.tokenizer) > config.text_decoder_config.vocab_size:
+        logger.info(
+            f"Resizing token embeddings from {config.text_decoder_config.vocab_size} to {len(processor.tokenizer)}"
+        )
+        model.text_decoder.resize_token_embeddings(len(processor.tokenizer), mean_resizing=False, pad_to_multiple_of=8)
+
+    def _freeze(module: torch.nn.Module):
+        for param in module.parameters():
+            param.requires_grad = False
+
     if adapter_cfg.freeze:
         logger.info("Freezing the adapter")
-        model.freeze_adapter()
+        _freeze(model.audio_stack.adapter)
     if encoder_cfg.freeze:
         logger.info("Freezing the encoder")
-        model.freeze_encoder()
+        _freeze(model.audio_stack.encoder)
     if decoder_cfg.freeze:
         logger.info("Freezing the decoder")
-        model.freeze_decoder()
+        _freeze(model.text_decoder)
 
     return model, last_checkpoint
 
