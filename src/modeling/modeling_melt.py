@@ -969,13 +969,6 @@ class MELTForCausalLM(MELTPreTrainedModel):
                 **kwargs,
             )
 
-        import pdb
-
-        pdb.set_trace()
-
-        print(f"Input shape: {input_ids.shape}")
-        print(f"Labels shape: {labels.shape}")
-        print(f"Loss: {loss}")
         if not return_dict:
             output = (logits,) + outputs[1:]
             return (loss,) + output if loss is not None else output
