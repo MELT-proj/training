@@ -141,6 +141,9 @@ echo "Master port: $MASTER_PORT"
 echo "Machine rank (SLURM_PROCID): ${SLURM_PROCID:-N/A}"
 
 if [[ "$RUNNING_UNDER_SLURM" -eq 1 ]]; then
+    # For multi-node SLURM: use c10d rendezvous backend (works with torchrun/FSDP)
+    # Note: DeepSpeed ignores these flags and uses its own launcher.
+    # For multi-node DeepSpeed, use a hostfile or switch to FSDP.
     export LAUNCHER="accelerate launch \
         --config_file $ACCELERATE_CONFIG \
         --gradient_accumulation_steps $GRAD_ACC_STEPS \
@@ -149,9 +152,9 @@ if [[ "$RUNNING_UNDER_SLURM" -eq 1 ]]; then
         --main_process_ip $MASTER_ADDR \
         --main_process_port $MASTER_PORT \
         --machine_rank \${SLURM_PROCID} \
-        --rdzv_conf \"rdzv_backend=c10d,rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT\" \
-        --max_restarts 1 \
-        --role \$(hostname -s): \
+        --rdzv_backend c10d \
+        --rdzv_conf rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT \
+        --max_restarts 0 \
         --tee 3 \
         "
 else
@@ -162,7 +165,7 @@ else
         --gradient_accumulation_steps $GRAD_ACC_STEPS \
         --num_machines 1 \
         --num_processes $GPUS_PER_NODE \
-        --max_restarts 1 \
+        --max_restarts 0 \
         --tee 3 \
         "
 fi
@@ -187,9 +190,9 @@ if [[ "$RUNNING_UNDER_SLURM" -eq 1 ]]; then
     # and simply run the launcher directly instead of wrapping it with srun.
     if [[ -n "${SLURM_STEP_ID:-}" || -n "${SLURM_PROCID:-}" ]]; then
         echo "Detected running inside an interactive srun step (SLURM_STEP_ID or SLURM_PROCID present); launching directly"
-        bash -c "$LAUNCHER --role \$SLURM_PROCID: $CMD" 2>&1
+        bash -c "$LAUNCHER $CMD" 2>&1
     else
-        srun $SRUN_ARGS --jobid "$SLURM_JOB_ID" bash -c "$LAUNCHER --role \$SLURM_PROCID: $CMD" 2>&1
+        srun $SRUN_ARGS --jobid "$SLURM_JOB_ID" bash -c "$LAUNCHER $CMD" 2>&1
     fi
 else
 # python -m pdb -c continue src/train.py --config-file $CONFIG_FILE --dry_run
