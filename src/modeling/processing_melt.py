@@ -6,6 +6,7 @@ import re
 
 import torch
 
+from transformers import AutoFeatureExtractor, AutoTokenizer, FeatureExtractorMixin, PreTrainedTokenizerBase
 from transformers.feature_extraction_utils import BatchFeature
 from transformers.image_utils import ImageInput
 from transformers.processing_utils import ProcessingKwargs, ProcessorMixin, Unpack
@@ -96,12 +97,17 @@ class MELTProcessor(ProcessorMixin):
 
     def __init__(
         self,
-        feature_extractor,
-        tokenizer,
+        feature_extractor: str | FeatureExtractorMixin,
+        tokenizer: str | PreTrainedTokenizerBase,
         config,
         # image_processor=None,
         # video_processor=None,
     ):
+        if isinstance(feature_extractor, str):
+            feature_extractor = AutoFeatureExtractor.from_pretrained(feature_extractor)
+        if isinstance(tokenizer, str):
+            tokenizer = AutoTokenizer.from_pretrained(tokenizer)
+
         super().__init__(feature_extractor, tokenizer)  # , image_processor, video_processor)
         self.image_processor = None
 
@@ -115,7 +121,6 @@ class MELTProcessor(ProcessorMixin):
         for name in MELT_REQUIRED_SPECIAL_TOKENS:
             setattr(self, name + "_id", tokenizer.convert_tokens_to_ids([getattr(self, name)])[0])
 
-        self.config = config
         self.audio_token = config.decoder.audio_token
         self.audio_bos_token = config.decoder.audio_bos_token
         self.audio_eos_token = config.decoder.audio_eos_token
@@ -223,10 +228,8 @@ class MELTProcessor(ProcessorMixin):
 
     def _surround_bos_eos_mm_tokens(self, text):
         text = text.replace(
-            self.config.decoder.audio_token,
-            self.config.decoder.audio_bos_token
-            + self.config.decoder.audio_token
-            + self.config.decoder.audio_eos_token,
+            self.audio_token,
+            self.audio_bos_token + self.audio_token + self.audio_eos_token,
         )
         return text
 
