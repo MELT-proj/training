@@ -180,20 +180,15 @@ def main(cfg: TrainingConfig) -> None:
     model, last_checkpoint = prepare_model(cfg, targs, processor)
     logger.info("Model prepared!")
 
-    trainable_params, trainable_str = count_trainable_parameters(model, return_int=True)
-    logger.info(f"Total number of learnable parameters: {trainable_params} ({trainable_str})")
-
     ##########################
     ## TRAINING
     ##########################
-    logger.info("Creating trainer with Lhotse data loading")
-
+    # No train_dataset/eval_dataset - they are handled by Lhotse
     trainer = MELTTrainer(
         model=model,
         args=targs,
         config=cfg,
         processor=processor,
-        # No train_dataset/eval_dataset - they are handled by Lhotse
     )
 
     # Determine checkpoint to resume from
