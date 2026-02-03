@@ -12,9 +12,8 @@ Key functions:
 
 import gzip
 import json
+import math
 import os
-import warnings
-from dataclasses import asdict
 from functools import partial
 from glob import glob
 from pathlib import Path
@@ -43,9 +42,69 @@ from ....config import DataConfig, DatasetConfig, DataSourceConfig
 logger = get_logger(__name__)
 
 
+def _maybe_attach_set_epoch(dataloader: torch.utils.data.DataLoader, sampler: CutSampler) -> None:
+    """Ensure the returned DataLoader exposes a ``set_epoch`` method.
+
+    HF Trainer advances epoch state via ``epoch_dataloader.set_epoch(epoch)``.
+    For iterable-style Lhotse pipelines, we want this to reach the
+    ``IterableDatasetWrapper`` and/or underlying sampler.
+    """
+
+    if hasattr(dataloader, "set_epoch"):
+        return
+
+    def set_epoch(epoch: int) -> None:
+        if hasattr(sampler, "set_epoch"):
+            sampler.set_epoch(epoch)
+
+        dataset = getattr(dataloader, "dataset", None)
+        if dataset is None:
+            return
+
+        if hasattr(dataset, "set_epoch"):
+            dataset.set_epoch(epoch)
+
+        dataset_sampler = getattr(dataset, "sampler", None)
+        if dataset_sampler is not None and hasattr(dataset_sampler, "set_epoch"):
+            dataset_sampler.set_epoch(epoch)
+
+    setattr(dataloader, "set_epoch", set_epoch)
+
+
 # -----------------------------------------------------------------------------
-# Finite Iterable Dataset Wrapper for Evaluation
+# Iterable Dataset Wrappers
 # -----------------------------------------------------------------------------
+
+
+class InfiniteIterableDatasetWrapper(IterableDatasetWrapper):
+    """Lhotse IterableDatasetWrapper with __len__ support for HF Trainer.
+
+    This wrapper adds epoch length estimation to Lhotse's IterableDatasetWrapper,
+    allowing HF Trainer to display progress bars and compute steps_in_epoch.
+
+    The dataset still iterates infinitely (via sampler.repeat()), but __len__
+    returns the estimated number of batches per epoch per rank for progress tracking.
+
+    Args:
+        dataset: PyTorch Dataset that processes CutSets.
+        sampler: Lhotse CutSampler that yields batches of cuts.
+        estimated_batches_per_epoch: Expected number of batches per rank per epoch.
+        **kwargs: Additional arguments passed to IterableDatasetWrapper.
+    """
+
+    def __init__(
+        self,
+        dataset: torch.utils.data.Dataset,
+        sampler: CutSampler,
+        estimated_batches_per_epoch: int,
+        **kwargs,
+    ):
+        super().__init__(dataset=dataset, sampler=sampler, **kwargs)
+        self._estimated_batches = estimated_batches_per_epoch
+
+    def __len__(self) -> int:
+        """Return estimated number of batches per epoch for progress bars."""
+        return self._estimated_batches
 
 
 class FiniteIterableDatasetWrapper(torch.utils.data.IterableDataset):
@@ -134,15 +193,6 @@ def _get_config_value(config: Any, key: str, default: Any = None) -> Any:
     elif isinstance(config, dict):
         return config.get(key, default)
     return default
-
-
-def _config_to_dict(config: Any) -> dict:
-    """Convert config to dict, handling dataclasses and dicts."""
-    if hasattr(config, "__dataclass_fields__"):
-        return asdict(config)
-    elif isinstance(config, dict):
-        return config
-    return dict(config)
 
 
 def _read_shar_manifest_durations(
@@ -272,7 +322,7 @@ def estimate_steps_per_epoch(
     config: DatasetConfig | dict,
     gradient_accumulation_steps: int = 1,
     world_size: int = 1,
-) -> tuple[int, float, int]:
+) -> tuple[int, float, int, int, int]:
     """Estimate the number of training steps per epoch.
 
     Computes steps based on how data is sharded across ranks:
@@ -293,8 +343,9 @@ def estimate_steps_per_epoch(
     if batch_duration is None:
         # Fixed batch size mode - can't estimate without more info
         logger.warning("batch_duration not set, cannot estimate steps per epoch")
-        return -1, 0.0, 0
+        return -1, 0.0, 0, 0, 0
 
+    num_workers = _get_config_value(config, "num_workers", 1)
     total_hours = _get_config_value(config, "total_hours", None)
     total_cuts = _get_config_value(config, "total_cuts", None)
     force_estimate = _get_config_value(config, "force_estimate", None)
@@ -306,27 +357,30 @@ def estimate_steps_per_epoch(
             total_duration, total_cuts = compute_dataset_duration(config)
 
             if total_duration <= 0:
-                return 0, 0.0, 0
+                return 0, 0.0, 0, 0, 0
 
             total_hours = total_duration / 3600.0
         else:
             logger.info("`total_hours` and `force_estimate` not set; cannot estimate steps per epoch")
-            return -1, 0.0, 0
+            return -1, 0.0, 0, 0, 0
     else:
         total_duration = total_hours * 3600.0
 
-    # Each rank sees total_duration / world_size of data.
-    # Each rank creates (total_duration / world_size) / batch_duration micro-batches.
-    # One optimizer step = gradient_accumulation_steps micro-batches.
-    # steps_per_epoch = total_duration / (batch_duration * world_size * gradient_accumulation_steps)
-    steps_per_epoch = int(total_duration / (batch_duration * world_size * gradient_accumulation_steps))
+    batches_per_epoch = math.ceil(total_duration / batch_duration)
+
+    # We use data parallelism by setting split_for_loading=True in CutSet.from_shar()
+    # The shard are hence divided to world_size * num_workers processes.
+    batches_per_worker = batches_per_epoch / (world_size * num_workers)
+
+    # The number of update steps is rescaled by gradient accumulation steps
+    optimizer_steps_per_epoch = math.ceil(batches_per_worker / gradient_accumulation_steps)
 
     logger.info(
         f"Dataset stats: {total_cuts} cuts, {total_hours:.2f} hours total, "
-        f"~{steps_per_epoch} steps/epoch (batch_duration={batch_duration}s, "
+        f"~{optimizer_steps_per_epoch} steps/epoch (batch_duration={batch_duration}s, "
         f"grad_accum={gradient_accumulation_steps}, world_size={world_size})"
     )
-    return steps_per_epoch, total_hours, total_cuts
+    return optimizer_steps_per_epoch, total_hours, total_cuts, batches_per_epoch, batches_per_worker
 
 
 def read_cutset_from_config(config: DatasetConfig | dict) -> tuple[CutSet, bool]:
@@ -345,7 +399,15 @@ def read_cutset_from_config(config: DatasetConfig | dict) -> tuple[CutSet, bool]
 
     cutsets = []
     use_iterable = False
-    shuffle = _get_config_value(config, "shuffle", True)
+    shard_seed = _get_config_value(config, "shard_seed", "randomized")
+
+    # For SHAR/WebDataset-style streaming, each PyTorch DataLoader worker (and each DDP rank)
+    # will host its own iterator/sampler replica.
+    # Unless the underlying CutSet shards are explicitly split between node+worker
+    # combinations, this can easily lead to duplicated data across workers/ranks.
+    #
+    # Lhotse provides a dedicated mechanism for this: CutSet.from_shar(..., split_for_dataloading=True).
+    # split_for_dataloading_default = bool(_get_config_value(config, "split_for_dataloading", True))
 
     for source_cfg in input_cfg:
         source_type = _get_config_value(source_cfg, "type", "lhotse_shar")
@@ -361,8 +423,14 @@ def read_cutset_from_config(config: DatasetConfig | dict) -> tuple[CutSet, bool]
             if not Path(shar_path).exists():
                 raise FileNotFoundError(f"Shar path not found: {shar_path}")
 
-            logger.info(f"Loading CutSet from shar: {shar_path}")
-            cuts = CutSet.from_shar(in_dir=shar_path, shuffle_shards=bool(shuffle))
+            logger.info(f"Loading CutSet from shar: {shar_path} (seed: {shard_seed})")
+            cuts = CutSet.from_shar(
+                in_dir=shar_path,
+                shuffle_shards=True,
+                seed=config.seed,
+                stateful_shuffle=True,
+                split_for_dataloading=True,
+            )
             use_iterable = True  # Shar always uses iterable dataset
 
         elif source_type == "lhotse_cuts":
@@ -398,10 +466,12 @@ def read_cutset_from_config(config: DatasetConfig | dict) -> tuple[CutSet, bool]
         for cfg in input_cfg:
             weight = _get_config_value(cfg, "weight", 1.0)
             weights.append(float(weight))
-        if all(w == weights[0] for w in weights):
-            combined = CutSet.mux(*cutsets)
-        else:
-            combined = CutSet.mux(*cutsets, weights=weights)
+
+        combined = CutSet.mux(*cutsets, weights=weights, seed=shard_seed)
+
+    # Since we split cuts across data workers (split_for_dataloading=True),
+    # to avoid deadlocks we force the combined CutSet to repeat infinitely.
+    combined = combined.repeat()
 
     return combined, use_iterable
 
@@ -434,6 +504,7 @@ def get_lhotse_sampler_from_config(
         Tuple of (CutSampler, use_iterable_dataset).
     """
     # Load cutset from config. Since we are using Shar data, this is a lazy CutSet.
+    # For now, it should always be use_iterable = True.
     cuts, use_iterable = read_cutset_from_config(config)
 
     # Apply duration filtering
@@ -477,10 +548,15 @@ def get_lhotse_sampler_from_config(
     shuffle = _get_config_value(config, "shuffle", True)
     drop_last = _get_config_value(config, "drop_last", False)
     shuffle_buffer_size = _get_config_value(config, "shuffle_buffer_size", 10000)
+
     seed = resolve_seed(_get_config_value(config, "seed", 0))
-    shard_seed = _get_config_value(config, "shard_seed", "trng")
-    if isinstance(shard_seed, str) and shard_seed != "trng":
-        shard_seed = resolve_seed(shard_seed)
+    shard_seed = _get_config_value(config, "shard_seed", "randomized")
+
+    # Important: do NOT resolve shard_seed='randomized' in the main process.
+    # Lhotse's resolve_seed('randomized') is designed to run in DataLoader workers after
+    # make_worker_init_fn has set LHOTSE_PROCESS_SEED.
+    if isinstance(shard_seed, str) and shard_seed not in ("trng", "randomized"):
+        raise ValueError(f"Unsupported shard_seed={shard_seed!r}. Supported values: int, 'trng', 'randomized'.")
 
     if _get_config_value(config, "use_bucketing", False):
         # Dynamic bucketing sampler for efficient batching
@@ -557,6 +633,7 @@ def get_lhotse_dataloader_from_config(
 
     # Resolve seed
     seed = resolve_seed(_get_config_value(config, "seed", 0))
+    logger.info(f"Creating a lhotse dataloader with seed {seed}")
     fix_random_seed(seed)
 
     # Get sampler
@@ -578,23 +655,40 @@ def get_lhotse_dataloader_from_config(
     if use_iterable:
         # For tarred/shar data, wrap dataset with sampler
         # This moves sampling to worker processes
-        logger.info("Using IterableDatasetWrapper for shar data")
-        dloader_kwargs = dict(
-            dataset=IterableDatasetWrapper(dataset=dataset, sampler=sampler),
-            worker_init_fn=make_worker_init_fn(
+        logger.info("Using InfiniteIterableDatasetWrapper for shar data")
+        logger.info(f"Using world size: {world_size}, rank: {global_rank}")
+
+        # Estimate batches per epoch for progress bars
+        # This is the micro-batch count per rank per epoch
+        gradient_accumulation_steps = 1  # We count micro-batches, not optimizer steps
+        steps_per_epoch, _, _, _, _ = estimate_steps_per_epoch(
+            config=config,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+            world_size=world_size,
+        )
+        logger.info(f"Estimated {steps_per_epoch} micro-batches per epoch per rank")
+
+        dloader_kwargs = {
+            "dataset": InfiniteIterableDatasetWrapper(
+                dataset=dataset,
+                sampler=sampler,
+                estimated_batches_per_epoch=steps_per_epoch,
+            ),
+            "worker_init_fn": make_worker_init_fn(
                 rank=global_rank,
                 world_size=world_size,
                 seed=seed,
+                set_different_node_and_worker_seeds=True,
             ),
-            persistent_workers=num_workers > 0,
-        )
+            "persistent_workers": num_workers > 0,
+        }
     else:
         # For non-tarred data, sampler stays in main process
         logger.info("Using map-style dataset")
-        dloader_kwargs = dict(
-            dataset=dataset,
-            sampler=sampler,
-        )
+        dloader_kwargs = {
+            "dataset": dataset,
+            "sampler": sampler,
+        }
 
     dataloader = torch.utils.data.DataLoader(
         **dloader_kwargs,
@@ -604,6 +698,7 @@ def get_lhotse_dataloader_from_config(
         prefetch_factor=prefetch_factor if num_workers > 0 else 0,
     )
 
+    _maybe_attach_set_epoch(dataloader=dataloader, sampler=sampler)
     return dataloader
 
 
@@ -923,5 +1018,6 @@ __all__ = [
     "compute_dataset_duration",
     "estimate_steps_per_epoch",
     "estimate_num_batches",
+    "InfiniteIterableDatasetWrapper",
     "FiniteIterableDatasetWrapper",
 ]

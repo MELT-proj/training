@@ -10,15 +10,13 @@ Key features:
 - Proper step/epoch tracking for Lhotse's infinite dataloaders
 """
 
+import math
 import os
-import random
-from typing import Any
 
 import torch
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 
-from transformers import Trainer
+from transformers import Trainer, TrainingArguments, set_seed
 from transformers.trainer_utils import has_length
 
 from .. import ddp
@@ -69,15 +67,18 @@ class MELTTrainer(Trainer):
 
     def __init__(
         self,
-        model=None,
-        args=None,
-        config: TrainingConfig | None = None,
-        processor: MELTProcessor | None = None,
+        model,
+        args: TrainingArguments,
+        config: TrainingConfig,
+        processor: MELTProcessor,
         **kwargs,
     ):
         # Store config and processor before calling super().__init__
         self.config = config
         self.processor = processor
+
+        # Set seed
+        # set_seed(config.trainer.seed)
 
         # Always use ddp.py for distributed information
         self._global_rank = ddp.get_global_rank()
@@ -90,118 +91,25 @@ class MELTTrainer(Trainer):
         self.eval_num_cuts = 0
         self.eval_num_batches = 0
 
-        if config is not None and hasattr(config, "data"):
-            # Training dataset stats
-            if hasattr(config.data, "train_ds"):
-                grad_accum = getattr(args, "gradient_accumulation_steps", 1) if args else 1
-                self.steps_per_epoch, self.dataset_duration_hours, self.dataset_num_cuts = estimate_steps_per_epoch(
-                    config=config.data.train_ds,
-                    gradient_accumulation_steps=grad_accum,
-                    world_size=self._world_size,
-                )
+        # # Training dataset stats
+        # if hasattr(config.data, "train_ds"):
+        #     grad_accum = getattr(args, "gradient_accumulation_steps", 1)
+        #     self.steps_per_epoch, self.dataset_duration_hours, self.dataset_num_cuts = estimate_steps_per_epoch(
+        #         config=config.data.train_ds,
+        #         gradient_accumulation_steps=grad_accum,
+        #         world_size=self._world_size,
+        #     )
 
-            # Evaluation dataset stats
-            if hasattr(config.data, "validation_ds") and config.data.validation_ds.input_cfg:
-                from .data.audio.lhotse import compute_dataset_duration
+        # Evaluation dataset stats
+        if hasattr(config.data, "validation_ds") and config.data.validation_ds.input_cfg:
+            from .data.audio.lhotse import compute_dataset_duration
 
-                _, self.eval_num_cuts = compute_dataset_duration(config.data.validation_ds)
-                self.eval_num_batches = estimate_num_batches(
-                    config.data.validation_ds,
-                    world_size=self._world_size,
-                )
-                logger.info(f"Evaluation dataset: {self.eval_num_cuts} cuts, ~{self.eval_num_batches} batches")
-
-            # Log epoch estimation info
-            if self.steps_per_epoch > 0:
-                logger.info(
-                    f"Epoch estimation: {self.dataset_num_cuts} cuts, "
-                    f"{self.dataset_duration_hours:.2f} hours, "
-                    f"~{self.steps_per_epoch} steps/epoch"
-                )
-
-                # Get max_steps and num_train_epochs from args
-                max_steps = getattr(args, "max_steps", None) if args else None
-                num_train_epochs = getattr(args, "num_train_epochs", None) if args else None
-
-                # Validate: at least one must be set
-                if max_steps is None and num_train_epochs is None:
-                    raise ValueError("Either max_steps or num_train_epochs must be set. Both cannot be None.")
-
-                # Check if we should compute max_steps from epochs
-                compute_from_epochs = hasattr(config, "trainer") and getattr(
-                    config.trainer, "compute_max_steps_from_epochs", False
-                )
-
-                if compute_from_epochs or max_steps is None:
-                    # Compute max_steps from num_train_epochs
-                    if num_train_epochs is None:
-                        num_train_epochs = getattr(config.trainer, "num_train_epochs", 1)
-                    computed_max_steps = int(self.steps_per_epoch * num_train_epochs)
-                    logger.info(
-                        f"Computing max_steps from epochs: "
-                        f"{num_train_epochs} epochs * {self.steps_per_epoch} steps/epoch = {computed_max_steps} steps"
-                    )
-                    # Update args.max_steps so HF Trainer uses it
-                    if args is not None:
-                        args.max_steps = computed_max_steps
-                elif max_steps is not None and max_steps > 0:
-                    # If max_steps is set, compute how many epochs that represents
-                    total_epochs = max_steps / self.steps_per_epoch
-                    logger.info(f"Training for {max_steps} steps = ~{total_epochs:.2f} epochs")
-
-                # Compute and log checkpoint/logging/eval intervals in hours
-                if self.dataset_duration_hours > 0 and self.steps_per_epoch > 0:
-                    hours_per_step = self.dataset_duration_hours / self.steps_per_epoch
-
-                    logger.info("=" * 80)
-                    logger.info("CHECKPOINT & LOGGING SCHEDULE (in input audio hours):")
-                    logger.info("=" * 80)
-
-                    # Logging frequency
-                    if args and hasattr(args, "logging_steps") and args.logging_steps > 0:
-                        logging_hours = args.logging_steps * hours_per_step
-                        logging_minutes = logging_hours * 60
-                        if logging_hours >= 1.0:
-                            logger.info(
-                                f"  📊 Logging every {args.logging_steps} steps = ~{logging_hours:.2f} input hours"
-                            )
-                        else:
-                            logger.info(
-                                f"  📊 Logging every {args.logging_steps} steps = ~{logging_minutes:.1f} input minutes"
-                            )
-
-                    # Evaluation frequency
-                    if args and hasattr(args, "eval_steps") and args.eval_steps > 0:
-                        eval_hours = args.eval_steps * hours_per_step
-                        if eval_hours >= 1.0:
-                            logger.info(
-                                f"  📈 Evaluation every {args.eval_steps} steps = ~{eval_hours:.2f} input hours"
-                            )
-                        else:
-                            eval_minutes = eval_hours * 60
-                            logger.info(
-                                f"  📈 Evaluation every {args.eval_steps} steps = ~{eval_minutes:.1f} input minutes"
-                            )
-
-                    # Save frequency
-                    if args and hasattr(args, "save_steps") and args.save_steps > 0:
-                        save_hours = args.save_steps * hours_per_step
-                        if save_hours >= 1.0:
-                            logger.info(
-                                f"  💾 Checkpoints every {args.save_steps} steps = ~{save_hours:.2f} input hours"
-                            )
-                        else:
-                            save_minutes = save_hours * 60
-                            logger.info(
-                                f"  💾 Checkpoints every {args.save_steps} steps = ~{save_minutes:.1f} input minutes"
-                            )
-
-                    logger.info("=" * 80)
-                    logger.info(
-                        f"Note: Time estimates based on {self.dataset_duration_hours:.2f}h dataset, "
-                        f"{self._world_size} world size, grad_accum={grad_accum}"
-                    )
-                    logger.info("=" * 80)
+            _, self.eval_num_cuts = compute_dataset_duration(config.data.validation_ds)
+            self.eval_num_batches = estimate_num_batches(
+                config.data.validation_ds,
+                world_size=self._world_size,
+            )
+            logger.info(f"Evaluation dataset: {self.eval_num_cuts} cuts, ~{self.eval_num_batches} batches")
 
         # Create eval dataset before super().__init__() so HF Trainer can use it
         # Uses Lhotse's DynamicBucketingSampler for memory-efficient evaluation
@@ -316,36 +224,131 @@ class MELTTrainer(Trainer):
         return dataloader
 
     def num_examples(self, dataloader: DataLoader) -> int:
-        """Return the number of examples in the dataloader.
+        raise NotImplementedError("This method should not be used in this custom trainer.")
 
-        For Lhotse dataloaders, we use the pre-computed dataset_num_cuts
-        since the dataloader may be infinite or not have __len__.
-
-        Args:
-            dataloader: The dataloader to count examples from.
-
-        Returns:
-            Number of examples (cuts) in the dataset.
+    def get_total_train_batch_size(self, args):
         """
-        # First try to get length from the dataset directly
-        if has_length(dataloader):
-            try:
-                dataset = dataloader.dataset
-                if hasattr(dataset, "__len__"):
-                    # For EvalCutSetDataset, __len__ returns num_cuts directly
-                    return len(dataset)
-            except (TypeError, AttributeError):
-                pass
+        In the original class, this function returns
+        self._train_batch_size * args.gradient_accumulation_steps * dp_world_size.
+        Here, we override this and the next one to avoid using self._train_batch_size.
+        """
+        if args.per_device_train_batch_size == -1:
+            return -1  # we are using lhotse's automatic batching
+        else:
+            return super().get_total_train_batch_size(args)
 
-        # For Lhotse infinite dataloaders (training), use pre-computed count
-        if self.dataset_num_cuts > 0:
-            return self.dataset_num_cuts
+    def set_initial_training_values(
+        self,
+        args: TrainingArguments,
+        dataloader: DataLoader,
+        total_train_batch_size: int | None = None,
+    ):
+        """
+        Calculates and returns the following values:
+        - `num_train_epochs`
+        - `num_update_steps_per_epoch`
+        - `num_examples`
+        - `num_train_samples`
+        - `epoch_based`
+        - `len_dataloader`
+        - `max_steps`
+        """
+        if args.per_device_train_batch_size != -1:
+            return super().set_initial_training_values(args, dataloader, total_train_batch_size)
 
-        # Fallback: try to get from parent
-        try:
-            return super().num_examples(dataloader)
-        except (TypeError, ValueError):
-            return 0
+        # # Case 1: we rely on `args.max_steps` first
+        max_steps = args.max_steps
+        epoch_based = max_steps < 0
+
+        (
+            num_update_steps_per_epoch,
+            self.dataset_duration_hours,
+            self.dataset_num_cuts,
+            batches_per_epoch,
+            batches_per_worker,
+        ) = estimate_steps_per_epoch(
+            config=self.config.data.train_ds,
+            gradient_accumulation_steps=args.gradient_accumulation_steps,
+            world_size=self._world_size,
+        )
+
+        if epoch_based:
+            max_steps = math.ceil(args.num_train_epochs * num_update_steps_per_epoch)
+
+        # Now we figure out `num_examples`, `num_train_epochs`, and `train_samples`
+        num_examples = self.dataset_num_cuts  # in hours, length of the dataset (not really useful/used for audio dataset) TODO: check that it doesn't break the trainer
+        if args.max_steps > 0:
+            num_train_epochs = max_steps // num_update_steps_per_epoch + int(
+                max_steps % num_update_steps_per_epoch > 0
+            )
+            # May be slightly incorrect if the last batch in the training dataloader has a smaller size but it's
+            # the best we can do.
+            num_train_samples = (
+                max_steps * self.config.data.train_ds.batch_duration
+            )  # in hours TODO: check that this does not break the trainer
+
+        len_dataloader = batches_per_epoch
+
+        # Log epoch estimation info
+        logger.info(
+            f"Epoch estimation: {self.dataset_num_cuts} cuts, "
+            f"{self.dataset_duration_hours:.2f} hours, "
+            f"~{self.steps_per_epoch} steps/epoch"
+        )
+
+        # Compute and log checkpoint/logging/eval intervals in hours
+        if self.dataset_duration_hours > 0 and self.steps_per_epoch > 0:
+            hours_per_step = self.dataset_duration_hours / self.steps_per_epoch
+
+            logger.info("=" * 80)
+            logger.info("CHECKPOINT & LOGGING SCHEDULE (in input audio hours):")
+            logger.info("=" * 80)
+
+            # Logging frequency
+            if args and hasattr(args, "logging_steps") and args.logging_steps > 0:
+                logging_hours = args.logging_steps * hours_per_step
+                logging_minutes = logging_hours * 60
+                if logging_hours >= 1.0:
+                    logger.info(f"  📊 Logging every {args.logging_steps} steps = ~{logging_hours:.2f} input hours")
+                else:
+                    logger.info(
+                        f"  📊 Logging every {args.logging_steps} steps = ~{logging_minutes:.1f} input minutes"
+                    )
+
+            # Evaluation frequency
+            if args and hasattr(args, "eval_steps") and args.eval_steps > 0:
+                eval_hours = args.eval_steps * hours_per_step
+                if eval_hours >= 1.0:
+                    logger.info(f"  📈 Evaluation every {args.eval_steps} steps = ~{eval_hours:.2f} input hours")
+                else:
+                    eval_minutes = eval_hours * 60
+                    logger.info(f"  📈 Evaluation every {args.eval_steps} steps = ~{eval_minutes:.1f} input minutes")
+
+            # Save frequency
+            if args and hasattr(args, "save_steps") and args.save_steps > 0:
+                save_hours = args.save_steps * hours_per_step
+                if save_hours >= 1.0:
+                    logger.info(f"  💾 Checkpoints every {args.save_steps} steps = ~{save_hours:.2f} input hours")
+                else:
+                    save_minutes = save_hours * 60
+                    logger.info(f"  💾 Checkpoints every {args.save_steps} steps = ~{save_minutes:.1f} input minutes")
+
+            logger.info("=" * 80)
+            logger.info(
+                f"Note: Time estimates based on a {self.dataset_duration_hours:.2f}h dataset, "
+                f"{self._world_size} world size, grad_accum={grad_accum}"
+            )
+            logger.info("=" * 80)
+
+        return (
+            num_train_epochs,
+            num_update_steps_per_epoch,
+            num_examples,
+            num_train_samples,
+            epoch_based,
+            len_dataloader,
+            max_steps,
+        )
 
     def create_optimizer(self):
         """Create optimizer groups respecting freeze flags and modular audio stack.

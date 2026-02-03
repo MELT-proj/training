@@ -23,11 +23,9 @@ import torch
 import tyro
 
 from transformers import (
-    AutoConfig,
     AutoFeatureExtractor,
     AutoTokenizer,
     TrainingArguments,
-    set_seed,
 )
 from transformers.modeling_utils import find_tied_parameters
 from transformers.trainer_utils import get_last_checkpoint
@@ -47,7 +45,6 @@ from .trainer import MELTTrainer, count_trainable_parameters
 
 
 logger = get_logger(__name__)
-
 
 # Optimize matmul precision
 torch.set_float32_matmul_precision("high")
@@ -166,9 +163,6 @@ def main(cfg: TrainingConfig) -> None:
     # Create training arguments
     targs = TrainingArguments(**trainer_args_dict(cfg))
 
-    # Set seed
-    set_seed(cfg.trainer.seed)
-
     ##########################
     ## PROCESSOR SETUP
     ##########################
@@ -217,9 +211,9 @@ def main(cfg: TrainingConfig) -> None:
     ## SAVING
     ##########################
     # From: https://huggingface.co/blog/ram-efficient-pytorch-fsdp
-    if trainer.is_fsdp_enabled:
-        logger.info("Setting FSDP state dict type to FULL_STATE_DICT for saving...")
-        trainer.accelerator.state.fsdp_plugin.set_state_dict_type("FULL_STATE_DICT")
+    # if trainer.is_fsdp_enabled:
+    #     logger.info("Setting FSDP state dict type to FULL_STATE_DICT for saving...")
+    #     trainer.accelerator.state.fsdp_plugin.set_state_dict_type("FULL_STATE_DICT")
 
     logger.info("Saving model and processor...")
     trainer.save_model()

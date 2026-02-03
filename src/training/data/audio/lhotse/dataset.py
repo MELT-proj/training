@@ -8,6 +8,10 @@ The dataset does not hold actual data; instead, it acts as a processing
 recipe that transforms CutSets into model inputs via the MELTProcessor.
 """
 
+import json
+import os
+import time
+
 import torch
 import torch.utils.data
 from lhotse import CutSet
@@ -104,6 +108,53 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         self.sample_rate = int(_get_config_value(config, "sample_rate", 16000))
         self.min_chars = int(_get_config_value(config, "min_chars", 0))
 
+        self._debug_cut_ids_dir = os.environ.get("MELT_DEBUG_CUT_IDS_DIR")
+        self._debug_cut_ids_max_batches = int(os.environ.get("MELT_DEBUG_CUT_IDS_MAX_BATCHES", "0") or "0")
+        self._debug_cut_ids_every = int(os.environ.get("MELT_DEBUG_CUT_IDS_EVERY", "1") or "1")
+        self._debug_cut_ids_batch_idx = 0
+        self._debug_cut_ids_fh = None
+
+    def _maybe_log_cut_ids(self, cuts: CutSet) -> None:
+        if not self._debug_cut_ids_dir:
+            return
+        if self._debug_cut_ids_max_batches <= 0:
+            return
+        if self._debug_cut_ids_batch_idx >= self._debug_cut_ids_max_batches:
+            return
+        if self._debug_cut_ids_every > 1 and (self._debug_cut_ids_batch_idx % self._debug_cut_ids_every) != 0:
+            self._debug_cut_ids_batch_idx += 1
+            return
+
+        # Note: in DataLoader worker processes, torch.distributed is typically not initialized.
+        # We rely on env vars; Lhotse's make_worker_init_fn sets RANK/WORLD_SIZE for WebDataset.
+        rank = int(os.environ.get("RANK", os.environ.get("SLURM_PROCID", "0")) or "0")
+        world_size = int(os.environ.get("WORLD_SIZE", os.environ.get("SLURM_NTASKS", "1")) or "1")
+        worker_info = torch.utils.data.get_worker_info()
+        worker_id = worker_info.id if worker_info is not None else 0
+
+        os.makedirs(self._debug_cut_ids_dir, exist_ok=True)
+        if self._debug_cut_ids_fh is None:
+            pid = os.getpid()
+            path = os.path.join(
+                self._debug_cut_ids_dir,
+                f"cut_ids.rank{rank:05d}-ws{world_size:05d}.worker{worker_id:02d}.pid{pid}.jsonl",
+            )
+            # Line-buffered for "tail -f" usability.
+            self._debug_cut_ids_fh = open(path, "a", encoding="utf-8", buffering=1)
+
+        cut_ids = [c.id for c in cuts]
+        record = {
+            "time": time.time(),
+            "rank": rank,
+            "world_size": world_size,
+            "worker_id": worker_id,
+            "batch_idx": self._debug_cut_ids_batch_idx,
+            "num_cuts": len(cut_ids),
+            "cut_ids": cut_ids,
+        }
+        self._debug_cut_ids_fh.write(json.dumps(record) + "\n")
+        self._debug_cut_ids_batch_idx += 1
+
     def __getitem__(self, cuts: CutSet) -> dict[str, torch.Tensor] | None:
         """Process a batch of cuts into model inputs.
 
@@ -122,6 +173,8 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         """
         if cuts is None or len(cuts) == 0:
             return None
+
+        self._maybe_log_cut_ids(cuts)
 
         # Load audio and text from cuts
         audios = []
@@ -187,30 +240,6 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         except Exception as e:
             logger.error(f"Failed to process batch through processor: {e}")
             return None
-
-    # def _build_labels(self, input_ids: torch.Tensor) -> torch.Tensor:
-    #     """Build labels tensor for loss computation.
-
-    #     The labels tensor contains -100 for audio token positions, audio_bos_token_id, audio_eos_token_id,
-    #     and pad tokens, and actual token IDs for text positions.
-
-    #     Args:
-    #         input_ids: Input token IDs tensor [B, S].
-    #         audio_token_id: Token ID representing the audio token.
-    #     Returns:
-    #         Labels tensor [B, S] with -100 for audio tokens.
-    #     """
-    #     labels = input_ids.clone()
-    #     # Create a single mask for all tokens to be ignored
-
-    #     mask = (
-    #         (labels == self.processor.audio_token_id)
-    #         | (labels == self.processor.audio_bos_token_id)
-    #         | (labels == self.processor.audio_eos_token_id)
-    #         | (labels == self.processor.tokenizer.pad_token_id)
-    #     )
-    #     labels[mask] = -100
-    #     return labels
 
     def _load_audio(self, cut: Cut) -> torch.Tensor | None:
         """Load audio from a cut.
