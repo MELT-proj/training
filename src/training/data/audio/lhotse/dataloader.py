@@ -375,11 +375,6 @@ def estimate_steps_per_epoch(
     # The number of update steps is rescaled by gradient accumulation steps
     optimizer_steps_per_epoch = math.ceil(batches_per_worker / gradient_accumulation_steps)
 
-    logger.info(
-        f"Dataset stats: {total_cuts} cuts, {total_hours:.2f} hours total, "
-        f"~{optimizer_steps_per_epoch} steps/epoch (batch_duration={batch_duration}s, "
-        f"grad_accum={gradient_accumulation_steps}, world_size={world_size})"
-    )
     return optimizer_steps_per_epoch, total_hours, total_cuts, batches_per_epoch, batches_per_worker
 
 
