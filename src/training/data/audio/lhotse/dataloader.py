@@ -654,20 +654,22 @@ def get_lhotse_dataloader_from_config(
         logger.info(f"Using world size: {world_size}, rank: {global_rank}")
 
         # Estimate batches per epoch for progress bars
-        # This is the micro-batch count per rank per epoch
-        gradient_accumulation_steps = 1  # We count micro-batches, not optimizer steps
-        steps_per_epoch, _, _, _, _ = estimate_steps_per_epoch(
+        # We need micro-batches per worker, per rank, per epoch (not optimizer steps)
+        # So we call estimate_steps_per_epoch with gradient_accumulation_steps=1
+        _, _, _, _, batches_per_worker = estimate_steps_per_epoch(
             config=config,
-            gradient_accumulation_steps=gradient_accumulation_steps,
+            gradient_accumulation_steps=1,  # We want micro-batches, not optimizer steps
             world_size=world_size,
         )
-        logger.info(f"Estimated {steps_per_epoch} micro-batches per epoch per rank")
+        # Convert to int for __len__
+        batches_per_worker_int = max(1, int(batches_per_worker))
+        logger.info(f"Estimated {batches_per_worker_int} micro-batches per epoch per rank")
 
         dloader_kwargs = {
             "dataset": InfiniteIterableDatasetWrapper(
                 dataset=dataset,
                 sampler=sampler,
-                estimated_batches_per_epoch=steps_per_epoch,
+                estimated_batches_per_epoch=batches_per_worker_int,
             ),
             "worker_init_fn": make_worker_init_fn(
                 rank=global_rank,

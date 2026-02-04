@@ -21,6 +21,7 @@ from glob import glob
 from pathlib import Path
 from statistics import mean, median, stdev
 
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 # Datasets where the second level is language (multilingual)
-MULTILINGUAL_DATASETS = {"cv22_sidon", "fleurs", "voxpopuli"} #, "multilingual_librispeech"} "mls_sidon",
+MULTILINGUAL_DATASETS = {"cv22_sidon", "fleurs", "voxpopuli", "mls_sidon"}
 
 # Datasets where the second level is config (monolingual, assume English)
 MONOLINGUAL_DATASETS = {"librispeech", "peoples_speech"}
@@ -44,6 +45,12 @@ LANGUAGE_MAP = {
     "it": "it",
     "pt": "pt",
     "nl": "nl",
+    "cs": "cs",
+    "ja": "ja",
+    # Common Voice variants
+    "zh-CN": "zh",
+    "zh-HK": "zh",
+    "zh-TW": "zh",
     # Fleurs-style with region
     "de_de": "de",
     "en_us": "en",
@@ -242,9 +249,7 @@ def discover_datasets(parent_dir: Path) -> list[DatasetEntry]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Compute statistics from Lhotse SHAR manifests"
-    )
+    parser = argparse.ArgumentParser(description="Compute statistics from Lhotse SHAR manifests")
     parser.add_argument(
         "parent_dir",
         type=Path,
@@ -368,9 +373,7 @@ def main() -> None:
         logger.info(f"Results written to {args.output}")
     else:
         # Print to stdout as table
-        writer = csv.DictWriter(
-            __import__("sys").stdout, fieldnames=fieldnames, delimiter="\t"
-        )
+        writer = csv.DictWriter(__import__("sys").stdout, fieldnames=fieldnames, delimiter="\t")
         writer.writeheader()
         writer.writerows(results)
 

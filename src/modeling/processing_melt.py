@@ -6,7 +6,7 @@ import re
 
 import torch
 
-from transformers import AutoFeatureExtractor, AutoTokenizer, FeatureExtractorMixin, PreTrainedTokenizerBase
+from transformers import AutoFeatureExtractor, AutoTokenizer, FeatureExtractionMixin, PreTrainedTokenizerBase
 from transformers.feature_extraction_utils import BatchFeature
 from transformers.image_utils import ImageInput
 from transformers.processing_utils import ProcessingKwargs, ProcessorMixin, Unpack
@@ -97,7 +97,7 @@ class MELTProcessor(ProcessorMixin):
 
     def __init__(
         self,
-        feature_extractor: str | FeatureExtractorMixin,
+        feature_extractor: str | FeatureExtractionMixin,
         tokenizer: str | PreTrainedTokenizerBase,
         config,
         # image_processor=None,

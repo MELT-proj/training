@@ -12,6 +12,7 @@ Key features:
 
 import math
 import os
+import sys
 
 import torch
 from torch.utils.data import DataLoader
@@ -246,22 +247,35 @@ class MELTTrainer(Trainer):
         """
         Calculates and returns the following values:
         - `num_train_epochs`
-        - `num_update_steps_per_epoch`
-        - `num_examples`
-        - `num_train_samples`
-        - `epoch_based`
-        - `len_dataloader`
-        - `max_steps`
+        - `num_update_steps_per_epoch`: number of optimization steps in an epoch.
+        - `num_examples`: used only for logging.
+        - `num_train_samples`: used for speed metrics.
+        - `epoch_based`: used to scale num_train_tokens.
+        - `len_dataloader`: used to compute `steps_in_epoch`. If not provided, falls back to max_steps * grad_accum
+        - `max_steps`: used for scheduler setup, logging, and total optimization steps.
+
+        Roughly:
+        Parent Trainer._inner_training_loop:
+        ├── for epoch in range(0, sys.maxsize):     # runs "forever"
+        │   ├── steps_in_epoch = len(dataloader)    # = batches_per_worker (int)
+        │   ├── for update_step in total_updates:   # = steps_in_epoch // grad_accum
+        │   │   ├── for micro_batch in grad_accum:
+        │   │   │   └── self.state.global_step += 1 (after grad_accum micro-batches)
+        │   │   └── if global_step >= max_steps: break
+        │   └── if should_training_stop: break
         """
         if args.per_device_train_batch_size != -1:
             return super().set_initial_training_values(args, dataloader, total_train_batch_size)
+
+        num_workers = self.config.data.train_ds.num_workers
+        grad_accum = args.gradient_accumulation_steps
 
         # # Case 1: we rely on `args.max_steps` first
         max_steps = args.max_steps
         epoch_based = max_steps < 0
 
         (
-            num_update_steps_per_epoch,
+            optimization_steps_per_epoch,
             self.dataset_duration_hours,
             self.dataset_num_cuts,
             batches_per_epoch,
@@ -273,32 +287,36 @@ class MELTTrainer(Trainer):
         )
 
         if epoch_based:
-            max_steps = math.ceil(args.num_train_epochs * num_update_steps_per_epoch)
+            max_steps = math.ceil(args.num_train_epochs * optimization_steps_per_epoch)
 
         # Now we figure out `num_examples`, `num_train_epochs`, and `train_samples`
-        num_examples = self.dataset_num_cuts  # in hours, length of the dataset (not really useful/used for audio dataset) TODO: check that it doesn't break the trainer
+        num_examples = self.dataset_num_cuts  # Just for logging, not critical for audio
         if args.max_steps > 0:
-            num_train_epochs = max_steps // num_update_steps_per_epoch + int(
-                max_steps % num_update_steps_per_epoch > 0
+            num_train_epochs = max_steps // optimization_steps_per_epoch + int(
+                max_steps % optimization_steps_per_epoch > 0
             )
-            # May be slightly incorrect if the last batch in the training dataloader has a smaller size but it's
-            # the best we can do.
-            num_train_samples = (
-                max_steps * self.config.data.train_ds.batch_duration
-            )  # in hours TODO: check that this does not break the trainer
+            # num_train_samples is used for speed_metrics (samples_per_second)
+            # For audio, we count micro-batches as "samples"
+            num_train_samples = max_steps * args.gradient_accumulation_steps
+        else:
+            num_train_epochs = args.num_train_epochs
+            num_train_samples = num_train_epochs * batches_per_epoch
 
-        len_dataloader = batches_per_epoch
+        # len_dataloader MUST match len(dataloader.dataset) = batches_per_worker
+        # This is what the InfiniteIterableDatasetWrapper.__len__ returns
+        # It represents micro-batches per worker, per rank, per epoch
+        len_dataloader = int(batches_per_worker)
 
-        # Log epoch estimation info
         logger.info(
-            f"Epoch estimation: {self.dataset_num_cuts} cuts, "
-            f"{self.dataset_duration_hours:.2f} hours, "
-            f"~{self.steps_per_epoch} steps/epoch"
+            f"Single epoch estimation: {self.dataset_num_cuts} cuts, \n"
+            f"{self.dataset_duration_hours:.2f} hours, \n"
+            f"~{len_dataloader} number of batches, "
+            f"~{optimization_steps_per_epoch} optimization steps/epoch (world size: {self._world_size}, num workers: {num_workers}, grad acc steps: {grad_accum})"
         )
 
         # Compute and log checkpoint/logging/eval intervals in hours
-        if self.dataset_duration_hours > 0 and self.steps_per_epoch > 0:
-            hours_per_step = self.dataset_duration_hours / self.steps_per_epoch
+        if self.dataset_duration_hours > 0 and optimization_steps_per_epoch > 0:
+            hours_per_step = self.dataset_duration_hours / optimization_steps_per_epoch
 
             logger.info("=" * 80)
             logger.info("CHECKPOINT & LOGGING SCHEDULE (in input audio hours):")
@@ -340,9 +358,24 @@ class MELTTrainer(Trainer):
             )
             logger.info("=" * 80)
 
+        # For step-based training with infinite dataloaders, we want:
+        # - num_train_epochs = sys.maxsize (so the outer loop keeps running)
+        # - epoch_based = False (we stop by max_steps, not epochs)
+        # The training loop will terminate when global_step >= max_steps
+        if epoch_based:
+            logger.info(
+                "User specified num_train_epochs. Converting to equivalent max_steps for Lhotse infinite dataloader."
+            )
+
+        # Always use step-based termination for infinite dataloaders
+        # Set num_train_epochs to a large value so the outer loop keeps running
+        # The inner loop will break when global_step >= max_steps
+        num_train_epochs = sys.maxsize
+        epoch_based = False
+
         return (
             num_train_epochs,
-            num_update_steps_per_epoch,
+            optimization_steps_per_epoch,
             num_examples,
             num_train_samples,
             epoch_based,
