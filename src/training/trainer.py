@@ -15,6 +15,7 @@ import os
 import sys
 
 import torch
+from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 
 from transformers import Trainer, TrainingArguments, set_seed
@@ -23,7 +24,6 @@ from transformers.trainer_utils import has_length
 from .. import ddp
 from ..logging_utils import get_logger
 from ..modeling import MELTProcessor
-from .config import TrainingConfig
 from .data.audio.lhotse import (
     FallbackDataset,
     SpeechToTextDataset,
@@ -54,7 +54,7 @@ class MELTTrainer(Trainer):
     Args:
         model: The model to train.
         args: Training arguments.
-        config: TrainingConfig with Lhotse data loading settings.
+        config: OmegaConf DictConfig with Lhotse data loading settings.
         processor: MELTProcessor for audio/text processing.
         **kwargs: Additional arguments passed to Trainer.
 
@@ -70,7 +70,7 @@ class MELTTrainer(Trainer):
         self,
         model,
         args: TrainingArguments,
-        config: TrainingConfig,
+        config: DictConfig,
         processor: MELTProcessor,
         **kwargs,
     ):
@@ -223,9 +223,6 @@ class MELTTrainer(Trainer):
         )
 
         return dataloader
-
-    def num_examples(self, dataloader: DataLoader) -> int:
-        raise NotImplementedError("This method should not be used in this custom trainer.")
 
     def get_total_train_batch_size(self, args):
         """
@@ -409,28 +406,6 @@ class MELTTrainer(Trainer):
 
         decoder_params = list(decoder_module.parameters()) if decoder_module is not None else []
 
-        # Apply freezes using provided freeze helpers when available
-        if getattr(self.args, "freeze_adapter", False):
-            if adapter_module is not None and hasattr(adapter_module, "freeze"):
-                adapter_module.freeze()
-            else:
-                for p in adapter_params:
-                    p.requires_grad = False
-
-        if getattr(self.args, "freeze_encoder", False):
-            if encoder_module is not None and hasattr(encoder_module, "freeze"):
-                encoder_module.freeze()
-            else:
-                for p in encoder_params:
-                    p.requires_grad = False
-
-        if getattr(self.args, "freeze_decoder", False):
-            if hasattr(self.model, "freeze_decoder"):
-                self.model.freeze_decoder()
-            else:
-                for p in decoder_params:
-                    p.requires_grad = False
-
         # Filter out any frozen params before building optimizer groups.
         # DeepSpeed ZeRO will error out if any param group is empty.
         adapter_params = [p for p in adapter_params if p.requires_grad]
@@ -474,16 +449,9 @@ class MELTTrainer(Trainer):
         # Final safety: drop any accidentally-empty groups (defensive against config mistakes)
         groups = [g for g in groups if g.get("params")]
 
-        # If everything got frozen or no groups created, fall back to any remaining trainable params
-        if len(groups) == 0:
-            trainable = [p for p in self.model.parameters() if p.requires_grad]
-            if len(trainable) == 0:
-                raise ValueError("All model parameters are frozen; cannot create optimizer.")
-            groups = [{"params": trainable, "lr": getattr(self.args, "lr", 1e-5)}]
-
         self.optimizer = torch.optim.AdamW(
             groups,
-            betas=(self.args.adam_beta1, self.args.adam_beta2),
+            betas=(opt_cfg.adam_beta1, opt_cfg.adam_beta2),
         )
 
 

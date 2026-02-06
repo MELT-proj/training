@@ -7,6 +7,7 @@ Contents
 - `accelerate/` and `train/` subfolders: presets for distributed training (FSDP, Zero, etc.) and dataset/training configs.
 
 Usage
-- Loaded and merged with the project’s dataclass-based CLI (tyro) in `src/train.py`.
+- Loaded via OmegaConf in `src/train.py` with support for hierarchical CLI overrides.
 - Use shell-style env expansion in YAML (e.g. `${VAR:-default}`) for portability.
 - Prefer editing small, focused YAMLs and pass overrides via the CLI or environment variables.
+- CLI overrides use dot notation: `--trainer.max_steps 100 --run.exp_name my_exp`

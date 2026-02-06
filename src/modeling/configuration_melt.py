@@ -2,7 +2,6 @@ from transformers import AutoConfig
 from transformers.configuration_utils import PretrainedConfig
 from transformers.utils import logging
 
-
 # Required special token names (no hard-coded defaults).
 # These are the token *names* the model config is expected to provide under
 # `model.config.decoder.<name>` or that must already exist in the tokenizer.
@@ -46,6 +45,7 @@ class MELTAdapterConfig(PretrainedConfig):
 
     def __init__(
         self,
+        _type,
         hidden_size=1024,
         num_hidden_layers=2,
         intermediate_size=4096,
@@ -60,14 +60,20 @@ class MELTAdapterConfig(PretrainedConfig):
         **kwargs,
     ):
         super().__init__(**kwargs)
+
+        self._type = _type
+
+        # MLP specific
         self.hidden_size = hidden_size
         self.num_hidden_layers = num_hidden_layers
         self.intermediate_size = intermediate_size
         self.hidden_act = hidden_act
         self.dropout = dropout
+
         # Q-Former specific
         self.downsample_rate = downsample_rate
         self.window_size = window_size
+
         # Conformer specific
         self.num_adapter_layers = num_adapter_layers
         self.layerdrop = layerdrop
@@ -108,7 +114,7 @@ class MELTConfig(PretrainedConfig):
         self,
         audio_encoder: str,
         text_decoder: str,
-        adapter_config: MELTAdapterConfig,
+        adapter_config: dict,
         initializer_range: float = 0.02,
         encoder_kwargs: dict = {},
         decoder_kwargs: dict = {},
@@ -121,38 +127,7 @@ class MELTConfig(PretrainedConfig):
         self.text_decoder = text_decoder
         self.audio_encoder_config = audio_config
         self.text_decoder_config = text_config
-
-        # Handle adapter config
-        if not isinstance(adapter_config, MELTAdapterConfig):
-            # Accept mapping, dataclass (e.g., Training's AdapterConfig), or namespace-like objects
-            if adapter_config is None:
-                adapter_cfg = {}
-            elif isinstance(adapter_config, dict):
-                adapter_cfg = dict(adapter_config)
-            else:
-                # Defer importing dataclasses utilities lazily to avoid import cycles
-                from dataclasses import asdict, is_dataclass
-
-                if is_dataclass(adapter_config):
-                    adapter_cfg = asdict(adapter_config)
-                elif hasattr(adapter_config, "__dict__"):
-                    adapter_cfg = dict(adapter_config.__dict__)
-                else:
-                    raise TypeError(
-                        "adapter_config must be a MELTAdapterConfig, dict, or dataclass/namespace-like object"
-                    )
-
-            # Extract user-provided adapter `type` (mlp/qformer/conformer) if present.
-            adapter_type = adapter_cfg.pop("type", getattr(self, "adapter_type", "mlp"))
-            self.adapter_type = adapter_type
-
-            # Initialize MELTAdapterConfig with remaining adapter kwargs
-            self.adapter_config = MELTAdapterConfig(**adapter_cfg)
-        else:
-            self.adapter_config = adapter_config
-            # Ensure adapter_type attribute exists and defaults to 'mlp' if not present
-            self.adapter_type = getattr(self, "adapter_type", "mlp")
-
+        self.adapter_config = MELTAdapterConfig(**adapter_config)
         self.initializer_range = initializer_range
 
         # Set decoder-related attributes

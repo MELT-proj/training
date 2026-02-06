@@ -44,13 +44,13 @@ echo "CUDA version:"
 nvcc --version 2>/dev/null || echo "nvcc not found (may be running in container)"
 
 # Usage: $0 <accelerate_config> [extra_args...]
-# The new config system uses tyro dataclasses, so we pass arguments directly.
-# Example: $0 config/accelerate/zero3.yaml --config-file config/train/LS_asr.yaml --trainer.max-steps 1000
+# The config system uses OmegaConf, so we pass arguments with dot notation.
+# Example: $0 config/accelerate/zero3.yaml --config config/train/asr.yaml --trainer.max_steps 1000
 
-if [ -z "${1:-}" ]; then
-    echo "Usage: $0 <accelerate_config> [train_args...]"
-    echo "Example: $0 config/accelerate/zero3.yaml --config-file config/train/LS_asr.yaml"
-    echo "Example: $0 config/accelerate/zero3.yaml --trainer.max-steps 1000 --trainer.learning-rate 2e-5"
+if [ -z \"${1:-}\" ]; then
+    echo \"Usage: $0 <accelerate_config> [train_args...]\"
+    echo \"Example: $0 config/accelerate/zero3.yaml --config config/train/asr.yaml\"
+    echo \"Example: $0 config/accelerate/zero3.yaml --config config/train/asr.yaml --trainer.max_steps 1000\"
     exit 1
 fi
 
@@ -195,7 +195,7 @@ if [[ "$RUNNING_UNDER_SLURM" -eq 1 ]]; then
         srun $SRUN_ARGS --jobid "$SLURM_JOB_ID" bash -c "$LAUNCHER $CMD" 2>&1
     fi
 else
-# python -m pdb -c continue src/train.py --config-file $CONFIG_FILE --dry_run
+# python -m pdb -c continue src/train.py --config $CONFIG_FILE --dry_run
     bash -c "$LAUNCHER $CMD" 2>&1
 fi
 

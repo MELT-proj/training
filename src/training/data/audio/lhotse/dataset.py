@@ -16,10 +16,10 @@ import torch
 import torch.utils.data
 from lhotse import CutSet
 from lhotse.cut import Cut
+from omegaconf import DictConfig
 
 from .....logging_utils import get_logger
 from .....modeling import MELTProcessor
-from ....config import DataConfig
 
 
 logger = get_logger(__name__)
@@ -84,12 +84,13 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
 
     Args:
         processor: MELTProcessor instance for audio/text processing.
-        config: DataConfig containing processing settings.
+        config: DictConfig containing data processing settings.
         is_train: Whether this is for training (affects augmentation, etc.).
 
     Example:
         >>> processor = MELTProcessor(feature_extractor, tokenizer)
-        >>> config = DataConfig(apply_chat_template=False)
+        >>> from omegaconf import OmegaConf
+        >>> config = OmegaConf.create({"apply_chat_template": False})
         >>> dataset = SpeechToTextDataset(processor, config)
         >>> # Called by Lhotse sampler/dataloader:
         >>> batch = dataset[cuts]  # cuts is a CutSet
@@ -98,7 +99,7 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
     def __init__(
         self,
         processor: MELTProcessor,
-        config: DataConfig,
+        config: DictConfig,
         is_train: bool = True,
     ) -> None:
         self.processor = processor

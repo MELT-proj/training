@@ -1,27 +1,28 @@
 """MELT training entrypoint.
 
-This script uses Lhotse-based data loading and dataclass-based configs with tyro.
+This script uses Lhotse-based data loading and OmegaConf for configuration.
 
 Usage:
     # Use defaults
     python src/train.py
 
     # Load from YAML config file
-    python src/train.py --config-file config/train/LS_asr.yaml
+    python src/train.py --config config/train/asr.yaml
 
     # Override specific parameters
-    python src/train.py --trainer.max-steps 1000 --trainer.learning-rate 2e-5
+    python src/train.py --config config/train/asr.yaml --trainer.max_steps 1000
 
-    # Combine YAML with CLI overrides
-    python src/train.py --config-file config/train/LS_asr.yaml --trainer.max-steps 500
+    # Override run settings
+    python src/train.py --config config/train/asr.yaml --run.exp_name my_experiment
 """
 
 import os
 from pathlib import Path
 
 import torch
-import tyro
+from omegaconf import DictConfig, OmegaConf
 
+import wandb
 from transformers import (
     AutoFeatureExtractor,
     AutoTokenizer,
@@ -34,10 +35,9 @@ from .. import ddp
 from ..logging_utils import configure_logging, get_logger
 from ..modeling import MELTConfig, MELTForCausalLM, MELTProcessor
 from .config import (
-    TrainingConfig,
+    config_to_dict,
     expand_env_vars_in_config,
-    load_config_from_yaml,
-    merge_configs,
+    parse_args_and_load_config,
     save_config,
     trainer_args_dict,
 )
@@ -51,14 +51,14 @@ torch.set_float32_matmul_precision("high")
 
 
 def prepare_model(
-    cfg: TrainingConfig,
+    cfg: DictConfig,
     targs: TrainingArguments,
     processor: MELTProcessor,
 ) -> tuple[MELTForCausalLM, str | None]:
     """Prepare the model for training.
 
     Args:
-        cfg: Training configuration.
+        cfg: Training configuration (OmegaConf DictConfig).
         targs: HuggingFace TrainingArguments.
         processor: MELTProcessor instance.
 
@@ -72,12 +72,12 @@ def prepare_model(
     adapter_cfg = model_cfg.adapter
 
     # Beyond this length in frames, the encoder will unfold the input in chunks
-    max_audio_seq_len = getattr(encoder_cfg, "max_audio_seq_len", 1500)
+    max_audio_seq_len = encoder_cfg.get("max_audio_seq_len", 1500)
 
     config = MELTConfig(
         audio_encoder=encoder_cfg.name,
         text_decoder=decoder_cfg.name,
-        adapter_config=cfg.model.adapter,
+        adapter_config=adapter_cfg,
         decoder_kwargs={"attn_implementation": "flash_attention_2"},
         max_audio_seq_len=max_audio_seq_len,
     )
@@ -104,7 +104,7 @@ def prepare_model(
             )
 
     # Load or create model
-    logger.info("Loading model to CPU (before device placement)...")
+    logger.info("Loading model...")
     if model_cfg.ckpt is not None:
         logger.info(f"Loading model from checkpoint: {model_cfg.ckpt}")
         model = MELTForCausalLM.from_pretrained(model_cfg.ckpt)
@@ -140,25 +140,56 @@ def prepare_model(
     return model, last_checkpoint
 
 
-def main(cfg: TrainingConfig) -> None:
-    """Run training from a loaded config."""
+def main(cfg: DictConfig) -> None:
+    """Run training from a loaded config.
+
+    Args:
+        cfg: Training configuration (OmegaConf DictConfig).
+    """
     configure_logging()
 
-    if ddp.is_distributed():
-        rank = ddp.get_global_rank()
-        world_size = ddp.get_world_size()
-        local_rank = ddp.get_local_rank()
-        is_local_master = ddp.is_local_master()
-        is_global_master = ddp.is_global_master()
+    rank = ddp.get_global_rank()
+    world_size = ddp.get_world_size()
+    local_world_size = ddp.get_local_world_size()
+    local_rank = ddp.get_local_rank()
+    is_local_master = ddp.is_local_master()
+    is_global_master = ddp.is_global_master()
+    is_distributed = ddp.is_distributed()
 
-        logger.info(f"Distributed setup: rank {rank} out of {world_size}")
-        logger.info(
-            f"world_size: {world_size}, local_world_size: {ddp.get_local_world_size()}"
-            f" local_rank: {local_rank}, group_rank: {ddp.get_group_rank()}"
-            f" is_local_master: {is_local_master}, is_global_master: {is_global_master}"
+    logger.info(f"Distributed setup: rank {rank} out of {world_size}")
+    logger.info(
+        f"world_size: {world_size}, local_world_size: {ddp.get_local_world_size()}"
+        f" local_rank: {local_rank}, group_rank: {ddp.get_group_rank()}"
+        f" is_local_master: {is_local_master}, is_global_master: {is_global_master}"
+        f" is_distributed: {is_distributed}"
+    )
+
+    if is_distributed:
+        # It seems gloo breaks on multi-node
+        torch.distributed.init_process_group(
+            backend="cpu:gloo,cuda:nccl" if local_world_size == world_size else "nccl"
         )
-    else:
-        logger.info("Not in a distributed setup")
+
+    # Convert config to dict for wandb logging
+    dict_cfg = config_to_dict(cfg)
+    dict_cfg |= {
+        "world_size": world_size,
+        "local_world_size": local_world_size,
+        "is_distributed": is_distributed,
+    }
+
+    # Starting W&B. HF Trainer can also do this, but this way we can include the config.
+    # Initializing sooner also means more of the stdout logs are captured by W&B.
+    # Approach taken from: https://github.com/fixie-ai/ultravox/blob/main/ultravox/training/train.py
+    if "wandb" in cfg.trainer.report_to and is_global_master:
+        wandb.init(
+            project=os.getenv("WANDB_PROJECT", "melt"),
+            config=dict_cfg,
+            name=cfg.run.get("exp_name", None),
+            # dir="runs",
+            # tags=cfg.run_tags,
+            # save_code=True,
+        )
 
     # Create training arguments
     targs = TrainingArguments(**trainer_args_dict(cfg))
@@ -222,22 +253,15 @@ def main(cfg: TrainingConfig) -> None:
 
 if __name__ == "__main__":
     configure_logging()
-    # Parse CLI arguments using tyro
-    cli_cfg = tyro.cli(TrainingConfig)
 
-    # If a config file is specified, load it and merge with CLI overrides
-    if cli_cfg.config_file is not None:
-        base_cfg = load_config_from_yaml(cli_cfg.config_file)
-        cfg = merge_configs(base_cfg, cli_cfg)
-    else:
-        cfg = cli_cfg
+    # Parse CLI arguments and load config using OmegaConf
+    cfg = parse_args_and_load_config()
 
     # Expand environment variables in paths
     cfg = expand_env_vars_in_config(cfg)
 
-    if cfg.dry_run:
-        configure_logging()
+    if cfg.run.get("dry_run", False):
         logger.info("Dry run mode - config parsed successfully")
-        logger.info(f"Config: {cfg}")
+        logger.info(f"Config:\n{OmegaConf.to_yaml(cfg)}")
     else:
         main(cfg)

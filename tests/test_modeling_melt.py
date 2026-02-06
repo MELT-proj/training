@@ -1,4 +1,4 @@
-"""Tests for MELTForConditionalGeneration forward pass, specifically testing
+"""Tests for MELTForCausalLM forward pass, specifically testing
 the merging of audio and text embeddings and their attention masks."""
 
 import math
@@ -11,7 +11,7 @@ from src.modeling import (
     MELTAudioAdapter,
     MELTConfig,
     MELTConformerAdapter,
-    MELTForConditionalGeneration,
+    MELTForCausalLM,
     MELTMLPAdapter,
 )
 
@@ -34,10 +34,10 @@ class TestReplaceAudioPlaceholders:
         # Use a MagicMock with the real class as spec, then attach the
         # actual _replace_audio_placeholders function so tests can call it
         # attach the actual _replace_audio_placeholders function so tests can call it
-        mock_model = MagicMock(spec=MELTForConditionalGeneration)
+        mock_model = MagicMock(spec=MELTForCausalLM)
         mock_model.config = mock_config
         # assign the unbound function; tests call it passing the mock as self
-        mock_model._replace_audio_placeholders = MELTForConditionalGeneration._replace_audio_placeholders
+        mock_model._replace_audio_placeholders = MELTForCausalLM._replace_audio_placeholders
         return mock_model
 
     def test_single_audio_single_batch(self, mock_model):
@@ -248,8 +248,8 @@ class TestForwardPassIntegration:
         hidden_size = minimal_config.text_decoder_config.n_embd
 
         # Create mock model components
-        with patch.object(MELTForConditionalGeneration, "__init__", lambda x, y: None):
-            model = MELTForConditionalGeneration.__new__(MELTForConditionalGeneration)
+        with patch.object(MELTForCausalLM, "__init__", lambda x, y: None):
+            model = MELTForCausalLM.__new__(MELTForCausalLM)
             model.config = minimal_config
 
             # Test the _replace_audio_placeholders directly with controlled inputs
@@ -281,8 +281,8 @@ class TestForwardPassIntegration:
         text_seq_len = 10
         audio_seq_len = 5
 
-        with patch.object(MELTForConditionalGeneration, "__init__", lambda x, y: None):
-            model = MELTForConditionalGeneration.__new__(MELTForConditionalGeneration)
+        with patch.object(MELTForCausalLM, "__init__", lambda x, y: None):
+            model = MELTForCausalLM.__new__(MELTForCausalLM)
             model.config = minimal_config
 
             audio_bos_token = minimal_config.audio_bos_token_id
@@ -318,9 +318,9 @@ class TestEdgeCases:
 
     @pytest.fixture
     def mock_model(self, mock_config):
-        mock_model = MagicMock(spec=MELTForConditionalGeneration)
+        mock_model = MagicMock(spec=MELTForCausalLM)
         mock_model.config = mock_config
-        mock_model._replace_audio_placeholders = MELTForConditionalGeneration._replace_audio_placeholders
+        mock_model._replace_audio_placeholders = MELTForCausalLM._replace_audio_placeholders
         return mock_model
 
     def test_audio_at_start_of_sequence(self, mock_model):
@@ -445,9 +445,9 @@ class TestMergeCorrectness:
 
     @pytest.fixture
     def mock_model(self, mock_config):
-        mock_model = MagicMock(spec=MELTForConditionalGeneration)
+        mock_model = MagicMock(spec=MELTForCausalLM)
         mock_model.config = mock_config
-        mock_model._replace_audio_placeholders = MELTForConditionalGeneration._replace_audio_placeholders
+        mock_model._replace_audio_placeholders = MELTForCausalLM._replace_audio_placeholders
         return mock_model
 
     def test_text_embeddings_unchanged_outside_placeholders(self, mock_model):
@@ -518,13 +518,11 @@ def test_freeze_decoder_minimal():
     )
     config.audio_bos_token_id = 100
 
-    model = MELTForConditionalGeneration(config)
+    model = MELTForCausalLM(config)
     ret = model.freeze_decoder()
     assert ret is model
     # All decoder params should be frozen
     assert all((not p.requires_grad) for p in model.text_decoder.parameters())
-
-    
 
 
 class TestAdapterOutputFeaturesShape:

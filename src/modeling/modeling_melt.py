@@ -58,7 +58,7 @@ class MELTMLPAdapter(nn.Module):
         self.fc2 = nn.Linear(mid, out, bias=True)
 
         self.post_norm = nn.LayerNorm(out)
-        self.gain = nn.Parameter(torch.tensor(0.1, dtype=torch.float32))
+        self.gain = nn.Parameter(torch.tensor([0.1], dtype=torch.float32))
         self.output_hidden_size = out
 
     def _get_output_features_shape(
@@ -319,7 +319,7 @@ class MELTAudioAdapter(nn.Module):
 
     def __init__(self, config: MELTConfig):
         super().__init__()
-        architecture = getattr(config, "adapter_type", getattr(config, "adapter", {}).get("type", "mlp"))
+        architecture = config.adapter_config._type
 
         if architecture == "mlp":
             self.adapter = MELTMLPAdapter(config)
@@ -331,6 +331,8 @@ class MELTAudioAdapter(nn.Module):
             raise ValueError(
                 f"Unknown adapter architecture: {architecture}. Supported architectures: 'mlp', 'qformer', 'conformer'"
             )
+
+        logger.info("MELT instantiated with adapter architecture: %s", architecture)
 
     def forward(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor | None = None) -> torch.Tensor:
         # Some adapters (conformer) need attention_mask, others don't

@@ -5,7 +5,7 @@ This AGENTS.md file provides guidance for code agents working with this codebase
 ## Core Project Structure
 
 - `/src`: Main source code for the training library
-  - `/config.py`: Dataclass-based configuration (YAML + CLI via `tyro`)
+  - `/config.py`: OmegaConf-based configuration (YAML + CLI overrides)
   - `/logging_utils.py`: Central logging utilities (only global-rank-0 logs)
   - `/data/audio/`: Speech data loading utilities
     - `/lhotse/`: Lhotse-based data loading for speech datasets
@@ -74,7 +74,7 @@ pytest tests/test_peoples_speech_lhotse.py
 - `processing_melt.py`: Processor for input/output handling
 
 ### Training (`src/`)
-- `train.py`: Main training entrypoint (dataclass config via `tyro`)
+- `train.py`: Main training entrypoint (OmegaConf config with CLI overrides)
 - `trainer.py`: HF Trainer wrapper using Lhotse dataloaders
 - `ddp.py`: Lightweight distributed rank helpers
 

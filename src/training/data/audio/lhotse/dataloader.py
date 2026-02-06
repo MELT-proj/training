@@ -34,9 +34,9 @@ from lhotse.dataset import (
 from lhotse.dataset.dataloading import resolve_seed
 from lhotse.dataset.sampling.base import CutSampler, TimeConstraint
 from lhotse.utils import fix_random_seed
+from omegaconf import DictConfig
 
 from .....logging_utils import get_logger
-from ....config import DataConfig, DatasetConfig, DataSourceConfig
 
 
 logger = get_logger(__name__)
@@ -243,7 +243,7 @@ def _read_shar_manifest_durations(
 
 
 def compute_dataset_duration(
-    config: DatasetConfig | dict,
+    config: DictConfig,
     min_duration: float | None = None,
     max_duration: float | None = None,
 ) -> tuple[float, int]:
@@ -253,7 +253,7 @@ def compute_dataset_duration(
     Applies duration filtering if min/max_duration are specified.
 
     Args:
-        config: DatasetConfig with input_cfg specifying data sources.
+        config: DictConfig with input_cfg specifying data sources.
         min_duration: Minimum cut duration filter (from config if None).
         max_duration: Maximum cut duration filter (from config if None).
 
@@ -319,7 +319,7 @@ def compute_dataset_duration(
 
 
 def estimate_steps_per_epoch(
-    config: DatasetConfig | dict,
+    config: DictConfig,
     gradient_accumulation_steps: int = 1,
     world_size: int = 1,
 ) -> tuple[int, float, int, int, int]:
@@ -332,7 +332,7 @@ def estimate_steps_per_epoch(
     requires gradient_accumulation_steps micro-batches.
 
     Args:
-        config: DatasetConfig with batch_duration and data sources.
+        config: DictConfig with batch_duration and data sources.
         gradient_accumulation_steps: Number of gradient accumulation steps.
         world_size: Number of distributed processes.
 
@@ -378,11 +378,11 @@ def estimate_steps_per_epoch(
     return optimizer_steps_per_epoch, total_hours, total_cuts, batches_per_epoch, batches_per_worker
 
 
-def read_cutset_from_config(config: DatasetConfig | dict) -> tuple[CutSet, bool]:
+def read_cutset_from_config(config: DictConfig) -> tuple[CutSet, bool]:
     """Read CutSet(s) from configuration.
 
     Args:
-        config: DatasetConfig with input_cfg specifying data sources.
+        config: DictConfig with input_cfg specifying data sources.
 
     Returns:
         Tuple of (CutSet, use_iterable_dataset).
@@ -483,7 +483,7 @@ def _add_tags_to_cut(cut: Cut, tags: dict[str, str]) -> Cut:
 
 
 def get_lhotse_sampler_from_config(
-    config: DatasetConfig | dict,
+    config: DictConfig,
     global_rank: int = 0,
     world_size: int = 1,
     split_batches: bool = False,
@@ -491,7 +491,7 @@ def get_lhotse_sampler_from_config(
     """Create a CutSampler from configuration.
 
     Args:
-        config: DatasetConfig with sampling parameters.
+        config: DictConfig with sampling parameters.
         global_rank: Global rank for distributed training.
         world_size: Total number of processes.
 
@@ -604,7 +604,7 @@ def get_lhotse_sampler_from_config(
 
 
 def get_lhotse_dataloader_from_config(
-    config: DatasetConfig | dict,
+    config: DictConfig,
     global_rank: int,
     world_size: int,
     dataset: torch.utils.data.Dataset,
@@ -613,7 +613,7 @@ def get_lhotse_dataloader_from_config(
     """Create a DataLoader from configuration.
 
     Args:
-        config: DatasetConfig with data loading parameters.
+        config: DictConfig with data loading parameters.
         global_rank: Global rank for distributed training.
         world_size: Total number of processes.
         dataset: PyTorch Dataset that processes CutSets.
@@ -700,7 +700,7 @@ def get_lhotse_dataloader_from_config(
 
 
 def get_train_dataloader_from_config(
-    data_config: DataConfig | dict,
+    data_config: DictConfig,
     dataset: torch.utils.data.Dataset,
     global_rank: int = 0,
     world_size: int = 1,
@@ -709,7 +709,7 @@ def get_train_dataloader_from_config(
     """Convenience function to create training dataloader.
 
     Args:
-        data_config: Full DataConfig with train_ds settings.
+        data_config: Full DictConfig with train_ds settings.
         dataset: Dataset to use.
         global_rank: Global rank for distributed training.
         world_size: Total number of processes.
@@ -728,7 +728,7 @@ def get_train_dataloader_from_config(
 
 
 def estimate_num_batches(
-    config: DatasetConfig | dict,
+    config: DictConfig,
     world_size: int = 1,
 ) -> int:
     """Estimate number of batches for a dataset configuration.
@@ -740,7 +740,7 @@ def estimate_num_batches(
     produce a partial final batch when exhausted.
 
     Args:
-        config: DatasetConfig with batch settings and data sources.
+        config: DictConfig with batch settings and data sources.
         world_size: Number of distributed processes (batches are split across ranks).
 
     Returns:
@@ -785,7 +785,7 @@ def estimate_num_batches(
 
 
 def get_eval_sampler_from_config(
-    config: DatasetConfig | dict,
+    config: DictConfig,
     global_rank: int = 0,
     world_size: int = 1,
 ) -> tuple[CutSampler, CutSet, bool]:
@@ -802,7 +802,7 @@ def get_eval_sampler_from_config(
     - DataLoader workers within each GPU use round-robin (handled by FiniteIterableDatasetWrapper)
 
     Args:
-        config: DatasetConfig with sampling parameters.
+        config: DictConfig with sampling parameters.
         global_rank: Global rank for distributed evaluation.
         world_size: Total number of processes (GPUs).
 
@@ -869,7 +869,7 @@ def get_eval_sampler_from_config(
 
 
 def get_finite_dataloader_from_config(
-    config: DatasetConfig | dict,
+    config: DictConfig,
     global_rank: int,
     world_size: int,
     dataset: torch.utils.data.Dataset,
@@ -885,7 +885,7 @@ def get_finite_dataloader_from_config(
     This function can be imported and used by external evaluation scripts.
 
     Args:
-        config: DatasetConfig with data loading parameters.
+        config: DictConfig with data loading parameters.
         global_rank: Global rank for distributed evaluation.
         world_size: Total number of processes.
         dataset: PyTorch Dataset that processes CutSets (e.g., SpeechToTextDataset).
@@ -959,7 +959,7 @@ def get_finite_dataloader_from_config(
 
 
 def get_eval_dataloader_from_config(
-    data_config: DataConfig | dict,
+    data_config: DictConfig,
     dataset: torch.utils.data.Dataset,
     global_rank: int = 0,
     world_size: int = 1,
@@ -970,7 +970,7 @@ def get_eval_dataloader_from_config(
     that iterates once (not infinitely) and has __len__ for progress bars.
 
     Args:
-        data_config: Full DataConfig with validation_ds settings.
+        data_config: Full DictConfig with validation_ds settings.
         dataset: Dataset to use (typically SpeechToTextDataset or FallbackDataset).
         global_rank: Global rank for distributed evaluation.
         world_size: Total number of processes.

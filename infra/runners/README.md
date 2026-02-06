@@ -82,7 +82,7 @@ export TMPDIR_HOST=/path/to/tmp
 # Submit job with cluster-specific SLURM settings
 sbatch --time=01:00:00 --nodes=1 --gres=gpu:2 --partition=gpu \
   ./bash/run_train_singularity.sbatch config/accelerate/zero3.yaml \
-  --config-file config/train/LS_asr.yaml
+  --config config/train/LS_asr.yaml
 ```
 
 ## Notes

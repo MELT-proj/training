@@ -12,7 +12,7 @@ from transformers import AutoConfig
 # Ensure top-level `ddp` import used by src.trainer resolves during tests
 sys.modules["ddp"] = importlib.import_module("src.ddp")
 
-from src.modeling import MELTConfig, MELTForConditionalGeneration
+from src.modeling import MELTConfig, MELTForCausalLM
 from src.training.trainer import MELTTrainer
 
 
@@ -29,7 +29,7 @@ def _make_minimal_model():
     )
     config.audio_bos_token_id = 100
 
-    model = MELTForConditionalGeneration(config)
+    model = MELTForCausalLM(config)
     return model
 
 
