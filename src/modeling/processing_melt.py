@@ -125,6 +125,20 @@ class MELTProcessor(ProcessorMixin):
         self.audio_bos_token = config.decoder.audio_bos_token
         self.audio_eos_token = config.decoder.audio_eos_token
 
+        # if the tokenizer does not have a pad_token, use config.decoder.pad_token
+        if tokenizer.pad_token is None:
+            if not hasattr(config.decoder, "pad_token"):
+                raise ValueError(
+                    "We need a pad token and this tokenizer doesn't have one. Set config.decoder.pad_token to a string token to add it."
+                )
+            logger.info(
+                "Tokenizer does not have a pad_token. Adding pad token from config.decoder.pad_token: %s",
+                config.decoder.pad_token,
+            )
+            self.tokenizer.add_special_tokens({"pad_token": config.decoder.pad_token})
+            self.tokenizer.pad_token_id = self.tokenizer.convert_tokens_to_ids([config.decoder.pad_token])[0]
+            self.pad_token = config.decoder.pad_token
+
     def _validate_required_special_tokens(self, tokenizer, config) -> None:
         """Validate required MELT special tokens.
 

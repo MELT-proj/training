@@ -85,6 +85,7 @@ def prepare_model(
     # Set special tokens
     config.audio_bos_token_id = processor.tokenizer.convert_tokens_to_ids([processor.audio_bos_token])[0]
     config.audio_eos_token_id = processor.tokenizer.convert_tokens_to_ids([processor.audio_eos_token])[0]
+    config.pad_token_id = processor.tokenizer.convert_tokens_to_ids([processor.tokenizer.pad_token])[0]
     config.audio_token_id = processor.tokenizer.convert_tokens_to_ids([processor.audio_token])[0]
     config.audio_encoder_config.max_audio_seq_len = max_audio_seq_len
 
@@ -198,7 +199,6 @@ def main(cfg: DictConfig) -> None:
     ## PROCESSOR SETUP
     ##########################
     logger.info(f"Loading processor for encoder={cfg.model.encoder.name}, decoder={cfg.model.decoder.name}")
-
     processor = MELTProcessor(
         feature_extractor=AutoFeatureExtractor.from_pretrained(cfg.model.encoder.name),
         tokenizer=AutoTokenizer.from_pretrained(cfg.model.decoder.name, use_fast=True),

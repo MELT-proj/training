@@ -681,7 +681,7 @@ class MELTForCausalLM(MELTPreTrainedModel):
     def set_output_embeddings(self, new_embeddings):
         return self.text_decoder.set_output_embeddings(new_embeddings)
 
-    def _inject_embeddings(
+    def _inject_tensor(
         self,
         source_tensor: torch.Tensor,  # audio embeddings (b, s_a, d) or masks (b, s_a)
         target_tensor: torch.Tensor,  # text embeddings (b, s_t, d) or masks (b, s_t)
@@ -689,6 +689,8 @@ class MELTForCausalLM(MELTPreTrainedModel):
         input_ids: torch.Tensor,  # token ids (b, s_t), with inject_token_id in them
         source_lengths: torch.Tensor,  # lengths of source tensor (b, max_num_injects), where max_num_injects is the max number of inject_token_id in input_ids
         source_tensor_mask: torch.Tensor | None = None,  # mask for source tensor (b, s_a), only used for embeddings
+        pad_item: torch.Tensor
+        | float = 0.0,  # item to pad with for masks (float) or embeddings (tensor of shape (d,))
     ) -> torch.Tensor:
         """
         Inject source_tensor embeddings or masks into target_tensor at positions specified by input_ids.
@@ -700,7 +702,7 @@ class MELTForCausalLM(MELTPreTrainedModel):
         the longest sequence.
 
         For embeddings (ndim=3): uses the decoder's eos_token embedding for padding.
-        For attention masks (ndim=2): uses 0.0 for padding.
+        For attention masks (ndim=2): uses pad_item value for padding.
 
         Returns:
             Tensor of shape (batch_size, max_new_seq_len, hidden_size) for embeddings,
@@ -719,7 +721,7 @@ class MELTForCausalLM(MELTPreTrainedModel):
             ).squeeze(0)  # (hidden_size,)
         else:
             # Attention masks: use 0.0 for padding (masked positions)
-            pad_item = torch.tensor(0.0, device=target_tensor.device, dtype=target_tensor.dtype)
+            pad_item = torch.tensor(pad_item, device=target_tensor.device, dtype=target_tensor.dtype)
 
         merged_sequences = []
 
@@ -904,7 +906,7 @@ class MELTForCausalLM(MELTPreTrainedModel):
             if not use_cache or (use_cache and past_key_values is None):
                 # Replace placeholder audio tokens with actual audio embeddings
                 if audio_lengths is not None and encoder_hidden_states is not None:
-                    decoder_input_embs = self._inject_embeddings(
+                    decoder_input_embs = self._inject_tensor(
                         source_tensor=encoder_hidden_states,
                         target_tensor=decoder_input_embs,
                         inject_token_id=self.config.audio_token_id,
@@ -914,26 +916,27 @@ class MELTForCausalLM(MELTPreTrainedModel):
                     )
 
                     if attention_mask is not None and encoder_outputs_mask is not None:
-                        attention_mask = self._inject_embeddings(
-                            encoder_outputs_mask,
-                            attention_mask,
-                            self.config.audio_token_id,
-                            input_ids,
-                            audio_lengths,
+                        attention_mask = self._inject_tensor(
+                            source_tensor=encoder_outputs_mask,
+                            target_tensor=attention_mask,
+                            inject_token_id=self.config.audio_token_id,
+                            input_ids=input_ids,
+                            source_lengths=audio_lengths,
                         )
 
                     if labels is not None:
-                        labels = self._inject_embeddings(
-                            torch.full(
+                        labels = self._inject_tensor(
+                            source_tensor=torch.full(
                                 encoder_outputs_mask.shape,
                                 -100,
                                 device=labels.device,
                                 dtype=labels.dtype,
                             ),
-                            labels,
-                            self.config.audio_token_id,
-                            input_ids,
-                            audio_lengths,
+                            target_tensor=labels,
+                            inject_token_id=self.config.audio_token_id,
+                            input_ids=input_ids,
+                            source_lengths=audio_lengths,
+                            pad_item=-100,
                         )  # type: ignore
 
         # TODO: Below this point (logits to keep and loss computation) only works
