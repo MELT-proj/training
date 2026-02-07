@@ -17,9 +17,7 @@ import sys
 import torch
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
-
-from transformers import Trainer, TrainingArguments, set_seed
-from transformers.trainer_utils import has_length
+from transformers import Trainer, TrainingArguments
 
 from .. import ddp
 from ..logging_utils import get_logger
@@ -27,12 +25,11 @@ from ..modeling import MELTProcessor
 from .data.audio.lhotse import (
     FallbackDataset,
     SpeechToTextDataset,
-    estimate_num_batches,
+    # estimate_num_batches,
     estimate_steps_per_epoch,
     get_eval_dataloader_from_config,
     get_train_dataloader_from_config,
 )
-
 
 logger = get_logger(__name__)
 
@@ -102,15 +99,15 @@ class MELTTrainer(Trainer):
         #     )
 
         # Evaluation dataset stats
-        if hasattr(config.data, "validation_ds") and config.data.validation_ds.input_cfg:
-            from .data.audio.lhotse import compute_dataset_duration
+        # if hasattr(config.data, "validation_ds") and config.data.validation_ds.input_cfg:
+        #     from .data.audio.lhotse import compute_dataset_duration
 
-            _, self.eval_num_cuts = compute_dataset_duration(config.data.validation_ds)
-            self.eval_num_batches = estimate_num_batches(
-                config.data.validation_ds,
-                world_size=self._world_size,
-            )
-            logger.info(f"Evaluation dataset: {self.eval_num_cuts} cuts, ~{self.eval_num_batches} batches")
+        #     _, self.eval_num_cuts = compute_dataset_duration(config.data.validation_ds)
+        #     self.eval_num_batches = estimate_num_batches(
+        #         config.data.validation_ds,
+        #         world_size=self._world_size,
+        #     )
+        #     logger.info(f"Evaluation dataset: {self.eval_num_cuts} cuts, ~{self.eval_num_batches} batches")
 
         # Create eval dataset before super().__init__() so HF Trainer can use it
         # Uses Lhotse's DynamicBucketingSampler for memory-efficient evaluation
@@ -160,13 +157,16 @@ class MELTTrainer(Trainer):
         dataset = FallbackDataset(dataset)
 
         # Create dataloader from config
-        split_batches = bool(getattr(getattr(self.args, "accelerator_config", None), "split_batches", False))
+        split_batches = bool(
+            getattr(
+                getattr(self.args, "accelerator_config", None), "split_batches", False
+            )
+        )
         dataloader = get_train_dataloader_from_config(
             data_config=self.config.data,
             dataset=dataset,
             global_rank=self._global_rank,
             world_size=self._world_size,
-            split_batches=split_batches,
         )
 
         # We do not prepare the dataloader with the accelerator since rank and DDP allocation is already
@@ -199,7 +199,9 @@ class MELTTrainer(Trainer):
 
         # Check if validation data is configured
         if not self.config.data.validation_ds.input_cfg:
-            raise ValueError("No validation data configured (validation_ds.input_cfg is empty)")
+            raise ValueError(
+                "No validation data configured (validation_ds.input_cfg is empty)"
+            )
 
         logger.info("Creating Lhotse evaluation dataloader")
 
@@ -262,7 +264,9 @@ class MELTTrainer(Trainer):
         │   └── if should_training_stop: break
         """
         if args.per_device_train_batch_size != -1:
-            return super().set_initial_training_values(args, dataloader, total_train_batch_size)
+            return super().set_initial_training_values(
+                args, dataloader, total_train_batch_size
+            )
 
         num_workers = self.config.data.train_ds.num_workers
         grad_accum = args.gradient_accumulation_steps
@@ -324,7 +328,9 @@ class MELTTrainer(Trainer):
                 logging_hours = args.logging_steps * hours_per_step
                 logging_minutes = logging_hours * 60
                 if logging_hours >= 1.0:
-                    logger.info(f"  📊 Logging every {args.logging_steps} steps = ~{logging_hours:.2f} input hours")
+                    logger.info(
+                        f"  📊 Logging every {args.logging_steps} steps = ~{logging_hours:.2f} input hours"
+                    )
                 else:
                     logger.info(
                         f"  📊 Logging every {args.logging_steps} steps = ~{logging_minutes:.1f} input minutes"
@@ -334,19 +340,27 @@ class MELTTrainer(Trainer):
             if args and hasattr(args, "eval_steps") and args.eval_steps > 0:
                 eval_hours = args.eval_steps * hours_per_step
                 if eval_hours >= 1.0:
-                    logger.info(f"  📈 Evaluation every {args.eval_steps} steps = ~{eval_hours:.2f} input hours")
+                    logger.info(
+                        f"  📈 Evaluation every {args.eval_steps} steps = ~{eval_hours:.2f} input hours"
+                    )
                 else:
                     eval_minutes = eval_hours * 60
-                    logger.info(f"  📈 Evaluation every {args.eval_steps} steps = ~{eval_minutes:.1f} input minutes")
+                    logger.info(
+                        f"  📈 Evaluation every {args.eval_steps} steps = ~{eval_minutes:.1f} input minutes"
+                    )
 
             # Save frequency
             if args and hasattr(args, "save_steps") and args.save_steps > 0:
                 save_hours = args.save_steps * hours_per_step
                 if save_hours >= 1.0:
-                    logger.info(f"  💾 Checkpoints every {args.save_steps} steps = ~{save_hours:.2f} input hours")
+                    logger.info(
+                        f"  💾 Checkpoints every {args.save_steps} steps = ~{save_hours:.2f} input hours"
+                    )
                 else:
                     save_minutes = save_hours * 60
-                    logger.info(f"  💾 Checkpoints every {args.save_steps} steps = ~{save_minutes:.1f} input minutes")
+                    logger.info(
+                        f"  💾 Checkpoints every {args.save_steps} steps = ~{save_minutes:.1f} input minutes"
+                    )
 
             logger.info("=" * 80)
             logger.info(
@@ -390,21 +404,37 @@ class MELTTrainer(Trainer):
 
         decoder_module = getattr(self.model, "text_decoder", None)
         audio_stack = getattr(self.model, "audio_stack", None)
-        adapter_module = getattr(audio_stack, "adapter", None) if audio_stack is not None else None
-        encoder_module = getattr(audio_stack, "encoder", None) if audio_stack is not None else None
+        adapter_module = (
+            getattr(audio_stack, "adapter", None) if audio_stack is not None else None
+        )
+        encoder_module = (
+            getattr(audio_stack, "encoder", None) if audio_stack is not None else None
+        )
 
-        adapter_params = list(adapter_module.parameters()) if adapter_module is not None else []
+        adapter_params = (
+            list(adapter_module.parameters()) if adapter_module is not None else []
+        )
         # Get optimization config if present, otherwise fall back to args
-        opt_cfg = getattr(self.config, "optimization", None) if getattr(self, "config", None) is not None else None
+        opt_cfg = (
+            getattr(self.config, "optimization", None)
+            if getattr(self, "config", None) is not None
+            else None
+        )
 
         # encoder_module is expected to be MELTAudioEncoder; its underlying HF model is `encoder_module.encoder`
         if encoder_module is not None:
             inner = getattr(encoder_module, "encoder", None)
-            encoder_params = list(inner.parameters()) if inner is not None else list(encoder_module.parameters())
+            encoder_params = (
+                list(inner.parameters())
+                if inner is not None
+                else list(encoder_module.parameters())
+            )
         else:
             encoder_params = []
 
-        decoder_params = list(decoder_module.parameters()) if decoder_module is not None else []
+        decoder_params = (
+            list(decoder_module.parameters()) if decoder_module is not None else []
+        )
 
         # Filter out any frozen params before building optimizer groups.
         # DeepSpeed ZeRO will error out if any param group is empty.
@@ -413,17 +443,23 @@ class MELTTrainer(Trainer):
         decoder_params = [p for p in decoder_params if p.requires_grad]
 
         # Determine learning rates: prefer config.optimization values, otherwise fall back to args
-        adapter_lr = getattr(opt_cfg, "adapter_lr", None) if opt_cfg is not None else None
+        adapter_lr = (
+            getattr(opt_cfg, "adapter_lr", None) if opt_cfg is not None else None
+        )
         if adapter_lr is None:
             adapter_lr = getattr(self.args, "adapter_lr", 1e-4)
         adapter_lr = float(adapter_lr)
 
-        encoder_lr = getattr(opt_cfg, "encoder_lr", None) if opt_cfg is not None else None
+        encoder_lr = (
+            getattr(opt_cfg, "encoder_lr", None) if opt_cfg is not None else None
+        )
         if encoder_lr is None:
             encoder_lr = getattr(self.args, "encoder_lr", 1e-5)
         encoder_lr = float(encoder_lr)
 
-        decoder_lr = getattr(opt_cfg, "decoder_lr", None) if opt_cfg is not None else None
+        decoder_lr = (
+            getattr(opt_cfg, "decoder_lr", None) if opt_cfg is not None else None
+        )
         if decoder_lr is None:
             decoder_lr = getattr(self.args, "decoder_lr", 1e-3)
         decoder_lr = float(decoder_lr)
@@ -469,7 +505,9 @@ def _format_param_count(count: int, precision: int = 2) -> str:
     return str(count)
 
 
-def count_trainable_parameters(model: torch.nn.Module, precision: int = 2, return_int: bool = False):
+def count_trainable_parameters(
+    model: torch.nn.Module, precision: int = 2, return_int: bool = False
+):
     """Return the number of trainable parameters, respecting any frozen modules.
 
     Args:
