@@ -22,4 +22,4 @@ ACCELERATE_CONFIG="config/accelerate/zero3.yaml"
 sbatch --time=00:30:00 --nodes=1 --gres=gpu:2 \
     -A epor48 --qos=acc_debug -c 40 \
     ./bash/run_train_singularity.sbatch $ACCELERATE_CONFIG \
-    --config-file config/train/asr.yaml
+    --config config/train/asr.yaml

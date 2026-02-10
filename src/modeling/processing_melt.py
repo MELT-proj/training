@@ -118,12 +118,12 @@ class MELTProcessor(ProcessorMixin):
         # silently introducing defaults.
         self._validate_required_special_tokens(tokenizer, config)
 
-        for name in MELT_REQUIRED_SPECIAL_TOKENS:
-            setattr(self, name + "_id", tokenizer.convert_tokens_to_ids([getattr(self, name)])[0])
-
         self.audio_token = config.decoder.audio_token
         self.audio_bos_token = config.decoder.audio_bos_token
         self.audio_eos_token = config.decoder.audio_eos_token
+
+        for name in MELT_REQUIRED_SPECIAL_TOKENS:
+            setattr(self, name + "_id", tokenizer.convert_tokens_to_ids([getattr(self, name)])[0])
 
         # if the tokenizer does not have a pad_token, use config.decoder.pad_token
         if tokenizer.pad_token is None:

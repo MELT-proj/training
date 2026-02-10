@@ -64,8 +64,12 @@ class TestConfigIO:
         assert cfg.trainer.max_steps == 123
         assert cfg.model.adapter.freeze is True
 
-    def test_save_config_roundtrip(self, tmp_path: Path):
+    def test_save_config_roundtrip(self, tmp_path: Path, monkeypatch):
         from src.training.config import load_config, save_config
+
+        # Set env vars that asr.yaml interpolates via ${oc.env:...}
+        monkeypatch.setenv("LOCAL_DATASETS_DIR", "/tmp/fake_datasets")
+        monkeypatch.setenv("OUTPUT_DIR", "/tmp/fake_output")
 
         cfg = load_config("config/train/asr.yaml")
         cfg.trainer.max_steps = 321
