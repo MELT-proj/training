@@ -557,12 +557,7 @@ class MELTPreTrainedModel(PreTrainedModel):
     config_class = MELTConfig
     base_model_prefix = "melt"
     _skip_keys_device_placement = ["past_key_values"]
-    _no_split_modules = [
-        "Qwen2DecoderLayer",
-        "MELTAudioAdapter",
-        "Wav2Vec2BertEncoderLayer",
-    ]
-    supports_gradient_checkpointing = True
+    supports_gradient_checkpointing = False
     _supports_param_buffer_assignment = False
     _supports_flash_attn_2 = False
     _supports_sdpa = True
