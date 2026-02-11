@@ -6,6 +6,7 @@ These tests focus on the OmegaConf-based config approach:
 - Lhotse CutSet/sampler/dataloader creation works with DictConfig objects
 """
 
+import os
 from pathlib import Path
 
 import pytest
@@ -48,6 +49,10 @@ def librispeech_train100_path(librispeech_shar_base: str) -> str:
 
 
 class TestConfigIO:
+    @pytest.mark.skipif(
+        os.getenv("LOCAL_DATASETS_DIR") is None,
+        reason="LOCAL_DATASETS_DIR environment variable not set",
+    )
     def test_load_config_from_yaml(self):
         from src.training.config import load_config
 
@@ -64,6 +69,10 @@ class TestConfigIO:
         assert cfg.trainer.max_steps == 123
         assert cfg.model.adapter.freeze is True
 
+    @pytest.mark.skipif(
+        os.getenv("LOCAL_DATASETS_DIR") is None,
+        reason="LOCAL_DATASETS_DIR environment variable not set",
+    )
     def test_save_config_roundtrip(self, tmp_path: Path, monkeypatch):
         from src.training.config import load_config, save_config
 
