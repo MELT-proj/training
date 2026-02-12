@@ -1,0 +1,68 @@
+# MELT Evaluation Configuration — ASR
+#
+# Usage:
+#   python -m src.evaluation.eval --config config/eval/asr.yaml
+#   python -m src.evaluation.eval --config config/eval/asr.yaml --model.path /path/to/ckpt
+#   python -m src.evaluation.eval --config config/eval/asr.yaml --generation_args.max_new_tokens 128
+
+# =============================================================================
+# Run
+# =============================================================================
+run:
+  exp_name: melt_eval_asr
+  dry_run: false
+
+# =============================================================================
+# Model
+# =============================================================================
+model:
+  backend: melt                          # "melt" | future: "hf_pipeline"
+  path: null                             # local checkpoint directory (required)
+
+# =============================================================================
+# Test Datasets
+# =============================================================================
+data:
+  test_ds:
+    # Each entry describes one test set.
+    # Supported keys: name, type, shar_path/cuts_path, text_field, lang_field,
+    #                 max_cuts (batch size), num_workers, metrics, sample_rate.
+
+    - name: librispeech_test_clean
+      type: lhotse_shar
+      shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/test
+      text_field: supervisions.0.text
+      sample_rate: 16000
+      max_cuts: 8
+      num_workers: 1
+      metrics:
+        []
+        # - wer          # uncomment once the WER metric is registered
+
+    # - name: librispeech_test_other
+    #   type: lhotse_shar
+    #   shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/other/test
+    #   text_field: supervisions.0.text
+    #   sample_rate: 16000
+    #   max_cuts: 8
+    #   num_workers: 2
+    #   metrics:
+    #     - wer
+
+# =============================================================================
+# Generation Arguments (forwarded to model.generate())
+# =============================================================================
+generation_args:
+  max_new_tokens: 256
+  # num_beams: 1
+  # do_sample: false
+  # temperature: 1.0
+
+# =============================================================================
+# Output
+# =============================================================================
+output:
+  results_file: eval_results.jsonl
+  report_to:
+    - none            # set to "wandb" to log to Weights & Biases
+  skip_existing: true # skip (model, dataset) pairs that already have results
