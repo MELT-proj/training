@@ -5,9 +5,8 @@ from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
-from torch import nn
-
 import transformers.modeling_utils
+from torch import nn
 from transformers import AutoModel, AutoModelForCausalLM
 from transformers.cache_utils import Cache, DynamicCache
 from transformers.generation.utils import GenerationMixin
@@ -24,7 +23,6 @@ from transformers.utils import TransformersKwargs
 
 from ..logging_utils import get_logger
 from .configuration_melt import MELTConfig
-
 
 logger = get_logger(__name__)
 
@@ -50,7 +48,11 @@ class MELTMLPAdapter(nn.Module):
         )
         out = config.text_decoder_config.hidden_size
         adapter_cfg = getattr(config, "adapter_config", None)
-        mid = getattr(adapter_cfg, "mlp_hidden_size", out) if adapter_cfg is not None else out
+        mid = (
+            getattr(adapter_cfg, "mlp_hidden_size", out)
+            if adapter_cfg is not None
+            else out
+        )
         if mid is None:
             mid = out
 
@@ -87,7 +89,9 @@ class MELTMLPAdapter(nn.Module):
         hidden_states = self.fc1(audio_features)
         hidden_states = self.act(hidden_states)
         hidden_states = self.fc2(hidden_states)
-        hidden_states = self.post_norm(hidden_states) * self.gain.to(dtype=hidden_states.dtype)
+        hidden_states = self.post_norm(hidden_states) * self.gain.to(
+            dtype=hidden_states.dtype
+        )
         return hidden_states
 
 
@@ -101,16 +105,24 @@ class MELTQFormerAdapter(nn.Module):
         super().__init__()
         adapter_cfg = getattr(config, "adapter_config", None)
         if adapter_cfg is None:
-            raise ValueError("MELTQFormerAdapter requires config.adapter_config to be set")
+            raise ValueError(
+                "MELTQFormerAdapter requires config.adapter_config to be set"
+            )
 
         self.hidden_size = adapter_cfg.hidden_size
         # Read Q-Former parameters from adapter_config when present
-        self.downsample_rate = getattr(adapter_cfg, "downsample_rate", getattr(config, "downsample_rate", 5))
-        self.window_size = getattr(adapter_cfg, "window_size", getattr(config, "window_size", 15))
+        self.downsample_rate = getattr(
+            adapter_cfg, "downsample_rate", getattr(config, "downsample_rate", 5)
+        )
+        self.window_size = getattr(
+            adapter_cfg, "window_size", getattr(config, "window_size", 15)
+        )
         self.num_queries = self.window_size // self.downsample_rate
         self.output_hidden_size = config.text_decoder_config.hidden_size
 
-        self.query = nn.Parameter(torch.zeros(1, self.num_queries, adapter_cfg.hidden_size))
+        self.query = nn.Parameter(
+            torch.zeros(1, self.num_queries, adapter_cfg.hidden_size)
+        )
         self.query.data.normal_(mean=0.0, std=1.0)
 
         # Q-Former model from config (typically blip_2_qformer)
@@ -141,7 +153,9 @@ class MELTQFormerAdapter(nn.Module):
         output_seq_len = nblocks * self.num_queries
         output_shape = (batch_size, output_seq_len, self.output_hidden_size)
         # Q-Former doesn't propagate the attention mask; output is always valid
-        output_attention_mask = torch.ones(batch_size, output_seq_len, device=input_features.device)
+        output_attention_mask = torch.ones(
+            batch_size, output_seq_len, device=input_features.device
+        )
         return output_shape, output_attention_mask
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
@@ -158,7 +172,9 @@ class MELTQFormerAdapter(nn.Module):
             return_dict=True,
         )
         query_proj = self.linear(
-            query_output.last_hidden_state.view(batch_size, nblocks * self.window_size // self.downsample_rate, -1)
+            query_output.last_hidden_state.view(
+                batch_size, nblocks * self.window_size // self.downsample_rate, -1
+            )
         )
         return query_proj
 
@@ -175,10 +191,14 @@ class MELTConformerAdapter(nn.Module):
         adapter_config = getattr(config, "adapter_config", None) or encoder_config
 
         # Feature projection if output_hidden_size differs from hidden_size
-        output_hidden_size = getattr(encoder_config, "output_hidden_size", encoder_config.hidden_size)
+        output_hidden_size = getattr(
+            encoder_config, "output_hidden_size", encoder_config.hidden_size
+        )
         if output_hidden_size != encoder_config.hidden_size:
             self.proj = nn.Linear(encoder_config.hidden_size, output_hidden_size)
-            self.proj_layer_norm = nn.LayerNorm(output_hidden_size, eps=encoder_config.layer_norm_eps)
+            self.proj_layer_norm = nn.LayerNorm(
+                output_hidden_size, eps=encoder_config.layer_norm_eps
+            )
         else:
             self.proj = None
             self.proj_layer_norm = None
@@ -190,8 +210,12 @@ class MELTConformerAdapter(nn.Module):
             getattr(encoder_config, "num_adapter_layers", 1),
         )
         self.num_adapter_layers = num_adapter_layers
-        self.layers = nn.ModuleList(Wav2Vec2BertAdapterLayer(encoder_config) for _ in range(num_adapter_layers))
-        self.layerdrop = getattr(adapter_config, "layerdrop", getattr(encoder_config, "layerdrop", 0.0))
+        self.layers = nn.ModuleList(
+            Wav2Vec2BertAdapterLayer(encoder_config) for _ in range(num_adapter_layers)
+        )
+        self.layerdrop = getattr(
+            adapter_config, "layerdrop", getattr(encoder_config, "layerdrop", 0.0)
+        )
 
         self.kernel_size = getattr(
             adapter_config,
@@ -229,7 +253,9 @@ class MELTConformerAdapter(nn.Module):
         output_len = seq_len
         pad = self.kernel_size // 2
         for _ in range(self.num_adapter_layers):
-            output_len = int((output_len + 2 * pad - self.kernel_size) / self.stride + 1)
+            output_len = int(
+                (output_len + 2 * pad - self.kernel_size) / self.stride + 1
+            )
         return output_len
 
     def _get_output_features_shape(
@@ -256,12 +282,16 @@ class MELTConformerAdapter(nn.Module):
         output_attention_mask = None
         if features_attention_mask is not None:
             # Non-padded lengths (robust, standard)
-            non_padded_lengths = features_attention_mask.to(torch.long).sum(dim=-1).to(torch.float32)
+            non_padded_lengths = (
+                features_attention_mask.to(torch.long).sum(dim=-1).to(torch.float32)
+            )
 
             # Apply subsampling for each adapter layer
             out_lengths = non_padded_lengths
             for _ in range(self.num_adapter_layers):
-                out_lengths = self._compute_sub_sample_lengths_from_attention_mask(out_lengths)
+                out_lengths = self._compute_sub_sample_lengths_from_attention_mask(
+                    out_lengths
+                )
 
             out_lengths = out_lengths.to(torch.long).clamp(min=0, max=output_seq_len)
 
@@ -277,11 +307,15 @@ class MELTConformerAdapter(nn.Module):
                     torch.arange(batch_size, device=input_features.device)[valid],
                     out_lengths[valid] - 1,
                 ] = True
-                output_attention_mask = output_attention_mask.flip([-1]).cumsum(-1).flip([-1]).bool()
+                output_attention_mask = (
+                    output_attention_mask.flip([-1]).cumsum(-1).flip([-1]).bool()
+                )
 
         return output_shape, output_attention_mask
 
-    def forward(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(
+        self, hidden_states: torch.Tensor, attention_mask: torch.Tensor | None = None
+    ) -> torch.Tensor:
         # Down project hidden_states if necessary
         if self.proj is not None and self.proj_layer_norm is not None:
             hidden_states = self.proj(hidden_states)
@@ -289,11 +323,15 @@ class MELTConformerAdapter(nn.Module):
 
         sub_sampled_lengths = None
         if attention_mask is not None:
-            sub_sampled_lengths = (attention_mask.size(1) - (1 - attention_mask.int()).sum(1)).to(hidden_states.device)
+            sub_sampled_lengths = (
+                attention_mask.size(1) - (1 - attention_mask.int()).sum(1)
+            ).to(hidden_states.device)
 
         for layer in self.layers:
             layerdrop_prob = torch.rand([])
-            sub_sampled_lengths = self._compute_sub_sample_lengths_from_attention_mask(sub_sampled_lengths)
+            sub_sampled_lengths = self._compute_sub_sample_lengths_from_attention_mask(
+                sub_sampled_lengths
+            )
             if not self.training or (layerdrop_prob > self.layerdrop):
                 hidden_states = layer(
                     hidden_states,
@@ -335,7 +373,9 @@ class MELTAudioAdapter(nn.Module):
 
         logger.info("MELT instantiated with adapter architecture: %s", architecture)
 
-    def forward(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(
+        self, hidden_states: torch.Tensor, attention_mask: torch.Tensor | None = None
+    ) -> torch.Tensor:
         # Some adapters (conformer) need attention_mask, others don't
         if isinstance(self.adapter, MELTConformerAdapter):
             return self.adapter(hidden_states, attention_mask=attention_mask)
@@ -360,7 +400,9 @@ class MELTAudioAdapter(nn.Module):
                 - output_shape: (batch_size, output_seq_len, output_hidden_size)
                 - output_attention_mask: Adapter-specific output attention mask
         """
-        return self.adapter._get_output_features_shape(input_features, features_attention_mask)
+        return self.adapter._get_output_features_shape(
+            input_features, features_attention_mask
+        )
 
     def freeze(self):
         """Freeze all adapter parameters."""
@@ -390,7 +432,9 @@ def _unfold_tensor(tensor: torch.Tensor, max_seq_len: int) -> torch.Tensor:
     _, _, D = tensor.shape
     tensor = tensor.transpose(-1, -2)
     # N x D x 1 x T => N x (D x max_seq_len) x T'
-    tensor = F.unfold(tensor[..., None, :], kernel_size=(1, max_seq_len), stride=(1, max_seq_len))
+    tensor = F.unfold(
+        tensor[..., None, :], kernel_size=(1, max_seq_len), stride=(1, max_seq_len)
+    )
 
     new_bsz, _, slen = tensor.shape
     tensor = tensor.reshape(new_bsz, -1, max_seq_len, slen)
@@ -416,13 +460,17 @@ class MELTAudioEncoder(nn.Module):
         self.config = config
 
         # Maximum sequence length for chunking (default 500 like Phi4)
-        self.max_seq_len = getattr(config.audio_encoder_config, "max_audio_seq_len", 500)
+        self.max_seq_len = getattr(
+            config.audio_encoder_config, "max_audio_seq_len", 500
+        )
 
         # Initialize the audio encoder – when loading from a checkpoint the
         # pretrained weights are unnecessary (the checkpoint will overwrite
         # everything), so we use ``from_config`` which is much faster.
         if load_pretrained:
-            self.model = AutoModel.from_pretrained(config.audio_encoder, config=config.audio_encoder_config)
+            self.model = AutoModel.from_pretrained(
+                config.audio_encoder, config=config.audio_encoder_config
+            )
         else:
             self.model = AutoModel.from_config(config.audio_encoder_config)
 
@@ -469,7 +517,9 @@ class MELTAudioEncoder(nn.Module):
                 chunk_pad_size = self.max_seq_len - (seq_len % self.max_seq_len)
 
             if chunk_pad_size > 0:
-                hidden_states = F.pad(hidden_states, (0, 0, 0, chunk_pad_size), "constant", 0)
+                hidden_states = F.pad(
+                    hidden_states, (0, 0, 0, chunk_pad_size), "constant", 0
+                )
 
             # Unfold into chunks
             hidden_states = _unfold_tensor(hidden_states, self.max_seq_len)
@@ -478,7 +528,9 @@ class MELTAudioEncoder(nn.Module):
             chunk_mask = None
             if features_attention_mask is not None:
                 # Pad the attention mask similarly
-                padded_mask = F.pad(features_attention_mask, (0, chunk_pad_size), "constant", 0)
+                padded_mask = F.pad(
+                    features_attention_mask, (0, chunk_pad_size), "constant", 0
+                )
                 padded_mask = padded_mask.unsqueeze(-1).float()
                 chunk_mask = _unfold_tensor(padded_mask, self.max_seq_len)
                 chunk_mask = chunk_mask.squeeze(-1).bool()
@@ -619,7 +671,9 @@ class MELTPreTrainedModel(PreTrainedModel):
         elif isinstance(module, nn.Conv1d):
             nn.init.kaiming_normal_(module.weight)
             if module.bias is not None:
-                k = math.sqrt(module.groups / (module.in_channels * module.kernel_size[0]))
+                k = math.sqrt(
+                    module.groups / (module.in_channels * module.kernel_size[0])
+                )
                 nn.init.uniform_(module.bias, a=-k, b=k)
 
         # LayerNorm and BatchNorm (common pattern)
@@ -658,7 +712,9 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
 
         # Propagate tied weights keys if present
         if self.text_decoder._tied_weights_keys is not None:
-            self._tied_weights_keys = [f"text_decoder.{k}" for k in self.text_decoder._tied_weights_keys]
+            self._tied_weights_keys = [
+                f"text_decoder.{k}" for k in self.text_decoder._tied_weights_keys
+            ]
 
         # Initialize the audio stack (encoder model + adapter)
         self.audio_stack = self._create_audio_stack(config)
@@ -667,7 +723,9 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
         self.config.audio_encoder_config._attn_implementation = (
             self.audio_stack.encoder.model.config._attn_implementation
         )
-        self.config.text_decoder_config._attn_implementation = self.text_decoder.config._attn_implementation
+        self.config.text_decoder_config._attn_implementation = (
+            self.text_decoder.config._attn_implementation
+        )
         self.audio_stack.encoder.model.config = self.config.audio_encoder_config
         self.text_decoder.config = self.config.text_decoder_config
 
@@ -691,8 +749,13 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
         checkpoint's own state-dict will overwrite all weights, so downloading
         the original pretrained weights would be wasteful.
         """
-        if transformers.modeling_utils._init_weights and config.text_decoder is not None:
-            return AutoModelForCausalLM.from_pretrained(config.text_decoder, config=config.text_decoder_config)
+        if (
+            transformers.modeling_utils._init_weights
+            and config.text_decoder is not None
+        ):
+            return AutoModelForCausalLM.from_pretrained(
+                config.text_decoder, config=config.text_decoder_config
+            )
         return AutoModelForCausalLM.from_config(config.text_decoder_config)
 
     @staticmethod
@@ -703,7 +766,10 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
         is loaded via ``from_pretrained`` only when we are creating a fresh
         model; otherwise ``from_config`` is used.
         """
-        load_pretrained = bool(transformers.modeling_utils._init_weights and config.audio_encoder is not None)
+        load_pretrained = bool(
+            transformers.modeling_utils._init_weights
+            and config.audio_encoder is not None
+        )
         return MELTAudioStack(config, load_pretrained=load_pretrained)
 
     # -----------------------------------------------------------------
@@ -752,7 +818,8 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
         inject_token_id: int,  # token id to inject at
         input_ids: torch.Tensor,  # token ids (b, s_t), with inject_token_id in them
         source_lengths: torch.Tensor,  # lengths of source tensor (b, max_num_injects), where max_num_injects is the max number of inject_token_id in input_ids
-        source_tensor_mask: torch.Tensor | None = None,  # mask for source tensor (b, s_a), only used for embeddings
+        source_tensor_mask: torch.Tensor
+        | None = None,  # mask for source tensor (b, s_a), only used for embeddings
         pad_item: torch.Tensor
         | float = 0.0,  # item to pad with for masks (float) or embeddings (tensor of shape (d,))
     ) -> torch.Tensor:
@@ -781,11 +848,15 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
             hidden_size = target_tensor.shape[-1]
             eos_token_id = self.text_decoder.config.eos_token_id
             pad_item = self.text_decoder.get_input_embeddings()(
-                torch.tensor([eos_token_id], device=target_tensor.device, dtype=torch.long)
+                torch.tensor(
+                    [eos_token_id], device=target_tensor.device, dtype=torch.long
+                )
             ).squeeze(0)  # (hidden_size,)
         else:
             # Attention masks: use 0.0 for padding (masked positions)
-            pad_item = torch.tensor(pad_item, device=target_tensor.device, dtype=target_tensor.dtype)
+            pad_item = torch.tensor(
+                pad_item, device=target_tensor.device, dtype=target_tensor.dtype
+            )
 
         merged_sequences = []
 
@@ -799,7 +870,9 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
             # Filter valid source tensor based on source mask
             if ndim == 3 and source_tensor_mask is not None:
                 item_source_mask = source_tensor_mask[batch_idx]  # (s_a,)
-                valid_source_tensor = source_tensor[batch_idx][item_source_mask]  # (valid_s_a, d)
+                valid_source_tensor = source_tensor[batch_idx][
+                    item_source_mask
+                ]  # (valid_s_a, d)
             else:
                 valid_source_tensor = source_tensor[batch_idx]  # (d)
 
@@ -886,7 +959,103 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
             )
         kwargs["_fast_init"] = False
 
-        return super().from_pretrained(pretrained_model_name_or_path, *model_args, **kwargs)
+        return super().from_pretrained(
+            pretrained_model_name_or_path, *model_args, **kwargs
+        )
+
+    def _get_text_embeddings(self, input_ids):
+        embedding = self.text_decoder.get_input_embeddings()
+        return embedding(input_ids)
+
+    def _get_audio_embeddings(
+        self,
+        input_features,
+        features_attention_mask,
+        output_attentions,
+        output_hidden_states,
+        return_dict,
+        **kwargs_encoder,
+    ):
+        encoder_hidden_states = self.audio_stack(
+            input_features,
+            features_attention_mask=features_attention_mask,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+            **kwargs_encoder,
+        )
+
+        # Create attention mask for encoder outputs
+        if features_attention_mask is not None:
+            # Tuple of (output_shape, output_attention_mask):
+            # - output_shape: (batch_size, output_seq_len, output_hidden_size)
+            # - output_attention_mask: Subsampled attention mask matching output_seq_len
+            output_shape, encoder_outputs_mask = (
+                self.audio_stack.adapter._get_output_features_shape(
+                    input_features, features_attention_mask
+                )
+            )
+        else:
+            output_shape = encoder_hidden_states.shape
+            encoder_outputs_mask = torch.ones(
+                encoder_hidden_states.shape[:2],
+                dtype=torch.long,
+                device=encoder_hidden_states.device,
+            )
+
+        # The audio stack might have modified the audio lengths (e.g., subsampling in conformer).
+        # We need to compute the new audio lengths after the audio stack.
+
+        # TODO: IMPORTANT -- this implementation only works if the is only one audio per batch item!
+        # The reason why it breaks is with more than one is because audio_lengths should be
+        # a list of lists of lenghts. Moreover, since we concatenate them and process them together in the audio encoder
+        # we will have to compute the new lengths for each audio accordingly.
+        audio_lengths = encoder_outputs_mask.sum(dim=1).unsqueeze(-1)
+
+        return encoder_hidden_states, features_attention_mask, audio_lengths
+
+    def _merge_embeddings(
+        self,
+        decoder_input_embs,
+        encoder_hidden_states,
+        encoder_outputs_mask,
+        audio_lengths,
+        input_ids,
+        attention_mask,
+        labels,
+    ):
+        """Replace placeholder audio tokens with actual audio embeddings."""
+        decoder_input_embs = self._inject_tensor(
+            source_tensor=encoder_hidden_states,
+            target_tensor=decoder_input_embs,
+            inject_token_id=self.config.audio_token_id,
+            input_ids=input_ids,
+            source_lengths=audio_lengths,
+            source_tensor_mask=encoder_outputs_mask,  # not all encoder outputs are valid, this is used to filter them
+        )
+        if attention_mask is not None and encoder_outputs_mask is not None:
+            attention_mask = self._inject_tensor(
+                source_tensor=encoder_outputs_mask,
+                target_tensor=attention_mask,
+                inject_token_id=self.config.audio_token_id,
+                input_ids=input_ids,
+                source_lengths=audio_lengths,
+            )
+        if labels is not None:
+            labels = self._inject_tensor(
+                source_tensor=torch.full(
+                    encoder_outputs_mask.shape,
+                    -100,
+                    device=labels.device,
+                    dtype=labels.dtype,
+                ),
+                target_tensor=labels,
+                inject_token_id=self.config.audio_token_id,
+                input_ids=input_ids,
+                source_lengths=audio_lengths,
+                pad_item=-100,
+            )  # type: ignore
+        return decoder_input_embs, attention_mask, labels
 
     def forward(
         self,
@@ -909,99 +1078,54 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
         if input_ids.dtype != torch.long:
             raise TypeError(f"input_ids must be torch.long, got {input_ids.dtype}")
 
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
 
-        kwargs_encoder = {argument: value for argument, value in kwargs.items() if argument.startswith("encoder_")}
+        kwargs_encoder = {
+            argument: value
+            for argument, value in kwargs.items()
+            if argument.startswith("encoder_")
+        }
         kwargs_decoder = {
-            argument[len("decoder_") :]: value for argument, value in kwargs.items() if argument.startswith("decoder_")
+            argument[len("decoder_") :]: value
+            for argument, value in kwargs.items()
+            if argument.startswith("decoder_")
         }
 
         # HF Trainer passes `num_items_in_batch` (not prefixed); forward it to the decoder if present.
         if "num_items_in_batch" in kwargs:
             kwargs_decoder["num_items_in_batch"] = kwargs["num_items_in_batch"]
 
-        embedding = self.text_decoder.get_input_embeddings()
-        decoder_input_embs = embedding(input_ids)
+        # 1. Extract text embeddings
+        decoder_input_embs = self._get_text_embeddings(
+            input_ids
+        )  # (batch_size, seq_len, hidden_size)
 
-        # Extract audio embeddings (includes chunking and adapter projection)
-        # We assume that if we are using cache then we are caching encoder_outputs
-
-        # TODO: before removing the cache checks, we need to verify if all audio models support them internally
+        # 2. If the user provided audio features, extract audio embeddings
+        # In this step chunking and adapter projection happens. Moreover, we return the new
+        # features mask and audio lenghts since some adapters modify the sequence length.
         if input_features is not None:
-            # First, we extract audio embeddings
-            encoder_hidden_states = None
-            if not use_cache or (use_cache and past_key_values is None):
-                encoder_hidden_states = self.audio_stack(
-                    input_features,
+            encoder_hidden_states, encoder_outputs_mask, audio_lengths = (
+                self._get_audio_embeddings(
+                    input_features=input_features,
                     features_attention_mask=features_attention_mask,
-                    output_attentions=output_attentions,
-                    output_hidden_states=output_hidden_states,
+                    output_attentions=True,
+                    output_hidden_states=True,
                     return_dict=return_dict,
                     **kwargs_encoder,
                 )
+            )
 
-                # Create attention mask for encoder outputs
-                if features_attention_mask is not None:
-                    # Tuple of (output_shape, output_attention_mask):
-                    # - output_shape: (batch_size, output_seq_len, output_hidden_size)
-                    # - output_attention_mask: Subsampled attention mask matching output_seq_len
-                    output_shape, encoder_outputs_mask = self.audio_stack.adapter._get_output_features_shape(
-                        input_features, features_attention_mask
-                    )
-                else:
-                    output_shape = encoder_hidden_states.shape
-                    encoder_outputs_mask = torch.ones(
-                        encoder_hidden_states.shape[:2],
-                        dtype=attention_mask.dtype if attention_mask is not None else torch.float32,
-                        device=encoder_hidden_states.device,
-                    )
-
-            # The audio stack might have modified the audio lengths (e.g., subsampling in conformer).
-            # We need to compute the new audio lengths after the audio stack.
-
-            # TODO: IMPORTANT -- this implementation only works if the is only one audio per batch item!
-            # The reason why it breaks is with more than one is because audio_lengths should be
-            # a list of lists of lenghts. Moreover, since we concatenate them and process them together in the audio encoder
-            # we will have to compute the new lengths for each audio accordingly.
-            audio_lengths = encoder_outputs_mask.sum(dim=1).unsqueeze(-1)
-
-            # If we are not using the cache, or it's the first pass with the cache on.
-            # Hence, we need to build new inputs for the decoder
-            if not use_cache or (use_cache and past_key_values is None):
-                # Replace placeholder audio tokens with actual audio embeddings
-                if audio_lengths is not None and encoder_hidden_states is not None:
-                    decoder_input_embs = self._inject_tensor(
-                        source_tensor=encoder_hidden_states,
-                        target_tensor=decoder_input_embs,
-                        inject_token_id=self.config.audio_token_id,
-                        input_ids=input_ids,
-                        source_lengths=audio_lengths,
-                        source_tensor_mask=encoder_outputs_mask,  # not all encoder outputs are valid, this is used to filter them
-                    )
-
-                    if attention_mask is not None and encoder_outputs_mask is not None:
-                        attention_mask = self._inject_tensor(
-                            source_tensor=encoder_outputs_mask,
-                            target_tensor=attention_mask,
-                            inject_token_id=self.config.audio_token_id,
-                            input_ids=input_ids,
-                            source_lengths=audio_lengths,
-                        )
-
-                    if labels is not None:
-                        labels = self._inject_tensor(
-                            source_tensor=torch.full(
-                                encoder_outputs_mask.shape,
-                                -100,
-                                device=labels.device,
-                                dtype=labels.dtype,
-                            ),
-                            target_tensor=labels,
-                            inject_token_id=self.config.audio_token_id,
-                            input_ids=input_ids,
-                            source_lengths=audio_lengths,
-                            pad_item=-100,
-                        )  # type: ignore
+            decoder_input_embs, attention_mask, labels = self._merge_embeddings(
+                decoder_input_embs=decoder_input_embs,
+                encoder_hidden_states=encoder_hidden_states,
+                encoder_outputs_mask=encoder_outputs_mask,
+                audio_lengths=audio_lengths,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels,
+            )
 
         # TODO: Below this point (logits to keep and loss computation) only works
         # for causal language modeling with a single text response.
@@ -1027,7 +1151,11 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
         )
 
         # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
-        slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
+        slice_indices = (
+            slice(-logits_to_keep, None)
+            if isinstance(logits_to_keep, int)
+            else logits_to_keep
+        )
         logits = outputs.logits[:, slice_indices, :]
 
         loss = None
