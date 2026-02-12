@@ -36,7 +36,8 @@ python infra/setup/lhotse/librispeech.py --batched --batch-size 5000 --num-worke
 ### People's Speech (batched, specific config):
 
 ```bash
-python infra/setup/lhotse/peoples_speech.py --configs clean --splits train validation test --batched --batch-size 5000 --num-workers 8 --hf-num-proc 4
+HF_HUB_ENABLE_HF_TRANSFER=1 hf download MLCommons/peoples_speech --repo-type dataset --include "clean/*"
+python infra/setup/lhotse/peoples_speech.py --batched --batch-size 5000 --num-workers 8 --hf-num-proc 4
 ```
 
 ### VoxPopuli (per-language configs; optional accented tests):

@@ -1,53 +1,63 @@
-"""Convert FLEURS from HuggingFace to Lhotse Shar format.
+"""Convert FLEURS dataset from HuggingFace to Lhotse Shar format.
 
-Dataset:
-  - HF id: google/fleurs
-  - Multilingual: yes (configs correspond to locales, e.g. "hi_in")
+This script downloads the FLEURS dataset from HuggingFace and converts
+it to Lhotse Shar archives for efficient training using multiprocessing.
 
-Output directory structure:
-  {LHOTSE_DATA_SHAR_ROOT}/fleurs/{lang}/{split}/
+Dataset Structure:
+------------------
+FLEURS is a multilingual dataset where:
+- config: language code (e.g., "en_us", "de_de", "fr_fr")
+- splits: "train", "validation", "test"
 
-Important:
-- FLEURS has ~100+ configs; by default you must pass `--configs ...`.
-  Use `--all-configs` only if you really intend to convert everything.
+Output Directory Structure:
+--------------------------
+    {BASE_OUTPUT_DIR}/fleurs/{lang}/{split}/
+    Example: shar/fleurs/en_us/train/
+
+Reference: https://huggingface.co/datasets/google/fleurs
 """
-
-from __future__ import annotations
 
 import argparse
 import logging
 import os
 from pathlib import Path
 
-from datasets import Audio, load_dataset
-from lhotse import MonoCut, Recording, SupervisionSegment
-from lhotse.shar import SharWriter
-from tqdm.auto import tqdm
-
-from batch_utils import is_dataset_cached_locally
+from batch_utils import convert_subset_to_shar_batched
 
 
+# --- Configuration ---
 DATASET_NAME = "google/fleurs"
 DATASET_NICKNAME = "fleurs"
 BASE_OUTPUT_DIR = Path(os.environ.get("LHOTSE_DATA_SHAR_ROOT", "/mnt/home/giuseppe/myscratch/melt-data/shar"))
-
-SHARD_SIZE = 18000  # ~12 sec avg @ FLAC 16kHz → ~135 KB/sample → ~2.4 GB/shard
+SHARD_SIZE = 4000
 AUDIO_FORMAT = "flac"
 MARKER_ROOT = BASE_OUTPUT_DIR / ".conversion_markers"
 
+# Default languages to convert (can be overridden via CLI)
+DEFAULT_LANGUAGES = [
+    "en_us",
+    "de_de",
+    "fr_fr",
+    "es_419",
+    "it_it",
+    "pt_br",
+]
+
+# Default splits
+DEFAULT_SPLITS = ["train", "validation", "test"]
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def _get_dataset_config_names() -> list[str]:
-    try:
-        from datasets import get_dataset_config_names
-
-        return list(get_dataset_config_names(DATASET_NAME))
-    except Exception:
-        return []
+def _get_language_code(lang: str) -> str:
+    """Extract base language code from locale (e.g., 'en_us' -> 'en')."""
+    return lang.split("_")[0]
 
 
 def get_output_dir(lang: str, split: str) -> Path:
+    """Construct output directory path."""
     return BASE_OUTPUT_DIR / DATASET_NICKNAME / lang / split
 
 
@@ -62,6 +72,7 @@ def _marker_path_for_output(output_dir: Path) -> Path:
 
 
 def is_conversion_complete(output_dir: Path) -> bool:
+    """Check if conversion is already complete."""
     marker = _marker_path_for_output(output_dir)
     if marker.exists():
         return True
@@ -71,174 +82,119 @@ def is_conversion_complete(output_dir: Path) -> bool:
 def mark_conversion_complete(output_dir: Path, count: int, errors: int) -> None:
     marker_path = _marker_path_for_output(output_dir)
     marker_path.write_text(f"Conversion completed successfully.\nCuts processed: {count}\nErrors: {errors}\n")
-    logger.info("Created completion marker: %s", marker_path)
-
-
-def _pick_text(item: dict) -> str:
-    for key in ("transcription", "raw_transcription"):
-        val = item.get(key)
-        if isinstance(val, str) and val.strip():
-            return val
-    return ""
+    logger.info(f"Created completion marker: {marker_path}")
 
 
 def convert_one(
     lang: str,
     split: str,
-    *,
-    force: bool,
-    use_batched: bool,
-    batch_size: int,
-    num_workers: int,
-    io_num_workers: int,
-    prefetch_batches: int,
-    hf_num_proc: int,
+    force: bool = False,
+    num_workers: int | None = None,
+    hf_num_proc: int = 4,
 ) -> tuple[int, int] | tuple[None, None]:
+    """Convert a single language/split combination to Shar format.
+
+    Args:
+        lang: Language code (e.g., "en_us", "de_de").
+        split: Data split (e.g., "train", "validation", "test").
+        force: If True, re-run conversion even if already complete.
+        num_workers: Number of parallel workers (default: cpu_count).
+        hf_num_proc: Number of HuggingFace loading processes.
+
+    Returns:
+        Tuple of (count, errors) if processed, or (None, None) if skipped.
+    """
     output_dir = get_output_dir(lang, split)
 
-    dataset_cached = is_dataset_cached_locally(DATASET_NAME)
-    use_streaming = not dataset_cached
-
-    if not dataset_cached:
-        logger.info(
-            "Dataset %s not found in local HF cache; using streaming. Pre-download to disable streaming: HF_HUB_ENABLE_HF_TRANSFER=1 HF_HOME=$HF_HOME hf download %s --repo-type dataset",
-            DATASET_NAME,
-            DATASET_NAME,
-        )
-
+    # Check if conversion is already complete
     if not force and is_conversion_complete(output_dir):
         marker = _marker_path_for_output(output_dir)
-        logger.info("SKIPPING %s/%s - already complete (marker: %s)", lang, split, marker)
+        logger.info(f"SKIPPING {lang}/{split} - already complete (marker: {marker})")
         return None, None
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    logger.info("Saving %s/%s to: %s", lang, split, output_dir)
+    logger.info(f"Converting {lang}/{split} to: {output_dir}")
 
-    if use_batched and not use_streaming:
-        from batch_utils import convert_subset_to_shar_batched
+    # Use the batched converter with multiprocessing
+    count, errors = convert_subset_to_shar_batched(
+        dataset_name=DATASET_NAME,
+        hf_config=lang,
+        hf_split=split,
+        output_dir=output_dir,
+        audio_format=AUDIO_FORMAT,
+        shard_size=SHARD_SIZE,
+        language=_get_language_code(lang),
+        num_workers=num_workers,
+        hf_num_proc=hf_num_proc,
+        text_field="transcription",  # FLEURS uses "transcription" field
+    )
 
-        count, errors = convert_subset_to_shar_batched(
-            dataset_name=DATASET_NAME,
-            hf_config=lang,
-            hf_split=split,
-            output_dir=output_dir,
-            audio_format=AUDIO_FORMAT,
-            shard_size=SHARD_SIZE,
-            language=lang,
-            batch_size=batch_size,
-            num_workers=num_workers,
-            io_num_workers=io_num_workers,
-            prefetch_batches=prefetch_batches,
-            hf_num_proc=hf_num_proc,
-            id_field="id",
-            text_field="transcription",
-            audio_field="audio",
-        )
-    elif use_batched and use_streaming:
-        logger.info("Falling back to streaming mode because dataset is not cached locally; batching requires local data.")
-        use_batched = False
-        # fall through to streaming path
+    logger.info(f"Finished {lang}/{split}! Processed {count} cuts with {errors} errors.")
+
+    # Mark conversion as complete only if no errors
+    if errors == 0:
+        mark_conversion_complete(output_dir, count, errors)
     else:
-        load_kwargs = {
-            "path": DATASET_NAME,
-            "name": lang,
-            "split": split,
-            "streaming": use_streaming,
-            "trust_remote_code": True,
-        }
-        if not use_streaming:
-            load_kwargs["download_mode"] = "reuse_dataset_if_exists"
-            load_kwargs["num_proc"] = hf_num_proc
+        logger.warning(f"Not marking {lang}/{split} as complete due to {errors} errors")
 
-        ds = load_dataset(**load_kwargs)
-        ds = ds.cast_column("audio", Audio(decode=False))
-
-        writer = SharWriter(output_dir=output_dir, fields={"recording": AUDIO_FORMAT}, shard_size=SHARD_SIZE)
-        count = 0
-        errors = 0
-
-        with writer:
-            for i, item in enumerate(tqdm(ds, desc=f"Processing {lang}/{split}", unit="cut")):
-                try:
-                    hf_id = item.get("id", f"no_id_{i}")
-                    cut_id = str(hf_id).replace("/", "_").replace(".", "_")
-
-                    audio_bytes = item["audio"]["bytes"]
-                    text = _pick_text(item)
-
-                    recording = Recording.from_bytes(data=audio_bytes, recording_id=cut_id)
-                    supervision = SupervisionSegment(
-                        id=cut_id,
-                        recording_id=cut_id,
-                        start=0.0,
-                        duration=recording.duration,
-                        text=text,
-                        language=lang,
-                    )
-                    cut = MonoCut(
-                        id=cut_id,
-                        start=0.0,
-                        duration=recording.duration,
-                        channel=0,
-                        recording=recording,
-                        supervisions=[supervision],
-                    )
-
-                    writer.write(cut)
-                    count += 1
-                except Exception as e:
-                    errors += 1
-                    logger.error("Failed to process item %s: %s", i, e)
-                    if errors > 100:
-                        logger.critical("Too many errors, stopping.")
-                        break
-
-    logger.info("Finished %s/%s! Processed %s cuts with %s errors.", lang, split, count, errors)
-    mark_conversion_complete(output_dir, count, errors)
     return count, errors
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Convert FLEURS to Lhotse SHAR archives")
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Convert FLEURS dataset from HuggingFace to Lhotse Shar format.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Convert default languages:
+  python fleurs.py
+
+  # Convert specific languages:
+  python fleurs.py --configs en_us de_de fr_fr
+
+  # Custom number of workers:
+  python fleurs.py --num-workers 8
+
+  # Force re-conversion:
+  python fleurs.py --force
+        """,
+    )
 
     parser.add_argument(
         "--configs",
         nargs="+",
         default=None,
-        help="HF config names (languages) to convert, e.g. hi_in fr_fr. Required unless --all-configs.",
-    )
-    parser.add_argument(
-        "--all-configs",
-        action="store_true",
-        help="Convert all configs (VERY large).",
+        help=f"Language codes to convert (default: {DEFAULT_LANGUAGES}).",
     )
     parser.add_argument(
         "--splits",
         nargs="+",
-        default=["train", "validation", "test"],
-        help="Splits to convert (default: train validation test).",
-    )
-
-    parser.add_argument("--force", action="store_true", help="Re-run conversion even if already complete.")
-
-    parser.add_argument("--batched", action="store_true", help="Use batched processing (faster, more RAM).")
-    parser.add_argument("--batch-size", type=int, default=5000, help="Items per batch in batched mode.")
-    parser.add_argument("--num-workers", type=int, default=4, help="Parallel workers for cut creation.")
-    parser.add_argument(
-        "--io-num-workers",
-        type=int,
-        default=8,
-        help="Worker threads for IO-bound batch materialization (default: 8).",
+        default=DEFAULT_SPLITS,
+        help=f"Splits to convert (default: {DEFAULT_SPLITS}).",
     )
     parser.add_argument(
-        "--prefetch-batches",
-        type=int,
-        default=1,
-        help="Prefetch batches ahead (0 or 1; default: 1).",
+        "--force",
+        action="store_true",
+        help="Re-run conversion even for already completed subsets.",
     )
-    parser.add_argument("--hf-num-proc", type=int, default=4, help="HF loading processes in batched mode.")
-
-    parser.add_argument("--log-level", default="INFO", help="Logging level (INFO, DEBUG, ...).")
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=None,
+        help="Number of parallel workers for conversion (default: cpu_count).",
+    )
+    parser.add_argument(
+        "--hf-num-proc",
+        type=int,
+        default=4,
+        help="Number of HuggingFace data loading processes (default: 4).",
+    )
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        help="Logging level (INFO, DEBUG, ...).",
+    )
 
     return parser.parse_args()
 
@@ -247,21 +203,11 @@ def main() -> None:
     args = parse_args()
     logging.basicConfig(level=getattr(logging, str(args.log_level).upper(), logging.INFO))
 
-    if args.all_configs:
-        configs = _get_dataset_config_names()
-        if not configs:
-            raise SystemExit("Could not determine configs. Pass --configs explicitly.")
-        logger.warning("--all-configs enabled: converting %s configs", len(configs))
-    else:
-        if not args.configs:
-            known = _get_dataset_config_names()
-            hint = f"Known configs (sample): {known[:10]} ..." if known else "(could not list configs)"
-            raise SystemExit(f"Pass --configs <lang...> (or --all-configs). {hint}")
-        configs = list(args.configs)
+    configs = args.configs if args.configs else DEFAULT_LANGUAGES
 
-    logger.info("Base output directory: %s", BASE_OUTPUT_DIR / DATASET_NICKNAME)
-    logger.info("Configs: %s", configs)
-    logger.info("Splits: %s", args.splits)
+    logger.info(f"Base output directory: {BASE_OUTPUT_DIR / DATASET_NICKNAME}")
+    logger.info(f"Languages: {configs}")
+    logger.info(f"Splits: {args.splits}")
 
     total_count = 0
     total_errors = 0
@@ -269,24 +215,27 @@ def main() -> None:
 
     for lang in configs:
         for split in args.splits:
+            logger.info(f"\n{'=' * 60}")
+            logger.info(f"Processing {lang}/{split}")
+            logger.info(f"{'=' * 60}")
+
             count, errors = convert_one(
                 lang,
                 split,
-                force=bool(args.force),
-                use_batched=bool(args.batched),
-                batch_size=int(args.batch_size),
-                num_workers=int(args.num_workers),
-                io_num_workers=int(args.io_num_workers),
-                prefetch_batches=int(args.prefetch_batches),
-                hf_num_proc=int(args.hf_num_proc),
+                force=args.force,
+                num_workers=args.num_workers,
+                hf_num_proc=args.hf_num_proc,
             )
+
             if count is None:
                 skipped += 1
             else:
                 total_count += count
                 total_errors += errors
 
-    logger.info("ALL DONE! Processed: %s cuts, Errors: %s, Skipped: %s subsets", total_count, total_errors, skipped)
+    logger.info(f"\n{'=' * 60}")
+    logger.info(f"ALL DONE! Processed: {total_count} cuts, Errors: {total_errors}, Skipped: {skipped} subsets")
+    logger.info(f"{'=' * 60}")
 
 
 if __name__ == "__main__":

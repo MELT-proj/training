@@ -70,10 +70,12 @@ for lang in "${LANGUAGES[@]}"; do
       --output-dir "$out_dir"
       --pattern "${split}*.tar.gz"
       --recursive
+      --resample
       --shard-size "$SHARD_SIZE"
       --audio-format "$AUDIO_FORMAT"
       --language "$lang"
       --log-level "$LOG_LEVEL"
+      --num-workers 8
     )
 
     if [[ "$FORCE" == "1" ]]; then

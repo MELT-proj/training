@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "melt-proj"
-version = "0.1.0"
+version = "0.2.0"
 description = "MELT project training utilities"
 readme = "README.md"
 license = {text = "MIT"}
@@ -16,7 +16,7 @@ dependencies = [
     "transformers==4.57.1",
     "wandb>=0.23",
     "datasets>=4.0",
-    "tyro>=1.0",
+    "omegaconf>=2.3",
     "librosa>=0.11",
     "soundfile>=0.13",
     "sentencepiece>=0.2",

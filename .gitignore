@@ -3,6 +3,7 @@ logs/
 src/transformers
 results/
 recording*
+*._*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

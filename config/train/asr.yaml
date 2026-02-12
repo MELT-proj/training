@@ -32,11 +32,11 @@ model:
 data:
   sample_rate: 16000
   apply_chat_template: false
-  min_chars: 3
 
   train_ds:
     # Data sources - list of datasets to load
     input_cfg:
+      # Librispeech
       - type: lhotse_shar
         shar_path: ${LOCAL_DATASETS_DIR}/librispeech/clean/train.100
         tags:
@@ -48,14 +48,70 @@ data:
           task: asr
           lang: en
 
+      # MLS Sidon
+      # - type: lhotse_shar
+      #   shar_path: ${LOCAL_DATASETS_DIR}/mls_sidon/english/train
+      #   tags:
+      #     task: asr
+      #     lang: en
+      - type: lhotse_shar
+        shar_path: ${LOCAL_DATASETS_DIR}/mls_sidon/german/train
+        tags:
+          task: asr
+          lang: de
+      - type: lhotse_shar
+        shar_path: ${LOCAL_DATASETS_DIR}/mls_sidon/italian/train
+        tags:
+          task: asr
+          lang: it
+
+      # # FLEURS
+      - type: lhotse_shar
+        shar_path: ${LOCAL_DATASETS_DIR}/fleurs/de_de/train
+        tags:
+          task: asr
+          lang: de
+      - type: lhotse_shar
+        shar_path: ${LOCAL_DATASETS_DIR}/fleurs/it_it/train
+        tags:
+          task: asr
+          lang: it
+      - type: lhotse_shar
+        shar_path: ${LOCAL_DATASETS_DIR}/fleurs/en_us/train
+        tags:
+          task: asr
+          lang: en
+
+      # # CV 22 Sidon
+      # For CommonVoice, text is in custom.metadata.sentence, so override text_field
+      - type: lhotse_shar
+        shar_path: ${LOCAL_DATASETS_DIR}/cv22_sidon/de/train
+        tags:
+          task: asr
+          lang: de
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${LOCAL_DATASETS_DIR}/cv22_sidon/en/train
+        tags:
+          task: asr
+          lang: en
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${LOCAL_DATASETS_DIR}/cv22_sidon/it/train
+        tags:
+          task: asr
+          lang: it
+          text_field: custom.metadata.sentence
+
+
     # Batch settings
     batch_size: null  # Use batch_duration instead for dynamic batching
-    batch_duration: 120.0  # seconds of audio per batch
-    quadratic_duration: null
+    batch_duration: 240.0  # seconds of audio per batch
+    quadratic_duration: 20 # see https://lhotse.readthedocs.io/en/latest/datasets.html#lhotse.dataset.sampling.TimeConstraint
 
     # Bucketing for efficient batching
     use_bucketing: true
-    num_buckets: 30
+    num_buckets: 20
     bucket_buffer_size: 10000
     bucket_duration_bins: null  # Auto-estimated if null
 
@@ -71,7 +127,7 @@ data:
     max_duration: 30.0
 
     # DataLoader settings
-    num_workers: 2
+    num_workers: 1
     pin_memory: true
     prefetch_factor: 2
     sample_rate: 16000
@@ -85,19 +141,26 @@ data:
         tags:
           task: asr
           lang: en
+      - type: lhotse_shar
+        shar_path: ${LOCAL_DATASETS_DIR}/cv22_sidon/en/validation
+        tags:
+          task: asr
+          lang: en
+          text_field: custom.metadata.sentence
 
-    batch_size: 8
+    batch_size: 16
     batch_duration: null
-    use_bucketing: false
+    use_bucketing: true
+    num_buckets: 20
     shuffle: false
     drop_last: false
     seed: 42
     shard_seed: trng
     min_duration: 0.5
     max_duration: 30.0
-    num_workers: 4
+    num_workers: 2
     pin_memory: true
-    prefetch_factor: 2
+    prefetch_factor: 1
     sample_rate: 16000
     text_field: text
     lang_field: lang
@@ -111,6 +174,7 @@ trainer:
   seed: 42
   do_train: true
   do_eval: true
+  eval_on_start: true
 
   # Accelerate DataLoader behavior under Transformers Trainer.
   # If you hit errors about different-shaped batches being concatenated,
@@ -142,8 +206,8 @@ trainer:
   report_to: wandb
 
   # Evaluation
-  eval_strategy: "no" # steps
-  eval_steps: 3000
+  eval_strategy: steps # "no" # steps
+  eval_steps: 5
 
   # Checkpointing
   save_strategy: steps
@@ -158,7 +222,7 @@ trainer:
   ddp_find_unused_parameters: false
 
 optimization:
-    encoder_lr: 6e-6
-    decoder_lr: 2e-5
+    encoder_lr: 6e-6 # Not used since it's frozen
+    decoder_lr: 2e-5 # Not used since it's frozen
     adapter_lr: 2e-4
     min_lr_scale: 0.1

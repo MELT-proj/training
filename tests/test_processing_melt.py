@@ -1,11 +1,11 @@
 import tempfile
 import urllib.request
+from types import SimpleNamespace
 
 import librosa
 import pytest
-from types import SimpleNamespace
 
-from src.modeling import MELT_REQUIRED_SPECIAL_TOKENS, MELTProcessor, MELTConfig
+from src.modeling import MELT_REQUIRED_SPECIAL_TOKENS, MELTConfig, MELTProcessor
 from transformers import AutoConfig, AutoFeatureExtractor, AutoTokenizer
 
 
@@ -46,14 +46,12 @@ def tokenizer():
 @pytest.fixture(scope="module")
 def processor(feature_extractor, tokenizer):
     """Create a MELTProcessor instance with proper MELTConfig."""
-    audio_encoder_config = AutoConfig.from_pretrained("facebook/w2v-bert-2.0")
-    text_decoder_config = AutoConfig.from_pretrained("Qwen/Qwen2.5-1.5B")
-    
     config = MELTConfig(
-        audio_encoder_config=audio_encoder_config,
-        text_decoder_config=text_decoder_config,
+        audio_encoder="facebook/w2v-bert-2.0",
+        text_decoder="Qwen/Qwen2.5-1.5B",
+        adapter_config={"_type": "mlp"},
     )
-    
+
     # Add decoder attribute with special tokens
     config.decoder = SimpleNamespace(
         image_token="<|IMAGE|>",
@@ -62,7 +60,7 @@ def processor(feature_extractor, tokenizer):
         audio_bos_token="<|audio_bos|>",
         audio_eos_token="<|audio_eos|>",
     )
-    
+
     return MELTProcessor(
         feature_extractor=feature_extractor,
         tokenizer=tokenizer,
@@ -72,21 +70,19 @@ def processor(feature_extractor, tokenizer):
 
 class TestMELTProcessorInit:
     def test_init_with_required_components(self, feature_extractor, tokenizer):
-        audio_encoder_config = AutoConfig.from_pretrained("facebook/w2v-bert-2.0")
-        text_decoder_config = AutoConfig.from_pretrained("Qwen/Qwen2.5-1.5B")
-        
         config = MELTConfig(
-            audio_encoder_config=audio_encoder_config,
-            text_decoder_config=text_decoder_config,
+            audio_encoder="facebook/w2v-bert-2.0",
+            text_decoder="Qwen/Qwen2.5-1.5B",
+            adapter_config={"_type": "mlp"},
         )
-        
+
         # Add decoder attribute with special tokens
         config.decoder = SimpleNamespace(
             audio_token="<|AUDIO|>",
             audio_bos_token="<|audio_bos|>",
             audio_eos_token="<|audio_eos|>",
         )
-        
+
         processor = MELTProcessor(
             feature_extractor=feature_extractor,
             tokenizer=tokenizer,
@@ -95,13 +91,23 @@ class TestMELTProcessorInit:
         assert processor.feature_extractor is not None
         assert processor.tokenizer is not None
 
-    def test_init_without_feature_extractor_raises(self, tokenizer):
-        with pytest.raises(ValueError, match="feature_extractor is required"):
-            MELTProcessor(feature_extractor=None, tokenizer=tokenizer)
+    def test_init_without_config_raises(self, feature_extractor, tokenizer):
+        with pytest.raises(TypeError):
+            MELTProcessor(feature_extractor=feature_extractor, tokenizer=tokenizer)
 
     def test_init_without_tokenizer_raises(self, feature_extractor):
-        with pytest.raises(ValueError, match="tokenizer is required"):
-            MELTProcessor(feature_extractor=feature_extractor, tokenizer=None)
+        config = MELTConfig(
+            audio_encoder="facebook/w2v-bert-2.0",
+            text_decoder="Qwen/Qwen2.5-1.5B",
+            adapter_config={"_type": "mlp"},
+        )
+        config.decoder = SimpleNamespace(
+            audio_token="<|AUDIO|>",
+            audio_bos_token="<|audio_bos|>",
+            audio_eos_token="<|audio_eos|>",
+        )
+        with pytest.raises(Exception):
+            MELTProcessor(feature_extractor=feature_extractor, tokenizer=None, config=config)
 
     def test_special_tokens_added(self, processor):
         vocab = processor.tokenizer.get_vocab()
@@ -194,8 +200,6 @@ class TestMELTProcessorSpecialTokens:
         assert processor.audio_bos_token in vocab
         assert processor.audio_eos_token in vocab
 
-
-
     def test_text_with_special_tokens(self, processor):
         text = f"{processor.audio_bos_token}Some text{processor.audio_eos_token}"
         result = processor(text=text)
@@ -210,7 +214,7 @@ class TestMELTProcessorModelInputNames:
         input_names = processor.model_input_names
         assert "input_ids" in input_names
         assert "attention_mask" in input_names
-        assert "feature_attention_mask" in input_names
+        assert "features_attention_mask" in input_names
 
 
 class TestMELTProcessorChatTemplate:

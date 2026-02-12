@@ -1,6 +1,6 @@
 ## Running training (config-driven)
 
-We provide several ways to launch training using a YAML config file (`--config-file`). The canonical helper is `bash/train_with_config.sh`, which wraps `accelerate` and sets useful environment defaults.
+We provide several ways to launch training using a YAML config file (`--config`). The canonical helper is `bash/train_with_config.sh`, which wraps `accelerate` and sets useful environment defaults.
 
 ### 1) Batch (SLURM + sbatch)
 Use this when submitting a job to the cluster scheduler. Example:
@@ -36,7 +36,7 @@ This is useful for small-scale debugging and development.
 If you prefer to call `accelerate` yourself, you can run:
 
 ```bash
-accelerate launch --config_file config/accelerate/zero3.yaml src/train.py --config-file config/train/LS_asr.yaml
+accelerate launch --config_file config/accelerate/zero3.yaml src/train.py --config config/train/LS_asr.yaml
 ```
 
 This is equivalent to the helper but useful when experimenting with different `accelerate` flags.

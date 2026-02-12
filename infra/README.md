@@ -4,8 +4,6 @@ Purpose
 - Infrastructure and operational scripts for environment setup, data synchronization, container images, and convenience utilities used during development and HPC runs.
 
 Contents (high-level)
-- `create_env.sh`, `install_env.sh`, `prepare_local.sh`: local dev and venv setup.
-- `download_models.sh`, `prepare/`: model/dataset preparation helpers.
 - `rsync_*` and `sync_*` scripts: rsync helpers for remote storage (MN5, Leonardo, local mirrors).
 - `Singularity.def` and `run_train_singularity.sbatch`: container and SLURM launch helpers.
 

@@ -6,14 +6,14 @@ import re
 
 import torch
 
-from ..logging_utils import get_logger
-
+from transformers import AutoFeatureExtractor, AutoTokenizer, FeatureExtractionMixin, PreTrainedTokenizerBase
 from transformers.feature_extraction_utils import BatchFeature
 from transformers.image_utils import ImageInput
 from transformers.processing_utils import ProcessingKwargs, ProcessorMixin, Unpack
 from transformers.tokenization_utils_base import AudioInput, PreTokenizedInput, TextInput
 from transformers.video_utils import VideoInput
 
+from ..logging_utils import get_logger
 from .configuration_melt import MELT_REQUIRED_SPECIAL_TOKENS
 
 
@@ -97,17 +97,16 @@ class MELTProcessor(ProcessorMixin):
 
     def __init__(
         self,
-        feature_extractor=None,
-        tokenizer=None,
-        config=None,
+        feature_extractor: str | FeatureExtractionMixin,
+        tokenizer: str | PreTrainedTokenizerBase,
+        config,
         # image_processor=None,
         # video_processor=None,
     ):
-        # Ensure we have required components
-        if feature_extractor is None:
-            raise ValueError("feature_extractor is required for MELTProcessor")
-        if tokenizer is None:
-            raise ValueError("tokenizer is required for MELTProcessor")
+        if isinstance(feature_extractor, str):
+            feature_extractor = AutoFeatureExtractor.from_pretrained(feature_extractor)
+        if isinstance(tokenizer, str):
+            tokenizer = AutoTokenizer.from_pretrained(tokenizer)
 
         super().__init__(feature_extractor, tokenizer)  # , image_processor, video_processor)
         self.image_processor = None
@@ -119,10 +118,26 @@ class MELTProcessor(ProcessorMixin):
         # silently introducing defaults.
         self._validate_required_special_tokens(tokenizer, config)
 
-        # self.image_token = None
-        # self.video_token = None
-        # self.vision_bos_token = None
-        # self.vision_eos_token = None
+        self.audio_token = config.decoder.audio_token
+        self.audio_bos_token = config.decoder.audio_bos_token
+        self.audio_eos_token = config.decoder.audio_eos_token
+
+        for name in MELT_REQUIRED_SPECIAL_TOKENS:
+            setattr(self, name + "_id", tokenizer.convert_tokens_to_ids([getattr(self, name)])[0])
+
+        # if the tokenizer does not have a pad_token, use config.decoder.pad_token
+        if tokenizer.pad_token is None:
+            if not hasattr(config.decoder, "pad_token"):
+                raise ValueError(
+                    "We need a pad token and this tokenizer doesn't have one. Set config.decoder.pad_token to a string token to add it."
+                )
+            logger.info(
+                "Tokenizer does not have a pad_token. Adding pad token from config.decoder.pad_token: %s",
+                config.decoder.pad_token,
+            )
+            self.tokenizer.add_special_tokens({"pad_token": config.decoder.pad_token})
+            self.tokenizer.pad_token_id = self.tokenizer.convert_tokens_to_ids([config.decoder.pad_token])[0]
+            self.pad_token = config.decoder.pad_token
 
     def _validate_required_special_tokens(self, tokenizer, config) -> None:
         """Validate required MELT special tokens.
@@ -136,51 +151,41 @@ class MELTProcessor(ProcessorMixin):
         """
 
         # Gather tokenizer known tokens
-        all_special = set(getattr(tokenizer, "all_special_tokens", []))
         vocab = set(tokenizer.get_vocab().keys())
 
         for name in MELT_REQUIRED_SPECIAL_TOKENS:
-            # First, try to find a configured token string
-            token_str = getattr(config.decoder, name)
+            token_str = getattr(config.decoder, name, None)
+            if token_str is None or not isinstance(token_str, str):
+                raise ValueError(
+                    f"Token string for required special token '{name}' not found in config.decoder. "
+                    "Please provide this token in the model config under `config.decoder.<name>`."
+                )
 
-            # Not present in the current tokenizer
-            if name not in all_special and name not in vocab:
-                if token_str is None:
+            # If the tokenizer has the attribute set already, don't touch anything
+            if hasattr(self.tokenizer, name):
+                # check if the pre-existing value matches the config value. If not, raise an error.
+                existing_token = getattr(self.tokenizer, name)
+                if existing_token != token_str:
                     raise ValueError(
-                        f"Configured token for '{name}' ('{token_str}') was not found in tokenizer vocabulary. "
-                        "Please add this token to the tokenizer before creating the processor."
+                        f"Tokenizer already has a value for special token '{name}': '{existing_token}'. "
+                        f"This does not match the config value: '{token_str}'. "
+                        "Please ensure consistency between the tokenizer and model config."
                     )
-                else:
-                    # Add it to the tokenizer's special tokens
-                    logger.info("Adding special token: %s -> %s", name, token_str)
-                    self.tokenizer.add_tokens([token_str])
-                    setattr(self.tokenizer, name, token_str)
-                    setattr(self, name, token_str)
+                continue
+
+            # If it doesn't but the token is in the vocab, we just reuse it and set the attribute to the tokenizer
+            if token_str in vocab:
+                setattr(self.tokenizer, name, token_str)
+                logger.info("Reusing existing token: %s -> %s", name, token_str)
+                continue
+
+            # If it doesn't and the token isn't in the vocab, we add it to the tokenizer
             else:
-                # Token name exists in tokenizer. Ensure config value (if any) matches the tokenizer's token string.
-                # Try to resolve the token string from common tokenizer places.
-                tokenizer_token_str = getattr(tokenizer, name, None)
-                if tokenizer_token_str is None and hasattr(tokenizer, "special_tokens_map"):
-                    tokenizer_token_str = tokenizer.special_tokens_map.get(name, None)
-
-                # If tokenizer expresses the token as a vocab entry (literal name), use that.
-                if tokenizer_token_str is None and name in vocab:
-                    tokenizer_token_str = name
-
-                if token_str is not None and tokenizer_token_str is not None and tokenizer_token_str != token_str:
-                    raise ValueError(
-                        f"Configured token for '{name}' ('{token_str}') does not match the token found in "
-                        f"the tokenizer ('{tokenizer_token_str}'). Please ensure the tokenizer and config agree."
-                    )
-
-                if tokenizer_token_str is None:
-                    raise ValueError(
-                        f"Could not resolve token string for '{name}' in the tokenizer. "
-                        "Please add this token to the tokenizer or set it in the config."
-                    )
-
-                # Expose the resolved token strings on the processor for later use (e.g., replacement).
-                setattr(self, name, tokenizer_token_str)
+                # Add it to the tokenizer's special tokens
+                logger.info("Adding special token: %s -> %s", name, token_str)
+                self.tokenizer.add_tokens([token_str])
+                setattr(self.tokenizer, name, token_str)
+                setattr(self, name, token_str)
 
     def _validate_audio_token_count(self, text: list[str], audio, is_batched: bool) -> None:
         """Validate that the number of audio tokens in text matches the number of audio inputs.
@@ -235,6 +240,13 @@ class MELTProcessor(ProcessorMixin):
                     f"Pass a list of audio arrays if you have multiple audio tokens."
                 )
 
+    def _surround_bos_eos_mm_tokens(self, text):
+        text = text.replace(
+            self.audio_token,
+            self.audio_bos_token + self.audio_token + self.audio_eos_token,
+        )
+        return text
+
     def __call__(
         self,
         text: TextInput | PreTokenizedInput | list[TextInput] | list[PreTokenizedInput] | None = None,
@@ -269,7 +281,7 @@ class MELTProcessor(ProcessorMixin):
             - **input_ids** -- List of token ids to be fed to the model.
             - **attention_mask** -- List of indices specifying which tokens should be attended to by the model.
             - **input_features** -- Audio features to be fed to the model (if audio is provided).
-            - **feature_attention_mask** -- Attention mask for audio features (if audio is provided).
+            - **features_attention_mask** -- Attention mask for audio features (if audio is provided).
         """
         if text is None:
             raise ValueError("You need to specify a `text` input to process.")
@@ -312,42 +324,47 @@ class MELTProcessor(ProcessorMixin):
         #     videos_inputs = {}
         #     video_grid_thw = None  # iter([])
 
+        text = list(map(self._surround_bos_eos_mm_tokens, text))
+
         # Replace multimodal special tokens with appropriate number of placeholders
         text_to_tokenize = text
-        if audio is not None or images is not None or videos is not None:
-            # Flatten audio_lengths for token replacement
-            if audio_lengths_output is not None:
-                if is_batched:
-                    flat_lengths: list[int] = []
-                    if isinstance(audio_lengths_output, list):
-                        for sample_lengths in audio_lengths_output:
-                            if isinstance(sample_lengths, list):
-                                flat_lengths.extend(sample_lengths)
-                            else:
-                                flat_lengths.append(int(sample_lengths))
-                    audio_lengths_flat = iter(flat_lengths)
-                else:
-                    flat_lengths_single = (
-                        audio_lengths_output if isinstance(audio_lengths_output, list) else [audio_lengths_output]
-                    )
-                    audio_lengths_flat = iter(flat_lengths_single)
-            else:
-                audio_lengths_flat = iter([])
+        # if audio is not None or images is not None or videos is not None:
+        #     # Flatten audio_lengths for token replacement
+        #     if audio_lengths_output is not None:
+        #         if is_batched:
+        #             flat_lengths: list[int] = []
+        #             if isinstance(audio_lengths_output, list):
+        #                 for sample_lengths in audio_lengths_output:
+        #                     if isinstance(sample_lengths, list):
+        #                         flat_lengths.extend(sample_lengths)
+        #                     else:
+        #                         flat_lengths.append(int(sample_lengths))
+        #             audio_lengths_flat = iter(flat_lengths)
+        #         else:
+        #             flat_lengths_single = (
+        #                 audio_lengths_output if isinstance(audio_lengths_output, list) else [audio_lengths_output]
+        #             )
+        #             audio_lengths_flat = iter(flat_lengths_single)
+        #     else:
+        #         audio_lengths_flat = iter([])
 
-            # Here is where we expand each audio_token into a sequence 
-            # depending on audio_lengths_flat.
-            expanded_text = self.replace_multimodal_special_tokens(
-                text_to_tokenize,
-                audio_lengths=audio_lengths_flat,
-                # image_grid_thw=image_grid_thw,  # TODO: to support in future
-                # video_grid_thw=video_grid_thw,
-            )
-            text_to_tokenize = expanded_text
+        #     # Here is where we expand each audio_token into a sequence
+        #     # depending on audio_lengths_flat.
+        #     expanded_text = self.replace_multimodal_special_tokens(
+        #         text_to_tokenize,
+        #         audio_lengths=audio_lengths_flat,
+        #         # image_grid_thw=image_grid_thw,  # TODO: to support in future
+        #         # video_grid_thw=video_grid_thw,
+        #     )
+        #     text_to_tokenize = expanded_text
 
         texts_inputs = self.tokenizer(text_to_tokenize, **output_kwargs["text_kwargs"])
 
         output_data = {**texts_inputs, **audio_inputs}
-        if audio_lengths_output is not None:
+
+        output_data["audio_lengths"] = audio_lengths_output
+        if audio_lengths_output is not None and not return_dict:
+            # Pad audio lengths to max length to allow for tensor conversion
             output_data["audio_lengths"] = audio_lengths_output
             if (
                 isinstance(output_data["audio_lengths"], list)
@@ -359,9 +376,13 @@ class MELTProcessor(ProcessorMixin):
                     lengths + [-1] * (max_len - len(lengths)) for lengths in output_data["audio_lengths"]
                 ]
 
-        return output_data if return_dict else BatchFeature(
-            data=output_data,  # , **images_inputs, **videos_inputs},
-            tensor_type=kwargs.get("return_tensors"),
+        return (
+            output_data
+            if return_dict
+            else BatchFeature(
+                data=output_data,  # , **images_inputs, **videos_inputs},
+                tensor_type=kwargs.get("return_tensors"),
+            )
         )
 
     def _process_audio(self, audio, is_batched: bool, audio_kwargs: dict) -> tuple[dict, list | int]:
@@ -376,7 +397,7 @@ class MELTProcessor(ProcessorMixin):
 
         Returns:
             Tuple of (audio_inputs dict, audio_lengths).
-            - audio_inputs contains 'input_features' and 'feature_attention_mask' with shape (batch_size, *).
+            - audio_inputs contains 'input_features' and 'features_attention_mask' with shape (batch_size, *).
             - audio_lengths is a list of lists for batched input, or a single int/list for single input.
         """
 
@@ -448,7 +469,7 @@ class MELTProcessor(ProcessorMixin):
 
             audio_inputs = {
                 "input_features": torch.cat(padded_features, dim=0),
-                "feature_attention_mask": torch.cat(padded_masks, dim=0) if padded_masks else None,
+                "features_attention_mask": torch.cat(padded_masks, dim=0) if padded_masks else None,
             }
         else:
             # Single item: here audio is a single array or a list of arrays
@@ -456,7 +477,7 @@ class MELTProcessor(ProcessorMixin):
 
             audio_inputs = {
                 "input_features": input_features,
-                "feature_attention_mask": attention_mask,
+                "features_attention_mask": attention_mask,
             }
 
         return audio_inputs, audio_lengths_output
@@ -564,11 +585,20 @@ class MELTProcessor(ProcessorMixin):
         """
         return self.tokenizer.decode(*args, **kwargs)
 
+    def encode(self, *args, **kwargs):
+        """
+        This method forwards all its arguments to the tokenizer's [`~PreTrainedTokenizer.encode`].
+        Please refer to the docstring of this method for more information.
+        """
+        return self.tokenizer.encode(*args, **kwargs)
+
     @property
     def model_input_names(self):
         tokenizer_input_names = self.tokenizer.model_input_names
         feature_extractor_input_names = self.feature_extractor.model_input_names
-        names = list(dict.fromkeys(tokenizer_input_names + feature_extractor_input_names + ["feature_attention_mask"]))
+        names = list(
+            dict.fromkeys(tokenizer_input_names + feature_extractor_input_names + ["features_attention_mask"])
+        )
 
         if getattr(self, "image_processor", None) is not None:
             names.extend(self.image_processor.model_input_names)

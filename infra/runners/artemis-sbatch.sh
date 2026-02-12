@@ -21,4 +21,4 @@ sbatch --time=01:00:00 --nodes=1 --gres=gpu:2 --qos=gpu-debug --partition a6000 
   --error="logs/%x.%j.err" \
   --job-name=melt-train \
   ./bash/run_train.sh config/accelerate/zero3.yaml \
-  --config-file config/train/LS_asr.yaml
+  --config config/train/LS_asr.yaml

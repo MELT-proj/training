@@ -8,14 +8,19 @@ The dataset does not hold actual data; instead, it acts as a processing
 recipe that transforms CutSets into model inputs via the MELTProcessor.
 """
 
+import json
+import os
+import time
+
 import torch
 import torch.utils.data
 from lhotse import CutSet
 from lhotse.cut import Cut
+from omegaconf import DictConfig
 
-from ....config import DataConfig
 from .....logging_utils import get_logger
 from .....modeling import MELTProcessor
+
 
 logger = get_logger(__name__)
 
@@ -27,6 +32,42 @@ def _get_config_value(config, key: str, default=None):
     elif isinstance(config, dict):
         return config.get(key, default)
     return default
+
+
+def _get_nested_value(obj, path: str, default=None):
+    """Get a nested value from an object using dot notation.
+
+    Supports both attribute access and dict key access at each level.
+
+    Args:
+        obj: Object to traverse (can have nested dicts/objects).
+        path: Dot-separated path like "custom.metadata.sentence".
+        default: Default value if path not found.
+
+    Returns:
+        The value at the path, or default if not found.
+
+    Example:
+        >>> cut.custom = {"metadata": {"sentence": "Hello world"}}
+        >>> _get_nested_value(cut, "custom.metadata.sentence")
+        "Hello world"
+    """
+    parts = path.split(".")
+    current = obj
+
+    for part in parts:
+        if current is None:
+            return default
+        # Try attribute access first
+        if hasattr(current, part):
+            current = getattr(current, part)
+        # Then try dict access
+        elif isinstance(current, dict) and part in current:
+            current = current[part]
+        else:
+            return default
+
+    return current if current is not None else default
 
 
 class SpeechToTextDataset(torch.utils.data.Dataset):
@@ -43,12 +84,13 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
 
     Args:
         processor: MELTProcessor instance for audio/text processing.
-        config: DataConfig containing processing settings.
+        config: DictConfig containing data processing settings.
         is_train: Whether this is for training (affects augmentation, etc.).
 
     Example:
         >>> processor = MELTProcessor(feature_extractor, tokenizer)
-        >>> config = DataConfig(apply_chat_template=False)
+        >>> from omegaconf import OmegaConf
+        >>> config = OmegaConf.create({"apply_chat_template": False})
         >>> dataset = SpeechToTextDataset(processor, config)
         >>> # Called by Lhotse sampler/dataloader:
         >>> batch = dataset[cuts]  # cuts is a CutSet
@@ -57,7 +99,7 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
     def __init__(
         self,
         processor: MELTProcessor,
-        config: DataConfig,
+        config: DictConfig,
         is_train: bool = True,
     ) -> None:
         self.processor = processor
@@ -66,6 +108,53 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         self.apply_chat_template = bool(_get_config_value(config, "apply_chat_template", False))
         self.sample_rate = int(_get_config_value(config, "sample_rate", 16000))
         self.min_chars = int(_get_config_value(config, "min_chars", 0))
+
+        self._debug_cut_ids_dir = os.environ.get("MELT_DEBUG_CUT_IDS_DIR")
+        self._debug_cut_ids_max_batches = int(os.environ.get("MELT_DEBUG_CUT_IDS_MAX_BATCHES", "0") or "0")
+        self._debug_cut_ids_every = int(os.environ.get("MELT_DEBUG_CUT_IDS_EVERY", "1") or "1")
+        self._debug_cut_ids_batch_idx = 0
+        self._debug_cut_ids_fh = None
+
+    def _maybe_log_cut_ids(self, cuts: CutSet) -> None:
+        if not self._debug_cut_ids_dir:
+            return
+        if self._debug_cut_ids_max_batches <= 0:
+            return
+        if self._debug_cut_ids_batch_idx >= self._debug_cut_ids_max_batches:
+            return
+        if self._debug_cut_ids_every > 1 and (self._debug_cut_ids_batch_idx % self._debug_cut_ids_every) != 0:
+            self._debug_cut_ids_batch_idx += 1
+            return
+
+        # Note: in DataLoader worker processes, torch.distributed is typically not initialized.
+        # We rely on env vars; Lhotse's make_worker_init_fn sets RANK/WORLD_SIZE for WebDataset.
+        rank = int(os.environ.get("RANK", os.environ.get("SLURM_PROCID", "0")) or "0")
+        world_size = int(os.environ.get("WORLD_SIZE", os.environ.get("SLURM_NTASKS", "1")) or "1")
+        worker_info = torch.utils.data.get_worker_info()
+        worker_id = worker_info.id if worker_info is not None else 0
+
+        os.makedirs(self._debug_cut_ids_dir, exist_ok=True)
+        if self._debug_cut_ids_fh is None:
+            pid = os.getpid()
+            path = os.path.join(
+                self._debug_cut_ids_dir,
+                f"cut_ids.rank{rank:05d}-ws{world_size:05d}.worker{worker_id:02d}.pid{pid}.jsonl",
+            )
+            # Line-buffered for "tail -f" usability.
+            self._debug_cut_ids_fh = open(path, "a", encoding="utf-8", buffering=1)
+
+        cut_ids = [c.id for c in cuts]
+        record = {
+            "time": time.time(),
+            "rank": rank,
+            "world_size": world_size,
+            "worker_id": worker_id,
+            "batch_idx": self._debug_cut_ids_batch_idx,
+            "num_cuts": len(cut_ids),
+            "cut_ids": cut_ids,
+        }
+        self._debug_cut_ids_fh.write(json.dumps(record) + "\n")
+        self._debug_cut_ids_batch_idx += 1
 
     def __getitem__(self, cuts: CutSet) -> dict[str, torch.Tensor] | None:
         """Process a batch of cuts into model inputs.
@@ -76,7 +165,7 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         Returns:
             Dictionary with model inputs:
                 - input_features: Audio features [B, T, F]
-                - feature_attention_mask: Audio attention mask [B, T]
+                - features_attention_mask: Audio attention mask [B, T]
                 - input_ids: Text token IDs [B, S]
                 - attention_mask: Text attention mask [B, S]
                 - labels: Target labels for training [B, S]
@@ -86,54 +175,41 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         if cuts is None or len(cuts) == 0:
             return None
 
+        self._maybe_log_cut_ids(cuts)
+
         # Load audio and text from cuts
         audios = []
         texts = []
         tasks = []
         langs = []
-        failed_indices = []
-
         for idx, cut in enumerate(cuts):
-            try:
-                # Load audio
-                audio = self._load_audio(cut)
-                if audio is None:
-                    failed_indices.append(idx)
-                    continue
+            # Load audio
+            audio = self._load_audio(cut)
 
-                # Get text transcript
-                text = self._get_text(cut)
-                if text is None or len(text.strip()) < self.min_chars:
-                    failed_indices.append(idx)
-                    continue
+            # Get text transcript
+            text = self._get_text(cut)
+            if text == "" or text is None:
+                raise RuntimeError(f"Empty or missing text for cut {cut.id}. Cut: {cut}")
 
-                # Get task and language tags
-                task, lang = self._get_tags(cut)
+            # Strip leading/trailing whitespace and make it lowercase
+            text = text.strip().lower()
 
-                audios.append(audio)
-                texts.append(text)
-                tasks.append(task)
-                langs.append(lang)
-
-            except Exception as e:
-                logger.warning(f"Failed to process cut {cut.id}: {e}")
-                failed_indices.append(idx)
-                continue
-
-        if len(audios) == 0:
-            logger.warning("All cuts in batch failed to load")
-            return None
-
-        if failed_indices:
-            logger.debug(f"Skipped {len(failed_indices)} cuts due to loading errors")
+            # Get task and language tags
+            task, lang = self._get_tags(cut)
+            audios.append(audio)
+            texts.append(text)
+            tasks.append(task)
+            langs.append(lang)
 
         # Format texts with audio token for the processor
-        # This adds <|AUDIO|> token to indicate where audio embeddings go
+        # This adds <|audio|> token to indicate where audio embeddings go
         if self.apply_chat_template:
+            raise RuntimeError("Not yet implemented.")
             formatted_texts = self._apply_chat_template(texts, tasks, langs)
         else:
             # Simple format: audio token + transcription
-            formatted_texts = [self._format_text_with_audio_token(t, task, lang) for t, task, lang in zip(texts, tasks, langs)]
+            # formatted_texts = [f"{self.processor.tokenizer.bos_token}{self.processor.audio_token}{t}" for t in texts]
+            formatted_texts = [f"{self.processor.audio_token}{t}" for t in texts]
 
         # Process through MELTProcessor
         try:
@@ -148,25 +224,17 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
                 return_tensors="pt",
             )
 
-            # Add the labels for loss computation. The labels for this class or exclusively the text token IDs. 
-            # The modeling code will handle  logit slicing based on this tensor's shape and loss masking as needed
-            # (Crucial: the training code must set loss_ignore_index to match the padding token ID of the tokenizer).
-
-
-            # TODO: we need to improve this label construction strategy, it does not
-            # really work for anything besides {audio_token}{text} formatting
-
-            # We tokenize only the text to construct the labels
-            labels = self.processor.tokenizer(
-                texts,
-                padding_side="left",
-                padding="longest",
-                return_tensors="pt",
-            )["input_ids"]
-            inputs["labels"] = labels
-
-            # TODO: this should not be needed
-            # inputs = inputs.convert_to_tensors("pt")
+            if self.is_train:
+                labels = inputs["input_ids"].clone()
+                mask = (
+                    (labels == self.processor.audio_token_id)
+                    | (labels == self.processor.audio_bos_token_id)
+                    | (labels == self.processor.audio_eos_token_id)
+                    | (labels == self.processor.tokenizer.pad_token_id)
+                    | (labels == self.processor.tokenizer.bos_token_id)
+                )
+                labels[mask] = -100
+                inputs["labels"] = labels
 
             return inputs
 
@@ -204,16 +272,46 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
     def _get_text(self, cut: Cut) -> str | None:
         """Extract text transcript from a cut.
 
+        Supports multiple sources for text extraction:
+        1. Per-cut `text_field` override from cut.custom.tags (highest priority)
+        2. Global `text_field` from dataset config
+        3. Supervision text (if non-empty)
+
+        The text_field can be a nested path like "custom.metadata.sentence"
+        using dot notation to access nested dicts/attributes.
+
         Args:
             cut: Lhotse Cut object.
 
         Returns:
             Text transcript or None if not available.
         """
+        # Determine text_field to use:
+        # 1. Check per-cut override in tags
+        # 2. Fall back to global dataset config
+        text_field = None
+        if hasattr(cut, "custom") and cut.custom:
+            tags = cut.custom.get("tags", {})
+            if isinstance(tags, dict):
+                text_field = tags.get("text_field")
+
+        if text_field is None:
+            # Get the appropriate dataset config based on is_train
+            ds_config = _get_config_value(self.config, "train_ds" if self.is_train else "validation_ds", None)
+            text_field = _get_config_value(ds_config, "text_field", "text") if ds_config else "text"
+
         text = None
 
-        # Try to get text from supervisions
-        if cut.supervisions:
+        # Try to get text using the text_field path (supports nested access)
+        if text_field and text_field != "text":
+            # Use nested value extraction for custom paths like "custom.metadata.sentence"
+            text = _get_nested_value(cut, text_field)
+            if text is None and hasattr(cut, "custom") and cut.custom:
+                # Also try directly in custom dict for simple field names
+                text = cut.custom.get(text_field)
+
+        # Fall back to supervision text if no custom text_field found text
+        if text is None and cut.supervisions:
             texts = []
             for sup in cut.supervisions:
                 if sup.text:
@@ -221,43 +319,11 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
             if texts:
                 text = " ".join(texts)
 
-        # Try custom field
+        # Final fallback: try default "text" field in custom
         if text is None and hasattr(cut, "custom") and cut.custom:
-            train_ds = self.config.get("train_ds") or {}
-            text_field = train_ds.get("text_field", "text") if hasattr(train_ds, "get") else "text"
-            if text_field in cut.custom:
-                text = cut.custom[text_field]
+            text = cut.custom.get("text")
 
         return text
-
-    def _format_text_with_audio_token(self, text: str, task: str, lang: str) -> str:
-        """Format text with audio token for the processor.
-
-        The processor expects text to contain <|AUDIO|> token(s) indicating where
-        audio embeddings should be inserted. This formats the text appropriately
-        based on the task.
-
-        Args:
-            text: Raw transcript text.
-            task: Task identifier (e.g., "transcribe", "asr", "translate", "st").
-            lang: Language code.
-
-        Returns:
-            Formatted text with audio token.
-        """
-        audio_token = self.processor.audio_token
-
-        # TODO: update this logic by supporting a config-specified template or prefix
-        # E.g., "Transcribe the following audio: {audio_token}{text}" for ASR
-        if task in ("transcribe", "asr"):
-            # For ASR: audio followed by transcription
-            return f"{audio_token}{text}"
-        elif task in ("translate", "st"):
-            # For translation: audio followed by translation
-            return f"{audio_token}{text}"
-        else:
-            # Default: audio followed by text
-            return f"{audio_token}{text}"
 
     def _get_tags(self, cut: Cut) -> tuple[str, str]:
         """Extract task and language tags from a cut.
