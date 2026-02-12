@@ -121,7 +121,7 @@ fi
 # ------------------------------------------------------------------
 if [[ -z "${1:-}" ]]; then
   echo "Usage: $0 <accelerate_config> [train_args...]"
-  echo "Example: sbatch $0 config/accelerate/fsdp.yaml --config-file config/train/LS_asr.yaml"
+  echo "Example: sbatch $0 config/accelerate/fsdp.yaml --config config/train/LS_asr.yaml"
   echo "Example: sbatch $0 config/accelerate/fsdp.yaml --trainer.max-steps 1000"
   exit 2
 fi

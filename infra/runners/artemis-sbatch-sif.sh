@@ -20,4 +20,4 @@ ACCELERATE_CONFIG="config/accelerate/fsdp.yaml"
 # Submit batch job with Artemis-specific SLURM settings
 sbatch --time=01:00:00 --nodes=1 --gres=gpu:2 --qos=gpu-debug --partition a6000 \
   ./bash/run_train_singularity.sbatch $ACCELERATE_CONFIG \
-  --config-file config/train/LS_asr.yaml
+  --config config/train/LS_asr.yaml

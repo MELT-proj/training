@@ -14,6 +14,7 @@ This AGENTS.md file provides guidance for code agents working with this codebase
 - `/tests`: Unit tests for the project
 - `/bash`: Shell scripts for training and data preparation
 - `/infra`: Infrastructure scripts for environment setup and synchronization
+- `./venv`: Virtual environment to be activate for running tests.
 
 ## Coding Conventions
 
@@ -24,9 +25,7 @@ This AGENTS.md file provides guidance for code agents working with this codebase
 - Document public functions and classes with docstrings.
 - Do not use the `typing` module as it is deprecated starting from Python 3.10.
 - I use `uv` for package management, so `pip` calls should take that into account.
-- The virtual environment is not assumed to live in `./venv`.
-  - For local dev, activate whatever venv you created.
-  - For training launch scripts, use `VENV_PATH=/path/to/venv/bin/activate`.
+- The virtual environment is assumed to live in `./venv`.
   - In container runs, the expected venv path is typically `/workspace/venv`.
 
 ## Dependencies

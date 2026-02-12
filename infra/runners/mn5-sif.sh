@@ -15,4 +15,4 @@ export WANDB_MODE=offline
 # Export venv if we are not using a singularity container
 export VENV_PATH=/workspace/venv
 
-./bash/run_train.sh config/accelerate/zero3.yaml --config-file config/train/LS_asr.yaml
+./bash/run_train.sh config/accelerate/zero3.yaml --config config/train/LS_asr.yaml

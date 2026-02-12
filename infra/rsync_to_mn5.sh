@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Simple rsync helper to sync the full melt-data folder to BSC transfer node
+# Generic rsync helper to sync a local folder to BSC transfer node
 # Usage:
 #   export MN5USER=myuser
 #   export MN5PROJ=MYPROJECT
-#   export MELT_DATA_ROOT=/path/to/melt-data  # optional
-#   ./rsync_data.sh
-#   ./rsync_data.sh --dry-run   # show what would be synced without transferring
-
-: "${MELT_DATA_ROOT:=/mnt/home/giuseppe/myscratch/melt-data}"
+#   ./rsync_to_mn5.sh <SRC_FOLDER> [<DEST_FOLDER>]
+#   ./rsync_to_mn5.sh <SRC_FOLDER> <DEST_FOLDER> --dry-run
 
 # Parse args (support --dry-run / -n, --help, and arbitrary rsync args)
 DRY_RUN=false
 RSYNC_EXTRA_ARGS=()
+SRC_FOLDER=""
+DEST_FOLDER=""
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -n|--dry-run)
@@ -21,11 +21,28 @@ while [ "$#" -gt 0 ]; do
       shift
       ;;
     -h|--help)
-      echo "Usage: $0 [--dry-run|-n] [-- <RSYNC ARGS>]"
+      echo "Usage: $0 <SRC_FOLDER> [<DEST_FOLDER>] [--dry-run|-n] [-- <RSYNC ARGS>]"
       echo
-      echo "Sync \\${MELT_DATA_ROOT} to ${MN5USER:-}<MN5USER>@transfer1.bsc.es:/gpfs/projects/${MN5PROJ:-}<MN5PROJ>/"
+      echo "Sync a local folder to ${MN5USER:-<MN5USER>}@transfer1.bsc.es:/gpfs/projects/${MN5PROJ:-<MN5PROJ>}/"
       echo
-      echo "Any additional arguments are passed directly to rsync (e.g., --exclude 'path')."
+      echo "Arguments:"
+      echo "  SRC_FOLDER    Local source folder to sync (required)"
+      echo "  DEST_FOLDER   Destination path on remote (optional, defaults to basename of SRC_FOLDER)"
+      echo
+      echo "Options:"
+      echo "  -n, --dry-run Show what would be synced without transferring"
+      echo "  -h, --help    Show this help message"
+      echo "  --            Treat remaining arguments as rsync options"
+      echo
+      echo "Environment variables:"
+      echo "  MN5USER       Username for BSC transfer node (required)"
+      echo "  MN5PROJ       Project name on BSC (required)"
+      echo
+      echo "Examples:"
+      echo "  $0 /path/to/data"
+      echo "  $0 /path/to/data remote-data-folder"
+      echo "  $0 /path/to/data --dry-run"
+      echo "  $0 /path/to/data -- --exclude '*.tmp'"
       echo
       exit 0
       ;;
@@ -37,9 +54,21 @@ while [ "$#" -gt 0 ]; do
         shift
       done
       ;;
-    *)
+    -*)
       # Unknown options are treated as rsync args (allows passing --exclude, --include, etc.)
       RSYNC_EXTRA_ARGS+=("$1")
+      shift
+      ;;
+    *)
+      # Positional arguments
+      if [ -z "$SRC_FOLDER" ]; then
+        SRC_FOLDER="$1"
+      elif [ -z "$DEST_FOLDER" ]; then
+        DEST_FOLDER="$1"
+      else
+        # Extra positional args treated as rsync args
+        RSYNC_EXTRA_ARGS+=("$1")
+      fi
       shift
       ;;
   esac
@@ -56,12 +85,31 @@ if [ -z "${MN5USER:-}" ] || [ -z "${MN5PROJ:-}" ]; then
   exit 1
 fi
 
-SRC="${MELT_DATA_ROOT}"
-DEST="${MN5USER}@transfer1.bsc.es:/gpfs/projects/${MN5PROJ}/"
+if [ -z "$SRC_FOLDER" ]; then
+  echo "Error: SRC_FOLDER argument is required."
+  echo "Usage: $0 <SRC_FOLDER> [<DEST_FOLDER>] [OPTIONS]"
+  echo "Run '$0 --help' for more information."
+  exit 1
+fi
 
-echo "Syncing ${SRC} -> ${DEST} (excluding tmp/ and models/)"
-# Exclude the 'tmp/' and 'models/' folders inside MELT_DATA_ROOT to avoid copying transient files and large model files.
-# Append any user-provided rsync args after the default options. Use array expansion to preserve quoting.
-rsync -avh --progress ${RSYNC_DRY_RUN_FLAG} -e ssh --exclude 'tmp/' --exclude 'models/' "${RSYNC_EXTRA_ARGS[@]}" "${SRC}" "${DEST}"
+# Default DEST_FOLDER to basename of SRC_FOLDER if not provided
+if [ -z "$DEST_FOLDER" ]; then
+  DEST_FOLDER="$(basename "$SRC_FOLDER")"
+fi
+
+SRC="${SRC_FOLDER}"
+DEST="${MN5USER}@transfer1.bsc.es:/gpfs/projects/${MN5PROJ}/${DEST_FOLDER}"
+
+echo "Syncing ${SRC} -> ${DEST}"
+if [ "$DRY_RUN" = true ]; then
+  echo "(Dry-run mode: no files will be transferred)"
+fi
+
+# Use array expansion to preserve quoting for user-provided rsync args.
+rsync -avh --progress ${RSYNC_DRY_RUN_FLAG} -e ssh "${RSYNC_EXTRA_ARGS[@]}" "${SRC}/" "${DEST}/"
 
 echo "Done."
+
+
+
+

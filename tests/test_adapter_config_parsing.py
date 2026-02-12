@@ -8,7 +8,7 @@ def test_adapter_defaults_in_training_config():
     cfg = get_default_config()
     ad = cfg.model.adapter
 
-    assert ad.type == "mlp"
+    assert ad._type == "mlp"
     assert ad.freeze is False
     assert ad.hidden_size == 1024
     assert ad.num_hidden_layers == 2
@@ -31,7 +31,7 @@ def test_config_merge_parses_adapter_fields():
         {
             "model": {
                 "adapter": {
-                    "type": "qformer",
+                    "_type": "qformer",
                     "freeze": True,
                     "hidden_size": 512,
                     "num_hidden_layers": 4,
@@ -53,7 +53,7 @@ def test_config_merge_parses_adapter_fields():
     cfg = OmegaConf.merge(base, override)
     ad = cfg.model.adapter
 
-    assert ad.type == "qformer"
+    assert ad._type == "qformer"
     assert ad.freeze is True
     assert ad.hidden_size == 512
     assert ad.num_hidden_layers == 4
