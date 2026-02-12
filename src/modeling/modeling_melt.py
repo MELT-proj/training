@@ -7,7 +7,7 @@ import torch
 import torch.nn.functional as F
 import transformers.modeling_utils
 from torch import nn
-from transformers import AutoModel, AutoModelForCausalLM
+from transformers import AutoModel, AutoModelForCausalLM, AutoModelForSequenceClassification
 from transformers.cache_utils import Cache, DynamicCache
 from transformers.generation.utils import GenerationMixin
 from transformers.modeling_outputs import (
@@ -1191,9 +1191,349 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
         return super().generate(*args, **kwargs)
 
 
+class MELTForSequenceClassification(MELTPreTrainedModel):
+    r"""
+    MELT model for sequence classification, consisting of an audio encoder, audio adapter, and text decoder.
+
+    The model takes audio features as input, processes them through an encoder, projects them to the
+    text decoder's embedding space via an adapter, and predicts sequence labels.
+    """
+
+    # Same loading behavior as MELTForCausalLM for shared stacks.
+    _keys_to_ignore_on_load_missing = ["audio_stack.encoder.*", "text_decoder.*"]
+
+    def __init__(self, config: MELTConfig):
+        super().__init__(config)
+
+        # Initialize the text decoder (sequence classification model)
+        self.text_decoder = self._create_text_stack(config)
+
+        # Propagate tied weights keys if present
+        if self.text_decoder._tied_weights_keys is not None:
+            self._tied_weights_keys = [
+                f"text_decoder.{k}" for k in self.text_decoder._tied_weights_keys
+            ]
+
+        # Initialize the audio stack (encoder model + adapter)
+        self.audio_stack = self._create_audio_stack(config)
+
+        # Sync attention implementation between config and models
+        self.config.audio_encoder_config._attn_implementation = (
+            self.audio_stack.encoder.model.config._attn_implementation
+        )
+        self.config.text_decoder_config._attn_implementation = (
+            self.text_decoder.config._attn_implementation
+        )
+        self.audio_stack.encoder.model.config = self.config.audio_encoder_config
+        self.text_decoder.config = self.config.text_decoder_config
+
+        # Initialize weights and apply final processing
+        self.post_init()
+
+    @staticmethod
+    def _create_text_stack(config: MELTConfig):
+        """Instantiate the text decoder (sequence classification model)."""
+        if (
+            transformers.modeling_utils._init_weights
+            and config.text_decoder is not None
+        ):
+            return AutoModelForSequenceClassification.from_pretrained(
+                config.text_decoder, config=config.text_decoder_config
+            )
+        return AutoModelForSequenceClassification.from_config(config.text_decoder_config)
+
+    @staticmethod
+    def _create_audio_stack(config: MELTConfig) -> MELTAudioStack:
+        """Instantiate the audio stack (encoder + adapter)."""
+        load_pretrained = bool(
+            transformers.modeling_utils._init_weights
+            and config.audio_encoder is not None
+        )
+        return MELTAudioStack(config, load_pretrained=load_pretrained)
+
+    def _init_weights(self, module: nn.Module):
+        """Initialise weights, skipping pre-trained sub-models."""
+        if hasattr(self, "text_decoder") and module in self.text_decoder.modules():
+            return
+        if (
+            hasattr(self, "audio_stack")
+            and hasattr(self.audio_stack, "encoder")
+            and hasattr(self.audio_stack.encoder, "model")
+            and module in self.audio_stack.encoder.model.modules()
+        ):
+            return
+
+        super()._init_weights(module)
+
+    def get_input_embeddings(self):
+        return self.text_decoder.get_input_embeddings()
+
+    def get_output_embeddings(self):
+        return self.text_decoder.get_output_embeddings()
+
+    def set_input_embeddings(self, value):
+        self.text_decoder.set_input_embeddings(value)
+
+    def set_output_embeddings(self, new_embeddings):
+        return self.text_decoder.set_output_embeddings(new_embeddings)
+
+    def _inject_tensor(
+        self,
+        source_tensor: torch.Tensor,
+        target_tensor: torch.Tensor,
+        inject_token_id: int,
+        input_ids: torch.Tensor,
+        source_lengths: torch.Tensor,
+        source_tensor_mask: torch.Tensor | None = None,
+        pad_item: torch.Tensor | float = 0.0,
+    ) -> torch.Tensor:
+        """Inject source_tensor embeddings or masks into target_tensor."""
+        ndim = target_tensor.ndim
+        batch_size = target_tensor.shape[0]
+
+        if ndim == 3:
+            hidden_size = target_tensor.shape[-1]
+            eos_token_id = self.text_decoder.config.eos_token_id
+            pad_item = self.text_decoder.get_input_embeddings()(
+                torch.tensor(
+                    [eos_token_id], device=target_tensor.device, dtype=torch.long
+                )
+            ).squeeze(0)
+        else:
+            pad_item = torch.tensor(
+                pad_item, device=target_tensor.device, dtype=target_tensor.dtype
+            )
+
+        merged_sequences = []
+
+        for batch_idx in range(batch_size):
+            input_id_seq = input_ids[batch_idx]
+            item_lengths = source_lengths[batch_idx]
+            valid_audio_lens = item_lengths[item_lengths > 0].tolist()
+
+            if ndim == 3 and source_tensor_mask is not None:
+                item_source_mask = source_tensor_mask[batch_idx]
+                valid_source_tensor = source_tensor[batch_idx][item_source_mask]
+            else:
+                valid_source_tensor = source_tensor[batch_idx]
+
+            inject_positions = torch.where(input_id_seq == inject_token_id)[0]
+
+            if len(inject_positions) == 0 or len(valid_audio_lens) == 0:
+                merged_sequences.append(target_tensor[batch_idx])
+                continue
+
+            slices = []
+            prev_pos = 0
+            source_pos = 0
+
+            for audio_idx, pos in enumerate(inject_positions):
+                if audio_idx >= len(valid_audio_lens):
+                    break
+
+                pos = pos.item()
+                audio_len = int(valid_audio_lens[audio_idx])
+
+                if pos > prev_pos:
+                    slices.append(target_tensor[batch_idx, prev_pos:pos])
+
+                audio_slice = valid_source_tensor[source_pos : source_pos + audio_len]
+                slices.append(audio_slice)
+
+                prev_pos = pos + 1
+                source_pos += audio_len
+
+            if prev_pos < target_tensor.shape[1]:
+                slices.append(target_tensor[batch_idx, prev_pos:])
+
+            if slices:
+                merged_seq = torch.cat(slices, dim=0)
+            else:
+                merged_seq = target_tensor[batch_idx]
+
+            merged_sequences.append(merged_seq)
+
+        max_seq_len = max(seq.shape[0] for seq in merged_sequences)
+
+        padded_sequences = []
+        for seq in merged_sequences:
+            seq_len = seq.shape[0]
+            if seq_len < max_seq_len:
+                pad_len = max_seq_len - seq_len
+                if ndim == 3:
+                    padding = pad_item.unsqueeze(0).expand(pad_len, hidden_size)
+                else:
+                    padding = pad_item.expand(pad_len)
+                padded_seq = torch.cat([padding, seq], dim=0)
+            else:
+                padded_seq = seq
+            padded_sequences.append(padded_seq)
+
+        return torch.stack(padded_sequences, dim=0)
+
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
+        # At the moment fast initialization is not supported for composite models
+        if kwargs.get("_fast_init", False):
+            logger.warning(
+                "Fast initialization is currently not supported for MELTForSequenceClassification. "
+                "Falling back to slow initialization..."
+            )
+        kwargs["_fast_init"] = False
+
+        return super().from_pretrained(
+            pretrained_model_name_or_path, *model_args, **kwargs
+        )
+
+    def _get_text_embeddings(self, input_ids):
+        embedding = self.text_decoder.get_input_embeddings()
+        return embedding(input_ids)
+
+    def _get_audio_embeddings(
+        self,
+        input_features,
+        features_attention_mask,
+        output_attentions,
+        output_hidden_states,
+        return_dict,
+        **kwargs_encoder,
+    ):
+        encoder_hidden_states = self.audio_stack(
+            input_features,
+            features_attention_mask=features_attention_mask,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+            **kwargs_encoder,
+        )
+
+        if features_attention_mask is not None:
+            output_shape, encoder_outputs_mask = (
+                self.audio_stack.adapter._get_output_features_shape(
+                    input_features, features_attention_mask
+                )
+            )
+        else:
+            output_shape = encoder_hidden_states.shape
+            encoder_outputs_mask = torch.ones(
+                encoder_hidden_states.shape[:2],
+                dtype=torch.long,
+                device=encoder_hidden_states.device,
+            )
+
+        audio_lengths = encoder_outputs_mask.sum(dim=1).unsqueeze(-1)
+
+        return encoder_hidden_states, features_attention_mask, audio_lengths
+
+    def _merge_embeddings(
+        self,
+        decoder_input_embs,
+        encoder_hidden_states,
+        encoder_outputs_mask,
+        audio_lengths,
+        input_ids,
+        attention_mask,
+        labels,
+    ):
+        """Replace placeholder audio tokens with actual audio embeddings."""
+        decoder_input_embs = self._inject_tensor(
+            source_tensor=encoder_hidden_states,
+            target_tensor=decoder_input_embs,
+            inject_token_id=self.config.audio_token_id,
+            input_ids=input_ids,
+            source_lengths=audio_lengths,
+            source_tensor_mask=encoder_outputs_mask,
+        )
+        if attention_mask is not None and encoder_outputs_mask is not None:
+            attention_mask = self._inject_tensor(
+                source_tensor=encoder_outputs_mask,
+                target_tensor=attention_mask,
+                inject_token_id=self.config.audio_token_id,
+                input_ids=input_ids,
+                source_lengths=audio_lengths,
+            )
+        if labels is not None:
+            labels = self._inject_tensor(
+                source_tensor=torch.full(
+                    encoder_outputs_mask.shape,
+                    -100,
+                    device=labels.device,
+                    dtype=labels.dtype,
+                ),
+                target_tensor=labels,
+                inject_token_id=self.config.audio_token_id,
+                input_ids=input_ids,
+                source_lengths=audio_lengths,
+                pad_item=-100,
+            )
+        return decoder_input_embs, attention_mask, labels
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        input_features: torch.FloatTensor | None = None,
+        features_attention_mask: torch.FloatTensor | None = None,
+        labels: torch.LongTensor | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
+        return_dict: bool | None = None,
+        **kwargs,
+    ):
+        if input_ids is None:
+            raise ValueError("input_ids must be provided")
+        if input_ids.dtype != torch.long:
+            raise TypeError(f"input_ids must be torch.long, got {input_ids.dtype}")
+
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
+
+        kwargs_encoder = {
+            argument: value
+            for argument, value in kwargs.items()
+            if argument.startswith("encoder_")
+        }
+
+        decoder_input_embs = self._get_text_embeddings(input_ids)
+
+        if input_features is not None:
+            encoder_hidden_states, encoder_outputs_mask, audio_lengths = (
+                self._get_audio_embeddings(
+                    input_features=input_features,
+                    features_attention_mask=features_attention_mask,
+                    output_attentions=True,
+                    output_hidden_states=True,
+                    return_dict=return_dict,
+                    **kwargs_encoder,
+                )
+            )
+
+            decoder_input_embs, attention_mask, labels = self._merge_embeddings(
+                decoder_input_embs=decoder_input_embs,
+                encoder_hidden_states=encoder_hidden_states,
+                encoder_outputs_mask=encoder_outputs_mask,
+                audio_lengths=audio_lengths,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels,
+            )
+
+        # Delegate both logits and loss computation to the underlying sequence classifier.
+        return self.text_decoder(
+            inputs_embeds=decoder_input_embs,
+            attention_mask=attention_mask,
+            labels=labels,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+
+
 __all__ = [
     "MELTPreTrainedModel",
     "MELTForCausalLM",
+    "MELTForSequenceClassification",
     "MELTAudioEncoder",
     "MELTAudioStack",
     "MELTAudioAdapter",

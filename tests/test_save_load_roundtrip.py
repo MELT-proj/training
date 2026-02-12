@@ -10,14 +10,14 @@ import tempfile
 import pytest
 import torch
 
-from src.modeling import MELTConfig, MELTForCausalLM
+from src.modeling import MELTConfig, MELTForCausalLM, MELTForSequenceClassification
 
 
 # ---------------------------------------------------------------------------
 # Small model identifiers for fast CI.
 # ---------------------------------------------------------------------------
 AUDIO_ENCODER = "facebook/wav2vec2-base"
-TEXT_DECODER = "gpt2"
+TEXT_DECODER = "Qwen/Qwen3-0.6B"
 SAVE_DIR = None  # populated per-test via tmp_path
 
 
@@ -139,3 +139,49 @@ class TestSaveLoadRoundtrip:
         for key, orig_val in original_enc.items():
             loaded_val = loaded_model.audio_stack.encoder.state_dict()[key]
             assert torch.equal(orig_val, loaded_val), f"Audio encoder param '{key}' differs after round-trip"
+
+    def test_load_sequence_classification_from_causal_checkpoint(self, save_dir):
+        """Load MELTForSequenceClassification from MELTForCausalLM checkpoint.
+
+        Shared language-model backbone/audio/adapter weights must be restored from
+        checkpoint, while sequence-classification head remains randomly initialized.
+        """
+        config = _make_tiny_config()
+        causal_model = MELTForCausalLM(config)
+        causal_model.save_pretrained(save_dir)
+
+        seq_model, loading_info = MELTForSequenceClassification.from_pretrained(
+            save_dir,
+            output_loading_info=True,
+        )
+
+        causal_state = causal_model.state_dict()
+        seq_state = seq_model.state_dict()
+
+        # All shared keys (common between classes) should load exactly.
+        shared_keys = set(causal_state.keys()).intersection(seq_state.keys())
+        for key in shared_keys:
+            assert torch.equal(causal_state[key], seq_state[key]), (
+                f"Shared param '{key}' was not restored from causal checkpoint"
+            )
+
+        # Sequence classification introduces text-decoder-only head params.
+        seq_only_text_keys = {
+            key for key in (set(seq_state.keys()) - set(causal_state.keys())) if key.startswith("text_decoder.")
+        }
+        assert len(seq_only_text_keys) > 0, "Expected sequence-classification-specific text-decoder head parameters"
+
+        # Missing keys should correspond to sequence-classification-specific head params.
+        missing_keys = set(loading_info["missing_keys"])
+        for key in missing_keys:
+            assert key in seq_only_text_keys or key.startswith("text_decoder."), (
+                f"Unexpected missing key while loading from causal checkpoint: {key}"
+            )
+
+        # A second load should random-initialize the classification head differently,
+        # while still loading shared parameters from checkpoint.
+        seq_model_2 = MELTForSequenceClassification.from_pretrained(save_dir)
+        seq_state_2 = seq_model_2.state_dict()
+        assert any(not torch.equal(seq_state[key], seq_state_2[key]) for key in seq_only_text_keys), (
+            "Sequence-classification head appears to be loaded from checkpoint instead of random init"
+        )
