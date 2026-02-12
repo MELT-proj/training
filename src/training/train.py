@@ -78,7 +78,7 @@ def prepare_model(
         audio_encoder=encoder_cfg.name,
         text_decoder=decoder_cfg.name,
         adapter_config=adapter_cfg,
-        decoder_kwargs={"attn_implementation": "flash_attention_2"},
+        decoder_kwargs={"attn_implementation": decoder_cfg.get("attn_implementation", "sdpa")},
         max_audio_seq_len=max_audio_seq_len,
     )
 
@@ -138,7 +138,7 @@ def prepare_model(
         logger.info("Freezing the decoder")
         _freeze(model.text_decoder)
 
-    return model, last_checkpoint
+    return model, last_checkpoint, config
 
 
 def main(cfg: DictConfig) -> None:
@@ -208,7 +208,7 @@ def main(cfg: DictConfig) -> None:
     ##########################
     ## MODEL PREPARATION
     ##########################
-    model, last_checkpoint = prepare_model(cfg, targs, processor)
+    model, last_checkpoint, config = prepare_model(cfg, targs, processor)
     logger.info("Model prepared!")
 
     ##########################
@@ -241,9 +241,10 @@ def main(cfg: DictConfig) -> None:
     #     logger.info("Setting FSDP state dict type to FULL_STATE_DICT for saving...")
     #     trainer.accelerator.state.fsdp_plugin.set_state_dict_type("FULL_STATE_DICT")
 
-    logger.info("Saving model and processor...")
+    logger.info("Saving model, processor, and config...")
     trainer.save_model()
     processor.save_pretrained(targs.output_dir)
+    config.save_pretrained(targs.output_dir)
 
     # Save config for reproducibility
     config_path = str(Path(targs.output_dir) / "training_config.yaml")
