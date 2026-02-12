@@ -279,7 +279,6 @@ srun "${SRUN_ARGS[@]}" \
         set -euo pipefail
         echo \"[container] SLURM_PROCID=\${SLURM_PROCID:-unset} SLURM_NODEID=\${SLURM_NODEID:-unset}\"
         echo \"[container] pwd: \$(pwd)\"
-        echo \"[container] listing /workspace/training:\"; ls -la /workspace/training || true
         exec /workspace/training/bash/run_train.sh '"${ACCELERATE_CONFIG_HOST}"' '"${TRAIN_ARGS}"'
       "
   '

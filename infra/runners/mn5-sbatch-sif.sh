@@ -12,14 +12,24 @@ export SINGULARITY_BIN="singularity"
 export SINGULARITY_IMG=/gpfs/projects/epor48/melt-data/melt_cuda126.sif
 export TMPDIR_HOST=/gpfs/projects/epor48/melt-data/tmp
 export WANDB_MODE=offline
+export MASTER_PORT=60001
 
 # ACCELERATE_CONFIG="config/accelerate/fsdp.yaml"
+ACCELERATE_CONFIG="config/accelerate/fsdp2.yaml"
 # ACCELERATE_CONFIG="config/accelerate/zero1.yaml"
-ACCELERATE_CONFIG="config/accelerate/zero3.yaml"
+# ACCELERATE_CONFIG="config/accelerate/zero3.yaml"
 
 
 # Submit batch job with Artemis-specific SLURM settings
-sbatch --time=00:30:00 --nodes=1 --gres=gpu:2 \
-    -A epor48 --qos=acc_debug -c 40 \
+sbatch --time=10:00:00 \
+    --nodes=1 --gpus-per-node=4 \
+    -A epor48 --qos=acc_ehpc -c 80 \
     ./bash/run_train_singularity.sbatch $ACCELERATE_CONFIG \
-    --config-file config/train/asr.yaml
+    --config config/train/iwslt-replica.yaml \
+    --trainer.gradient-accumulation-steps 1 \
+    --trainer.eval_steps 6000 \
+    --trainer.save_steps 6000 \
+    --trainer.logging_steps 5 \
+    --trainer.warmup_steps 50 \
+    --optimization.adapter_lr 0.0002 \
+    --trainer.num_train_epochs 2
