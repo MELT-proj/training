@@ -7,6 +7,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+import transformers.modeling_utils
 from transformers import AutoModel, AutoModelForCausalLM
 from transformers.cache_utils import Cache, DynamicCache
 from transformers.generation.utils import GenerationMixin
@@ -410,15 +411,20 @@ class MELTAudioEncoder(nn.Module):
         config: MELTConfig containing audio_encoder_config and chunking settings
     """
 
-    def __init__(self, config: MELTConfig):
+    def __init__(self, config: MELTConfig, load_pretrained: bool = True):
         super().__init__()
         self.config = config
 
         # Maximum sequence length for chunking (default 500 like Phi4)
         self.max_seq_len = getattr(config.audio_encoder_config, "max_audio_seq_len", 500)
 
-        # Initialize the audio encoder
-        self.model = AutoModel.from_pretrained(config.audio_encoder, config=config.audio_encoder_config)
+        # Initialize the audio encoder – when loading from a checkpoint the
+        # pretrained weights are unnecessary (the checkpoint will overwrite
+        # everything), so we use ``from_config`` which is much faster.
+        if load_pretrained:
+            self.model = AutoModel.from_pretrained(config.audio_encoder, config=config.audio_encoder_config)
+        else:
+            self.model = AutoModel.from_config(config.audio_encoder_config)
 
         # Validate that the encoder doesn't have an LM head
         if self.model.get_output_embeddings() is not None:
@@ -513,10 +519,10 @@ class MELTAudioStack(nn.Module):
     include the adapter), but keeps the responsibilities separated.
     """
 
-    def __init__(self, config: MELTConfig):
+    def __init__(self, config: MELTConfig, load_pretrained: bool = True):
         super().__init__()
         self.config = config
-        self.encoder = MELTAudioEncoder(config)
+        self.encoder = MELTAudioEncoder(config, load_pretrained=load_pretrained)
         self.adapter = MELTAudioAdapter(config)
 
     def forward(
@@ -630,7 +636,7 @@ class MELTPreTrainedModel(PreTrainedModel):
                 module.weight.data[module.padding_idx].zero_()
 
 
-class MELTForCausalLM(MELTPreTrainedModel):
+class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
     r"""
     MELT model for conditional generation, consisting of an audio encoder, audio adapter, and text decoder.
 
@@ -638,20 +644,24 @@ class MELTForCausalLM(MELTPreTrainedModel):
     text decoder's embedding space via an adapter, and generates text autoregressively.
     """
 
+    # When loading from a local checkpoint the audio encoder and text decoder
+    # weights are supplied by the checkpoint itself.  We mark their keys as
+    # *ignorable-on-missing* so that ``from_pretrained`` does not complain if
+    # only the adapter weights were saved (partial checkpoint).
+    _keys_to_ignore_on_load_missing = ["audio_stack.encoder.*", "text_decoder.*"]
+
     def __init__(self, config: MELTConfig):
         super().__init__(config)
 
         # Initialize the text decoder (language model)
-        self.text_decoder = AutoModelForCausalLM.from_pretrained(
-            config.text_decoder, config=config.text_decoder_config
-        )
+        self.text_decoder = self._create_text_stack(config)
 
         # Propagate tied weights keys if present
         if self.text_decoder._tied_weights_keys is not None:
             self._tied_weights_keys = [f"text_decoder.{k}" for k in self.text_decoder._tied_weights_keys]
 
         # Initialize the audio stack (encoder model + adapter)
-        self.audio_stack = MELTAudioStack(config)
+        self.audio_stack = self._create_audio_stack(config)
 
         # Sync attention implementation between config and models
         self.config.audio_encoder_config._attn_implementation = (
@@ -663,6 +673,65 @@ class MELTForCausalLM(MELTPreTrainedModel):
 
         # Initialize weights and apply final processing
         self.post_init()
+
+    # -----------------------------------------------------------------
+    # Sub-model factory methods
+    # -----------------------------------------------------------------
+
+    @staticmethod
+    def _create_text_stack(config: MELTConfig):
+        """Instantiate the text decoder (language model).
+
+        When ``transformers.modeling_utils._init_weights`` is ``True`` (i.e. we
+        are creating a *fresh* model), the decoder is loaded via
+        ``from_pretrained`` so that it ships with pretrained weights.
+
+        When the flag is ``False`` (i.e. ``MELTForCausalLM.from_pretrained`` is
+        loading a local checkpoint), we use ``from_config`` instead – the
+        checkpoint's own state-dict will overwrite all weights, so downloading
+        the original pretrained weights would be wasteful.
+        """
+        if transformers.modeling_utils._init_weights and config.text_decoder is not None:
+            return AutoModelForCausalLM.from_pretrained(config.text_decoder, config=config.text_decoder_config)
+        return AutoModelForCausalLM.from_config(config.text_decoder_config)
+
+    @staticmethod
+    def _create_audio_stack(config: MELTConfig) -> MELTAudioStack:
+        """Instantiate the audio stack (encoder + adapter).
+
+        Mirrors :meth:`_create_text_stack` – the audio encoder inside the stack
+        is loaded via ``from_pretrained`` only when we are creating a fresh
+        model; otherwise ``from_config`` is used.
+        """
+        load_pretrained = bool(transformers.modeling_utils._init_weights and config.audio_encoder is not None)
+        return MELTAudioStack(config, load_pretrained=load_pretrained)
+
+    # -----------------------------------------------------------------
+    # Weight initialisation (overrides MELTPreTrainedModel._init_weights)
+    # -----------------------------------------------------------------
+
+    def _init_weights(self, module: nn.Module):
+        """Initialise weights, skipping pre-trained sub-models.
+
+        The text decoder and audio encoder carry their own pretrained weights
+        (loaded via ``from_pretrained`` or supplied by the checkpoint).  We
+        must **not** re-initialise them with the generic random-init rules
+        defined in the base class; only MELT-specific adapter modules should
+        be touched.
+        """
+        # Skip modules that belong to pretrained sub-models.
+        if hasattr(self, "text_decoder") and module in self.text_decoder.modules():
+            return
+        if (
+            hasattr(self, "audio_stack")
+            and hasattr(self.audio_stack, "encoder")
+            and hasattr(self.audio_stack.encoder, "model")
+            and module in self.audio_stack.encoder.model.modules()
+        ):
+            return
+
+        # Delegate adapter / generic initialisation to the base class.
+        super()._init_weights(module)
 
     def get_input_embeddings(self):
         return self.text_decoder.get_input_embeddings()

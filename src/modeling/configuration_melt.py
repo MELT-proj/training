@@ -2,6 +2,7 @@ from transformers import AutoConfig
 from transformers.configuration_utils import PretrainedConfig
 from transformers.utils import logging
 
+
 # Required special token names (no hard-coded defaults).
 # These are the token *names* the model config is expected to provide under
 # `model.config.decoder.<name>` or that must already exist in the tokenizer.
@@ -42,10 +43,14 @@ class MELTAdapterConfig(PretrainedConfig):
     """
 
     model_type = "melt_adapter"
+    has_no_defaults_at_init = True
+
+    # No sub-configs → the recursive _attn_implementation setter is a no-op.
+    sub_configs: dict = {}
 
     def __init__(
         self,
-        _type,
+        _type=None,
         hidden_size=1024,
         num_hidden_layers=2,
         intermediate_size=4096,
@@ -86,22 +91,34 @@ class MELTConfig(PretrainedConfig):
     Configuration class for MELT (Multimodal Encoder Language Transformer).
 
     Args:
+        audio_encoder (`str`, *optional*):
+            HuggingFace model identifier for the audio encoder (e.g.
+            ``"facebook/wav2vec2-base"``).  Used to download the encoder config
+            the *first* time a model is created.  Ignored when a pre-serialised
+            ``audio_encoder_config`` is supplied (e.g. when loading from a
+            checkpoint).
+        text_decoder (`str`, *optional*):
+            HuggingFace model identifier for the text decoder (e.g.
+            ``"gpt2"``).  Same caching semantics as *audio_encoder*.
         audio_encoder_config (`Union[AutoConfig, dict]`, *optional*):
             The config object or dictionary of the audio encoder backbone.
+            When provided, ``audio_encoder`` is **not** contacted via
+            ``AutoConfig.from_pretrained``.
         text_decoder_config (`Union[AutoConfig, dict]`, *optional*):
             The config object or dictionary of the text decoder backbone.
-        adapter_config (`MELTAdapterConfig`, *optional*):
+        adapter_config (`Union[MELTAdapterConfig, dict]`, *optional*):
             The config object or dictionary of the audio adapter.
         initializer_range (`float`, *optional*, defaults to 0.02):
-            The standard deviation of the truncated_normal_initializer for initializing all weight matrices.
-        adapter_type (`str`, *optional*, defaults to `"mlp"`):
-            Type of adapter to use for modality projection. One of: "mlp", "qformer", or "conformer".
+            The standard deviation of the truncated_normal_initializer for
+            initializing all weight matrices.
     """
 
     model_type = "melt"
-    # Transformers' `PretrainedConfig.to_diff_dict()` will attempt to instantiate
-    # `self.__class__()` to compute defaults unless we opt out. Since MELTConfig
-    # requires nested sub-configs at init, we must disable that behavior.
+    # Transformers' ``PretrainedConfig.to_diff_dict()`` and
+    # ``_get_non_default_generation_parameters()`` may attempt to instantiate
+    # ``self.__class__()``.  Since MELTConfig has nested sub-configs that
+    # cannot be created without model identifiers, we must allow a no-arg
+    # construction.
     has_no_defaults_at_init = True
     sub_configs = {
         "audio_encoder_config": AutoConfig,
@@ -110,29 +127,71 @@ class MELTConfig(PretrainedConfig):
     }  # type: ignore
     is_composition = True
 
+    # ------------------------------------------------------------------
+    # Override the _attn_implementation property so that the parent class
+    # does NOT try to propagate the value recursively into sub-configs.
+    # Each sub-config should keep the attn_implementation it was created
+    # with (from its pretrained config or config file).  The composite
+    # model sets it explicitly after construction in modeling_melt.py.
+    # ------------------------------------------------------------------
+    @property
+    def _attn_implementation(self):  # type: ignore[override]
+        return getattr(self, "_attn_implementation_internal", None)
+
+    @_attn_implementation.setter
+    def _attn_implementation(self, value):
+        if isinstance(value, dict):
+            value = value.get("", getattr(self, "_attn_implementation_internal", None))
+        self._attn_implementation_internal = value
+
     def __init__(
         self,
-        audio_encoder: str,
-        text_decoder: str,
-        adapter_config: dict,
+        audio_encoder: str | None = None,
+        text_decoder: str | None = None,
+        adapter_config: dict | MELTAdapterConfig | None = None,
+        audio_encoder_config: PretrainedConfig | dict | None = None,
+        text_decoder_config: PretrainedConfig | dict | None = None,
         initializer_range: float = 0.02,
         encoder_kwargs: dict = {},
         decoder_kwargs: dict = {},
         **kwargs,
     ):
-        audio_config = AutoConfig.from_pretrained(audio_encoder, **encoder_kwargs)
-        text_config = AutoConfig.from_pretrained(text_decoder, **decoder_kwargs)
+        # Build sub-configs from model identifiers *only* when they are not
+        # already supplied.  This avoids redundant HuggingFace downloads when
+        # loading from a local checkpoint (whose ``config.json`` already
+        # contains serialised sub-configs).
+        if audio_encoder_config is None and audio_encoder is not None:
+            audio_encoder_config = AutoConfig.from_pretrained(audio_encoder, **encoder_kwargs)
+        elif isinstance(audio_encoder_config, dict):
+            # Reconstruct a proper config object from a serialised dict
+            # (happens during ``from_dict`` / ``from_pretrained``).
+            audio_encoder_config = AutoConfig.for_model(**audio_encoder_config)
+
+        if text_decoder_config is None and text_decoder is not None:
+            text_decoder_config = AutoConfig.from_pretrained(text_decoder, **decoder_kwargs)
+        elif isinstance(text_decoder_config, dict):
+            text_decoder_config = AutoConfig.for_model(**text_decoder_config)
 
         self.audio_encoder = audio_encoder
         self.text_decoder = text_decoder
-        self.audio_encoder_config = audio_config
-        self.text_decoder_config = text_config
-        self.adapter_config = MELTAdapterConfig(**adapter_config)
+        self.audio_encoder_config = audio_encoder_config
+        self.text_decoder_config = text_decoder_config
+
+        if adapter_config is not None and not isinstance(adapter_config, MELTAdapterConfig):
+            adapter_config = MELTAdapterConfig(**adapter_config)
+        self.adapter_config = adapter_config
+
         self.initializer_range = initializer_range
 
         # Set decoder-related attributes
         self.loss_type = "ForCausalLMLoss"
         super().__init__(**kwargs)
+
+    def get_text_config(self, decoder: bool = False):
+        """Return the text decoder sub-config for generation-related helpers."""
+        if self.text_decoder_config is not None:
+            return self.text_decoder_config
+        return super().get_text_config(decoder=decoder)
 
     @property
     def vocab_size(self):
