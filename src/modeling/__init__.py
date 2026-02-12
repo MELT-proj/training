@@ -1,9 +1,10 @@
-from .configuration_melt import MELTConfig, MELTAdapterConfig, MELT_REQUIRED_SPECIAL_TOKENS
+from .configuration_melt import MELT_REQUIRED_SPECIAL_TOKENS, MELTAdapterConfig, MELTConfig
 from .modeling_melt import (
     MELTAudioAdapter,
     MELTAudioStack,
     MELTConformerAdapter,
     MELTForCausalLM,
+    MELTForSequenceClassification,
     MELTMLPAdapter,
     MELTPreTrainedModel,
     MELTQFormerAdapter,
@@ -16,6 +17,7 @@ __all__ = [
     "MELTAdapterConfig",
     "MELTPreTrainedModel",
     "MELTForCausalLM",
+    "MELTForSequenceClassification",
     "MELTAudioAdapter",
     "MELTAudioStack",
     "MELTMLPAdapter",

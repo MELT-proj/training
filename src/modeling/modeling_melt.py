@@ -5,8 +5,9 @@ from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
-import transformers.modeling_utils
 from torch import nn
+
+import transformers.modeling_utils
 from transformers import AutoModel, AutoModelForCausalLM, AutoModelForSequenceClassification
 from transformers.cache_utils import Cache, DynamicCache
 from transformers.generation.utils import GenerationMixin
@@ -23,6 +24,7 @@ from transformers.utils import TransformersKwargs
 
 from ..logging_utils import get_logger
 from .configuration_melt import MELTConfig
+
 
 logger = get_logger(__name__)
 
@@ -1060,6 +1062,7 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
     def forward(
         self,
         input_ids: torch.LongTensor | None = None,
+        inputs_embeds: torch.FloatTensor | None = None,
         attention_mask: torch.Tensor | None = None,
         input_features: torch.FloatTensor | None = None,
         features_attention_mask: torch.FloatTensor | None = None,
@@ -1099,7 +1102,7 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
 
         # 1. Extract text embeddings
         decoder_input_embs = self._get_text_embeddings(
-            input_ids
+            input_ids=input_ids,
         )  # (batch_size, seq_len, hidden_size)
 
         # 2. If the user provided audio features, extract audio embeddings
