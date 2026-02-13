@@ -14,22 +14,23 @@ export TMPDIR_HOST=/gpfs/projects/epor48/melt-data/tmp
 export WANDB_MODE=offline
 export MASTER_PORT=60001
 
-# ACCELERATE_CONFIG="config/accelerate/fsdp.yaml"
 ACCELERATE_CONFIG="config/accelerate/fsdp2.yaml"
-# ACCELERATE_CONFIG="config/accelerate/zero1.yaml"
-# ACCELERATE_CONFIG="config/accelerate/zero3.yaml"
-
+EXP_NAME=MA-iwslt25-q3-1.7B-1node
+TRAIN_CONFIG=./config/train/MA-iwslt25.yaml
 
 # Submit batch job with Artemis-specific SLURM settings
-sbatch --time=10:00:00 \
+sbatch --time=09:00:00 \
     --nodes=1 --gpus-per-node=4 \
     -A epor48 --qos=acc_ehpc -c 80 \
     ./bash/run_train_singularity.sbatch $ACCELERATE_CONFIG \
-    --config config/train/iwslt-replica.yaml \
-    --trainer.gradient-accumulation-steps 1 \
+    --config ${TRAIN_CONFIG} \
     --trainer.eval_steps 6000 \
     --trainer.save_steps 6000 \
-    --trainer.logging_steps 5 \
+    --trainer.logging_steps 3 \
     --trainer.warmup_steps 50 \
     --optimization.adapter_lr 0.0002 \
-    --trainer.num_train_epochs 2
+    --trainer.num_train_epochs 2 \
+    --trainer.output_dir ${OUTPUT_DIR}/${EXP_NAME} \
+    --run.exp_name ${EXP_NAME} \
+    --model.decoder.name "Qwen/Qwen3-1.7B" \
+    --model.decoder.attn_implementation "sdpa"
