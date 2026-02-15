@@ -18,6 +18,10 @@ import torch
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 from transformers import Trainer, TrainingArguments
+from transformers.trainer_pt_utils import EvalLoopContainer, find_batch_size, nested_detach
+from transformers.trainer_utils import EvalPrediction, EvalLoopOutput, denumpify_detensorize, has_length, denumpify_detensorize
+from typing import Optional
+import numpy as np
 
 from .. import ddp
 from ..logging_utils import get_logger
@@ -89,26 +93,6 @@ class MELTTrainer(Trainer):
         self.eval_num_cuts = 0
         self.eval_num_batches = 0
 
-        # # Training dataset stats
-        # if hasattr(config.data, "train_ds"):
-        #     grad_accum = getattr(args, "gradient_accumulation_steps", 1)
-        #     self.steps_per_epoch, self.dataset_duration_hours, self.dataset_num_cuts = estimate_steps_per_epoch(
-        #         config=config.data.train_ds,
-        #         gradient_accumulation_steps=grad_accum,
-        #         world_size=self._world_size,
-        #     )
-
-        # Evaluation dataset stats
-        # if hasattr(config.data, "validation_ds") and config.data.validation_ds.input_cfg:
-        #     from .data.audio.lhotse import compute_dataset_duration
-
-        #     _, self.eval_num_cuts = compute_dataset_duration(config.data.validation_ds)
-        #     self.eval_num_batches = estimate_num_batches(
-        #         config.data.validation_ds,
-        #         world_size=self._world_size,
-        #     )
-        #     logger.info(f"Evaluation dataset: {self.eval_num_cuts} cuts, ~{self.eval_num_batches} batches")
-
         # Create eval dataset before super().__init__() so HF Trainer can use it
         # Uses Lhotse's DynamicBucketingSampler for memory-efficient evaluation
         # (supports lazy CutSets from shar/webdataset without materialization)
@@ -127,6 +111,7 @@ class MELTTrainer(Trainer):
                 processor=processor,
                 config=config.data,
                 is_train=False,
+                return_labels=True,  # we need labels for evaluation metrics
             )
             # Wrap with fallback for fault tolerance
             eval_dataset = FallbackDataset(eval_dataset)
@@ -151,6 +136,7 @@ class MELTTrainer(Trainer):
             processor=self.processor,
             config=self.config.data,
             is_train=True,
+            return_labels=True,
         )
 
         # Wrap with fallback for fault tolerance
@@ -213,6 +199,7 @@ class MELTTrainer(Trainer):
                 processor=self.processor,
                 config=self.config.data,
                 is_train=False,
+                return_labels=True,
             )
             dataset = FallbackDataset(dataset)
 
@@ -488,6 +475,236 @@ class MELTTrainer(Trainer):
         self.optimizer = torch.optim.AdamW(
             groups,
             betas=(opt_cfg.adam_beta1, opt_cfg.adam_beta2),
+        )
+
+    def evaluation_loop(
+        self,
+        dataloader: DataLoader,
+        description: str,
+        prediction_loss_only: Optional[bool] = None,
+        ignore_keys: Optional[list[str]] = None,
+        metric_key_prefix: str = "eval",
+    ) -> EvalLoopOutput:
+        """Override evaluation_loop to handle Lhotse dynamic batching.
+
+        Key differences from the base implementation:
+        - Uses observed_batch_size per step instead of a fixed batch_size for loss repeating
+        - Skips gather_function calls that deadlock when the dataloader isn't
+          prepared by accelerator (Lhotse handles distribution internally)
+        """
+        args = self.args
+        prediction_loss_only = (
+            prediction_loss_only if prediction_loss_only is not None else args.prediction_loss_only
+        )
+
+        # Model prep (same as base)
+        if self.is_deepspeed_enabled and self.deepspeed is None:
+            from transformers.integrations.deepspeed import deepspeed_init
+            _, _ = deepspeed_init(self, num_training_steps=0, inference=True)
+
+        model = self._wrap_model(self.model, training=False, dataloader=dataloader)
+
+        if len(self.accelerator._models) == 0 and model is self.model:
+            import time as _time
+            start_time = _time.time()
+            model = (
+                self.accelerator.prepare(model)
+                if self.is_deepspeed_enabled
+                or (self.is_fsdp_enabled and self.accelerator.mixed_precision != "fp8" and not self.args.torch_compile)
+                else self.accelerator.prepare_model(model, evaluation_mode=True)
+            )
+            self.model_preparation_time = round(_time.time() - start_time, 4)
+
+            if self.is_fsdp_enabled:
+                self.model = model
+            if model is not self.model:
+                self.model_wrapped = model
+            if self.is_deepspeed_enabled:
+                self.deepspeed = self.model_wrapped
+
+        if not self.is_in_train:
+            if args.fp16_full_eval:
+                model = model.to(dtype=torch.float16, device=args.device)
+            elif args.bf16_full_eval:
+                model = model.to(dtype=torch.bfloat16, device=args.device)
+
+        logger.info(f"\n***** Running {description} *****")
+        if has_length(dataloader):
+            logger.info(f"  Num examples = {self.num_examples(dataloader)}")
+        else:
+            logger.info("  Num examples: Unknown")
+        logger.info("  Batch size = dynamic (Lhotse)")
+
+        if hasattr(model, "eval") and callable(model.eval):
+            model.eval()
+        if hasattr(self.optimizer, "eval") and callable(self.optimizer.eval):
+            self.optimizer.eval()
+
+        self.callback_handler.eval_dataloader = dataloader
+        eval_dataset = getattr(dataloader, "dataset", None)
+
+        if args.past_index >= 0:
+            self._past = None
+
+        # Initialize containers — no gather, just accumulate locally
+        all_losses: list[float] = []
+        all_preds = EvalLoopContainer(self.args.eval_do_concat_batches, padding_index=-100)
+        all_labels = EvalLoopContainer(self.args.eval_do_concat_batches, padding_index=-100)
+        all_inputs = EvalLoopContainer(self.args.eval_do_concat_batches, padding_index=-100)
+
+        metrics = None
+        observed_num_examples = 0
+
+        for step, inputs in enumerate(dataloader):
+            observed_batch_size = find_batch_size(inputs)
+            if observed_batch_size is not None:
+                observed_num_examples += observed_batch_size
+
+            losses, logits, labels = self.prediction_step(
+                model, inputs, prediction_loss_only, ignore_keys=ignore_keys,
+            )
+            main_input_name = getattr(self.model, "main_input_name", "input_ids")
+            inputs_decode = (
+                self._prepare_input(inputs[main_input_name])
+                if "inputs" in args.include_for_metrics
+                else None
+            )
+
+            # --- Collect losses without gather / repeat ---
+            if losses is not None:
+                # losses is a scalar tensor from prediction_step (.mean() already applied)
+                all_losses.append(losses.item())
+
+            if logits is not None:
+                logits = nested_detach(logits)
+                if self.preprocess_logits_for_metrics is not None:
+                    logits = self.preprocess_logits_for_metrics(logits, labels)
+                if not self.args.batch_eval_metrics or description == "Prediction":
+                    all_preds.add(logits)
+            if labels is not None:
+                labels = nested_detach(labels) if isinstance(labels, torch.Tensor) else labels
+                if not self.args.batch_eval_metrics or description == "Prediction":
+                    all_labels.add(labels)
+            if inputs_decode is not None:
+                if not self.args.batch_eval_metrics or description == "Prediction":
+                    all_inputs.add(inputs_decode)
+
+            self.control = self.callback_handler.on_prediction_step(
+                args, self.state, self.control,
+            )
+
+            if self.args.batch_eval_metrics:
+                if self.compute_metrics is not None and logits is not None and labels is not None:
+                    batch_kwargs: dict = {}
+                    batch_kwargs["losses"] = (
+                        losses if "loss" in args.include_for_metrics else None
+                    )
+                    batch_kwargs["inputs"] = (
+                        inputs if "inputs" in args.include_for_metrics else None
+                    )
+                    # Always accumulate; never compute_result inside the loop.
+                    # Final computation happens after the loop exits.
+                    metrics = self.compute_metrics(
+                        EvalPrediction(predictions=logits, label_ids=labels, **batch_kwargs),
+                        compute_result=False,
+                    )
+                del losses, logits, labels, inputs
+                torch.cuda.empty_cache()
+
+            elif (
+                args.eval_accumulation_steps is not None
+                and (step + 1) % args.eval_accumulation_steps == 0
+            ):
+                all_preds.to_cpu_and_numpy()
+                all_labels.to_cpu_and_numpy()
+                all_inputs.to_cpu_and_numpy()
+                del losses, logits, labels, inputs
+                torch.cuda.empty_cache()
+
+        # Loop is done — trigger final metric computation for batch_eval_metrics
+        if self.args.batch_eval_metrics and self.compute_metrics is not None:
+            # Pass empty tensors so no new data is accumulated, only the result
+            # is computed from what was already buffered inside compute_metrics.
+            empty = torch.zeros(0)
+            metrics = self.compute_metrics(
+                EvalPrediction(predictions=empty, label_ids=empty),
+                compute_result=True,
+            )
+
+        if args.past_index and hasattr(self, "_past"):
+            delattr(self, "_past")
+
+        # Finalise containers
+        all_preds_arr = all_preds.get_arrays()
+        all_labels_arr = all_labels.get_arrays()
+        all_inputs_arr = all_inputs.get_arrays()
+
+        # Number of samples
+        if has_length(eval_dataset):
+            num_samples = len(eval_dataset)
+        else:
+            num_samples = observed_num_examples
+
+        if num_samples == 0 and observed_num_examples > 0:
+            num_samples = observed_num_examples
+
+        # Compute metrics
+        if (
+            self.compute_metrics is not None
+            and all_preds_arr is not None
+            and all_labels_arr is not None
+            and not self.args.batch_eval_metrics
+        ):
+            eval_set_kwargs: dict = {}
+            eval_set_kwargs["losses"] = (
+                np.array(all_losses) if "loss" in args.include_for_metrics else None
+            )
+            eval_set_kwargs["inputs"] = (
+                all_inputs_arr if "inputs" in args.include_for_metrics else None
+            )
+            metrics = self.compute_metrics(
+                EvalPrediction(
+                    predictions=all_preds_arr,
+                    label_ids=all_labels_arr,
+                    **eval_set_kwargs,
+                )
+            )
+        elif metrics is None:
+            metrics = {}
+
+        metrics = denumpify_detensorize(metrics)
+
+        # if all_losses:
+        #     metrics[f"{metric_key_prefix}_loss"] = np.mean(all_losses).item()
+        # At the end of the loop, after computing mean loss:
+        if all_losses:
+            if torch.distributed.is_initialized():
+                loss_tensor = torch.tensor([np.sum(all_losses), len(all_losses)], device=args.device)
+                torch.distributed.all_reduce(loss_tensor, op=torch.distributed.ReduceOp.SUM)
+                global_mean_loss = (loss_tensor[0] / loss_tensor[1]).item()
+                metrics[f"{metric_key_prefix}_loss"] = global_mean_loss
+            else:
+                metrics[f"{metric_key_prefix}_loss"] = np.mean(all_losses).item()
+
+        if hasattr(self, "jit_compilation_time"):
+            metrics[f"{metric_key_prefix}_jit_compilation_time"] = self.jit_compilation_time
+        if hasattr(self, "model_preparation_time"):
+            metrics[f"{metric_key_prefix}_model_preparation_time"] = self.model_preparation_time
+
+        for key in list(metrics.keys()):
+            if not key.startswith(f"{metric_key_prefix}_"):
+                metrics[f"{metric_key_prefix}_{key}"] = metrics.pop(key)
+
+        logger.info(f"***** RANK: {self._global_rank} -- {description} results *****")
+        logger.info(f"  Num samples = {num_samples}")
+        for key, value in metrics.items():
+            logger.info(f"  {key} = {value}")
+
+        return EvalLoopOutput(
+            predictions=all_preds_arr,
+            label_ids=all_labels_arr,
+            metrics=metrics,
+            num_samples=num_samples,
         )
 
 

@@ -101,10 +101,12 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         processor: MELTProcessor,
         config: DictConfig,
         is_train: bool = True,
+        return_labels: bool = True,
     ) -> None:
         self.processor = processor
         self.config = config
         self.is_train = is_train
+        self.return_labels = return_labels
         self.apply_chat_template = bool(_get_config_value(config, "apply_chat_template", False))
         self.sample_rate = int(_get_config_value(config, "sample_rate", 16000))
         self.min_chars = int(_get_config_value(config, "min_chars", 0))
@@ -224,7 +226,7 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
                 return_tensors="pt",
             )
 
-            if self.is_train:
+            if self.return_labels:
                 labels = inputs["input_ids"].clone()
                 mask = (
                     (labels == self.processor.audio_token_id)
