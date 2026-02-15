@@ -243,13 +243,15 @@ def main(cfg: DictConfig) -> None:
 
     logger.info("Saving model, processor, and config...")
     trainer.save_model()
-    processor.save_pretrained(targs.output_dir)
-    config.save_pretrained(targs.output_dir)
 
-    # Save config for reproducibility
-    config_path = str(Path(targs.output_dir) / "training_config.yaml")
-    save_config(cfg, config_path)
-    logger.info(f"Saved training config to {config_path}")
+    if is_global_master:
+        processor.save_pretrained(targs.output_dir)
+        config.save_pretrained(targs.output_dir)
+
+        # Save config for reproducibility
+        config_path = str(Path(targs.output_dir) / "training_config.yaml")
+        save_config(cfg, config_path)
+        logger.info(f"Saved training config to {config_path}")
 
 
 if __name__ == "__main__":

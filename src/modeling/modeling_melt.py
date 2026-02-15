@@ -1014,7 +1014,7 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
         # we will have to compute the new lengths for each audio accordingly.
         audio_lengths = encoder_outputs_mask.sum(dim=1).unsqueeze(-1)
 
-        return encoder_hidden_states, features_attention_mask, audio_lengths
+        return encoder_hidden_states, encoder_outputs_mask, audio_lengths
 
     def _merge_embeddings(
         self,
