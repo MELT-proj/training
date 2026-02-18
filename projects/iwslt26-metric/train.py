@@ -34,15 +34,16 @@ from transformers.trainer_utils import get_last_checkpoint
 from melt import ddp
 from melt.logging_utils import configure_logging, get_logger
 from melt.modeling import MELTConfig, MELTForSequenceClassification, MELTProcessor
-from melt.config import (
+from melt.training.config import (
     config_to_dict,
     expand_env_vars_in_config,
     parse_args_and_load_config,
     save_config,
     trainer_args_dict,
 )
-from melt.trainer import MELTTrainer, count_trainable_parameters
-from melt.metrics import TrainingEvaluator, pull_final_logits
+from melt.training.trainer import count_trainable_parameters
+from melt.training.metrics import TrainingEvaluator, pull_final_logits
+from .trainer import MELTTrainerForRegression
 
 
 logger = get_logger(__name__)
@@ -199,12 +200,8 @@ def main(cfg: DictConfig) -> None:
     ##########################
     ## PROCESSOR SETUP
     ##########################
-    logger.info(f"Loading processor for encoder={cfg.model.encoder.name}, decoder={cfg.model.decoder.name}")
-    processor = MELTProcessor(
-        feature_extractor=AutoFeatureExtractor.from_pretrained(cfg.model.encoder.name),
-        tokenizer=AutoTokenizer.from_pretrained(cfg.model.decoder.name, use_fast=True),
-        config=cfg.model,
-    )
+    logger.info(f"Loading processor from checkpoint: {cfg.model.ckpt}")
+    processor = MELTProcessor.from_pretrained(cfg.model.ckpt)
 
     ##########################
     ## MODEL PREPARATION

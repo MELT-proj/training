@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import librosa
 import pytest
 
-from src.modeling import MELT_REQUIRED_SPECIAL_TOKENS, MELTConfig, MELTProcessor
+from melt.modeling import MELT_REQUIRED_SPECIAL_TOKENS, MELTConfig, MELTProcessor
 from transformers import AutoConfig, AutoFeatureExtractor, AutoTokenizer
 
 

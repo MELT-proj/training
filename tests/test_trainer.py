@@ -9,8 +9,8 @@ import torch
 # Ensure top-level `ddp` import used by src.trainer resolves during tests
 sys.modules["ddp"] = importlib.import_module("src.ddp")
 
-from src.modeling import MELTConfig, MELTForCausalLM
-from src.training.trainer import MELTTrainer
+from melt.modeling import MELTConfig, MELTForCausalLM
+from melt.training.trainer import MELTTrainer
 
 
 def _make_minimal_model():
