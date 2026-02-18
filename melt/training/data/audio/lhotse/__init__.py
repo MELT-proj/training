@@ -47,7 +47,7 @@ from .dataloader import (
     get_train_dataloader_from_config,
     read_cutset_from_config,
 )
-from .dataset import FallbackDataset, SpeechToTextDataset
+from .dataset import FallbackDataset, SpeechTextQEDataset, SpeechToTextDataset
 
 __all__ = [
     # Base classes
