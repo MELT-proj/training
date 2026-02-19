@@ -135,9 +135,24 @@ def prepare_model(
         )
         model.text_decoder.resize_token_embeddings(len(processor.tokenizer), mean_resizing=False, pad_to_multiple_of=8)
 
-    def _freeze(module: torch.nn.Module):
-        for param in module.parameters():
-            param.requires_grad = False
+    def _freeze(module: torch.nn.Module, exclude_names: list[str] | None = None):
+        """Freeze parameters in a module, optionally excluding by name.
+        
+        Args:
+            module: The module to freeze.
+            exclude_names: List of parameter name substrings to exclude from freezing.
+        """
+        if exclude_names is None:
+            exclude_names = []
+        
+        for name, param in module.named_parameters():
+            # log when a is excluded
+            is_excluded = any(exclude in name for exclude in exclude_names)
+            if is_excluded:
+                logger.info(f"Excluding parameter from freezing: {name}")
+
+            if not any(exclude in name for exclude in exclude_names):
+                param.requires_grad = False
 
     if adapter_cfg.freeze:
         logger.info("Freezing the adapter")
@@ -147,7 +162,7 @@ def prepare_model(
         _freeze(model.audio_stack.encoder)
     if decoder_cfg.freeze:
         logger.info("Freezing the decoder")
-        _freeze(model.text_decoder)
+        _freeze(model.text_decoder, exclude_names=["score"])
 
     return model, last_checkpoint, config
 
