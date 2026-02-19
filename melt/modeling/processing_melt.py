@@ -99,7 +99,7 @@ class MELTProcessor(ProcessorMixin):
         self,
         feature_extractor: str | FeatureExtractionMixin,
         tokenizer: str | PreTrainedTokenizerBase,
-        config,
+        config=None,
         # image_processor=None,
         # video_processor=None,
     ):
@@ -111,33 +111,74 @@ class MELTProcessor(ProcessorMixin):
         super().__init__(feature_extractor, tokenizer)  # , image_processor, video_processor)
         self.image_processor = None
 
-        # Validate required tokens (no defaults are added automatically).
-        # The `config` argument (typically the model config) may provide these
-        # under `config.decoder.<name>`. If neither the tokenizer already
-        # contains the token nor the config provides it, we error to avoid
-        # silently introducing defaults.
-        self._validate_required_special_tokens(tokenizer, config)
+        if config is not None:
+            # Full initialisation path (training from scratch / first save).
+            # Validate required tokens (no defaults are added automatically).
+            # The `config` argument (typically the model config) may provide these
+            # under `config.decoder.<name>`. If neither the tokenizer already
+            # contains the token nor the config provides it, we error to avoid
+            # silently introducing defaults.
+            self._validate_required_special_tokens(tokenizer, config)
 
-        self.audio_token = config.decoder.audio_token
-        self.audio_bos_token = config.decoder.audio_bos_token
-        self.audio_eos_token = config.decoder.audio_eos_token
+            self.audio_token = config.decoder.audio_token
+            self.audio_bos_token = config.decoder.audio_bos_token
+            self.audio_eos_token = config.decoder.audio_eos_token
 
+            # if the tokenizer does not have a pad_token, use config.decoder.pad_token
+            if tokenizer.pad_token is None:
+                if not hasattr(config.decoder, "pad_token"):
+                    raise ValueError(
+                        "We need a pad token and this tokenizer doesn't have one. Set config.decoder.pad_token to a string token to add it."
+                    )
+                logger.info(
+                    "Tokenizer does not have a pad_token. Adding pad token from config.decoder.pad_token: %s",
+                    config.decoder.pad_token,
+                )
+                self.tokenizer.add_special_tokens({"pad_token": config.decoder.pad_token})
+                self.tokenizer.pad_token_id = self.tokenizer.convert_tokens_to_ids([config.decoder.pad_token])[0]
+                self.pad_token = config.decoder.pad_token
+        else:
+            # Reload path (from_pretrained): special tokens are already in the
+            # saved tokenizer, so we recover them from there.
+            self._recover_special_tokens_from_tokenizer(tokenizer)
+
+        # Resolve token IDs (works for both paths since by this point every
+        # required attribute is set on self).
         for name in MELT_REQUIRED_SPECIAL_TOKENS:
             setattr(self, name + "_id", tokenizer.convert_tokens_to_ids([getattr(self, name)])[0])
 
-        # if the tokenizer does not have a pad_token, use config.decoder.pad_token
-        if tokenizer.pad_token is None:
-            if not hasattr(config.decoder, "pad_token"):
-                raise ValueError(
-                    "We need a pad token and this tokenizer doesn't have one. Set config.decoder.pad_token to a string token to add it."
-                )
-            logger.info(
-                "Tokenizer does not have a pad_token. Adding pad token from config.decoder.pad_token: %s",
-                config.decoder.pad_token,
+    def _recover_special_tokens_from_tokenizer(self, tokenizer) -> None:
+        """Recover MELT special-token attributes from a pretrained tokenizer.
+
+        When loading via ``from_pretrained``, the ``config`` object is not
+        available, but the special tokens were already added to the tokenizer
+        when the processor was first saved.  We look them up in the tokenizer's
+        vocabulary by their canonical names.
+        """
+        for name in MELT_REQUIRED_SPECIAL_TOKENS:
+            # The token may already be an attribute on the tokenizer (set
+            # during save) or present in the vocab with its canonical string
+            # form, e.g. ``<|audio|>``.
+            token_str = getattr(tokenizer, name, None)
+            if token_str is not None:
+                setattr(self, name, token_str)
+                continue
+
+            # Convention: MELT special tokens look like ``<|audio|>``,
+            # ``<|audio_bos|>``, ``<|audio_eos|>``.  Derive the expected
+            # string and check the vocabulary.
+            candidate = f"<|{name.removesuffix('_token')}|>"
+            if candidate in tokenizer.get_vocab():
+                setattr(self, name, candidate)
+                logger.info("Recovered special token from vocab: %s -> %s", name, candidate)
+                continue
+
+            raise ValueError(
+                f"Cannot recover required special token '{name}' from the saved tokenizer. "
+                "It was neither set as a tokenizer attribute nor found in the vocabulary "
+                f"(tried '{candidate}'). The checkpoint may have been saved before these "
+                "tokens were added. Re-save the processor with a config to fix this."
             )
-            self.tokenizer.add_special_tokens({"pad_token": config.decoder.pad_token})
-            self.tokenizer.pad_token_id = self.tokenizer.convert_tokens_to_ids([config.decoder.pad_token])[0]
-            self.pad_token = config.decoder.pad_token
 
     def _validate_required_special_tokens(self, tokenizer, config) -> None:
         """Validate required MELT special tokens.

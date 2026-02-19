@@ -1384,6 +1384,25 @@ class MELTForSequenceClassification(MELTPreTrainedModel):
             )
         kwargs["_fast_init"] = False
 
+        # Pop MELT-specific sub-model kwargs before they reach transformers'
+        # from_pretrained machinery (which would not know what to do with them).
+        text_decoder_kwargs = kwargs.pop("text_decoder_kwargs", None) or {}
+        audio_encoder_kwargs = kwargs.pop("audio_encoder_kwargs", None) or {}
+
+        if text_decoder_kwargs or audio_encoder_kwargs:
+            # Load (or reuse) the config and patch it in-place so that
+            # _create_text_stack / _create_audio_stack pick the values up
+            # naturally (e.g. AutoModelForSequenceClassification.from_pretrained
+            # will receive num_labels through config.text_decoder_config).
+            config = kwargs.pop("config", None)
+            if config is None:
+                config = MELTConfig.from_pretrained(pretrained_model_name_or_path)
+            for k, v in text_decoder_kwargs.items():
+                setattr(config.text_decoder_config, k, v)
+            for k, v in audio_encoder_kwargs.items():
+                setattr(config.audio_encoder_config, k, v)
+            kwargs["config"] = config
+
         return super().from_pretrained(
             pretrained_model_name_or_path, *model_args, **kwargs
         )
@@ -1455,20 +1474,7 @@ class MELTForSequenceClassification(MELTPreTrainedModel):
                 input_ids=input_ids,
                 source_lengths=audio_lengths,
             )
-        if labels is not None:
-            labels = self._inject_tensor(
-                source_tensor=torch.full(
-                    encoder_outputs_mask.shape,
-                    -100,
-                    device=labels.device,
-                    dtype=labels.dtype,
-                ),
-                target_tensor=labels,
-                inject_token_id=self.config.audio_token_id,
-                input_ids=input_ids,
-                source_lengths=audio_lengths,
-                pad_item=-100,
-            )
+        # We don't touch labels as they are of shape [batch_size, num_labels]
         return decoder_input_embs, attention_mask, labels
 
     def forward(

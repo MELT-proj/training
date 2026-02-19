@@ -439,16 +439,13 @@ class SpeechTextQEDataset(SpeechToTextDataset):
             return_labels=return_labels,
         )
 
-        ds_config = _get_config_value(config, "train_ds" if is_train else "validation_ds", None)
-        self.target_field: str | None = _get_config_value(ds_config, "target_field", None) if ds_config else None
-        if not self.target_field:
-            raise ValueError(
-                "SpeechTextQEDataset requires 'target_field' to be set in the dataset config "
-                "(train_ds.target_field / validation_ds.target_field), but it was not found."
-            )
-
     def _get_score(self, cut: Cut) -> float:
         """Extract and validate the quality score from a cut's custom tags.
+
+        The field path is read per-cut from ``cut.custom["tags"]["target_field"]``
+        (set via the ``tags`` block of the corresponding ``input_cfg`` entry in the
+        YAML config, e.g. ``target_field: custom.score``).  The value at that path
+        is then resolved with dot-notation via ``_get_nested_value``.
 
         Args:
             cut: Lhotse Cut object.
@@ -457,23 +454,28 @@ class SpeechTextQEDataset(SpeechToTextDataset):
             Score in [0, 1] (raw value divided by 100).
 
         Raises:
-            RuntimeError: If the score attribute is missing or cannot be cast to float.
+            RuntimeError: If ``target_field`` is absent from the cut's tags, if the
+                resolved value is missing, or if it cannot be cast to float.
         """
-        raw: object = None
-
-        # Try cut.custom.tags first (highest priority)
+        # Step 1: resolve the field path from the per-cut tags.
+        target_field: str | None = None
         if hasattr(cut, "custom") and cut.custom:
             tags = cut.custom.get("tags", {})
             if isinstance(tags, dict):
-                raw = tags.get(self.target_field)
+                target_field = tags.get("target_field")
 
-        # Fall back to any other location via nested value extraction
-        if raw is None:
-            raw = _get_nested_value(cut, self.target_field)
+        if not target_field:
+            raise RuntimeError(
+                f"Cut '{cut.id}' has no 'target_field' entry in its tags. "
+                "Ensure each input_cfg entry in the YAML has a tags.target_field value."
+            )
+
+        # Step 2: resolve the actual score value using dot-notation.
+        raw = _get_nested_value(cut, target_field)
 
         if raw is None:
             raise RuntimeError(
-                f"Cut '{cut.id}' is missing the required '{self.target_field}' attribute. "
+                f"Cut '{cut.id}': could not find value at path '{target_field}'. "
                 "Ensure the CutSet was prepared with this field."
             )
 
@@ -481,7 +483,7 @@ class SpeechTextQEDataset(SpeechToTextDataset):
             score = float(raw)
         except (TypeError, ValueError) as exc:
             raise RuntimeError(
-                f"Cannot convert '{self.target_field}' value {raw!r} to float for cut '{cut.id}'."
+                f"Cut '{cut.id}': cannot convert '{target_field}' value {raw!r} to float."
             ) from exc
 
         return score / 100.0
@@ -530,7 +532,9 @@ class SpeechTextQEDataset(SpeechToTextDataset):
             )
 
             if self.return_labels:
-                inputs["labels"] = torch.tensor(scores, dtype=torch.float32)
+                # Shape [B, 1] to match the (batch_size, num_labels) convention
+                # expected by AutoModelForSequenceClassification with num_labels=1.
+                inputs["labels"] = torch.tensor(scores, dtype=torch.float32).unsqueeze(-1)
 
             return inputs
 

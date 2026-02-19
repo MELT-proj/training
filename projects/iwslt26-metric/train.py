@@ -112,7 +112,16 @@ def prepare_model(
         raise ValueError("model.ckpt must be specified to train a metric.")
 
     logger.info(f"Loading model from checkpoint: {model_cfg.ckpt}")
-    model = MELTForSequenceClassification.from_pretrained(model_cfg.ckpt)
+    model = MELTForSequenceClassification.from_pretrained(
+        model_cfg.ckpt,
+        text_decoder_kwargs={"num_labels": 1},
+    )
+
+    # Sync pad_token_id from the processor tokenizer in case it was not persisted
+    # correctly in the checkpoint config (needed for batch sizes > 1).
+    model.config.pad_token_id = processor.tokenizer.pad_token_id
+    if hasattr(model, "text_decoder") and hasattr(model.text_decoder, "config"):
+        model.text_decoder.config.pad_token_id = processor.tokenizer.pad_token_id
 
     logger.info("Tied model weights:")
     for tied_pair in find_tied_parameters(model):
@@ -221,7 +230,7 @@ def main(cfg: DictConfig) -> None:
         preprocess_logits_for_metrics = pull_final_logits
 
     # No explicit train_dataset/eval_dataset - they are handled by Lhotse
-    trainer = MELTTrainer(
+    trainer = MELTTrainerForRegression(
         model=model,
         args=targs,
         config=cfg,

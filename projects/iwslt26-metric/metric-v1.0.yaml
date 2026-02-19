@@ -24,7 +24,7 @@ model:
   decoder:
     freeze: true
   
-  ckpt: null  # Path to checkpoint to resume from
+  ckpt: /mnt/scratch-artemis/giuseppe/melt-data/outputs/MA-v1.2.3/
 
 # =============================================================================
 # Data Configuration
