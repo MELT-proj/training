@@ -157,7 +157,7 @@ trainer:
 
   # Evaluation
   eval_strategy: steps # "no" # steps
-  eval_steps: 10
+  eval_steps: 20
 
   # Checkpointing
   save_strategy: steps
@@ -178,6 +178,6 @@ optimization:
   adam_beta2: 0.95
 
   # encoder_lr: 6e-6 # Not used since it's frozen
-  # decoder_lr: 2e-5 # Not used since it's frozen
-  adapter_lr: 2e-5
+  decoder_lr: 2e-6
+  adapter_lr: 2e-6
   min_lr_scale: 0.1
