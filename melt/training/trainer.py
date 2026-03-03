@@ -452,22 +452,21 @@ class MELTTrainer(Trainer):
         decoder_lr = float(decoder_lr)
 
         groups = []
-        if not getattr(self.args, "freeze_adapter", False) and adapter_params:
+        if len(adapter_params) > 0:
+            logger.info(
+                f"Optimizer group: adapter ({_format_param_count(len(adapter_params))} params, lr={adapter_lr})"
+            )
             groups.append({"params": adapter_params, "lr": adapter_lr})
-        if not getattr(self.args, "freeze_encoder", False) and encoder_params:
-            groups.append(
-                {
-                    "params": encoder_params,
-                    "lr": encoder_lr,
-                }
+        if len(encoder_params) > 0:
+            logger.info(
+                f"Optimizer group: encoder ({_format_param_count(len(encoder_params))} params, lr={encoder_lr})"
             )
-        if not getattr(self.args, "freeze_decoder", False) and decoder_params:
-            groups.append(
-                {
-                    "params": decoder_params,
-                    "lr": decoder_lr,
-                }
+            groups.append({"params": encoder_params, "lr": encoder_lr})
+        if len(decoder_params) > 0:
+            logger.info(
+                f"Optimizer group: decoder ({_format_param_count(len(decoder_params))} params, lr={decoder_lr})"
             )
+            groups.append({"params": decoder_params, "lr": decoder_lr})
 
         # Final safety: drop any accidentally-empty groups (defensive against config mistakes)
         groups = [g for g in groups if g.get("params")]
