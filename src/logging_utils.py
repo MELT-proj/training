@@ -12,16 +12,18 @@ cause a local `src/logging.py` to shadow Python's standard-library `logging`.
 from __future__ import annotations
 
 import logging
+import os
 
 
 def _is_global_master() -> bool:
     try:
-        import ddp
+        from . import ddp
 
         return (not ddp.is_distributed()) or ddp.is_global_master()
     except Exception:
-        # If distributed helpers aren't available for some reason, prefer logging.
-        return True
+        # Fallback for early startup/import edge-cases.
+        # In distributed runs, non-zero RANK should stay silent.
+        return int(os.environ.get("RANK", "0")) == 0
 
 
 def configure_logging(

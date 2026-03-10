@@ -7,9 +7,19 @@
 
 set -euo pipefail
 
-echo "------------------------------------------------------------------"
-echo "WE ARE INSIDE RUN_TRAIN_SINGULARITY.SBATCH"
-echo "------------------------------------------------------------------"
+is_master_node() {
+  [[ -z "${SLURM_PROCID:-}" || "${SLURM_PROCID}" == "0" ]]
+}
+
+log_master() {
+  if is_master_node; then
+    echo "$@"
+  fi
+}
+
+log_master "------------------------------------------------------------------"
+log_master "WE ARE INSIDE RUN_TRAIN_SINGULARITY.SBATCH"
+log_master "------------------------------------------------------------------"
 
 # ------------------------------------------------------------------
 # Host-side setup (modules, etc.)
@@ -55,9 +65,9 @@ if [[ -n "${HOST_CUDA_HOME}" ]] && [[ -d "${HOST_CUDA_HOME}" ]]; then
   export APPTAINERENV_PREPEND_LD_LIBRARY_PATH="${CONTAINER_CUDA_HOME}/lib64:${CONTAINER_CUDA_HOME}/lib:${APPTAINERENV_PREPEND_LD_LIBRARY_PATH:-}"
   export SINGULARITYENV_PREPEND_LD_LIBRARY_PATH="${CONTAINER_CUDA_HOME}/lib64:${CONTAINER_CUDA_HOME}/lib:${SINGULARITYENV_PREPEND_LD_LIBRARY_PATH:-}"
 else
-  echo "WARNING: CUDA toolkit not detected on host (CUDA_HOME/CUDA_PATH/nvcc). nvcc will likely be unavailable in the container."
+  log_master "WARNING: CUDA toolkit not detected on host (CUDA_HOME/CUDA_PATH/nvcc). nvcc will likely be unavailable in the container."
 fi
-echo "CUDA_BIND_ARG: ${CUDA_BIND_ARG}"
+log_master "CUDA_BIND_ARG: ${CUDA_BIND_ARG}"
 
 # ------------------------------------------------------------------
 # Hugging Face cache: bind host HF_HOME into the container so model/
@@ -78,14 +88,14 @@ if [[ -n "${HOST_HF_HOME}" ]]; then
   export APPTAINERENV_HF_HUB_CACHE="${CONTAINER_HF_HOME}/hub"
   export SINGULARITYENV_HF_HUB_CACHE="${CONTAINER_HF_HOME}/hub"
 else
-  echo "WARNING: HF_HOME is not set on host; not binding Hugging Face cache into container."
+  log_master "WARNING: HF_HOME is not set on host; not binding Hugging Face cache into container."
 fi
-echo "HF_BIND_ARG: ${HF_BIND_ARG}"
+log_master "HF_BIND_ARG: ${HF_BIND_ARG}"
 
 export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-0}"
 export SINGULARITYENV_HF_HUB_OFFLINE="${HF_HUB_OFFLINE}"
 export APPTAINERENV_HF_HUB_OFFLINE="${HF_HUB_OFFLINE}"
-echo "HF_HUB_OFFLINE: ${HF_HUB_OFFLINE}"
+log_master "HF_HUB_OFFLINE: ${HF_HUB_OFFLINE}"
 
 # ------------------------------------------------------------------
 # Required: path to the .sif image on the host
@@ -218,8 +228,8 @@ export APPTAINERENV_SLURM_NNODES="${SLURM_NNODES:-1}"
 export APPTAINERENV_SLURM_GPUS_ON_NODE="${SLURM_GPUS_ON_NODE:-}"
 export APPTAINERENV_SLURM_JOB_NODELIST="${SLURM_JOB_NODELIST:-}"
 
-echo "SLURM_NNODES: ${SLURM_NNODES:-1}"
-echo "SLURM_GPUS_ON_NODE: ${SLURM_GPUS_ON_NODE:-unset}"
+log_master "SLURM_NNODES: ${SLURM_NNODES:-1}"
+log_master "SLURM_GPUS_ON_NODE: ${SLURM_GPUS_ON_NODE:-unset}"
 
 # Binds:
 # - project dir (latest code)
@@ -228,23 +238,23 @@ echo "SLURM_GPUS_ON_NODE: ${SLURM_GPUS_ON_NODE:-unset}"
 BIND_ARGS="${HOST_PROJECT_DIR}:${CONTAINER_PROJECT_DIR},${HOST_TMPDIR}:${CONTAINER_TMPDIR},${HOST_LOCAL_DATASETS_DIR}:${CONTAINER_LOCAL_DATASETS_DIR},${HOST_OUTPUT_DIR}:${CONTAINER_OUTPUT_DIR}:rw${CUDA_BIND_ARG}"
 BIND_ARGS="${BIND_ARGS}${HF_BIND_ARG}"
 
-echo "SINGULARITY_IMG: ${SINGULARITY_IMG}"
-echo "SINGULARITY_BIN: ${SINGULARITY_BIN}"
-echo "Host project: ${HOST_PROJECT_DIR} -> ${CONTAINER_PROJECT_DIR}"
-echo "Host datasets: ${HOST_LOCAL_DATASETS_DIR} -> ${CONTAINER_LOCAL_DATASETS_DIR}"
-echo "Host tmp: ${HOST_TMPDIR} -> ${CONTAINER_TMPDIR}"
-echo "Host outputs: ${HOST_OUTPUT_DIR} -> ${CONTAINER_OUTPUT_DIR}"
-echo "Host wandb: ${HOST_WANDB_DIR} -> ${CONTAINER_WANDB_DIR}"
+log_master "SINGULARITY_IMG: ${SINGULARITY_IMG}"
+log_master "SINGULARITY_BIN: ${SINGULARITY_BIN}"
+log_master "Host project: ${HOST_PROJECT_DIR} -> ${CONTAINER_PROJECT_DIR}"
+log_master "Host datasets: ${HOST_LOCAL_DATASETS_DIR} -> ${CONTAINER_LOCAL_DATASETS_DIR}"
+log_master "Host tmp: ${HOST_TMPDIR} -> ${CONTAINER_TMPDIR}"
+log_master "Host outputs: ${HOST_OUTPUT_DIR} -> ${CONTAINER_OUTPUT_DIR}"
+log_master "Host wandb: ${HOST_WANDB_DIR} -> ${CONTAINER_WANDB_DIR}"
 if [[ -n "${CUDA_BIND_ARG}" ]]; then
-  echo "Host CUDA toolkit: ${HOST_CUDA_HOME} -> ${CONTAINER_CUDA_HOME}"
+  log_master "Host CUDA toolkit: ${HOST_CUDA_HOME} -> ${CONTAINER_CUDA_HOME}"
 fi
 if [[ -n "${HF_BIND_ARG}" ]]; then
-  echo "Host HF_HOME: ${HOST_HF_HOME} -> ${CONTAINER_HF_HOME}"
+  log_master "Host HF_HOME: ${HOST_HF_HOME} -> ${CONTAINER_HF_HOME}"
 fi
-echo "OUTPUT_DIR (container): ${CONTAINER_OUTPUT_DIR}"
-echo "MASTER_ADDR (host): ${MASTER_ADDR_HOST}"
-echo "MASTER_PORT: ${MASTER_PORT}"
-echo "Train args: ${TRAIN_ARGS}"
+log_master "OUTPUT_DIR (container): ${CONTAINER_OUTPUT_DIR}"
+log_master "MASTER_ADDR (host): ${MASTER_ADDR_HOST}"
+log_master "MASTER_PORT: ${MASTER_PORT}"
+log_master "Train args: ${TRAIN_ARGS}"
 
 # ------------------------------------------------------------------
 # Run inside srun for multi-node support.
@@ -255,7 +265,7 @@ SRUN_ARGS=(
   --wait=60
 )
 
-echo "Starting training via srun + ${SINGULARITY_BIN} ..."
+log_master "Starting training via srun + ${SINGULARITY_BIN} ..."
 
 # NOTE: SLURM_PROCID, SLURM_NODEID, SLURM_LOCALID, SLURM_STEP_ID are set by srun
 # at runtime (different value per node). We wrap the singularity call in a bash -c
@@ -265,7 +275,9 @@ echo "Starting training via srun + ${SINGULARITY_BIN} ..."
 # We then pass these values to singularity via --env.
 srun "${SRUN_ARGS[@]}" \
   bash -c '
-    echo "[srun step] SLURM_PROCID=${SLURM_PROCID:-unset} SLURM_NODEID=${SLURM_NODEID:-unset}"
+    if [[ "${SLURM_PROCID:-0}" == "0" ]]; then
+      echo "[srun step] SLURM_PROCID=${SLURM_PROCID:-unset} SLURM_NODEID=${SLURM_NODEID:-unset}"
+    fi
     '"${SINGULARITY_BIN}"' exec --nv \
       --bind "'"${BIND_ARGS}"'" \
       --pwd "'"${CONTAINER_PROJECT_DIR}"'" \
@@ -277,8 +289,10 @@ srun "${SRUN_ARGS[@]}" \
       "'"${SINGULARITY_IMG}"'" \
       bash --noprofile --norc -c "
         set -euo pipefail
-        echo \"[container] SLURM_PROCID=\${SLURM_PROCID:-unset} SLURM_NODEID=\${SLURM_NODEID:-unset}\"
-        echo \"[container] pwd: \$(pwd)\"
+        if [[ \"\${SLURM_PROCID:-0}\" == \"0\" ]]; then
+          echo \"[container] SLURM_PROCID=\${SLURM_PROCID:-unset} SLURM_NODEID=\${SLURM_NODEID:-unset}\"
+          echo \"[container] pwd: \$(pwd)\"
+        fi
         exec /workspace/training/bash/run_train.sh '"${ACCELERATE_CONFIG_HOST}"' '"${TRAIN_ARGS}"'
       "
   '
