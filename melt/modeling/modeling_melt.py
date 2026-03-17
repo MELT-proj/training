@@ -1076,8 +1076,8 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
         logits_to_keep: int | torch.Tensor = 0,
         **kwargs,
     ) -> tuple[torch.FloatTensor] | CausalLMOutputWithPast:
-        if input_ids is None:
-            raise ValueError("input_ids must be provided")
+        if input_ids is None and input_embeds is None:
+            raise ValueError("Either `input_ids` or `inputs_embeds` must be provided.")
         if input_ids.dtype != torch.long:
             raise TypeError(f"input_ids must be torch.long, got {input_ids.dtype}")
 
@@ -1099,6 +1099,9 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
         # HF Trainer passes `num_items_in_batch` (not prefixed); forward it to the decoder if present.
         if "num_items_in_batch" in kwargs:
             kwargs_decoder["num_items_in_batch"] = kwargs["num_items_in_batch"]
+
+        import pdb; pdb.set_trace()
+
 
         # 1. Extract text embeddings
         decoder_input_embs = self._get_text_embeddings(

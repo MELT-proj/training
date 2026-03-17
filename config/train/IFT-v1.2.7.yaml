@@ -10,7 +10,7 @@
 # Run Configuration (non-TrainingArguments settings)
 # =============================================================================
 run:
-  exp_name: mn5-iwslt26
+  exp_name: IFT-v1.2.7
   dry_run: false
 
 # =============================================================================
@@ -18,35 +18,21 @@ run:
 # =============================================================================
 model:
   encoder:
-    name: facebook/w2v-bert-2.0
     freeze: true
     max_audio_seq_len: 1500 # for frames of 20ms, this is 30s
 
   decoder:
-    name: Qwen/Qwen2.5-0.5B
-    attn_implementation: flash_attention_2
-    bos_token: <|startoftext|>
-    eos_token: <|endoftext|>
-    pad_token: <|text_pad|> # used if not specified in tokenizer
-    audio_token: <|audio|>
-    audio_bos_token: <|audio_bos|>
-    audio_eos_token: <|audio_eos|>
+    attn_implementation: sdpa
     freeze: true
   
-  adapter:
-    _type: conformer
-    num_adapter_layers: 2
-    adapter_kernel_size: 3
-    adapter_stride: 2
-
-  ckpt: null  # Path to checkpoint to resume from
+  ckpt: /mnt/scratch-artemis/giuseppe/melt-data/outputs/MA-v1.2.7
 
 # =============================================================================
 # Data Configuration
 # =============================================================================
 data:
   sample_rate: 16000
-  apply_chat_template: false
+  apply_chat_template: true
 
   train_ds:
     total_hours: 3720.17 #42877.25  # Optional: total hours of data for estimation
@@ -68,15 +54,18 @@ data:
           lang: en
 
       # # MLS Sidon
+      # - type: lhotse_shar
+      #   shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/english/train
+      #   tags:
+      #     task: asr
+      #     lang: en
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/german/train
-        weight: 2.0
         tags:
           task: asr
           lang: de
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/italian/train
-        weight: 2.0
         tags:
           task: asr
           lang: it
@@ -84,13 +73,11 @@ data:
       # # # FLEURS
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/de_de/train
-        weight: 2.0
         tags:
           task: asr
           lang: de
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/it_it/train
-        weight: 2.0
         tags:
           task: asr
           lang: it
@@ -104,7 +91,6 @@ data:
       # For CommonVoice, text is in custom.metadata.sentence, so override text_field
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/de/train
-        weight: 2.0
         tags:
           task: asr
           lang: de
@@ -117,28 +103,24 @@ data:
           text_field: custom.metadata.sentence
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/it/train
-        weight: 2.0
         tags:
           task: asr
           lang: it
           text_field: custom.metadata.sentence
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/zh-CN/train
-        weight: 2.0
         tags:
           task: asr
           lang: zh
           text_field: custom.metadata.sentence
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/zh-HK/train
-        weight: 2.0
         tags:
           task: asr
           lang: zh
           text_field: custom.metadata.sentence
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/zh-TW/train
-        weight: 2.0
         tags:
           task: asr
           lang: zh
@@ -257,7 +239,7 @@ trainer:
   seed: 42
   do_train: true
   do_eval: true
-  eval_on_start: true
+  eval_on_start: false
   average_tokens_across_devices: true
 
   # Batch and accumulation

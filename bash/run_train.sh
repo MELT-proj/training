@@ -2,23 +2,33 @@
 
 set -euo pipefail
 
+is_master_node() {
+    [[ -z "${SLURM_PROCID:-}" || "${SLURM_PROCID}" == "0" ]]
+}
+
+log_master() {
+    if is_master_node; then
+        echo "$@"
+    fi
+}
+
 # --------------------------
 # User-overridable defaults
 # --------------------------
 # Override any of these at invocation time, e.g.:
 #   SCRATCH=/path WANDB_PROJECT=foo ./bash/run_train.sh ...
 
-echo "------------------------------------------------------------------"
-echo "WE ARE INSIDE RUN_TRAIN.SH"
-echo "------------------------------------------------------------------"
+log_master "------------------------------------------------------------------"
+log_master "WE ARE INSIDE RUN_TRAIN.SH"
+log_master "------------------------------------------------------------------"
 
 # Two crucial environment variables to set up:
 # 1) VENV_PATH: path to the python virtualenv activate script
 # 2) LOCAL_DATASETS_DIR: path to local datasets storage
 VENV_PATH="${VENV_PATH:-/workspace/venv/bin/activate}"
 LOCAL_DATASETS_DIR="${LOCAL_DATASETS_DIR:-./shar}"
-echo "Using VENV_PATH: $VENV_PATH"
-echo "Using LOCAL_DATASETS_DIR: $LOCAL_DATASETS_DIR"
+log_master "Using VENV_PATH: $VENV_PATH"
+log_master "Using LOCAL_DATASETS_DIR: $LOCAL_DATASETS_DIR"
 
 WANDB_PROJECT="${WANDB_PROJECT:-melt}"
 WANDB_MODE="${WANDB_MODE:-online}"
@@ -28,10 +38,12 @@ HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-1}"
 ACCELERATE_LOG_LEVEL="${ACCELERATE_LOG_LEVEL:-info}"
 TRANSFORMERS_VERBOSITY="${TRANSFORMERS_VERBOSITY:-info}"
 
-echo "Activating virtualenv at $VENV_PATH"
+log_master "Activating virtualenv at $VENV_PATH"
 source "$VENV_PATH"
-echo "Python is at:"
-command -v python || true
+if is_master_node; then
+    echo "Python is at:"
+    command -v python || true
+fi
 
 if [[ -f /etc/profile.d/02-lmod.sh ]]; then
     # shellcheck disable=SC1091
@@ -40,8 +52,10 @@ fi
 if command -v module >/dev/null 2>&1; then
     module load cuda 2>/dev/null || true
 fi
-echo "CUDA version:"
-nvcc --version 2>/dev/null || echo "nvcc not found (may be running in container)"
+if is_master_node; then
+    echo "CUDA version:"
+    nvcc --version 2>/dev/null || echo "nvcc not found (may be running in container)"
+fi
 
 # Usage: $0 <accelerate_config> [extra_args...]
 # The config system uses OmegaConf, so we pass arguments with dot notation.
@@ -70,8 +84,8 @@ for arg in "$@"; do
         GRAD_ACC_STEPS="${arg#*=}"
     fi
 done
-echo "Using accelerate config: $ACCELERATE_CONFIG"
-echo "Gradient Accumulation Steps: $GRAD_ACC_STEPS"
+log_master "Using accelerate config: $ACCELERATE_CONFIG"
+log_master "Gradient Accumulation Steps: $GRAD_ACC_STEPS"
 
 # setup run-specific envs
 export VENV_PATH
@@ -86,22 +100,24 @@ export HF_HUB_ENABLE_HF_TRANSFER
 export ACCELERATE_LOG_LEVEL
 export TRANSFORMERS_VERBOSITY
 
-echo "*** ENV VARIABLES ***"
-echo "WANDB_PROJECT=$WANDB_PROJECT"
-echo "WANDB_MODE=$WANDB_MODE"
-echo "TORCHDYNAMO_VERBOSE=$TORCHDYNAMO_VERBOSE"
-echo "TORCH_NCCL_ASYNC_ERROR_HANDLING=$TORCH_NCCL_ASYNC_ERROR_HANDLING"
-echo "ACCELERATE_LOG_LEVEL=$ACCELERATE_LOG_LEVEL"
-echo "TRANSFORMERS_VERBOSITY=$TRANSFORMERS_VERBOSITY"
-echo "HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-0}"
-echo "HF_HOME=$HF_HOME"
-echo "LOCAL_DATASETS_DIR=$LOCAL_DATASETS_DIR"
-echo "TMPDIR=$TMPDIR"
-echo "---------------------"
+log_master "*** ENV VARIABLES ***"
+log_master "WANDB_PROJECT=$WANDB_PROJECT"
+log_master "WANDB_MODE=$WANDB_MODE"
+log_master "TORCHDYNAMO_VERBOSE=$TORCHDYNAMO_VERBOSE"
+log_master "TORCH_NCCL_ASYNC_ERROR_HANDLING=$TORCH_NCCL_ASYNC_ERROR_HANDLING"
+log_master "ACCELERATE_LOG_LEVEL=$ACCELERATE_LOG_LEVEL"
+log_master "TRANSFORMERS_VERBOSITY=$TRANSFORMERS_VERBOSITY"
+log_master "HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-0}"
+log_master "HF_HOME=$HF_HOME"
+log_master "LOCAL_DATASETS_DIR=$LOCAL_DATASETS_DIR"
+log_master "TMPDIR=$TMPDIR"
+log_master "---------------------"
 
-echo "Listing what I see under ${HF_HOME}/hub:"
-ls -l "${HF_HOME}/hub" || echo "No models cached yet."
-echo "---------------------"
+if is_master_node; then
+    echo "Listing what I see under ${HF_HOME}/hub:"
+    ls -l "${HF_HOME}/hub" || echo "No models cached yet."
+    echo "---------------------"
+fi
 
 RUNNING_UNDER_SLURM=0
 if [[ -n "${SLURM_JOB_ID:-}" ]]; then
@@ -132,13 +148,13 @@ else
     MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
 fi
 
-echo "Running under SLURM: $RUNNING_UNDER_SLURM"
-echo "GPUS per node: $GPUS_PER_NODE"
-echo "Num nodes: $NUM_NODES"
-echo "World size (total GPUs): $WORLD_SIZE"
-echo "Master addr: $MASTER_ADDR"
-echo "Master port: $MASTER_PORT"
-echo "Machine rank (SLURM_PROCID): ${SLURM_PROCID:-N/A}"
+log_master "Running under SLURM: $RUNNING_UNDER_SLURM"
+log_master "GPUS per node: $GPUS_PER_NODE"
+log_master "Num nodes: $NUM_NODES"
+log_master "World size (total GPUs): $WORLD_SIZE"
+log_master "Master addr: $MASTER_ADDR"
+log_master "Master port: $MASTER_PORT"
+log_master "Machine rank (SLURM_PROCID): ${SLURM_PROCID:-N/A}"
 
 if [[ "$RUNNING_UNDER_SLURM" -eq 1 ]]; then
     # For multi-node SLURM: use c10d rendezvous backend (works with torchrun/FSDP)
@@ -169,7 +185,7 @@ else
         --tee 3 \
         "
 fi
-echo "Launcher: $LAUNCHER"
+log_master "Launcher: $LAUNCHER"
 
 if [[ "${LAUNCHER%% *}" == "python" ]]; then
     export CMD="-m src.training.train $@"
@@ -189,7 +205,7 @@ if [[ "$RUNNING_UNDER_SLURM" -eq 1 ]]; then
     # Detect that situation via SLURM_STEP_ID (set for srun steps) or SLURM_PROCID
     # and simply run the launcher directly instead of wrapping it with srun.
     if [[ -n "${SLURM_STEP_ID:-}" || -n "${SLURM_PROCID:-}" ]]; then
-        echo "Detected running inside an interactive srun step (SLURM_STEP_ID or SLURM_PROCID present); launching directly"
+        log_master "Detected running inside an interactive srun step (SLURM_STEP_ID or SLURM_PROCID present); launching directly"
         bash -c "$LAUNCHER $CMD" 2>&1
     else
         srun $SRUN_ARGS --jobid "$SLURM_JOB_ID" bash -c "$LAUNCHER $CMD" 2>&1
