@@ -55,19 +55,6 @@ class MELTProcessorKwargs(ProcessingKwargs, total=False):
     }  # type: ignore
 
 
-def _token_in_vocab(tokenizer, token_str: str) -> bool:
-    """Return True if token_str is present in tokenizer vocabulary or special tokens."""
-
-    # Use tokenizer's known special tokens first
-    all_special = set(getattr(tokenizer, "all_special_tokens", []))
-    if token_str in all_special:
-        return True
-
-    # Fallback to vocabulary keys
-    vocab = set(tokenizer.get_vocab().keys())
-    return token_str in vocab
-
-
 class MELTProcessor(ProcessorMixin):
     r"""
     Constructs a MELT processor which wraps a feature extractor and a tokenizer into a single processor.
@@ -99,7 +86,6 @@ class MELTProcessor(ProcessorMixin):
         self,
         feature_extractor: str | FeatureExtractionMixin,
         tokenizer: str | PreTrainedTokenizerBase,
-        config,
         # image_processor=None,
         # video_processor=None,
     ):
@@ -111,81 +97,34 @@ class MELTProcessor(ProcessorMixin):
         super().__init__(feature_extractor, tokenizer)  # , image_processor, video_processor)
         self.image_processor = None
 
-        # Validate required tokens (no defaults are added automatically).
-        # The `config` argument (typically the model config) may provide these
-        # under `config.decoder.<name>`. If neither the tokenizer already
-        # contains the token nor the config provides it, we error to avoid
-        # silently introducing defaults.
-        self._validate_required_special_tokens(tokenizer, config)
+        # Verify that the tokenizer has a pad_token and all required MELT special tokens
+        self._validate_required_special_tokens(tokenizer)
 
-        self.audio_token = config.decoder.audio_token
-        self.audio_bos_token = config.decoder.audio_bos_token
-        self.audio_eos_token = config.decoder.audio_eos_token
+        self.audio_token: str = tokenizer.audio_token
+        self.audio_bos_token: str = tokenizer.audio_bos_token
+        self.audio_eos_token: str = tokenizer.audio_eos_token
 
-        for name in MELT_REQUIRED_SPECIAL_TOKENS:
-            setattr(self, name + "_id", tokenizer.convert_tokens_to_ids([getattr(self, name)])[0])
+    def _validate_required_special_tokens(self, tokenizer) -> None:
+        """Verify that pad_token and all MELT special tokens exist in the tokenizer vocabulary.
 
-        # if the tokenizer does not have a pad_token, use config.decoder.pad_token
-        if tokenizer.pad_token is None:
-            if not hasattr(config.decoder, "pad_token"):
-                raise ValueError(
-                    "We need a pad token and this tokenizer doesn't have one. Set config.decoder.pad_token to a string token to add it."
-                )
-            logger.info(
-                "Tokenizer does not have a pad_token. Adding pad token from config.decoder.pad_token: %s",
-                config.decoder.pad_token,
-            )
-            self.tokenizer.add_special_tokens({"pad_token": config.decoder.pad_token})
-            self.tokenizer.pad_token_id = self.tokenizer.convert_tokens_to_ids([config.decoder.pad_token])[0]
-            self.pad_token = config.decoder.pad_token
-
-    def _validate_required_special_tokens(self, tokenizer, config) -> None:
-        """Validate required MELT special tokens.
-
-        Behavior:
-        - For each name in MELT_REQUIRED_SPECIAL_TOKENS we check if a token string
-          exists in the tokenizer vocabulary/special tokens.
-        - If not present, we look for a value under `config.decoder.<name>`.
-        - If a configuration value is provided it must be present in the tokenizer
-          vocabulary; otherwise we raise a ValueError.
+        Raises:
+            RuntimeError: If any required tokens are missing from the vocabulary.
         """
+        vocab = tokenizer.get_vocab()
 
-        # Gather tokenizer known tokens
-        vocab = set(tokenizer.get_vocab().keys())
+        required_tokens = ["pad_token"] + list(MELT_REQUIRED_SPECIAL_TOKENS)
+        missing: list[str] = []
+        for name in required_tokens:
+            token_str = getattr(tokenizer, name, None)
+            if token_str is None or token_str not in vocab:
+                missing.append(name)
 
-        for name in MELT_REQUIRED_SPECIAL_TOKENS:
-            token_str = getattr(config.decoder, name, None)
-            if token_str is None or not isinstance(token_str, str):
-                raise ValueError(
-                    f"Token string for required special token '{name}' not found in config.decoder. "
-                    "Please provide this token in the model config under `config.decoder.<name>`."
-                )
-
-            # If the tokenizer has the attribute set already, don't touch anything
-            if hasattr(self.tokenizer, name):
-                # check if the pre-existing value matches the config value. If not, raise an error.
-                existing_token = getattr(self.tokenizer, name)
-                if existing_token != token_str:
-                    raise ValueError(
-                        f"Tokenizer already has a value for special token '{name}': '{existing_token}'. "
-                        f"This does not match the config value: '{token_str}'. "
-                        "Please ensure consistency between the tokenizer and model config."
-                    )
-                continue
-
-            # If it doesn't but the token is in the vocab, we just reuse it and set the attribute to the tokenizer
-            if token_str in vocab:
-                setattr(self.tokenizer, name, token_str)
-                logger.info("Reusing existing token: %s -> %s", name, token_str)
-                continue
-
-            # If it doesn't and the token isn't in the vocab, we add it to the tokenizer
-            else:
-                # Add it to the tokenizer's special tokens
-                logger.info("Adding special token: %s -> %s", name, token_str)
-                self.tokenizer.add_tokens([token_str])
-                setattr(self.tokenizer, name, token_str)
-                setattr(self, name, token_str)
+        if missing:
+            raise RuntimeError(
+                f"The following required tokens are missing from the tokenizer vocabulary: {missing}. "
+                "Ensure that the tokenizer has been properly configured with all MELT special tokens "
+                "before constructing the processor."
+            )
 
     def _validate_audio_token_count(self, text: list[str], audio, is_batched: bool) -> None:
         """Validate that the number of audio tokens in text matches the number of audio inputs.

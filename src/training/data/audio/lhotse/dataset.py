@@ -10,6 +10,7 @@ recipe that transforms CutSets into model inputs via the MELTProcessor.
 
 import json
 import os
+import random
 import time
 
 import torch
@@ -20,9 +21,81 @@ from omegaconf import DictConfig
 
 from .....logging_utils import get_logger
 from .....modeling import MELTProcessor
+from ....data.chat_templates import ChatTemplateConfig, get_chat_template_config
 
 
 logger = get_logger(__name__)
+
+
+# ISO 639-1 language code to spelled-out language name.
+# Supported languages:
+# - Bulgarian (bg), Croatian (hr), Czech (cs), Danish (da), Dutch (nl),
+#   English (en), Estonian (et), Finnish (fi), French (fr), German (de),
+#   Greek (el), Hungarian (hu), Italian (it), Latvian (lv), Lithuanian (lt),
+#   Maltese (mt), Polish (pl), Portuguese (pt), Romanian (ro), Slovak (sk),
+#   Slovenian (sl), Spanish (es), Swedish (sv), Russian (ru), Ukrainian (uk),
+#   Chinese (zh), Catalan (ca), Albanian (sq)
+LANGUAGE_ISO_TO_NAME: dict[str, str] = {
+    "bg": "Bulgarian",
+    "hr": "Croatian",
+    "cs": "Czech",
+    "da": "Danish",
+    "nl": "Dutch",
+    "en": "English",
+    "et": "Estonian",
+    "fi": "Finnish",
+    "fr": "French",
+    "de": "German",
+    "el": "Greek",
+    "hu": "Hungarian",
+    "it": "Italian",
+    "lv": "Latvian",
+    "lt": "Lithuanian",
+    "mt": "Maltese",
+    "pl": "Polish",
+    "pt": "Portuguese",
+    "ro": "Romanian",
+    "sk": "Slovak",
+    "sl": "Slovenian",
+    "es": "Spanish",
+    "sv": "Swedish",
+    "ru": "Russian",
+    "uk": "Ukrainian",
+    "zh": "Chinese",
+    "ca": "Catalan",
+    "sq": "Albanian",
+}
+
+# Task-specific prompt templates for chat-template mode.
+# Each template must contain {audio_token} and {lang} placeholders.
+TASK_TEMPLATES: dict[str, list[str]] = {
+    "transcribe": [
+        "{audio_token} Transcribe this audio in {lang}.",
+        "Transcribe the following {lang} audio: {audio_token}",
+        "{audio_token} Write down what is said in this {lang} recording.",
+        "Listen to this {lang} audio and transcribe it: {audio_token}",
+        "{audio_token} Provide a transcription of the {lang} speech.",
+        "What is being said in this {lang} audio? {audio_token}",
+    ],
+    "translate": [
+        "{audio_token} Translate this audio to {lang}.",
+        "Translate the following audio into {lang}: {audio_token}",
+        "{audio_token} Provide a translation of this speech in {lang}.",
+        "Listen to this audio and translate it to {lang}: {audio_token}",
+        "{audio_token} What is being said? Translate to {lang}.",
+        "Convert the speech in this audio to {lang}: {audio_token}",
+    ],
+    "default": [
+        "{audio_token} Process this audio.",
+        "Process the following audio: {audio_token}",
+        "{audio_token} Analyze this audio recording.",
+        "Listen to this audio and process it: {audio_token}",
+        "{audio_token} Handle this audio input.",
+    ],
+}
+# Aliases for common task names
+TASK_TEMPLATES["asr"] = TASK_TEMPLATES["transcribe"]
+TASK_TEMPLATES["st"] = TASK_TEMPLATES["translate"]
 
 
 def _get_config_value(config, key: str, default=None):
@@ -110,6 +183,17 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         self.apply_chat_template = bool(_get_config_value(config, "apply_chat_template", False))
         self.sample_rate = int(_get_config_value(config, "sample_rate", 16000))
         self.min_chars = int(_get_config_value(config, "min_chars", 0))
+
+        # Pre-compute boundary token IDs for chat-template label masking.
+        if self.apply_chat_template:
+            ct_name = str(_get_config_value(config, "chat_template_config", "chatml"))
+            ct_cfg: ChatTemplateConfig = get_chat_template_config(ct_name)
+            self._assistant_start_ids: list[int] = processor.tokenizer.encode(
+                ct_cfg.assistant_start, add_special_tokens=False
+            )
+            self._assistant_end_ids: list[int] = processor.tokenizer.encode(
+                ct_cfg.assistant_end, add_special_tokens=False
+            )
 
         self._debug_cut_ids_dir = os.environ.get("MELT_DEBUG_CUT_IDS_DIR")
         self._debug_cut_ids_max_batches = int(os.environ.get("MELT_DEBUG_CUT_IDS_MAX_BATCHES", "0") or "0")
@@ -206,11 +290,9 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         # Format texts with audio token for the processor
         # This adds <|audio|> token to indicate where audio embeddings go
         if self.apply_chat_template:
-            raise RuntimeError("Not yet implemented.")
             formatted_texts = self._apply_chat_template(texts, tasks, langs)
         else:
             # Simple format: audio token + transcription
-            # formatted_texts = [f"{self.processor.tokenizer.bos_token}{self.processor.audio_token}{t}" for t in texts]
             formatted_texts = [f"{self.processor.audio_token}{t}" for t in texts]
 
         # Process through MELTProcessor
@@ -228,14 +310,18 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
 
             if self.return_labels:
                 labels = inputs["input_ids"].clone()
-                mask = (
-                    (labels == self.processor.audio_token_id)
-                    | (labels == self.processor.audio_bos_token_id)
-                    | (labels == self.processor.audio_eos_token_id)
-                    | (labels == self.processor.tokenizer.pad_token_id)
-                    | (labels == self.processor.tokenizer.bos_token_id)
-                )
-                labels[mask] = -100
+                if self.apply_chat_template:
+                    labels = self._mask_non_assistant_tokens(labels)
+                else:
+                    # Non-chat-template mode: mask individual special tokens
+                    mask = (
+                        (labels == self.processor.audio_token_id)
+                        | (labels == self.processor.audio_bos_token_id)
+                        | (labels == self.processor.audio_eos_token_id)
+                        | (labels == self.processor.tokenizer.pad_token_id)
+                        | (labels == self.processor.tokenizer.bos_token_id)
+                    )
+                    labels[mask] = -100
                 inputs["labels"] = labels
 
             return inputs
@@ -358,16 +444,21 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
 
         return task, lang
 
-    def _apply_chat_template(self, texts: list[str], tasks: list[str], langs: list[str]) -> list[str]:
+    def _apply_chat_template(
+        self, texts: list[str], tasks: list[str], langs: list[str]
+    ) -> list[str]:
         """Apply chat template formatting to texts.
 
+        For each sample a task-specific prompt is randomly sampled from
+        ``TASK_TEMPLATES`` and wrapped with the tokenizer's chat template.
+
         Args:
-            texts: List of transcripts.
-            tasks: List of task identifiers.
+            texts: List of transcripts (ground-truth assistant responses).
+            tasks: List of task identifiers ("asr", "transcribe", "st", …).
             langs: List of language codes.
 
         Returns:
-            List of formatted texts with chat template and audio token.
+            List of fully formatted chat strings ready for the processor.
         """
         tokenizer = getattr(self.processor, "tokenizer", None)
         if tokenizer is None or not hasattr(tokenizer, "apply_chat_template"):
@@ -379,27 +470,91 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         formatted: list[str] = []
 
         for text, task, lang in zip(texts, tasks, langs):
-            if task in ("transcribe", "asr"):
-                prompt = f"Transcribe the following audio in {lang}: {audio_token}"
-            elif task in ("translate", "st"):
-                prompt = f"Translate the following audio to {lang}: {audio_token}"
-            else:
-                prompt = f"Process the following audio: {audio_token}"
+            # Pick a random prompt template for the task
+            templates = TASK_TEMPLATES.get(task, TASK_TEMPLATES["default"])
+            template = random.choice(templates)
 
-            # Use tokenizer chat template (as done in tests) to build the final prompt.
-            # For training, we include the assistant message with the ground-truth text.
-            messages = [
-                {"role": "user", "content": prompt},
-                {"role": "assistant", "content": text},
-            ]
-            formatted_text = tokenizer.apply_chat_template(
-                messages,
+            lang_key = (lang or "").lower()
+            language_name = LANGUAGE_ISO_TO_NAME.get(lang_key)
+            if language_name is None:
+                supported = ", ".join(sorted(LANGUAGE_ISO_TO_NAME.keys()))
+                raise ValueError(
+                    f"Unsupported language ISO code '{lang}'. "
+                    f"Expected one of: {supported}"
+                )
+            prompt = template.format(audio_token=audio_token, lang=language_name)
+
+            full_text = tokenizer.apply_chat_template(
+                [
+                    {"role": "user", "content": prompt},
+                    {"role": "assistant", "content": text},
+                ],
                 tokenize=False,
                 add_generation_prompt=False,
+                enable_thinking=False
             )
-            formatted.append(formatted_text)
+            formatted.append(full_text)
+
+            print(full_text)
 
         return formatted
+
+    # ------------------------------------------------------------------
+    # Token-level label masking for chat-template mode
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _find_subsequence(seq: list[int], subseq: list[int], start: int = 0) -> int:
+        """Return index of *subseq* in *seq* starting from *start*, or -1."""
+        sub_len = len(subseq)
+        for i in range(start, len(seq) - sub_len + 1):
+            if seq[i : i + sub_len] == subseq:
+                return i
+        return -1
+
+    def _mask_non_assistant_tokens(self, labels: torch.Tensor) -> torch.Tensor:
+        """Mask all tokens that do not belong to an assistant turn.
+
+        Iterates over each sequence in *labels* and keeps only the tokens
+        that lie within ``<|im_start|>assistant\n … <|im_end|>\n`` spans
+        (boundaries included).  Everything else — including padding — is
+        set to ``-100``.
+
+        The boundary token ID sequences are pre-computed in ``__init__``.
+        """
+        start_ids = self._assistant_start_ids
+        end_ids = self._assistant_end_ids
+        start_len = len(start_ids)
+        end_len = len(end_ids)
+
+        for i in range(labels.size(0)):
+            ids = labels[i].tolist()
+            keep = [False] * len(ids)
+
+            pos = 0
+            while True:
+                # Find next assistant-start boundary
+                s = self._find_subsequence(ids, start_ids, pos)
+                if s == -1:
+                    break
+                # Find the corresponding assistant-end boundary
+                e = self._find_subsequence(ids, end_ids, s + start_len)
+                if e == -1:
+                    # Open-ended assistant turn (e.g. last turn with
+                    # add_generation_prompt) — keep until end of real tokens.
+                    for j in range(s, len(ids)):
+                        keep[j] = True
+                    break
+                # Mark the whole span [start .. end+end_len) as keep
+                for j in range(s, e + end_len):
+                    keep[j] = True
+                pos = e + end_len
+
+            for j in range(len(ids)):
+                if not keep[j]:
+                    labels[i, j] = -100
+
+        return labels
 
 
 class FallbackDataset(torch.utils.data.Dataset):
