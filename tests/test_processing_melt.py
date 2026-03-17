@@ -1,3 +1,5 @@
+import json
+import os
 import tempfile
 import urllib.request
 from types import SimpleNamespace
@@ -466,3 +468,59 @@ class TestMELTProcessorMultipleAudios:
         assert "input_features" in result
         assert result["input_features"].shape[0] == 2
         assert len(result["input_ids"]) == 2
+
+
+class TestMELTProcessorSaveLoad:
+    """Tests for MELTProcessor save_pretrained / from_pretrained round-trip."""
+
+    def test_special_tokens_top_level_in_tokenizer_config(self, processor):
+        """MELT special tokens must appear as top-level keys in tokenizer_config.json."""
+        with tempfile.TemporaryDirectory() as d:
+            processor.save_pretrained(d)
+            tc = json.load(open(os.path.join(d, "tokenizer_config.json")))
+            for name in MELT_REQUIRED_SPECIAL_TOKENS:
+                assert name in tc, f"'{name}' missing from tokenizer_config.json top-level keys"
+                assert tc[name] == getattr(processor, name)
+
+    def test_special_tokens_in_additional_special_tokens(self, processor):
+        """MELT special tokens must be listed inside additional_special_tokens."""
+        with tempfile.TemporaryDirectory() as d:
+            processor.save_pretrained(d)
+            tc = json.load(open(os.path.join(d, "tokenizer_config.json")))
+            additional = tc.get("additional_special_tokens", [])
+            for name in MELT_REQUIRED_SPECIAL_TOKENS:
+                token_str = getattr(processor, name)
+                assert token_str in additional, (
+                    f"'{token_str}' ({name}) not found in additional_special_tokens"
+                )
+
+    def test_from_pretrained_restores_token_strings(self, processor):
+        """from_pretrained must restore all MELT token string attributes."""
+        with tempfile.TemporaryDirectory() as d:
+            processor.save_pretrained(d)
+            loaded = MELTProcessor.from_pretrained(d)
+            for name in MELT_REQUIRED_SPECIAL_TOKENS:
+                assert getattr(loaded, name) == getattr(processor, name), (
+                    f"Token '{name}' mismatch after round-trip"
+                )
+
+    def test_from_pretrained_restores_token_ids(self, processor):
+        """from_pretrained must restore all MELT token ID attributes."""
+        with tempfile.TemporaryDirectory() as d:
+            processor.save_pretrained(d)
+            loaded = MELTProcessor.from_pretrained(d)
+            for name in MELT_REQUIRED_SPECIAL_TOKENS:
+                orig_id = getattr(processor, name + "_id")
+                loaded_id = getattr(loaded, name + "_id")
+                assert loaded_id == orig_id, (
+                    f"Token ID for '{name}' mismatch after round-trip: {orig_id} vs {loaded_id}"
+                )
+
+    def test_from_pretrained_no_config_argument_needed(self, processor):
+        """from_pretrained must succeed without passing a config argument."""
+        with tempfile.TemporaryDirectory() as d:
+            processor.save_pretrained(d)
+            # Must not raise TypeError about missing 'config' argument
+            loaded = MELTProcessor.from_pretrained(d)
+            assert loaded is not None
+

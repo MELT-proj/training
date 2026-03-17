@@ -23,11 +23,7 @@ import torch
 from omegaconf import DictConfig, OmegaConf
 
 import wandb
-from transformers import (
-    AutoFeatureExtractor,
-    AutoTokenizer,
-    TrainingArguments,
-)
+from transformers import TrainingArguments
 from transformers.modeling_utils import find_tied_parameters
 from transformers.trainer_utils import get_last_checkpoint
 
@@ -41,8 +37,9 @@ from .config import (
     save_config,
     trainer_args_dict,
 )
-from .trainer import MELTTrainer, count_trainable_parameters
 from .metrics import TrainingEvaluator, pull_final_logits
+from .setup import prepare_melt_config, prepare_processor
+from .trainer import MELTTrainer, count_trainable_parameters
 
 
 logger = get_logger(__name__)
@@ -55,40 +52,27 @@ def prepare_model(
     cfg: DictConfig,
     targs: TrainingArguments,
     processor: MELTProcessor,
-) -> tuple[MELTForCausalLM, str | None]:
+) -> tuple[MELTForCausalLM, str | None, MELTConfig, MELTProcessor]:  # type: ignore[override]
     """Prepare the model for training.
+
+    When ``model.ckpt`` is set in the config, the model config and processor
+    are loaded from the checkpoint directory (which must contain
+    ``config.json`` and ``preprocessor_config.json``).  Otherwise they are
+    built from scratch using the training config.
 
     Args:
         cfg: Training configuration (OmegaConf DictConfig).
         targs: HuggingFace TrainingArguments.
-        processor: MELTProcessor instance.
+        processor: MELTProcessor instance (used only when no checkpoint is given).
 
     Returns:
-        Tuple of (model, last_checkpoint_path).
+        Tuple of (model, last_checkpoint_path, config, processor).
     """
     # Prepare model configs
     model_cfg = cfg.model
     encoder_cfg = model_cfg.encoder
     decoder_cfg = model_cfg.decoder
     adapter_cfg = model_cfg.adapter
-
-    # Beyond this length in frames, the encoder will unfold the input in chunks
-    max_audio_seq_len = encoder_cfg.get("max_audio_seq_len", 1500)
-
-    config = MELTConfig(
-        audio_encoder=encoder_cfg.name,
-        text_decoder=decoder_cfg.name,
-        adapter_config=adapter_cfg,
-        decoder_kwargs={"attn_implementation": decoder_cfg.get("attn_implementation", "sdpa")},
-        max_audio_seq_len=max_audio_seq_len,
-    )
-
-    # Set special tokens
-    config.audio_bos_token_id = processor.tokenizer.convert_tokens_to_ids([processor.audio_bos_token])[0]
-    config.audio_eos_token_id = processor.tokenizer.convert_tokens_to_ids([processor.audio_eos_token])[0]
-    config.pad_token_id = processor.tokenizer.convert_tokens_to_ids([processor.tokenizer.pad_token])[0]
-    config.audio_token_id = processor.tokenizer.convert_tokens_to_ids([processor.audio_token])[0]
-    config.audio_encoder_config.max_audio_seq_len = max_audio_seq_len
 
     # Detect last checkpoint
     last_checkpoint = None
@@ -108,9 +92,14 @@ def prepare_model(
     # Load or create model
     logger.info("Loading model...")
     if model_cfg.ckpt is not None:
-        logger.info(f"Loading model from checkpoint: {model_cfg.ckpt}")
-        model = MELTForCausalLM.from_pretrained(model_cfg.ckpt)
+        ckpt_dir = Path(model_cfg.ckpt)
+        logger.info(f"Loading model, config, and processor from checkpoint: {ckpt_dir}")
+
+        config = MELTConfig.from_pretrained(ckpt_dir)
+        processor = MELTProcessor.from_pretrained(ckpt_dir)
+        model = MELTForCausalLM.from_pretrained(ckpt_dir)
     else:
+        config = prepare_melt_config(cfg, processor)
         model = MELTForCausalLM(config)
 
     logger.info("Tied model weights:")
@@ -139,7 +128,7 @@ def prepare_model(
         logger.info("Freezing the decoder")
         _freeze(model.text_decoder)
 
-    return model, last_checkpoint, config
+    return model, last_checkpoint, config, processor
 
 
 def main(cfg: DictConfig) -> None:
@@ -199,17 +188,12 @@ def main(cfg: DictConfig) -> None:
     ##########################
     ## PROCESSOR SETUP
     ##########################
-    logger.info(f"Loading processor for encoder={cfg.model.encoder.name}, decoder={cfg.model.decoder.name}")
-    processor = MELTProcessor(
-        feature_extractor=AutoFeatureExtractor.from_pretrained(cfg.model.encoder.name),
-        tokenizer=AutoTokenizer.from_pretrained(cfg.model.decoder.name, use_fast=True),
-        config=cfg.model,
-    )
+    processor = prepare_processor(cfg)
 
     ##########################
     ## MODEL PREPARATION
     ##########################
-    model, last_checkpoint, config = prepare_model(cfg, targs, processor)
+    model, last_checkpoint, config, processor = prepare_model(cfg, targs, processor)
     logger.info("Model prepared!")
 
     ##########################
