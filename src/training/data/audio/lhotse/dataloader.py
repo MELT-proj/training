@@ -404,6 +404,7 @@ def read_cutset_from_config(config: DictConfig, repeat: bool = True) -> tuple[Cu
             weight = _get_config_value(cfg, "weight", 1.0)
             weights.append(float(weight))
 
+        logger.info(f"Mux-ing data sources. Weights: {weights}")
         combined = CutSet.mux(*cutsets, weights=weights, seed=shard_seed)
 
     # Since we split cuts across data workers (split_for_dataloading=True),
