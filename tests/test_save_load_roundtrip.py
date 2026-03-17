@@ -10,7 +10,7 @@ import tempfile
 import pytest
 import torch
 
-from src.modeling import MELTConfig, MELTForCausalLM, MELTForSequenceClassification
+from melt.modeling import MELTConfig, MELTForCausalLM, MELTForSequenceClassification
 
 
 # ---------------------------------------------------------------------------

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import librosa
 import pytest
 
-from src.modeling import MELT_REQUIRED_SPECIAL_TOKENS, MELTConfig, MELTProcessor
+from melt.modeling import MELT_REQUIRED_SPECIAL_TOKENS, MELTConfig, MELTProcessor
 from transformers import AutoConfig, AutoFeatureExtractor, AutoTokenizer
 
 
@@ -524,3 +524,45 @@ class TestMELTProcessorSaveLoad:
             loaded = MELTProcessor.from_pretrained(d)
             assert loaded is not None
 
+    def test_save_and_load_roundtrip(self, processor):
+        """Saved processor must reload without errors and preserve token attributes."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            processor.save_pretrained(tmp_dir)
+            loaded = MELTProcessor.from_pretrained(tmp_dir)
+
+        assert loaded.audio_token == processor.audio_token
+        assert loaded.audio_bos_token == processor.audio_bos_token
+        assert loaded.audio_eos_token == processor.audio_eos_token
+
+    def test_save_and_load_token_ids(self, processor):
+        """Token IDs resolved after from_pretrained() must match the originals."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            processor.save_pretrained(tmp_dir)
+            loaded = MELTProcessor.from_pretrained(tmp_dir)
+
+        assert loaded.audio_token_id == processor.audio_token_id
+        assert loaded.audio_bos_token_id == processor.audio_bos_token_id
+        assert loaded.audio_eos_token_id == processor.audio_eos_token_id
+
+    def test_load_does_not_require_config(self, processor):
+        """from_pretrained() must succeed without passing a config argument."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            processor.save_pretrained(tmp_dir)
+            # Must not raise TypeError about missing 'config' argument
+            loaded = MELTProcessor.from_pretrained(tmp_dir)
+
+        assert isinstance(loaded, MELTProcessor)
+
+    def test_loaded_processor_can_tokenize(self, processor, audio_sample):
+        """A reloaded processor must produce the same token IDs as the original."""
+        text = f"{processor.audio_token}hello world"
+        audio = [[audio_sample]]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            processor.save_pretrained(tmp_dir)
+            loaded = MELTProcessor.from_pretrained(tmp_dir)
+
+        original_out = processor(text=[text], audio=audio, return_tensors="pt")
+        loaded_out = loaded(text=[text], audio=audio, return_tensors="pt")
+
+        assert (original_out["input_ids"] == loaded_out["input_ids"]).all()

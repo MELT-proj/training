@@ -557,6 +557,147 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         return labels
 
 
+class SpeechTextQEDataset(SpeechToTextDataset):
+    """A dataset for Speech Quality Estimation tasks that processes Lhotse CutSets.
+
+    Identical to SpeechToTextDataset in audio packing, but replaces the
+    text-based labels with a scalar floating-point quality score read from
+    the cut's custom tags.
+
+    The name of the tag that holds the score is taken from
+    ``config.train_ds.target_field`` (or ``validation_ds.target_field``).
+    The raw score is expected to be in [0, 100] and is divided by 100 so
+    that the returned label is in [0, 1].
+
+    Args:
+        processor: MELTProcessor instance for audio processing.
+        config: DictConfig containing data processing settings.
+        is_train: Whether this is the training split.
+        return_labels: Whether to include the ``labels`` key in the output.
+
+    Raises:
+        ValueError: If ``target_field`` is not set in the dataset config.
+        RuntimeError: If the score cannot be cast to a float for a cut.
+    """
+
+    def __init__(
+        self,
+        processor: MELTProcessor,
+        config: DictConfig,
+        is_train: bool = True,
+        return_labels: bool = True,
+    ) -> None:
+        super().__init__(
+            processor=processor,
+            config=config,
+            is_train=is_train,
+            return_labels=return_labels,
+        )
+
+    def _get_score(self, cut: Cut) -> float:
+        """Extract and validate the quality score from a cut's custom tags.
+
+        The field path is read per-cut from ``cut.custom["tags"]["target_field"]``
+        (set via the ``tags`` block of the corresponding ``input_cfg`` entry in the
+        YAML config, e.g. ``target_field: custom.score``).  The value at that path
+        is then resolved with dot-notation via ``_get_nested_value``.
+
+        Args:
+            cut: Lhotse Cut object.
+
+        Returns:
+            Score in [0, 1] (raw value divided by 100).
+
+        Raises:
+            RuntimeError: If ``target_field`` is absent from the cut's tags, if the
+                resolved value is missing, or if it cannot be cast to float.
+        """
+        # Step 1: resolve the field path from the per-cut tags.
+        target_field: str | None = None
+        if hasattr(cut, "custom") and cut.custom:
+            tags = cut.custom.get("tags", {})
+            if isinstance(tags, dict):
+                target_field = tags.get("target_field")
+
+        if not target_field:
+            raise RuntimeError(
+                f"Cut '{cut.id}' has no 'target_field' entry in its tags. "
+                "Ensure each input_cfg entry in the YAML has a tags.target_field value."
+            )
+
+        # Step 2: resolve the actual score value using dot-notation.
+        raw = _get_nested_value(cut, target_field)
+
+        if raw is None:
+            raise RuntimeError(
+                f"Cut '{cut.id}': could not find value at path '{target_field}'. "
+                "Ensure the CutSet was prepared with this field."
+            )
+
+        try:
+            score = float(raw)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                f"Cut '{cut.id}': cannot convert '{target_field}' value {raw!r} to float."
+            ) from exc
+
+        return score / 100.0
+
+    def __getitem__(self, cuts: CutSet) -> dict[str, torch.Tensor] | None:
+        """Process a batch of cuts into model inputs with scalar QE labels.
+
+        Audio features are packed exactly as in SpeechToTextDataset; the
+        ``labels`` tensor is replaced with a 1-D float tensor of shape [B]
+        containing the normalised quality scores.
+
+        Args:
+            cuts: A CutSet containing the cuts to process.
+
+        Returns:
+            Dictionary with model inputs (same keys as SpeechToTextDataset
+            except ``labels`` is a float tensor of shape [B]).
+            Returns None if all cuts fail to load.
+        """
+        if cuts is None or len(cuts) == 0:
+            return None
+
+        self._maybe_log_cut_ids(cuts)
+
+        audios: list[torch.Tensor] = []
+        scores: list[float] = []
+
+        for cut in cuts:
+            audio = self._load_audio(cut)
+            score = self._get_score(cut)
+            audios.append(audio)
+            scores.append(score)
+
+        try:
+            audio_inputs = [[a] for a in audios]
+            # Provide a dummy text so the processor can build audio-only inputs.
+            # The audio token alone is sufficient; there is no target transcript.
+            dummy_texts = [self.processor.audio_token] * len(audios)
+
+            inputs = self.processor(
+                text=dummy_texts,
+                audio=audio_inputs,
+                sampling_rate=self.sample_rate,
+                padding=True,
+                return_tensors="pt",
+            )
+
+            if self.return_labels:
+                # Shape [B, 1] to match the (batch_size, num_labels) convention
+                # expected by AutoModelForSequenceClassification with num_labels=1.
+                inputs["labels"] = torch.tensor(scores, dtype=torch.float32).unsqueeze(-1)
+
+            return inputs
+
+        except Exception as e:
+            logger.error(f"Failed to process batch through processor: {e}")
+            return None
+
+
 class FallbackDataset(torch.utils.data.Dataset):
     """Wrapper dataset that returns previous batch on failure.
 
@@ -584,5 +725,6 @@ class FallbackDataset(torch.utils.data.Dataset):
 
 __all__ = [
     "SpeechToTextDataset",
+    "SpeechTextQEDataset",
     "FallbackDataset",
 ]

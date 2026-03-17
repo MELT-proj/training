@@ -54,7 +54,7 @@ class TestConfigIO:
         reason="LOCAL_DATASETS_DIR environment variable not set",
     )
     def test_load_config_from_yaml(self):
-        from src.training.config import load_config
+        from melt.training.config import load_config
 
         cfg = load_config("config/train/asr.yaml")
         assert cfg.model.encoder.name
@@ -63,7 +63,7 @@ class TestConfigIO:
 
     def test_cli_overrides(self):
         """Test that OmegaConf can apply CLI overrides via dotlist."""
-        from src.training.config import load_config
+        from melt.training.config import load_config
 
         cfg = load_config(cli_args=["trainer.max_steps=123", "model.adapter.freeze=true"])
         assert cfg.trainer.max_steps == 123
@@ -74,7 +74,7 @@ class TestConfigIO:
         reason="LOCAL_DATASETS_DIR environment variable not set",
     )
     def test_save_config_roundtrip(self, tmp_path: Path, monkeypatch):
-        from src.training.config import load_config, save_config
+        from melt.training.config import load_config, save_config
 
         # Set env vars that asr.yaml interpolates via ${oc.env:...}
         monkeypatch.setenv("LOCAL_DATASETS_DIR", "/tmp/fake_datasets")
@@ -95,7 +95,7 @@ class TestConfigIO:
 
 class TestCutSetLoading:
     def test_read_cutset_from_config(self, librispeech_train100_path: str):
-        from src.training.data.audio.lhotse.dataloader import read_cutset_from_config
+        from melt.training.data.audio.lhotse.dataloader import read_cutset_from_config
 
         config = OmegaConf.create(
             {
@@ -122,7 +122,7 @@ class TestCutSetLoading:
 
 class TestSamplerAndDataloader:
     def test_sampler_creation(self, librispeech_train100_path: str):
-        from src.training.data.audio.lhotse.dataloader import get_lhotse_sampler_from_config
+        from melt.training.data.audio.lhotse.dataloader import get_lhotse_sampler_from_config
 
         config = OmegaConf.create(
             {
@@ -146,7 +146,7 @@ class TestSamplerAndDataloader:
         assert use_iterable is True
 
     def test_dataloader_creation(self, librispeech_train100_path: str):
-        from src.training.data.audio.lhotse.dataloader import get_lhotse_dataloader_from_config
+        from melt.training.data.audio.lhotse.dataloader import get_lhotse_dataloader_from_config
 
         class DummyDataset(torch.utils.data.Dataset):
             def __getitem__(self, cuts):
@@ -185,7 +185,7 @@ class TestFallbackDataset:
     def test_fallback_returns_last_good_batch(self):
         from unittest.mock import MagicMock
 
-        from src.training.data.audio.lhotse.dataset import FallbackDataset
+        from melt.training.data.audio.lhotse.dataset import FallbackDataset
 
         inner_dataset = MagicMock()
         good_batch = {"input_features": torch.randn(2, 100, 80)}

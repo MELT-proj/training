@@ -1,7 +1,7 @@
 import pytest
 from omegaconf import OmegaConf
 
-from src.training.config import get_default_config
+from melt.training.config import get_default_config
 
 
 def test_adapter_defaults_in_training_config():
