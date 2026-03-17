@@ -85,13 +85,12 @@ TASK_TEMPLATES: dict[str, list[str]] = {
         "{audio_token} What is being said? Translate to {lang}.",
         "Convert the speech in this audio to {lang}: {audio_token}",
     ],
-    "default": [
-        "{audio_token} Process this audio.",
-        "Process the following audio: {audio_token}",
-        "{audio_token} Analyze this audio recording.",
-        "Listen to this audio and process it: {audio_token}",
-        "{audio_token} Handle this audio input.",
-    ],
+    "speechqe": [
+        "{audio_token} Score how well this {lang} translation matches the audio. Return a float between 0 and 1.",
+        "Given this audio and its {lang} translation, provide a quality score from 0 to 1: {audio_token}",
+        "{audio_token} Evaluate the quality of the following {lang} translation for this speech and answer with a single float in [0, 1].",
+        "Listen to this audio, assess the provided {lang} translation, and output only a float between 0 and 1: {audio_token}",
+    ]
 }
 # Aliases for common task names
 TASK_TEMPLATES["asr"] = TASK_TEMPLATES["transcribe"]
@@ -499,6 +498,57 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
 
         return formatted
 
+    def _apply_qe_chat_template(self, texts: list[str], langs: list[str]) -> list[str]:
+        """Apply chat-template formatting for quality estimation inputs.
+
+        Each sample is formatted as a user prompt containing the audio token and
+        a request to score a translation, followed by an assistant turn that
+        contains the candidate translation text.
+
+        Args:
+            texts: Candidate translations to be evaluated.
+            langs: List of target language ISO codes.
+
+        Returns:
+            List of fully formatted chat strings ready for the processor.
+        """
+        tokenizer = getattr(self.processor, "tokenizer", None)
+        if tokenizer is None or not hasattr(tokenizer, "apply_chat_template"):
+            raise ValueError(
+                "apply_chat_template=True but the processor tokenizer does not support apply_chat_template()."
+            )
+
+        audio_token = self.processor.audio_token
+        formatted: list[str] = []
+
+        qe_task_templates = TASK_TEMPLATES["speechqe"]
+
+        for text, lang in zip(texts, langs):
+            template = random.choice(qe_task_templates)
+
+            lang_key = (lang or "").lower()
+            language_name = LANGUAGE_ISO_TO_NAME.get(lang_key)
+            if language_name is None:
+                supported = ", ".join(sorted(LANGUAGE_ISO_TO_NAME.keys()))
+                raise ValueError(
+                    f"Unsupported language ISO code '{lang}'. "
+                    f"Expected one of: {supported}"
+                )
+
+            prompt = template.format(audio_token=audio_token, lang=language_name)
+            full_text = tokenizer.apply_chat_template(
+                [
+                    {"role": "user", "content": prompt},
+                    {"role": "assistant", "content": text},
+                ],
+                tokenize=False,
+                add_generation_prompt=False,
+                enable_thinking=False,
+            )
+            formatted.append(full_text)
+
+        return formatted
+
     # ------------------------------------------------------------------
     # Token-level label masking for chat-template mode
     # ------------------------------------------------------------------
@@ -614,10 +664,13 @@ class SpeechTextQEDataset(SpeechToTextDataset):
         """
         # Step 1: resolve the field path from the per-cut tags.
         target_field: str | None = None
+        normalize_factor: float = 1.0
+
         if hasattr(cut, "custom") and cut.custom:
             tags = cut.custom.get("tags", {})
             if isinstance(tags, dict):
                 target_field = tags.get("target_field")
+                normalize_factor = tags.get("normalize_factor", normalize_factor)
 
         if not target_field:
             raise RuntimeError(
@@ -641,7 +694,26 @@ class SpeechTextQEDataset(SpeechToTextDataset):
                 f"Cut '{cut.id}': cannot convert '{target_field}' value {raw!r} to float."
             ) from exc
 
-        return score / 100.0
+        return score / normalize_factor
+
+    def _get_translation_text(self, cut: Cut) -> str:
+        """Extract the candidate translation from supervision text.
+
+        Args:
+            cut: Lhotse Cut object.
+
+        Returns:
+            Translation text from the cut supervisions.
+
+        Raises:
+            RuntimeError: If no non-empty supervision text is available.
+        """
+        if cut.supervisions:
+            texts = [sup.text for sup in cut.supervisions if sup.text]
+            if texts:
+                return " ".join(texts).strip()
+
+        raise RuntimeError(f"Empty or missing supervision text for cut {cut.id}. Cut: {cut}")
 
     def __getitem__(self, cuts: CutSet) -> dict[str, torch.Tensor] | None:
         """Process a batch of cuts into model inputs with scalar QE labels.
@@ -665,21 +737,28 @@ class SpeechTextQEDataset(SpeechToTextDataset):
 
         audios: list[torch.Tensor] = []
         scores: list[float] = []
+        texts: list[str] = []
+        langs: list[str] = []
 
         for cut in cuts:
             audio = self._load_audio(cut)
             score = self._get_score(cut)
+            text = self._get_translation_text(cut)
+            _, lang = self._get_tags(cut)
             audios.append(audio)
             scores.append(score)
+            texts.append(text)
+            langs.append(lang)
 
         try:
             audio_inputs = [[a] for a in audios]
-            # Provide a dummy text so the processor can build audio-only inputs.
-            # The audio token alone is sufficient; there is no target transcript.
-            dummy_texts = [self.processor.audio_token] * len(audios)
+            if self.apply_chat_template:
+                formatted_texts = self._apply_qe_chat_template(texts, langs)
+            else:
+                formatted_texts = [f"{self.processor.audio_token}{text}" for text in texts]
 
             inputs = self.processor(
-                text=dummy_texts,
+                text=formatted_texts,
                 audio=audio_inputs,
                 sampling_rate=self.sample_rate,
                 padding=True,

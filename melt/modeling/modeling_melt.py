@@ -1100,9 +1100,6 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
         if "num_items_in_batch" in kwargs:
             kwargs_decoder["num_items_in_batch"] = kwargs["num_items_in_batch"]
 
-        import pdb; pdb.set_trace()
-
-
         # 1. Extract text embeddings
         decoder_input_embs = self._get_text_embeddings(
             input_ids=input_ids,
@@ -1483,6 +1480,7 @@ class MELTForSequenceClassification(MELTPreTrainedModel):
     def forward(
         self,
         input_ids: torch.LongTensor | None = None,
+        inputs_embeds: torch.FloatTensor | None = None,
         attention_mask: torch.Tensor | None = None,
         input_features: torch.FloatTensor | None = None,
         features_attention_mask: torch.FloatTensor | None = None,
