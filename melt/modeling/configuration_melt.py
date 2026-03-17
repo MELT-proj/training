@@ -197,5 +197,9 @@ class MELTConfig(PretrainedConfig):
     def vocab_size(self):
         return self.text_decoder_config.vocab_size
 
+    @property
+    def audio_token_id(self):
+        return self.text_decoder_config.audio_token_id
+
 
 __all__ = ["MELTConfig", "MELTAdapterConfig"]

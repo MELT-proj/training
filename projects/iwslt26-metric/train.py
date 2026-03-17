@@ -23,11 +23,7 @@ import torch
 from omegaconf import DictConfig, OmegaConf
 
 import wandb
-from transformers import (
-    AutoFeatureExtractor,
-    AutoTokenizer,
-    TrainingArguments,
-)
+from transformers import TrainingArguments
 from transformers.modeling_utils import find_tied_parameters
 from transformers.trainer_utils import get_last_checkpoint
 
@@ -41,8 +37,9 @@ from melt.training.config import (
     save_config,
     trainer_args_dict,
 )
-from melt.training.trainer import count_trainable_parameters
 from melt.training.metrics import TrainingEvaluator, pull_final_logits
+from melt.training.setup import prepare_melt_config
+from melt.training.trainer import count_trainable_parameters
 from .trainer import MELTTrainerForRegression
 
 
@@ -73,23 +70,7 @@ def prepare_model(
     decoder_cfg = model_cfg.decoder
     adapter_cfg = model_cfg.adapter
 
-    # Beyond this length in frames, the encoder will unfold the input in chunks
-    max_audio_seq_len = encoder_cfg.get("max_audio_seq_len", 1500)
-
-    config = MELTConfig(
-        audio_encoder=encoder_cfg.name,
-        text_decoder=decoder_cfg.name,
-        adapter_config=adapter_cfg,
-        decoder_kwargs={"attn_implementation": decoder_cfg.get("attn_implementation", "sdpa")},
-        max_audio_seq_len=max_audio_seq_len,
-    )
-
-    # Set special tokens
-    config.audio_bos_token_id = processor.tokenizer.convert_tokens_to_ids([processor.audio_bos_token])[0]
-    config.audio_eos_token_id = processor.tokenizer.convert_tokens_to_ids([processor.audio_eos_token])[0]
-    config.pad_token_id = processor.tokenizer.convert_tokens_to_ids([processor.tokenizer.pad_token])[0]
-    config.audio_token_id = processor.tokenizer.convert_tokens_to_ids([processor.audio_token])[0]
-    config.audio_encoder_config.max_audio_seq_len = max_audio_seq_len
+    config = prepare_melt_config(cfg, processor)
 
     # Detect last checkpoint
     last_checkpoint = None
