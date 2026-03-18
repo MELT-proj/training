@@ -50,7 +50,7 @@ from multiprocessing import cpu_count
 from pathlib import Path
 import pandas as pd
 
-from datasets import Audio, load_dataset, concatenate_datasets, DatasetDict
+from datasets import Audio, load_dataset, DatasetDict
 from lhotse import MonoCut, Recording, SupervisionSegment
 from lhotse.shar import SharWriter
 from tqdm.auto import tqdm
@@ -75,7 +75,7 @@ MARKER_ROOT = BASE_OUTPUT_DIR / ".conversion_markers"
 
 # Dataset properties
 SOURCE_LANGUAGE = "en"  # Source is always English
-SPLITS = ["train"]
+SPLITS = ["train", "train_synthetic", "dev"]
 
 # Fields to store in custom metadata (all dataset fields except audio)
 CUSTOM_FIELDS = [
@@ -237,7 +237,7 @@ def write_out(dataset: str,
                     cut_id = f"{tgt_lang}_{split}_{doc_id}".replace("/", "_").replace(".", "_").replace(" ", "_")
 
                     # Extract audio bytes
-                    audio_data = item["src_audio"]
+                    audio_data = item["audio"]
                     audio_bytes = audio_data.get("bytes")
 
                     if audio_bytes is None:
@@ -315,7 +315,6 @@ def convert_split_by_language(
     force: bool = False,
     num_workers: int | None = None,
     hf_num_proc: int = 4,
-    split_2: Optional[str] = None,
     split_ratio: Optional[float] = None,
 ) -> tuple[int, int, int]:
     """Convert a single split, creating subfolders per target language.
@@ -343,40 +342,26 @@ def convert_split_by_language(
         num_proc=hf_num_proc,
         trust_remote_code=True,
     )
-    #split 
-    if split_2:
-        logger.info(f"Adding synthetic data to train mix")
-        dataset_synthetic = load_dataset(
-        DATASET_NAME,
-        HF_CONFIG,
-        split=split_2,
-        num_proc=hf_num_proc,
-        trust_remote_code=True,
-        )
-        
-        train_data = concatenate_datasets([dataset, dataset_synthetic])
-        dataset = train_data
-
     logger.info(f"Loaded {len(dataset)} items")
 
     splits = None
-    if split_ratio > 0:
-        logger.info(f"Creating train/valid split with {split_ratio} ratio")
+    if split_ratio and split_ratio > 0:
+        logger.info(f"Creating train/validation split with {split_ratio} ratio")
 
         #to stratify
         indices = list(range(len(dataset)))
-        train_idx, test_idx = train_test_split(
+        train_idx, validation_idx = train_test_split(
             indices, train_size=split_ratio, 
             stratify=dataset['tgt_lang'], 
             random_state=42
         )
 
         train_dataset = dataset.select(train_idx)
-        test_dataset = dataset.select(test_idx)
+        validation_dataset = dataset.select(validation_idx)
 
         train_valid_dataset = DatasetDict({
             'train': train_dataset,
-            'valid': test_dataset
+            'validation': validation_dataset
         })
         dataset = train_valid_dataset
         splits = dataset.keys()
@@ -385,14 +370,12 @@ def convert_split_by_language(
         total_count, total_errors, skipped = 0,0,0
         for splt in splits:
             logger.info(f"Writing {splt} data from split")
-            count, errors, skip = write_out(dataset[splt], splt, force)
+            split_output_dir = f"{split}/{splt}"
+            count, errors, skip = write_out(dataset[splt], split_output_dir, force)
             total_count += count
             total_errors += errors
             skipped += skip
     else:
-        if split == "dev":
-            #change split name to test -> iwslt[dev] is our test set
-            split = "test"
         logger.info(f"Writing {split} data")
         total_count, total_errors, skipped = write_out(dataset, split, force)
     
@@ -403,8 +386,7 @@ def convert_all_to_shar(
     splits: list[str] | None = None,
     num_workers: int | None = None,
     hf_num_proc: int = 4,
-    split_ratio: Optional[float] = 0.3,
-    synthetic: Optional[bool] = True,
+    split_ratio: Optional[float] = 0.1,
 ):
     """Convert all splits to Shar format, organized by target language.
 
@@ -426,21 +408,13 @@ def convert_all_to_shar(
     grand_total_skipped = 0
 
     for split in splits:
-        if split == "train" and synthetic:
-            # for the train split and if synthetic, then we set the second split to train_synthetic. Otherwise, we do not use train_synthetic at all.
-            split_2 =  "train_synthetic"
-        else:
-            # for dev split and synthetic = False, we do not use the second split.
-            split_2 = None
-
-        #now, after concatenating or not the train set, we need to create a dev split from it ONLY if its train, otherwise no splitting. 
+        should_split = split in ["train", "train_synthetic"]
         count, errors, skipped = convert_split_by_language(
             split=split,
             force=force,
             num_workers=num_workers,
             hf_num_proc=hf_num_proc,
-            split_2=split_2,
-            split_ratio=split_ratio if split == "train" else 0,
+            split_ratio=split_ratio if should_split else 0,
         )
         grand_total_count += count
         grand_total_errors += errors
@@ -506,12 +480,6 @@ def parse_args():
         help="Train/dev split ratio from data. Choose a number between 0 and 1, default 0.1. Put 0 to not split the data."
     )
 
-    parser.add_argument(
-        "--synthetic",
-        type=bool,
-        default=False,
-        help="Include synthetic train split in training. Default True."
-    )
     return parser.parse_args()
 
 
@@ -523,5 +491,4 @@ if __name__ == "__main__":
         num_workers=args.num_workers,
         hf_num_proc=args.hf_num_proc,
         split_ratio = float(args.sratio),
-        synthetic = bool(args.synthetic),
     )

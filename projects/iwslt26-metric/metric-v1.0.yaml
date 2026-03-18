@@ -24,40 +24,92 @@ model:
   decoder:
     freeze: true
   
-  ckpt: /mnt/scratch-artemis/giuseppe/melt-data/outputs/MA-v1.2.3/
+  ckpt: /mnt/scratch-artemis/giuseppe/melt-data/outputs/MA-v1.2.7/
 
 # =============================================================================
 # Data Configuration
 # =============================================================================
 data:
   sample_rate: 16000
-  apply_chat_template: false
+  apply_chat_template: true
 
   train_ds:
-    total_hours: 54.26
-    total_cuts: 15661
-    force_estimate: false  # Force estimation of total_hours at start
+    # total_hours: 54.26
+    # total_cuts: 15661
+    force_estimate: true
 
-    # Data sources - list of datasets to load
     input_cfg:
+      # Hearing 2 translate HumanEval split
       - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/iwslt2026_metrics/en/train_synthetic
+        shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/hearing2translate_humeval/seamlessm4t/de/train
         tags:
-          task: qe
-          lang: en # target lang
-          target_field: custom.score
-      - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/iwslt2026_metrics/de/train
-        tags:
-          task: asr
+          task: speechqe
           lang: de
           target_field: custom.score
       - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/iwslt2026_metrics/zh/train
+        shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/hearing2translate_humeval/seamlessm4t/zh/train
         tags:
-          task: asr
+          task: speechqe
           lang: zh
           target_field: custom.score
+      
+      # Voxpopuli MetricX 24 XL TODO: bugged at the moment
+      # - type: lhotse_shar
+      #   shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/voxpopuli_metrics/de/train
+      #   tags:
+      #     task: speechqe
+      #     lang: de
+      #     target_field: custom.score
+
+      # Official IWSLT26 splitfiles
+      - type: lhotse_shar
+        shar_path: /mnt/home/giuseppe/myscratch/melt-data/shar/iwslt_metrics/de/train/train
+        tags:
+          task: speechqe
+          lang: de
+          target_field: custom.score
+          normalize_factor: 100.0
+      - type: lhotse_shar
+        shar_path: /mnt/home/giuseppe/myscratch/melt-data/shar/iwslt_metrics/zh/train/train
+        tags:
+          task: speechqe
+          lang: zh
+          target_field: custom.score
+          normalize_factor: 100.0
+      
+      - type: lhotse_shar
+        shar_path: /mnt/home/giuseppe/myscratch/melt-data/shar/iwslt_metrics/de/train_synthetic/train
+        tags:
+          task: speechqe
+          lang: de
+          target_field: custom.score
+          normalize_factor: 100.0
+      - type: lhotse_shar
+        shar_path: /mnt/home/giuseppe/myscratch/melt-data/shar/iwslt_metrics/zh/train_synthetic/train
+        tags:
+          task: speechqe
+          lang: zh
+          target_field: custom.score
+          normalize_factor: 100.0
+
+      # - type: lhotse_shar
+      #   shar_path: ${oc.env:LOCAL_DATASETS_DIR}/iwslt2026_metrics/en/train_synthetic
+      #   tags:
+      #     task: qe
+      #     lang: en # target lang
+      #     target_field: custom.score
+      # - type: lhotse_shar
+      #   shar_path: ${oc.env:LOCAL_DATASETS_DIR}/iwslt2026_metrics/de/train
+      #   tags:
+      #     task: asr
+      #     lang: de
+      #     target_field: custom.score
+      # - type: lhotse_shar
+      #   shar_path: ${oc.env:LOCAL_DATASETS_DIR}/iwslt2026_metrics/zh/train
+      #   tags:
+      #     task: asr
+      #     lang: zh
+      #     target_field: custom.score
 
     # Batch settings
     batch_size: null  # Use batch_duration instead for dynamic batching
@@ -68,7 +120,7 @@ data:
     use_bucketing: true
     num_buckets: 30
     bucket_buffer_size: 10000
-    bucket_duration_bins: [4.08, 4.95, 5.65, 6.33, 6.85, 7.36, 7.94, 8.46, 9.22, 10.26, 11.76, 13.51, 16.58, 21.43, 23.92, 26.24, 29.63, 31.67, 33.32, 35.22, 37.43, 39.2, 40.19, 42.1, 42.97, 43.93, 45.33, 46.72, 48.19]
+    # bucket_duration_bins: [4.08, 4.95, 5.65, 6.33, 6.85, 7.36, 7.94, 8.46, 9.22, 10.26, 11.76, 13.51, 16.58, 21.43, 23.92, 26.24, 29.63, 31.67, 33.32, 35.22, 37.43, 39.2, 40.19, 42.1, 42.97, 43.93, 45.33, 46.72, 48.19]
 
     # Sampling
     shuffle: true
@@ -90,30 +142,60 @@ data:
     lang_field: lang
 
   validation_ds:
-    total_hours: 10.53  # Optional: total hours of data for estimation
-    total_cuts: 5514  # Optional: total number of cuts for estimation
-    force_estimate: false  # Force estimation of total_hours at start
+    # total_hours: 10.53  # Optional: total hours of data for estimation
+    # total_cuts: 5514  # Optional: total number of cuts for estimation
+    force_estimate: true  # Force estimation of total_hours at start
 
     input_cfg:
       - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/iwslt2026_metrics/de/dev
-        tags:
-          task: asr
-          lang: de
-          target_field: custom.score
-      - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/iwslt2026_metrics/zh/dev
-        tags:
-          task: asr
-          lang: zh
-          target_field: custom.score
+          shar_path: /mnt/home/giuseppe/myscratch/melt-data/shar/iwslt_metrics/de/train/validation
+          tags:
+            task: speechqe
+            lang: de
+            target_field: custom.score
+            normalize_factor: 100.0
+        - type: lhotse_shar
+          shar_path: /mnt/home/giuseppe/myscratch/melt-data/shar/iwslt_metrics/zh/train/validation
+          tags:
+            task: speechqe
+            lang: zh
+            target_field: custom.score
+            normalize_factor: 100.0
+        
+        - type: lhotse_shar
+          shar_path: /mnt/home/giuseppe/myscratch/melt-data/shar/iwslt_metrics/de/train_synthetic/validation
+          tags:
+            task: speechqe
+            lang: de
+            target_field: custom.score
+            normalize_factor: 100.0
+        - type: lhotse_shar
+          shar_path: /mnt/home/giuseppe/myscratch/melt-data/shar/iwslt_metrics/zh/train_synthetic/validation
+          tags:
+            task: speechqe
+            lang: zh
+            target_field: custom.score
+            normalize_factor: 100.0
+
+      # - type: lhotse_shar
+      #   shar_path: ${oc.env:LOCAL_DATASETS_DIR}/iwslt2026_metrics/de/dev
+      #   tags:
+      #     task: asr
+      #     lang: de
+      #     target_field: custom.score
+      # - type: lhotse_shar
+      #   shar_path: ${oc.env:LOCAL_DATASETS_DIR}/iwslt2026_metrics/zh/dev
+      #   tags:
+      #     task: asr
+      #     lang: zh
+      #     target_field: custom.score
   
     batch_size: null
     batch_duration: 120.0
     use_bucketing: true
     num_buckets: 30
     bucket_buffer_size: 5000
-    bucket_duration_bins: [2.72, 3.6, 4.24, 4.8, 5.2, 5.6, 5.76, 6.08, 6.4, 6.72, 7.11, 7.52, 7.76, 8.08, 8.4, 8.8, 9.04, 9.44, 9.92, 10.32, 10.72, 11.1, 11.68, 12.4, 12.96, 14.0, 14.8, 17.6, 20.8]
+    # bucket_duration_bins: [2.72, 3.6, 4.24, 4.8, 5.2, 5.6, 5.76, 6.08, 6.4, 6.72, 7.11, 7.52, 7.76, 8.08, 8.4, 8.8, 9.04, 9.44, 9.92, 10.32, 10.72, 11.1, 11.68, 12.4, 12.96, 14.0, 14.8, 17.6, 20.8]
     shuffle: false
     drop_last: false
     min_duration: 0.5
@@ -129,11 +211,11 @@ data:
 # Trainer Configuration
 # =============================================================================
 trainer:
-  output_dir: ${oc.env:OUTPUT_DIR}/iwslt_replica_v1
+  output_dir: ${oc.env:OUTPUT_DIR}/MELT_QE_v1.0
   overwrite_output_dir: true
   seed: 42
   do_train: true
-  do_eval: true
+  do_eval: false
   eval_on_start: false
   average_tokens_across_devices: true
 
