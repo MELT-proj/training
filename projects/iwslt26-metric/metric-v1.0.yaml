@@ -148,34 +148,34 @@ data:
 
     input_cfg:
       - type: lhotse_shar
-          shar_path: /mnt/home/giuseppe/myscratch/melt-data/shar/iwslt_metrics/de/train/validation
-          tags:
-            task: speechqe
-            lang: de
-            target_field: custom.score
-            normalize_factor: 100.0
-        - type: lhotse_shar
-          shar_path: /mnt/home/giuseppe/myscratch/melt-data/shar/iwslt_metrics/zh/train/validation
-          tags:
-            task: speechqe
-            lang: zh
-            target_field: custom.score
-            normalize_factor: 100.0
-        
-        - type: lhotse_shar
-          shar_path: /mnt/home/giuseppe/myscratch/melt-data/shar/iwslt_metrics/de/train_synthetic/validation
-          tags:
-            task: speechqe
-            lang: de
-            target_field: custom.score
-            normalize_factor: 100.0
-        - type: lhotse_shar
-          shar_path: /mnt/home/giuseppe/myscratch/melt-data/shar/iwslt_metrics/zh/train_synthetic/validation
-          tags:
-            task: speechqe
-            lang: zh
-            target_field: custom.score
-            normalize_factor: 100.0
+        shar_path: /mnt/home/giuseppe/myscratch/melt-data/shar/iwslt_metrics/de/train/validation
+        tags:
+          task: speechqe
+          lang: de
+          target_field: custom.score
+          normalize_factor: 100.0
+      - type: lhotse_shar
+        shar_path: /mnt/home/giuseppe/myscratch/melt-data/shar/iwslt_metrics/zh/train/validation
+        tags:
+          task: speechqe
+          lang: zh
+          target_field: custom.score
+          normalize_factor: 100.0
+      
+      - type: lhotse_shar
+        shar_path: /mnt/home/giuseppe/myscratch/melt-data/shar/iwslt_metrics/de/train_synthetic/validation
+        tags:
+          task: speechqe
+          lang: de
+          target_field: custom.score
+          normalize_factor: 100.0
+      - type: lhotse_shar
+        shar_path: /mnt/home/giuseppe/myscratch/melt-data/shar/iwslt_metrics/zh/train_synthetic/validation
+        tags:
+          task: speechqe
+          lang: zh
+          target_field: custom.score
+          normalize_factor: 100.0
 
       # - type: lhotse_shar
       #   shar_path: ${oc.env:LOCAL_DATASETS_DIR}/iwslt2026_metrics/de/dev
