@@ -28,42 +28,66 @@ logger = get_logger(__name__)
 
 
 # ISO 639-1 language code to spelled-out language name.
-# Supported languages:
-# - Bulgarian (bg), Croatian (hr), Czech (cs), Danish (da), Dutch (nl),
-#   English (en), Estonian (et), Finnish (fi), French (fr), German (de),
-#   Greek (el), Hungarian (hu), Italian (it), Latvian (lv), Lithuanian (lt),
-#   Maltese (mt), Polish (pl), Portuguese (pt), Romanian (ro), Slovak (sk),
-#   Slovenian (sl), Spanish (es), Swedish (sv), Russian (ru), Ukrainian (uk),
-#   Chinese (zh), Catalan (ca), Albanian (sq)
+# Regional variants use the format "Language (REGION)".
+#
+# Base languages:
+#   ar, bg, ca, cs, cy, da, de, el, en, es, et, fa, fi, fr, hr, hu, id,
+#   it, ja, lv, lt, mn, mt, nl, pl, pt, ro, ru, sk, sl, sq, sv, ta, tr,
+#   uk, zh
+# Regional variants:
+#   de_de, en_us, es_419, es_es, fr_fr, it_it, pt_br, pt_pt,
+#   sv-se, zh-cn, zh-hk, zh-tw
 LANGUAGE_ISO_TO_NAME: dict[str, str] = {
+    # Base language codes
+    "ar": "Arabic",
     "bg": "Bulgarian",
-    "hr": "Croatian",
+    "ca": "Catalan",
     "cs": "Czech",
+    "cy": "Welsh",
     "da": "Danish",
-    "nl": "Dutch",
-    "en": "English",
-    "et": "Estonian",
-    "fi": "Finnish",
-    "fr": "French",
     "de": "German",
     "el": "Greek",
+    "en": "English",
+    "es": "Spanish",
+    "et": "Estonian",
+    "fa": "Persian",
+    "fi": "Finnish",
+    "fr": "French",
+    "hr": "Croatian",
     "hu": "Hungarian",
+    "id": "Indonesian",
     "it": "Italian",
+    "ja": "Japanese",
     "lv": "Latvian",
     "lt": "Lithuanian",
+    "mn": "Mongolian",
     "mt": "Maltese",
+    "nl": "Dutch",
     "pl": "Polish",
     "pt": "Portuguese",
     "ro": "Romanian",
+    "ru": "Russian",
     "sk": "Slovak",
     "sl": "Slovenian",
-    "es": "Spanish",
+    "sq": "Albanian",
     "sv": "Swedish",
-    "ru": "Russian",
+    "ta": "Tamil",
+    "tr": "Turkish",
     "uk": "Ukrainian",
     "zh": "Chinese",
-    "ca": "Catalan",
-    "sq": "Albanian",
+    # Regional variants (keys are lowercase; _get_tags lowercases before lookup)
+    "de_de": "German",
+    "en_us": "English (US)",
+    "es_419": "Spanish (Latin America)",
+    "es_es": "Spanish (Spain)",
+    "fr_fr": "French (France)",
+    "it_it": "Italian (Italy)",
+    "pt_br": "Portuguese (BR)",
+    "pt_pt": "Portuguese (PT)",
+    "sv-se": "Swedish (SE)",
+    "zh-cn": "Chinese (CN)",
+    "zh-hk": "Chinese (HK)",
+    "zh-tw": "Chinese (TW)",
 }
 
 # Task-specific prompt templates for chat-template mode.
@@ -270,11 +294,20 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         for idx, cut in enumerate(cuts):
             # Load audio
             audio = self._load_audio(cut)
+            if audio is None:
+                logger.warning("Skipping cut %s: audio failed to load.", cut.id)
+                continue
 
             # Get text transcript
             text = self._get_text(cut)
-            if text == "" or text is None:
-                raise RuntimeError(f"Empty or missing text for cut {cut.id}. Cut: {cut}")
+            if not text or not text.strip():
+                logger.warning(
+                    "Skipping cut %s: empty or missing text (text_field=%r, supervisions=%s).",
+                    cut.id,
+                    getattr(getattr(cut, 'custom', None) or {}, 'get', lambda *a: None)('tags', {}).get('text_field') if hasattr(cut, 'custom') and cut.custom else None,
+                    len(cut.supervisions) if cut.supervisions else 0,
+                )
+                continue
 
             # Strip leading/trailing whitespace and make it lowercase
             text = text.strip().lower()
@@ -285,6 +318,10 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
             texts.append(text)
             tasks.append(task)
             langs.append(lang)
+
+        if not audios:
+            logger.warning("All %d cuts in this batch were skipped.", len(cuts))
+            return None
 
         # Format texts with audio token for the processor
         # This adds <|audio|> token to indicate where audio embeddings go
@@ -415,6 +452,11 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
     def _get_tags(self, cut: Cut) -> tuple[str, str]:
         """Extract task and language tags from a cut.
 
+        For ASR tasks the returned language is the ``lang`` tag.
+        For ST tasks the returned language is ``tgt_lang`` (the target
+        language used in translation prompt templates), falling back to
+        ``lang`` if ``tgt_lang`` is not present.
+
         Args:
             cut: Lhotse Cut object.
 
@@ -428,6 +470,8 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         if hasattr(cut, "custom") and cut.custom:
             task = cut.custom.get("task", task)
             lang = cut.custom.get("lang", lang)
+            if task in ("st", "translate"):
+                lang = cut.custom.get("tgt_lang", lang)
 
         # Try to get language from supervision
         if cut.supervisions:
@@ -439,7 +483,10 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         # Check for tags added during dataset loading
         if hasattr(cut, "tags") and cut.tags:
             task = cut.tags.get("task", task)
-            lang = cut.tags.get("lang", lang)
+            if task in ("st", "translate"):
+                lang = cut.tags.get("tgt_lang", cut.tags.get("lang", lang))
+            else:
+                lang = cut.tags.get("lang", lang)
 
         return task, lang
 
@@ -742,13 +789,31 @@ class SpeechTextQEDataset(SpeechToTextDataset):
 
         for cut in cuts:
             audio = self._load_audio(cut)
-            score = self._get_score(cut)
-            text = self._get_translation_text(cut)
+            if audio is None:
+                logger.warning("Skipping cut %s: audio failed to load.", cut.id)
+                continue
+
+            try:
+                score = self._get_score(cut)
+            except RuntimeError as exc:
+                logger.warning("Skipping cut %s: score extraction failed: %s", cut.id, exc)
+                continue
+
+            try:
+                text = self._get_translation_text(cut)
+            except RuntimeError as exc:
+                logger.warning("Skipping cut %s: translation text missing: %s", cut.id, exc)
+                continue
+
             _, lang = self._get_tags(cut)
             audios.append(audio)
             scores.append(score)
             texts.append(text)
             langs.append(lang)
+
+        if not audios:
+            logger.warning("All %d cuts in this batch were skipped.", len(cuts))
+            return None
 
         try:
             audio_inputs = [[a] for a in audios]
