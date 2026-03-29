@@ -13,15 +13,23 @@ Key features:
 import math
 import os
 import sys
+from copy import deepcopy
+from typing import Any, Optional, Union
 
+import numpy as np
 import torch
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 from transformers import Trainer, TrainingArguments
 from transformers.trainer_pt_utils import EvalLoopContainer, find_batch_size, nested_detach
-from transformers.trainer_utils import EvalPrediction, EvalLoopOutput, denumpify_detensorize, has_length, denumpify_detensorize
-from typing import Optional
-import numpy as np
+from transformers.trainer_utils import (
+    EvalLoopOutput,
+    EvalPrediction,
+    PREFIX_CHECKPOINT_DIR,
+    denumpify_detensorize,
+    get_last_checkpoint,
+    has_length,
+)
 
 from .. import ddp
 from ..logging_utils import get_logger
@@ -117,8 +125,62 @@ class MELTTrainer(Trainer):
             eval_dataset = FallbackDataset(eval_dataset)
             logger.info(f"Eval dataset ready ({self.eval_num_cuts} cuts)")
 
+        # Sampler state restoration flag (set in train(), consumed in get_train_dataloader())
+        self._lhotse_resume_from: str | None = None
+        # Reference to the training dataloader (for sampler access during checkpoint saving)
+        self._train_dataloader_ref: DataLoader | None = None
+
         # Initialize parent (may set up distributed)
         super().__init__(model=model, args=args, eval_dataset=eval_dataset, **kwargs)
+
+    # ------------------------------------------------------------------
+    # Training entry point override: capture resume path for sampler
+    # ------------------------------------------------------------------
+
+    def train(
+        self,
+        resume_from_checkpoint: Optional[Union[str, bool]] = None,
+        trial: Union["optuna.Trial", dict[str, Any], None] = None,
+        ignore_keys_for_eval: Optional[list[str]] = None,
+        **kwargs,
+    ):
+        """Override to handle lhotse sampler state restoration on resume."""
+        if resume_from_checkpoint is False:
+            resume_from_checkpoint = None
+
+        # Resolve bool → path (same logic as parent)
+        if isinstance(resume_from_checkpoint, bool) and resume_from_checkpoint:
+            resume_from_checkpoint = get_last_checkpoint(self.args.output_dir)
+            if resume_from_checkpoint is None:
+                raise ValueError(
+                    f"No valid checkpoint found in output directory ({self.args.output_dir})"
+                )
+
+        # Check whether the checkpoint contains a saved sampler state for this rank
+        self._lhotse_resume_from = None
+        if resume_from_checkpoint is not None:
+            sampler_file = os.path.join(
+                resume_from_checkpoint,
+                "sampler",
+                f"sampler_state_rank{self._global_rank}.pt",
+            )
+            if os.path.isfile(sampler_file):
+                self._lhotse_resume_from = sampler_file
+                logger.info(
+                    f"Found lhotse sampler checkpoint at {sampler_file}; "
+                    "sampler state will be restored when the dataloader is created."
+                )
+
+        return super().train(
+            resume_from_checkpoint=resume_from_checkpoint,
+            trial=trial,
+            ignore_keys_for_eval=ignore_keys_for_eval,
+            **kwargs,
+        )
+
+    # ------------------------------------------------------------------
+    # Dataloader creation
+    # ------------------------------------------------------------------
 
     def get_train_dataloader(self) -> DataLoader:
         """Create training dataloader using Lhotse.
@@ -158,6 +220,14 @@ class MELTTrainer(Trainer):
         # We do not prepare the dataloader with the accelerator since rank and DDP allocation is already
         # taken care of by lhotse. Also, it seems the accelerator does not like setting batch_size to None.
         # dataloader = self.accelerator.prepare(dataloader)
+
+        # Keep a reference for sampler access during checkpoint saving
+        self._train_dataloader_ref = dataloader
+
+        # Restore sampler state if we are resuming from a checkpoint
+        if self._lhotse_resume_from is not None:
+            self._restore_sampler_state(dataloader)
+
         return dataloader
 
     def get_eval_dataloader(self, eval_dataset=None) -> DataLoader:
@@ -380,6 +450,164 @@ class MELTTrainer(Trainer):
             len_dataloader,
             max_steps,
         )
+
+    # ------------------------------------------------------------------
+    # Lhotse sampler state: save / restore helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _get_sampler_from_dataloader(dataloader: DataLoader):
+        """Extract the lhotse CutSampler from a DataLoader.
+
+        The sampler lives on ``dataloader.dataset.sampler`` when using
+        :class:`InfiniteIterableDatasetWrapper`.
+        """
+        dataset = getattr(dataloader, "dataset", None)
+        return getattr(dataset, "sampler", None)
+
+    def _save_sampler_state(self, output_dir: str) -> None:
+        """Save the lhotse sampler state dict into *output_dir*/sampler/.
+
+        Each rank saves its own file so that restoration is rank-aware.
+        """
+        dataloader = self._train_dataloader_ref
+        if dataloader is None:
+            logger.warning("No training dataloader reference — skipping sampler state save.")
+            return
+
+        sampler = self._get_sampler_from_dataloader(dataloader)
+        if sampler is None:
+            logger.warning("No sampler found on the training dataloader — skipping sampler state save.")
+            return
+
+        sampler_dir = os.path.join(output_dir, "sampler")
+        os.makedirs(sampler_dir, exist_ok=True)
+
+        # --- Build the payload ---------------------------------------------------
+        state: dict[str, Any] = {}
+
+        # 1) Native sampler state_dict (accurate when num_workers == 0).
+        try:
+            sampler_sd = sampler.state_dict()
+        except Exception as exc:
+            logger.warning(f"sampler.state_dict() failed ({exc}); saving training-progress only.")
+            sampler_sd = None
+
+        # 2) When dataloader workers > 0, the main-process sampler is never
+        #    iterated, so its diagnostics are empty.  We patch them with values
+        #    derived from the training progress so that ``_fast_forward`` on
+        #    restore replays the right number of batches.
+        if sampler_sd is not None:
+            diag = sampler_sd.get("diagnostics", {})
+            stats = diag.get("stats_per_epoch", {})
+            epoch = sampler_sd.get("epoch", 0)
+
+            has_real_stats = any(
+                s.get("kept_batches", 0) + s.get("discarded_batches", 0) > 0
+                for s in stats.values()
+            )
+
+            if not has_real_stats:
+                # Compute the number of micro-batches consumed in the current epoch.
+                total_microbatches = (
+                    self.state.global_step * self.args.gradient_accumulation_steps
+                )
+                batches_per_epoch = (
+                    len(dataloader)
+                    if hasattr(dataloader, "__len__")
+                    else total_microbatches
+                )
+                batches_in_epoch = (
+                    total_microbatches % batches_per_epoch
+                    if batches_per_epoch > 0
+                    else 0
+                )
+                sampler_sd["diagnostics"] = {
+                    "current_epoch": epoch,
+                    "stats_per_epoch": {
+                        epoch: {
+                            "epoch": epoch,
+                            "kept_batches": batches_in_epoch,
+                            "kept_cuts": 0,
+                            "discarded_batches": 0,
+                            "discarded_cuts": 0,
+                        }
+                    },
+                }
+                logger.info(
+                    f"Augmented sampler diagnostics for epoch {epoch}: "
+                    f"{batches_in_epoch} micro-batches (num_workers > 0 detected)."
+                )
+
+            state["sampler_state_dict"] = sampler_sd
+
+        # 3) Always include training-progress metadata for safety / debugging.
+        state["global_step"] = self.state.global_step
+        state["gradient_accumulation_steps"] = self.args.gradient_accumulation_steps
+
+        save_path = os.path.join(
+            sampler_dir, f"sampler_state_rank{self._global_rank}.pt"
+        )
+        torch.save(state, save_path)
+        logger.info(f"Saved lhotse sampler state to {save_path}")
+
+    def _restore_sampler_state(self, dataloader: DataLoader) -> None:
+        """Load a previously saved sampler state into *dataloader*'s sampler."""
+        sampler_file = self._lhotse_resume_from
+        self._lhotse_resume_from = None  # consumed
+
+        sampler = self._get_sampler_from_dataloader(dataloader)
+        if sampler is None:
+            logger.warning(
+                "Could not locate sampler on the dataloader — "
+                "sampler state will NOT be restored."
+            )
+            return
+
+        logger.info(f"Loading lhotse sampler state from {sampler_file}")
+        state = torch.load(sampler_file, map_location="cpu", weights_only=False)
+
+        sampler_sd = state.get("sampler_state_dict")
+        if sampler_sd is None:
+            logger.warning(
+                "Checkpoint does not contain 'sampler_state_dict' — "
+                "sampler state will NOT be restored."
+            )
+            return
+
+        logger.info(
+            "Restoring lhotse sampler state (this may take a while "
+            "as the sampler fast-forwards through already-seen data)…"
+        )
+        sampler.load_state_dict(deepcopy(sampler_sd))
+        logger.info("Lhotse sampler state restored successfully.")
+
+        # The sampler now handles data positioning internally, so we
+        # disable HF Trainer's own batch-skipping to avoid double-skipping.
+        self.args.ignore_data_skip = True
+        logger.info(
+            "Set ignore_data_skip=True — the lhotse sampler handles "
+            "data resumption natively."
+        )
+
+    # ------------------------------------------------------------------
+    # Checkpoint saving override
+    # ------------------------------------------------------------------
+
+    def _save_checkpoint(self, model, trial):
+        """Extend parent to also persist the lhotse sampler state."""
+        super()._save_checkpoint(model, trial)
+
+        # Reconstruct the same output directory the parent just wrote to.
+        checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
+        run_dir = self._get_output_dir(trial=trial)
+        output_dir = os.path.join(run_dir, checkpoint_folder)
+
+        self._save_sampler_state(output_dir)
+
+    # ------------------------------------------------------------------
+    # Optimizer
+    # ------------------------------------------------------------------
 
     def create_optimizer(self):
         """Create optimizer groups respecting freeze flags and modular audio stack.

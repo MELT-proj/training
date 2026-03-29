@@ -22,6 +22,9 @@ model:
     max_audio_seq_len: 1500 # for frames of 20ms, this is 30s
 
   decoder:
+    freeze: false
+
+  adapter:
     freeze: true
   
   ckpt: /mnt/scratch-artemis/giuseppe/melt-data/outputs/MA-v1.2.7/
@@ -55,10 +58,16 @@ data:
       
       # Voxpopuli MetricX 24 XL
       - type: lhotse_shar
-        shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/voxpopuli_metrics/de/train
+        shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/VP_metrics/de/train
         tags:
           task: speechqe
           lang: de
+          target_field: custom.score
+      - type: lhotse_shar
+        shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/VP_metrics/zh/train
+        tags:
+          task: speechqe
+          lang: zh
           target_field: custom.score
 
       # Official IWSLT26 splitfiles
@@ -120,15 +129,23 @@ data:
     force_estimate: true  # Force estimation of total_hours at start
 
     input_cfg:
-      # - type: lhotse_shar
-      #   shar_path: /mnt/home/giuseppe/myscratch/melt-data/shar/iwslt_metrics/de/train/validation
-      #   tags:
-      #     task: speechqe
-      #     lang: de
-      #     target_field: custom.score
-      #     normalize_factor: 100.0
       - type: lhotse_shar
-        shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/VP_metrics/zh/validation
+        shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/VP_metrics/zh/train
+        tags:
+          task: speechqe
+          lang: zh
+          target_field: custom.score
+
+      # Official IWSLT26 splitfiles
+      - type: lhotse_shar
+        shar_path: /mnt/home/giuseppe/myscratch/melt-data/shar/iwslt_metrics/de/train/validation
+        tags:
+          task: speechqe
+          lang: de
+          target_field: custom.score
+          normalize_factor: 100.0
+      - type: lhotse_shar
+        shar_path: /mnt/home/giuseppe/myscratch/melt-data/shar/iwslt_metrics/zh/train/validation
         tags:
           task: speechqe
           lang: zh
@@ -195,7 +212,7 @@ trainer:
   warmup_steps: 20
 
   # Duration
-  num_train_epochs: 3
+  num_train_epochs: 2
   max_steps: -1
 
   # Logging
@@ -205,11 +222,11 @@ trainer:
 
   # Evaluation
   eval_strategy: steps # "no" # steps
-  eval_steps: 5000
+  eval_steps: 100
 
   # Checkpointing
   save_strategy: steps
-  save_steps: 20
+  save_steps: 100
   save_total_limit: 3
 
   # Performance

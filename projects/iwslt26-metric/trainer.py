@@ -95,6 +95,12 @@ class MELTTrainerForRegression(MELTTrainer):
             eval_dataset = FallbackDataset(eval_dataset)
             logger.info(f"Eval QE dataset ready ({self.eval_num_cuts} cuts)")
 
+        # Initialise attributes that MELTTrainer.__init__ would normally set but
+        # that we must set ourselves because we skip it and call Trainer.__init__
+        # directly.
+        self._lhotse_resume_from: str | None = None
+        self._train_dataloader_ref = None
+
         # Skip MELTTrainer.__init__ and call Trainer.__init__ directly so that
         # we supply our own eval_dataset without the parent re-creating it.
         Trainer.__init__(self, model=model, args=args, eval_dataset=eval_dataset, **kwargs)
@@ -124,6 +130,13 @@ class MELTTrainerForRegression(MELTTrainer):
             global_rank=self._global_rank,
             world_size=self._world_size,
         )
+
+        # Mirror MELTTrainer.get_train_dataloader: keep a reference for sampler
+        # state saving during checkpointing, and restore state on resume.
+        self._train_dataloader_ref = dataloader
+        if self._lhotse_resume_from is not None:
+            self._restore_sampler_state(dataloader)
+
         return dataloader
 
     def get_eval_dataloader(self, eval_dataset=None) -> DataLoader:
