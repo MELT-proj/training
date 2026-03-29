@@ -457,6 +457,22 @@ def get_lhotse_sampler_from_config(
         cuts = cuts.filter(lambda c: min_dur <= c.duration <= max_dur)
         logger.info(f"Applied duration filter: [{min_dur}, {max_dur}]")
 
+    # Apply max_samples subsampling if requested.
+    # A shuffle + subset gives a random subsample that works lazily for both
+    # shar (iterable) and cuts (map-style) CutSets without loading everything
+    # into memory. The buffer_size controls how thoroughly the data is shuffled
+    # before truncation; 4x max_samples is a reasonable trade-off between
+    # randomness and memory usage.
+    max_samples = _get_config_value(config, "max_samples", None)
+    if max_samples is not None:
+        max_samples = int(max_samples)
+        shuffle_buffer = max(max_samples * 4, 10_000)
+        cuts = cuts.shuffle(buffer_size=shuffle_buffer).subset(max_cuts=max_samples)
+        logger.info(
+            f"Applied max_samples={max_samples} random subsampling "
+            f"(shuffle buffer={shuffle_buffer})"
+        )
+
     # Determine sampling constraint.
     # When training with an IterableDataset under Accelerate + `split_batches=True`,
     # the main process fetches a *global* batch and slices it across `world_size`.
