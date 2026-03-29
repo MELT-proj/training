@@ -10,9 +10,11 @@ methods are overridden; all other training logic is inherited unchanged from
 MELTTrainer.
 """
 
+import numpy as np
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 from transformers import TrainingArguments
+from transformers.trainer_utils import EvalLoopOutput
 
 from melt.training.data.audio.lhotse import (
     FallbackDataset,
@@ -176,3 +178,59 @@ class MELTTrainerForRegression(MELTTrainer):
             world_size=self._world_size,
         )
         return dataloader
+
+    def evaluation_loop(
+        self,
+        dataloader: DataLoader,
+        description: str,
+        prediction_loss_only=None,
+        ignore_keys=None,
+        metric_key_prefix: str = "eval",
+    ) -> EvalLoopOutput:
+        """Extend parent evaluation loop to log label and prediction distributions to wandb."""
+        output = super().evaluation_loop(
+            dataloader,
+            description,
+            prediction_loss_only=prediction_loss_only,
+            ignore_keys=ignore_keys,
+            metric_key_prefix=metric_key_prefix,
+        )
+
+        if not self.is_world_process_zero():
+            return output
+
+        try:
+            import wandb
+        except ImportError:
+            return output
+
+        if wandb.run is None:
+            return output
+
+        preds = output.predictions
+        labels = output.label_ids
+
+        if preds is None and labels is None:
+            return output
+
+        log_payload: dict = {}
+
+        if labels is not None:
+            labels_flat = np.array(labels).flatten().tolist()
+            log_payload[f"{metric_key_prefix}/label_distribution"] = wandb.Histogram(labels_flat)
+            log_payload[f"{metric_key_prefix}/label_table"] = wandb.Table(
+                columns=["label"],
+                data=[[v] for v in labels_flat],
+            )
+
+        if preds is not None:
+            preds_flat = np.array(preds).flatten().tolist()
+            log_payload[f"{metric_key_prefix}/pred_distribution"] = wandb.Histogram(preds_flat)
+            log_payload[f"{metric_key_prefix}/pred_table"] = wandb.Table(
+                columns=["score"],
+                data=[[v] for v in preds_flat],
+            )
+
+        wandb.log(log_payload, step=self.state.global_step)
+
+        return output

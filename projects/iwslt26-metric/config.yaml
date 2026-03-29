@@ -131,6 +131,7 @@ data:
     input_cfg:
       - type: lhotse_shar
         shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/VP_metrics/zh/train
+        max_samples: 2000
         tags:
           task: speechqe
           lang: zh
@@ -152,27 +153,6 @@ data:
           target_field: custom.score
           normalize_factor: 100.0
       
-      # - type: lhotse_shar
-      #   shar_path: /mnt/home/giuseppe/myscratch/melt-data/shar/iwslt_metrics/de/train_synthetic/validation
-      #   tags:
-      #     task: speechqe
-      #     lang: de
-      #     target_field: custom.score
-      #     normalize_factor: 100.0
-
-      # - type: lhotse_shar
-      #   shar_path: ${oc.env:LOCAL_DATASETS_DIR}/iwslt2026_metrics/de/dev
-      #   tags:
-      #     task: asr
-      #     lang: de
-      #     target_field: custom.score
-      # - type: lhotse_shar
-      #   shar_path: ${oc.env:LOCAL_DATASETS_DIR}/iwslt2026_metrics/zh/dev
-      #   tags:
-      #     task: asr
-      #     lang: zh
-      #     target_field: custom.score
-  
     batch_size: null
     batch_duration: 120.0
     use_bucketing: true
