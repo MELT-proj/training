@@ -10,7 +10,7 @@
 # Run Configuration (non-TrainingArguments settings)
 # =============================================================================
 run:
-  exp_name: mn5-iwslt26
+  exp_name: metric-iwslt26
   dry_run: false
 
 # =============================================================================
@@ -53,13 +53,13 @@ data:
           lang: zh
           target_field: custom.score
       
-      # Voxpopuli MetricX 24 XL TODO: bugged at the moment
-      # - type: lhotse_shar
-      #   shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/voxpopuli_metrics/de/train
-      #   tags:
-      #     task: speechqe
-      #     lang: de
-      #     target_field: custom.score
+      # Voxpopuli MetricX 24 XL
+      - type: lhotse_shar
+        shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/voxpopuli_metrics/de/train
+        tags:
+          task: speechqe
+          lang: de
+          target_field: custom.score
 
       # Official IWSLT26 splitfiles
       - type: lhotse_shar
@@ -76,7 +76,6 @@ data:
           lang: zh
           target_field: custom.score
           normalize_factor: 100.0
-      
       - type: lhotse_shar
         shar_path: /mnt/home/giuseppe/myscratch/melt-data/shar/iwslt_metrics/de/train_synthetic/train
         tags:
@@ -84,32 +83,6 @@ data:
           lang: de
           target_field: custom.score
           normalize_factor: 100.0
-      - type: lhotse_shar
-        shar_path: /mnt/home/giuseppe/myscratch/melt-data/shar/iwslt_metrics/zh/train_synthetic/train
-        tags:
-          task: speechqe
-          lang: zh
-          target_field: custom.score
-          normalize_factor: 100.0
-
-      # - type: lhotse_shar
-      #   shar_path: ${oc.env:LOCAL_DATASETS_DIR}/iwslt2026_metrics/en/train_synthetic
-      #   tags:
-      #     task: qe
-      #     lang: en # target lang
-      #     target_field: custom.score
-      # - type: lhotse_shar
-      #   shar_path: ${oc.env:LOCAL_DATASETS_DIR}/iwslt2026_metrics/de/train
-      #   tags:
-      #     task: asr
-      #     lang: de
-      #     target_field: custom.score
-      # - type: lhotse_shar
-      #   shar_path: ${oc.env:LOCAL_DATASETS_DIR}/iwslt2026_metrics/zh/train
-      #   tags:
-      #     task: asr
-      #     lang: zh
-      #     target_field: custom.score
 
     # Batch settings
     batch_size: null  # Use batch_duration instead for dynamic batching
@@ -147,35 +120,28 @@ data:
     force_estimate: true  # Force estimation of total_hours at start
 
     input_cfg:
+      # - type: lhotse_shar
+      #   shar_path: /mnt/home/giuseppe/myscratch/melt-data/shar/iwslt_metrics/de/train/validation
+      #   tags:
+      #     task: speechqe
+      #     lang: de
+      #     target_field: custom.score
+      #     normalize_factor: 100.0
       - type: lhotse_shar
-        shar_path: /mnt/home/giuseppe/myscratch/melt-data/shar/iwslt_metrics/de/train/validation
-        tags:
-          task: speechqe
-          lang: de
-          target_field: custom.score
-          normalize_factor: 100.0
-      - type: lhotse_shar
-        shar_path: /mnt/home/giuseppe/myscratch/melt-data/shar/iwslt_metrics/zh/train/validation
+        shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/VP_metrics/zh/validation
         tags:
           task: speechqe
           lang: zh
           target_field: custom.score
           normalize_factor: 100.0
       
-      - type: lhotse_shar
-        shar_path: /mnt/home/giuseppe/myscratch/melt-data/shar/iwslt_metrics/de/train_synthetic/validation
-        tags:
-          task: speechqe
-          lang: de
-          target_field: custom.score
-          normalize_factor: 100.0
-      - type: lhotse_shar
-        shar_path: /mnt/home/giuseppe/myscratch/melt-data/shar/iwslt_metrics/zh/train_synthetic/validation
-        tags:
-          task: speechqe
-          lang: zh
-          target_field: custom.score
-          normalize_factor: 100.0
+      # - type: lhotse_shar
+      #   shar_path: /mnt/home/giuseppe/myscratch/melt-data/shar/iwslt_metrics/de/train_synthetic/validation
+      #   tags:
+      #     task: speechqe
+      #     lang: de
+      #     target_field: custom.score
+      #     normalize_factor: 100.0
 
       # - type: lhotse_shar
       #   shar_path: ${oc.env:LOCAL_DATASETS_DIR}/iwslt2026_metrics/de/dev
@@ -229,7 +195,7 @@ trainer:
   warmup_steps: 20
 
   # Duration
-  num_train_epochs: 2
+  num_train_epochs: 3
   max_steps: -1
 
   # Logging
@@ -239,12 +205,12 @@ trainer:
 
   # Evaluation
   eval_strategy: steps # "no" # steps
-  eval_steps: 20
+  eval_steps: 5000
 
   # Checkpointing
   save_strategy: steps
-  save_steps: 1000
-  save_total_limit: 5
+  save_steps: 20
+  save_total_limit: 3
 
   # Performance
   bf16: true
