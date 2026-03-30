@@ -42,7 +42,7 @@ data:
     force_estimate: true
 
     input_cfg:
-      # Hearing 2 translate HumanEval split
+      # Hearing 2 translate HumanEval split (seamlessm4t)
       - type: lhotse_shar
         shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/hearing2translate_humeval/seamlessm4t/de/train
         tags:
@@ -55,7 +55,73 @@ data:
           task: speechqe
           lang: zh
           target_field: custom.score
-      
+      # Hearing 2 translate HumanEval split (voxtral-small-24b)
+      - type: lhotse_shar
+        shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/hearing2translate_humeval/voxtral-small-24b/de/train
+        tags:
+          task: speechqe
+          lang: de
+          target_field: custom.score
+      - type: lhotse_shar
+        shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/hearing2translate_humeval/voxtral-small-24b/zh/train
+        tags:
+          task: speechqe
+          lang: zh
+          target_field: custom.score
+      # Hearing 2 translate HumanEval split (aya_canary-v2)
+      - type: lhotse_shar
+        shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/hearing2translate_humeval/aya_canary-v2/de/train
+        tags:
+          task: speechqe
+          lang: de
+          target_field: custom.score
+      - type: lhotse_shar
+        shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/hearing2translate_humeval/aya_canary-v2/zh/train
+        tags:
+          task: speechqe
+          lang: zh
+          target_field: custom.score
+
+      # Hearing 2 translate MetricX split (seamlessm4t)
+      - type: lhotse_shar
+        shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/hearing2translate_metrics/seamlessm4t/de/train
+        tags:
+          task: speechqe
+          lang: de
+          target_field: custom.score
+      - type: lhotse_shar
+        shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/hearing2translate_metrics/seamlessm4t/zh/train
+        tags:
+          task: speechqe
+          lang: zh
+          target_field: custom.score
+      # Hearing 2 translate MetricX split (voxtral-small-24b)
+      - type: lhotse_shar
+        shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/hearing2translate_metrics/voxtral-small-24b/de/train
+        tags:
+          task: speechqe
+          lang: de
+          target_field: custom.score
+      - type: lhotse_shar
+        shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/hearing2translate_metrics/voxtral-small-24b/zh/train
+        tags:
+          task: speechqe
+          lang: zh
+          target_field: custom.score
+      # Hearing 2 translate MetricX split (aya_canary-v2)
+      - type: lhotse_shar
+        shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/hearing2translate_metrics/aya_canary-v2/de/train
+        tags:
+          task: speechqe
+          lang: de
+          target_field: custom.score
+      - type: lhotse_shar
+        shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/hearing2translate_metrics/aya_canary-v2/zh/train
+        tags:
+          task: speechqe
+          lang: zh
+          target_field: custom.score
+
       # Voxpopuli MetricX 24 XL
       - type: lhotse_shar
         shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/VP_metrics/de/train
@@ -65,6 +131,34 @@ data:
           target_field: custom.score
       - type: lhotse_shar
         shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/VP_metrics/zh/train
+        tags:
+          task: speechqe
+          lang: zh
+          target_field: custom.score
+      
+      # VoxPopuli Perturbed MetricX
+      - type: lhotse_shar
+        shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/VP_metrics_perturbed/de/train
+        tags:
+          task: speechqe
+          lang: de
+          target_field: custom.score
+      - type: lhotse_shar
+        shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/VP_metrics_perturbed/zh/train
+        tags:
+          task: speechqe
+          lang: zh
+          target_field: custom.score
+
+      # Covost
+      - type: lhotse_shar
+        shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/covost_metrics/de/train
+        tags:
+          task: speechqe
+          lang: de
+          target_field: custom.score
+      - type: lhotse_shar
+        shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/covost_metrics/zh/train
         tags:
           task: speechqe
           lang: zh
