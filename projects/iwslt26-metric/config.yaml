@@ -129,13 +129,13 @@ data:
     force_estimate: true  # Force estimation of total_hours at start
 
     input_cfg:
-      - type: lhotse_shar
-        shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/VP_metrics/zh/train
-        max_samples: 2000
-        tags:
-          task: speechqe
-          lang: zh
-          target_field: custom.score
+      # - type: lhotse_shar
+      #   shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/VP_metrics/zh/train
+      #   max_samples: 2000
+      #   tags:
+      #     task: speechqe
+      #     lang: zh
+      #     target_field: custom.score
 
       # Official IWSLT26 splitfiles
       - type: lhotse_shar
@@ -202,7 +202,7 @@ trainer:
 
   # Evaluation
   eval_strategy: steps # "no" # steps
-  eval_steps: 100
+  eval_steps: 10000
 
   # Checkpointing
   save_strategy: steps

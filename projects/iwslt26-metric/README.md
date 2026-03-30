@@ -1,5 +1,6 @@
 #### Useful commands
 
+Local training run:
 ```bash
 VENV_PATH=/mnt/scratch-artemis/giuseppe/venvs/melt/bin/activate \
   TMPDIR=/mnt/scratch-artemis/giuseppe/melt-data/tmp \
@@ -10,4 +11,15 @@ VENV_PATH=/mnt/scratch-artemis/giuseppe/venvs/melt/bin/activate \
   --config projects/iwslt26-metric/config.yaml \
   --trainer.gradient-accumulation-steps 4 \
   --trainer.output_dir /mnt/scratch-artemis/giuseppe/melt-data/outputs/MELT_QE_v1.1
+```
+
+Singularity run:
+```bash
+SINGULARITY_IMG=/path/to/melt.sif \
+HF_HOME=/mnt/scratch/hf_cache \
+OUTPUT_DIR=/mnt/scratch/outputs \
+LOCAL_DATASETS_DIR=/mnt/scratch/shar \
+sbatch projects/iwslt26-metric/run_train_singularity.sbatch \
+    config/accelerate/fsdp2.yaml \
+    --config projects/iwslt26-metric/config.yaml
 ```

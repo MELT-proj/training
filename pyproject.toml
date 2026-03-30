@@ -28,6 +28,7 @@ dependencies = [
     "scipy>=1.15",
     "jiwer>=4.0",
     "setuptools",
+    "peft>=0.18.1",
 ]
 
 [project.optional-dependencies]
