@@ -21,6 +21,7 @@ from pathlib import Path
 
 import torch
 from omegaconf import DictConfig, OmegaConf
+from peft import LoraConfig, TaskType, get_peft_model
 
 import wandb
 from transformers import TrainingArguments
@@ -38,7 +39,6 @@ from melt.training.config import (
     trainer_args_dict,
 )
 from melt.training.metrics import TrainingEvaluator, pull_final_logits
-from melt.training.setup import prepare_melt_config
 from melt.training.trainer import count_trainable_parameters
 from .trainer import MELTTrainerForRegression
 
@@ -69,8 +69,6 @@ def prepare_model(
     encoder_cfg = model_cfg.encoder
     decoder_cfg = model_cfg.decoder
     adapter_cfg = model_cfg.adapter
-
-    config = prepare_melt_config(cfg, processor)
 
     # Detect last checkpoint
     last_checkpoint = None
@@ -110,11 +108,36 @@ def prepare_model(
 
     # If we added new tokens and the model did not have spare embedding entries,
     # we need to resize the token embeddings
-    if len(processor.tokenizer) > config.text_decoder_config.vocab_size:
+    if len(processor.tokenizer) > model.config.text_decoder_config.vocab_size:
         logger.info(
-            f"Resizing token embeddings from {config.text_decoder_config.vocab_size} to {len(processor.tokenizer)}"
+            f"Resizing token embeddings from {model.config.text_decoder_config.vocab_size} to {len(processor.tokenizer)}"
         )
         model.text_decoder.resize_token_embeddings(len(processor.tokenizer), mean_resizing=False, pad_to_multiple_of=8)
+
+    lora_cfg = model_cfg.get("lora", None)
+    lora_enabled = lora_cfg is not None and lora_cfg.get("enabled", False)
+    if lora_enabled:
+        logger.info("Applying LoRA adapters to the model...")
+        target_modules = list(lora_cfg.target_modules) if lora_cfg.target_modules is not None else None
+        peft_config = LoraConfig(
+            r=lora_cfg.r,
+            lora_alpha=lora_cfg.lora_alpha,
+            lora_dropout=lora_cfg.lora_dropout,
+            target_modules=target_modules,
+            bias=lora_cfg.bias,
+            task_type=TaskType.SEQ_CLS,
+        )
+        model = get_peft_model(model, peft_config)
+        # PEFT freezes all base params; re-enable the regression head so it keeps training
+        for name, param in model.named_parameters():
+            if "score" in name:
+                param.requires_grad = True
+        model.print_trainable_parameters()
+
+        logger.info("Parameters containing 'score' after LoRA wrapping:")
+        for name, param in model.named_parameters():
+            if "score" in name:
+                logger.info(f"  {name} | shape={list(param.shape)} | requires_grad={param.requires_grad}")
 
     def _freeze(module: torch.nn.Module, exclude_names: list[str] | None = None):
         """Freeze parameters in a module, optionally excluding by name.
@@ -141,11 +164,11 @@ def prepare_model(
     if encoder_cfg.freeze:
         logger.info("Freezing the encoder")
         _freeze(model.audio_stack.encoder)
-    if decoder_cfg.freeze:
+    if decoder_cfg.freeze and not lora_enabled:
         logger.info("Freezing the decoder")
         _freeze(model.text_decoder, exclude_names=["score"])
 
-    return model, last_checkpoint, config
+    return model, last_checkpoint, model.config
 
 
 def main(cfg: DictConfig) -> None:

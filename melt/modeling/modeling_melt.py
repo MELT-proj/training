@@ -1530,7 +1530,7 @@ class MELTForSequenceClassification(MELTPreTrainedModel):
             )
 
         # Delegate both logits and loss computation to the underlying sequence classifier.
-        return self.text_decoder(
+        output = self.text_decoder(
             inputs_embeds=decoder_input_embs,
             attention_mask=attention_mask,
             labels=labels,
@@ -1538,6 +1538,16 @@ class MELTForSequenceClassification(MELTPreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
+
+        # It loss is above 500, print labels and logits for debugging
+        if output.loss is not None and output.loss.item() > 500:
+            logger.warning(
+                f"Loss is very high ({output.loss.item()}), printing logits and labels for debugging."
+            )
+            logger.warning(f"Logits: {output.logits}")
+            logger.warning(f"Labels: {labels}")
+
+        return output
 
 
 __all__ = [

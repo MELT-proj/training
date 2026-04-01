@@ -19,14 +19,30 @@ run:
 model:
   encoder:
     freeze: true
-    max_audio_seq_len: 1500 # for frames of 20ms, this is 30s
+    max_audio_seq_len: 1000 # for frames of 20ms, this is 30s
 
   decoder:
+    attn_implementation: sdpa
     freeze: false
 
   adapter:
     freeze: true
-  
+
+  lora:
+    enabled: true
+    r: 16
+    lora_alpha: 32
+    lora_dropout: 0.0
+    target_modules:
+      - q_proj
+      - k_proj
+      - v_proj
+      - o_proj
+      - gate_proj
+      - up_proj
+      - down_proj
+    bias: none
+
   ckpt: /mnt/scratch-artemis/giuseppe/melt-data/outputs/MA-v1.2.7/
 
 # =============================================================================
@@ -83,18 +99,19 @@ data:
           target_field: custom.score
 
       # Hearing 2 translate MetricX split (seamlessm4t)
-      - type: lhotse_shar
-        shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/hearing2translate_metrics/seamlessm4t/de/train
-        tags:
-          task: speechqe
-          lang: de
-          target_field: custom.score
+      # - type: lhotse_shar
+      #   shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/hearing2translate_metrics/seamlessm4t/de/de/train
+      #   tags:
+      #     task: speechqe
+      #     lang: de
+      #     target_field: custom.score
       - type: lhotse_shar
         shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/hearing2translate_metrics/seamlessm4t/zh/train
         tags:
           task: speechqe
           lang: zh
           target_field: custom.score
+          normalize_factor: 100.0
       # Hearing 2 translate MetricX split (voxtral-small-24b)
       - type: lhotse_shar
         shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/hearing2translate_metrics/voxtral-small-24b/de/train
@@ -102,12 +119,14 @@ data:
           task: speechqe
           lang: de
           target_field: custom.score
+          normalize_factor: 100.0
       - type: lhotse_shar
         shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/hearing2translate_metrics/voxtral-small-24b/zh/train
         tags:
           task: speechqe
           lang: zh
           target_field: custom.score
+          normalize_factor: 100.0
       # Hearing 2 translate MetricX split (aya_canary-v2)
       - type: lhotse_shar
         shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/hearing2translate_metrics/aya_canary-v2/de/train
@@ -115,12 +134,14 @@ data:
           task: speechqe
           lang: de
           target_field: custom.score
+          normalize_factor: 100.0
       - type: lhotse_shar
         shar_path: /mnt/scratch-artemis/sonal/IWSLT26/data/hearing2translate_metrics/aya_canary-v2/zh/train
         tags:
           task: speechqe
           lang: zh
           target_field: custom.score
+          normalize_factor: 100.0
 
       # Voxpopuli MetricX 24 XL
       - type: lhotse_shar
@@ -185,12 +206,11 @@ data:
           task: speechqe
           lang: de
           target_field: custom.score
-          normalize_factor: 100.0
 
     # Batch settings
     batch_size: null  # Use batch_duration instead for dynamic batching
-    batch_duration: 120  # seconds of audio per batch
-    quadratic_duration: 20 # see https://lhotse.readthedocs.io/en/latest/datasets.html#lhotse.dataset.sampling.TimeConstraint
+    batch_duration: 140  # seconds of audio per batch
+    quadratic_duration: 25 # see https://lhotse.readthedocs.io/en/latest/datasets.html#lhotse.dataset.sampling.TimeConstraint
 
     # Bucketing for efficient batching
     use_bucketing: true
@@ -207,7 +227,7 @@ data:
 
     # Duration filtering
     min_duration: 0.5
-    max_duration: 600.0
+    max_duration: 120.0
 
     # DataLoader settings
     num_workers: 1
@@ -275,6 +295,7 @@ trainer:
   do_eval: false
   eval_on_start: false
   average_tokens_across_devices: true
+  resume_from_checkpoint: false
 
   # Batch and accumulation
   per_device_train_batch_size: -1  # Handled by Lhotse, set to 1
@@ -283,10 +304,10 @@ trainer:
 
   # LR schedule
   lr_scheduler_type: cosine
-  warmup_steps: 20
+  warmup_steps: 30
 
   # Duration
-  num_train_epochs: 2
+  num_train_epochs: 1
   max_steps: -1
 
   # Logging
@@ -296,11 +317,11 @@ trainer:
 
   # Evaluation
   eval_strategy: steps # "no" # steps
-  eval_steps: 10000
+  eval_steps: 100000
 
   # Checkpointing
   save_strategy: steps
-  save_steps: 100
+  save_steps: 500
   save_total_limit: 3
 
   # Performance
@@ -312,11 +333,13 @@ trainer:
 
   max_grad_norm: 1.0
 
+  weight_decay: 0.01
+
 optimization:
   adam_beta1: 0.9
   adam_beta2: 0.95
 
   # encoder_lr: 6e-6 # Not used since it's frozen
-  decoder_lr: 2e-6
-  adapter_lr: 2e-6
+  decoder_lr: 2e-4
+  adapter_lr: 2e-4
   min_lr_scale: 0.1

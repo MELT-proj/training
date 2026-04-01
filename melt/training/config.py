@@ -94,6 +94,14 @@ model:
     adapter_stride: 2
     mlp_hidden_size: null
 
+  lora:
+    enabled: false
+    r: 16
+    lora_alpha: 32
+    lora_dropout: 0.05
+    target_modules: null  # null = PEFT auto-detection; or list e.g. [q_proj, v_proj]
+    bias: none
+
   ckpt: null  # Path to checkpoint to resume from
 
 # =============================================================================
