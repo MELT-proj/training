@@ -19,10 +19,10 @@ run:
 model:
   encoder:
     freeze: true
-    max_audio_seq_len: 1000 # for frames of 20ms, this is 30s
+    max_audio_seq_len: 1500 # for frames of 20ms, this is 30s
 
   decoder:
-    attn_implementation: sdpa
+    attn_implementation: flash_attention_2
     freeze: false
 
   adapter:
@@ -187,21 +187,21 @@ data:
 
       # Official IWSLT26 splitfiles
       - type: lhotse_shar
-        shar_path: /mnt/home/giuseppe/myscratch/melt-data/shar/iwslt_metrics/de/train/train
+        shar_path: /mnt/scratch-artemis/giuseppe/melt-data/shar/iwslt_metrics/de/train/train
         tags:
           task: speechqe
           lang: de
           target_field: custom.score
           normalize_factor: 100.0
       - type: lhotse_shar
-        shar_path: /mnt/home/giuseppe/myscratch/melt-data/shar/iwslt_metrics/zh/train/train
+        shar_path: /mnt/scratch-artemis/giuseppe/melt-data/shar/iwslt_metrics/zh/train/train
         tags:
           task: speechqe
           lang: zh
           target_field: custom.score
           normalize_factor: 100.0
       - type: lhotse_shar
-        shar_path: /mnt/home/giuseppe/myscratch/melt-data/shar/iwslt_metrics/de/train_synthetic/train
+        shar_path: /mnt/scratch-artemis/giuseppe/melt-data/shar/iwslt_metrics/de/train_synthetic/train
         tags:
           task: speechqe
           lang: de
@@ -209,7 +209,7 @@ data:
 
     # Batch settings
     batch_size: null  # Use batch_duration instead for dynamic batching
-    batch_duration: 140  # seconds of audio per batch
+    batch_duration: 180  # seconds of audio per batch
     quadratic_duration: 25 # see https://lhotse.readthedocs.io/en/latest/datasets.html#lhotse.dataset.sampling.TimeConstraint
 
     # Bucketing for efficient batching
@@ -227,7 +227,7 @@ data:
 
     # Duration filtering
     min_duration: 0.5
-    max_duration: 120.0
+    max_duration: 60.0
 
     # DataLoader settings
     num_workers: 1
@@ -268,7 +268,7 @@ data:
           normalize_factor: 100.0
       
     batch_size: null
-    batch_duration: 120.0
+    batch_duration: 180.0
     use_bucketing: true
     num_buckets: 30
     bucket_buffer_size: 5000

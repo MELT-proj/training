@@ -26,4 +26,4 @@ VENV_PATH=/mnt/scratch-artemis/giuseppe/venvs/py313/bin/activate \
     ./projects/iwslt26-metric/fsdp2.yaml \
     --config projects/iwslt26-metric/config.yaml \
     --trainer.gradient-accumulation-steps 4 \
-    --trainer.output_dir /mnt/scratch-artemis/giuseppe/melt-data/outputs/MELT_QE_v1.1.6
+    --trainer.output_dir /mnt/scratch-artemis/giuseppe/melt-data/outputs/MELT_QE_v1.1.7

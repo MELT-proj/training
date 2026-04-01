@@ -93,7 +93,10 @@ def prepare_model(
     logger.info(f"Loading model from checkpoint: {model_cfg.ckpt}")
     model = MELTForSequenceClassification.from_pretrained(
         model_cfg.ckpt,
-        text_decoder_kwargs={"num_labels": 1},
+        text_decoder_kwargs={
+            "num_labels": 1,
+            "attn_implementation": decoder_cfg.attn_implementation,
+        },
     )
 
     # Sync pad_token_id from the processor tokenizer in case it was not persisted
