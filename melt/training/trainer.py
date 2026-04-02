@@ -704,6 +704,76 @@ class MELTTrainer(Trainer):
             betas=(opt_cfg.adam_beta1, opt_cfg.adam_beta2),
         )
 
+    # ------------------------------------------------------------------
+    # OOM diagnostics
+    # ------------------------------------------------------------------
+
+    def training_step(
+        self,
+        model: torch.nn.Module,
+        inputs: dict,
+        num_items_in_batch: int | None = None,
+    ) -> torch.Tensor:
+        """Override to log batch diagnostics when an OOM error occurs."""
+        try:
+            return super().training_step(model, inputs, num_items_in_batch)
+        except torch.OutOfMemoryError:
+            self._log_oom_batch_info(inputs)
+            raise
+
+    def _log_oom_batch_info(self, inputs: dict) -> None:
+        """Log tensor shapes, model info, and GPU memory state on OOM to identify the offending batch."""
+        logger.error(
+            f"[OOM] rank={self._global_rank} step={self.state.global_step} — "
+            "dumping batch info to help identify the offending batch"
+        )
+
+        # --- Training context ---
+        logger.error(
+            f"[OOM] Training context: "
+            f"fp16={self.args.fp16}, bf16={self.args.bf16}, "
+            f"grad_accum={self.args.gradient_accumulation_steps}, "
+            f"grad_checkpointing={self.args.gradient_checkpointing}"
+        )
+
+        # --- Model dtypes and memory footprint ---
+        model = self.model
+        param_dtypes = {p.dtype for p in model.parameters()}
+        param_mem_mb = sum(p.numel() * p.element_size() for p in model.parameters()) / 1024**2
+        buf_mem_mb = sum(b.numel() * b.element_size() for b in model.buffers()) / 1024**2
+        logger.error(
+            f"[OOM] Model: dtypes={[str(d) for d in param_dtypes]}, "
+            f"param_mem={param_mem_mb:.1f} MB, buffer_mem={buf_mem_mb:.1f} MB"
+        )
+
+        # --- Batch tensors ---
+        logger.error("[OOM] Batch tensors:")
+        for key, val in inputs.items():
+            if isinstance(val, torch.Tensor):
+                mem_mb = val.numel() * val.element_size() / 1024**2
+                logger.error(
+                    f"[OOM]   {key}: shape={list(val.shape)}, dtype={val.dtype}, "
+                    f"device={val.device}, mem={mem_mb:.2f} MB"
+                )
+            elif isinstance(val, list):
+                logger.error(f"[OOM]   {key}: list of {len(val)} items")
+                if val and isinstance(val[0], str):
+                    # e.g. cut IDs — log all of them so the exact cuts can be reproduced
+                    logger.error(f"[OOM]     values={val}")
+            else:
+                logger.error(f"[OOM]   {key}: {type(val).__name__} = {val!r}")
+
+        # --- GPU memory ---
+        if torch.cuda.is_available():
+            for i in range(torch.cuda.device_count()):
+                allocated = torch.cuda.memory_allocated(i) / 1024**3
+                reserved = torch.cuda.memory_reserved(i) / 1024**3
+                max_allocated = torch.cuda.max_memory_allocated(i) / 1024**3
+                logger.error(
+                    f"[OOM]   GPU {i}: allocated={allocated:.2f} GB, "
+                    f"reserved={reserved:.2f} GB, peak={max_allocated:.2f} GB"
+                )
+
     def evaluation_loop(
         self,
         dataloader: DataLoader,

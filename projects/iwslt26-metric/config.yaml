@@ -209,7 +209,7 @@ data:
 
     # Batch settings
     batch_size: null  # Use batch_duration instead for dynamic batching
-    batch_duration: 180  # seconds of audio per batch
+    batch_duration: 120  # seconds of audio per batch
     quadratic_duration: 25 # see https://lhotse.readthedocs.io/en/latest/datasets.html#lhotse.dataset.sampling.TimeConstraint
 
     # Bucketing for efficient batching
@@ -227,7 +227,7 @@ data:
 
     # Duration filtering
     min_duration: 0.5
-    max_duration: 60.0
+    max_duration: 120.0
 
     # DataLoader settings
     num_workers: 1
@@ -312,7 +312,7 @@ trainer:
 
   # Logging
   logging_strategy: steps
-  logging_steps: 2
+  logging_steps: 5
   report_to: wandb
 
   # Evaluation
@@ -321,7 +321,7 @@ trainer:
 
   # Checkpointing
   save_strategy: steps
-  save_steps: 500
+  save_steps: 100000
   save_total_limit: 3
 
   # Performance
@@ -332,7 +332,6 @@ trainer:
   ddp_find_unused_parameters: false
 
   max_grad_norm: 1.0
-
   weight_decay: 0.01
 
 optimization:

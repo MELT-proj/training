@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=melt-qe-train
-#SBATCH --time=5:00:00
+#SBATCH --time=12:00:00
 #SBATCH --qos=gpu-h100
 #SBATCH --partition=h100
 #SBATCH --gres=gpu:4
@@ -25,5 +25,4 @@ VENV_PATH=/mnt/scratch-artemis/giuseppe/venvs/py313/bin/activate \
     bash ./projects/iwslt26-metric/run_train.sh \
     ./projects/iwslt26-metric/fsdp2.yaml \
     --config projects/iwslt26-metric/config.yaml \
-    --trainer.gradient-accumulation-steps 4 \
-    --trainer.output_dir /mnt/scratch-artemis/giuseppe/melt-data/outputs/MELT_QE_v1.1.7
+    --trainer.output_dir /mnt/scratch-artemis/giuseppe/melt-data/outputs/MELT_QE_v1.1.8
