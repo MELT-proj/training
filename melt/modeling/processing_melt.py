@@ -104,6 +104,11 @@ class MELTProcessor(ProcessorMixin):
         self.audio_bos_token: str = tokenizer.audio_bos_token
         self.audio_eos_token: str = tokenizer.audio_eos_token
 
+        vocab = tokenizer.get_vocab()
+        self.audio_token_id: int = vocab[self.audio_token]
+        self.audio_bos_token_id: int = vocab[self.audio_bos_token]
+        self.audio_eos_token_id: int = vocab[self.audio_eos_token]
+
     def _validate_required_special_tokens(self, tokenizer) -> None:
         """Verify that pad_token and all MELT special tokens exist in the tokenizer vocabulary.
 

@@ -33,7 +33,7 @@ from lhotse.dataset import (
     make_worker_init_fn,
 )
 from lhotse.dataset.dataloading import resolve_seed
-from lhotse.dataset.sampling.base import CutSampler, TimeConstraint
+from lhotse.dataset.sampling.base import CutSampler
 from lhotse.utils import fix_random_seed
 from omegaconf import DictConfig
 
@@ -306,7 +306,7 @@ def estimate_steps_per_epoch(
 
     # We use data parallelism by setting split_for_loading=True in CutSet.from_shar()
     # The shard are hence divided to world_size * num_workers processes.
-    batches_per_worker = batches_per_epoch / (world_size * num_workers)
+    batches_per_worker = batches_per_epoch / (world_size * num_workers) if num_workers > 0 else batches_per_epoch / world_size
 
     # The number of update steps is rescaled by gradient accumulation steps
     optimizer_steps_per_epoch = math.ceil(batches_per_worker / gradient_accumulation_steps)
@@ -494,12 +494,6 @@ def get_lhotse_sampler_from_config(
     #         world_size,
     #     )
 
-    constraint = TimeConstraint(
-        max_cuts=max_cuts,
-        max_duration=batch_duration,
-        quadratic_duration=quadratic_duration,
-    )
-
     # Create sampler
     shuffle = _get_config_value(config, "shuffle", True)
     drop_last = _get_config_value(config, "drop_last", False)
@@ -542,7 +536,9 @@ def get_lhotse_sampler_from_config(
 
         sampler = DynamicBucketingSampler(
             cuts,
-            constraint=constraint,
+            max_duration=batch_duration,
+            max_cuts=max_cuts,
+            quadratic_duration=quadratic_duration,
             shuffle=shuffle,
             drop_last=drop_last,
             shuffle_buffer_size=shuffle_buffer_size,
@@ -565,7 +561,9 @@ def get_lhotse_sampler_from_config(
 
         sampler = DynamicCutSampler(
             cuts,
-            constraint=constraint,
+            max_duration=batch_duration,
+            max_cuts=max_cuts,
+            quadratic_duration=quadratic_duration,
             shuffle=shuffle,
             drop_last=drop_last,
             shuffle_buffer_size=shuffle_buffer_size,
@@ -641,7 +639,7 @@ def get_lhotse_dataloader_from_config(
 
     # Extract optional prefetch_factor for worker-level prefetching
     prefetch_factor_val = _get_config_value(config, "prefetch_factor", 2)
-    prefetch_factor = int(prefetch_factor_val) if prefetch_factor_val is not None else 2
+    prefetch_factor = int(prefetch_factor_val) if prefetch_factor_val is not None else None
 
     if use_iterable:
         # For tarred/shar data, wrap dataset with sampler
@@ -721,7 +719,7 @@ def get_lhotse_dataloader_from_config(
             batch_size=None,  # Batching handled by sampler
             num_workers=num_workers,
             pin_memory=pin_memory,
-            prefetch_factor=prefetch_factor if num_workers > 0 else 0,
+            prefetch_factor=prefetch_factor,
         )
 
     _maybe_attach_set_epoch(dataloader=dataloader, sampler=sampler)
