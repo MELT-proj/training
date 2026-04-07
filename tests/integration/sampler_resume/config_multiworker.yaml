@@ -1,0 +1,116 @@
+# Integration test config: sampler resume correctness — num_workers=1 variant
+#
+# Identical to config.yaml except:
+#   - num_workers: 1       (shar data read by a forked worker process)
+#   - prefetch_factor: 2   (worker prefetches 2 batches ahead)
+#
+# Restoration relies on Linux fork: the forked worker inherits the
+# fast-forwarded cuts_iter from the main process, so the worker resumes
+# at exactly position global_step (the first batch not yet consumed by
+# the optimizer at checkpoint time).
+#
+# The augmented sampler diagnostics (kept_batches = global_step) are
+# correct because prefetched-but-not-consumed batches sit at positions
+# [global_step, global_step + prefetch_factor), which is precisely where
+# the resumed sampler is placed by _fast_forward.
+
+model:
+  encoder:
+    name: facebook/w2v-bert-2.0
+    freeze: true
+
+  decoder:
+    name: Qwen/Qwen2.5-0.5B
+    attn_implementation: flash_attention_2
+    audio_bos_token: "<|audio_bos|>"
+    audio_eos_token: "<|audio_eos|>"
+    audio_token: "<|audio|>"
+    freeze: true
+
+  adapter:
+    type: mlp
+
+  ckpt: null
+
+data:
+  sample_rate: 16000
+  apply_chat_template: false
+  min_chars: 3
+
+  train_ds:
+    force_estimate: true
+    input_cfg:
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/train.100
+        tags:
+          task: asr
+          lang: en
+
+    batch_size: null
+    batch_duration: 30.0
+    quadratic_duration: null
+
+    use_bucketing: true
+    num_buckets: 10
+    bucket_buffer_size: 1000
+    bucket_duration_bins: null
+
+    shuffle: true
+    shuffle_buffer_size: 1000
+    drop_last: false
+    seed: 42
+    shard_seed: 42
+
+    min_duration: 0.5
+    max_duration: 30.0
+
+    num_workers: 1          # shar data read by one forked worker process
+    pin_memory: false
+    prefetch_factor: 2      # worker keeps 2 batches prefetched ahead
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+  validation_ds:
+    input_cfg: []
+
+trainer:
+  output_dir: ${OUTPUT_DIR}
+  overwrite_output_dir: true
+  seed: 42
+  do_train: true
+  do_eval: false
+
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  gradient_accumulation_steps: 1
+
+  learning_rate: 2.0e-5
+  lr_scheduler_type: cosine
+  warmup_steps: 0
+
+  num_train_epochs: 3
+  max_steps: 100
+
+  logging_strategy: steps
+  logging_steps: 10
+  report_to:
+    - none
+
+  eval_strategy: "no"
+
+  save_strategy: steps
+  save_steps: 50
+  save_total_limit: 5
+
+  bf16: true
+  group_by_length: false
+  dataloader_num_workers: 0
+  remove_unused_columns: false
+  ddp_find_unused_parameters: false
+
+optimization:
+  encoder_lr: 6.0e-6
+  decoder_lr: 2.0e-5
+  adapter_lr: 2.0e-4
+  min_lr_scale: 0.1
