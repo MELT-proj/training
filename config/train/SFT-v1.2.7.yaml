@@ -1,0 +1,803 @@
+# MELT Training Configuration
+# Following NeMo SpeechLM2 configuration structure
+#
+# Usage:
+#   python src/train.py --config config/train/asr.yaml
+#   python src/train.py --config config/train/asr.yaml --trainer.max_steps=1000
+#   python src/train.py --config config/train/asr.yaml --run.exp_name=my_experiment
+
+# =============================================================================
+# Run Configuration (non-TrainingArguments settings)
+# =============================================================================
+run:
+  exp_name: IFT-v1.2.7
+  dry_run: false
+
+# =============================================================================
+# Model Configuration
+# =============================================================================
+model:
+  encoder:
+    freeze: true
+    max_audio_seq_len: 1500 # for frames of 20ms, this is 30s
+
+  decoder:
+    attn_implementation: sdpa
+    freeze: true
+  
+  ckpt: /mnt/scratch-artemis/giuseppe/melt-data/outputs/MA-v1.2.7
+
+# =============================================================================
+# Data Configuration
+# =============================================================================
+data:
+  sample_rate: 16000
+  apply_chat_template: true
+
+  train_ds:
+    total_hours: 3720.17 #42877.25  # Optional: total hours of data for estimation
+    total_cuts: 2143430 #11588853  # Optional: total number of cuts for estimation
+    force_estimate: false  # Force estimation of total_hours at start
+
+    # Data sources - list of datasets to load
+    input_cfg:
+      # Librispeech
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/train.100
+        tags:
+          task: asr
+          lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/train.360
+        tags:
+          task: asr
+          lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/other/train.500
+        tags:
+          task: asr
+          lang: en
+
+      # MLS Sidon
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/dutch/train
+        tags:
+          task: asr
+          lang: nl
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/english/train
+        tags:
+          task: asr
+          lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/french/train
+        tags:
+          task: asr
+          lang: fr
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/german/train
+        tags:
+          task: asr
+          lang: de
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/italian/train
+        tags:
+          task: asr
+          lang: it
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/polish/train
+        tags:
+          task: asr
+          lang: pl
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/portuguese/train
+        tags:
+          task: asr
+          lang: pt
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/spanish/train
+        tags:
+          task: asr
+          lang: es
+
+      # FLEURS
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/de_de/train
+        tags:
+          task: asr
+          lang: de_de
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/en_us/train
+        tags:
+          task: asr
+          lang: en_us
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/es_419/train
+        tags:
+          task: asr
+          lang: es_419
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/fr_fr/train
+        tags:
+          task: asr
+          lang: fr_fr
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/it_it/train
+        tags:
+          task: asr
+          lang: it_it
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/pt_br/train
+        tags:
+          task: asr
+          lang: pt_br
+
+      # CV 22 Sidon
+      # For CommonVoice, text is in custom.metadata.sentence, so override text_field
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/cs/train
+        tags:
+          task: asr
+          lang: cs
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/de/train
+        tags:
+          task: asr
+          lang: de
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/en/train
+        tags:
+          task: asr
+          lang: en
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/es/train
+        tags:
+          task: asr
+          lang: es
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/fr/train
+        tags:
+          task: asr
+          lang: fr
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/it/train
+        tags:
+          task: asr
+          lang: it
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ja/train
+        tags:
+          task: asr
+          lang: ja
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/pt/train
+        tags:
+          task: asr
+          lang: pt
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/zh-CN/train
+        tags:
+          task: asr
+          lang: zh-CN
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/zh-HK/train
+        tags:
+          task: asr
+          lang: zh-HK
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/zh-TW/train
+        tags:
+          task: asr
+          lang: zh-TW
+          text_field: custom.metadata.sentence
+
+      # People's Speech
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/peoples_speech/clean/train
+        tags:
+          task: asr
+          lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/peoples_speech/clean_sa/train
+        tags:
+          task: asr
+          lang: en
+
+      # VoxPopuli
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/de/train
+        tags:
+          task: asr
+          lang: de
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/en/train
+        tags:
+          task: asr
+          lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/es/train
+        tags:
+          task: asr
+          lang: es
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/fr/train
+        tags:
+          task: asr
+          lang: fr
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/it/train
+        tags:
+          task: asr
+          lang: it
+
+      # YODAS-Granary
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Bulgarian/asr_only
+        tags:
+          task: asr
+          lang: bg
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Bulgarian/ast
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: bg
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Croatian/asr_only
+        tags:
+          task: asr
+          lang: hr
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Croatian/ast
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: hr
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Czech/asr_only
+        tags:
+          task: asr
+          lang: cs
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Czech/ast
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: cs
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Danish/asr_only
+        tags:
+          task: asr
+          lang: da
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Danish/ast
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: da
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Dutch/asr_only
+        tags:
+          task: asr
+          lang: nl
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Dutch/ast
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: nl
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/English/asr_only
+        tags:
+          task: asr
+          lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Estonian/asr_only
+        tags:
+          task: asr
+          lang: et
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Estonian/ast
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: et
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Finnish/asr_only
+        tags:
+          task: asr
+          lang: fi
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Finnish/ast
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: fi
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/French/asr_only
+        tags:
+          task: asr
+          lang: fr
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/French/ast
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: fr
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/German/asr_only
+        tags:
+          task: asr
+          lang: de
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/German/ast
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: de
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Greek/asr_only
+        tags:
+          task: asr
+          lang: el
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Greek/ast
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: el
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Hungarian/asr_only
+        tags:
+          task: asr
+          lang: hu
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Hungarian/ast
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: hu
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Italian/asr_only
+        tags:
+          task: asr
+          lang: it
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Italian/ast
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: it
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Latvian/asr_only
+        tags:
+          task: asr
+          lang: lv
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Latvian/ast
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: lv
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Lithuanian/asr_only
+        tags:
+          task: asr
+          lang: lt
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Lithuanian/ast
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: lt
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Polish/asr_only
+        tags:
+          task: asr
+          lang: pl
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Polish/ast
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: pl
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Portuguese/asr_only
+        tags:
+          task: asr
+          lang: pt
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Portuguese/ast
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: pt
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Romanian/asr_only
+        tags:
+          task: asr
+          lang: ro
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Romanian/ast
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: ro
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Russian/asr_only
+        tags:
+          task: asr
+          lang: ru
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Russian/ast
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: ru
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Slovak/asr_only
+        tags:
+          task: asr
+          lang: sk
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Slovak/ast
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: sk
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Spanish/asr_only
+        tags:
+          task: asr
+          lang: es
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Spanish/ast
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: es
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Swedish/asr_only
+        tags:
+          task: asr
+          lang: sv
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Swedish/ast
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: sv
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Ukrainian/asr_only
+        tags:
+          task: asr
+          lang: uk
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Ukrainian/ast
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: uk
+
+      # CoVoST2 (speech translation, English source)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_ar/train
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: ar
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_ca/train
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: ca
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_cy/train
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: cy
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_de/train
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: de
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_et/train
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: et
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_ja/train
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: ja
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_lv/train
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: lv
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_sl/train
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: sl
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_sv-SE/train
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: sv-SE
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_tr/train
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: tr
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_zh-CN/train
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: zh-CN
+
+      # CoVoST2 (speech translation, English target)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/ar_en/train
+        tags:
+          task: st
+          src_lang: ar
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/ca_en/train
+        tags:
+          task: st
+          src_lang: ca
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/cy_en/train
+        tags:
+          task: st
+          src_lang: cy
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/de_en/train
+        tags:
+          task: st
+          src_lang: de
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/es_en/train
+        tags:
+          task: st
+          src_lang: es
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/et_en/train
+        tags:
+          task: st
+          src_lang: et
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/fr_en/train
+        tags:
+          task: st
+          src_lang: fr
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/it_en/train
+        tags:
+          task: st
+          src_lang: it
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/ja_en/train
+        tags:
+          task: st
+          src_lang: ja
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/lv_en/train
+        tags:
+          task: st
+          src_lang: lv
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/nl_en/train
+        tags:
+          task: st
+          src_lang: nl
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/pt_en/train
+        tags:
+          task: st
+          src_lang: pt
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/ru_en/train
+        tags:
+          task: st
+          src_lang: ru
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/sl_en/train
+        tags:
+          task: st
+          src_lang: sl
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/sv-SE_en/train
+        tags:
+          task: st
+          src_lang: sv-SE
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/tr_en/train
+        tags:
+          task: st
+          src_lang: tr
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/zh-CN_en/train
+        tags:
+          task: st
+          src_lang: zh-CN
+          tgt_lang: en
+
+    # Batch settings
+    batch_size: null  # Use batch_duration instead for dynamic batching
+    batch_duration: 480  # seconds of audio per batch
+    quadratic_duration: 20 # see https://lhotse.readthedocs.io/en/latest/datasets.html#lhotse.dataset.sampling.TimeConstraint
+
+    # Bucketing for efficient batching
+    use_bucketing: true
+    num_buckets: 30
+    bucket_buffer_size: 10000
+    bucket_duration_bins: [3.42, 3.88, 4.18, 4.44, 4.68, 4.87, 5.06, 5.23, 5.4, 5.58, 5.76, 5.9, 6.08, 6.24, 6.41, 6.6, 6.8, 7.01, 7.22, 7.46, 7.75, 8.09, 8.5, 9.1, 10.1, 12.67, 14.12, 15.06, 15.9]
+
+    # Sampling
+    shuffle: true
+    shuffle_buffer_size: 10000
+    drop_last: false
+    seed: 42
+    shard_seed: randomized
+
+    # Duration filtering
+    min_duration: 0.5
+    max_duration: 1800.0 # 30 minutes
+
+    # DataLoader settings
+    num_workers: 1
+    pin_memory: true
+    prefetch_factor: 2
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+  validation_ds:
+    total_hours: 91.49  # Optional: total hours of data for estimation
+    total_cuts: 58238  # Optional: total number of cuts for estimation
+    force_estimate: false
+
+    input_cfg:
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/validation
+        tags:
+          task: asr
+          lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/es_419/validation
+        tags:
+          task: asr
+          lang: es_419
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/zh-CN/validation
+        tags:
+          task: asr
+          lang: zh-CN
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/pt_br/validation
+        tags:
+          task: asr
+          lang: pt_br
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/polish/dev
+        tags:
+          task: asr
+          lang: pl
+  
+    batch_size: null
+    batch_duration: 300.0
+    use_bucketing: true
+    num_buckets: 30
+    bucket_duration_bins: [2.86, 3.28, 3.64, 3.94, 4.22, 4.46, 4.7, 4.92, 5.14, 5.33, 5.52, 5.71, 5.9, 6.08, 6.26, 6.43, 6.62, 6.82, 7.01, 7.22, 7.42, 7.67, 7.94, 8.21, 8.57, 8.93, 9.4, 10.04, 13.2]
+    shuffle: false
+    drop_last: false
+    min_duration: 0.5
+    max_duration: 30.0
+    num_workers: 1
+    pin_memory: true
+    prefetch_factor: 1
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+# =============================================================================
+# Trainer Configuration
+# =============================================================================
+trainer:
+  output_dir: ${oc.env:OUTPUT_DIR}/iwslt_replica_v1
+  overwrite_output_dir: true
+  seed: 42
+  do_train: true
+  do_eval: true
+  eval_on_start: false
+  average_tokens_across_devices: true
+
+  # Batch and accumulation
+  per_device_train_batch_size: -1  # Handled by Lhotse, set to 1
+  per_device_eval_batch_size: -1   # Handled by Lhotse, set to 1
+  gradient_accumulation_steps: 4
+
+  # LR schedule
+  lr_scheduler_type: cosine
+  warmup_steps: 20
+
+  # Duration
+  num_train_epochs: 2
+  max_steps: -1
+
+  # Logging
+  logging_strategy: steps
+  logging_steps: 2
+  report_to: wandb
+
+  # Evaluation
+  eval_strategy: steps # "no" # steps
+  eval_steps: 100
+  batch_eval_metrics: true
+
+  # Checkpointing
+  save_strategy: steps
+  save_steps: 1000
+  save_total_limit: 5
+
+  # Performance
+  bf16: true
+  group_by_length: false  # Handled by Lhotse bucketing
+  dataloader_num_workers: 0  # Workers handled by Lhotse
+  remove_unused_columns: false
+  ddp_find_unused_parameters: false
+
+  max_grad_norm: 1.0
+
+evaluation:
+  compute_metrics: true
+  enable_whisper_normalization: true
+
+optimization:
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+
+  # encoder_lr: 6e-6 # Not used since it's frozen
+  # decoder_lr: 2e-5 # Not used since it's frozen
+  adapter_lr: 2e-5
+  min_lr_scale: 0.1
