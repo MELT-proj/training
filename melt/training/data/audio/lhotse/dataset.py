@@ -93,20 +93,28 @@ LANGUAGE_ISO_TO_NAME: dict[str, str] = {
 # Task-specific prompt templates for chat-template mode.
 # Each template must contain {audio_token} and {lang} placeholders.
 TASK_TEMPLATES: dict[str, list[str]] = {
-    "transcribe": [
+    "asr": [
         "{audio_token} Transcribe this audio in {lang}.",
         "Transcribe the following {lang} audio: {audio_token}",
         "{audio_token} Write down what is said in this {lang} recording.",
         "Listen to this {lang} audio and transcribe it: {audio_token}",
         "{audio_token} Provide a transcription of the {lang} speech.",
         "What is being said in this {lang} audio? {audio_token}",
+
+        # Same as above but with no LID
+        "{audio_token} Transcribe this audio.",
+        "Transcribe the following audio: {audio_token}",
+        "{audio_token} Write down what is said in this recording.",
+        "Listen to this audio and transcribe it: {audio_token}",
+        "{audio_token} Provide a transcription of the speech.",
+        "What is being said in this audio? {audio_token}",
     ],
-    "translate": [
+    "st": [
         "{audio_token} Translate this audio to {lang}.",
         "Translate the following audio into {lang}: {audio_token}",
-        "{audio_token} Provide a translation of this speech in {lang}.",
+        "{audio_token} Provide a translation of this speech to {lang}.",
         "Listen to this audio and translate it to {lang}: {audio_token}",
-        "{audio_token} What is being said? Translate to {lang}.",
+        "{audio_token} What is being said? Translate into {lang}.",
         "Convert the speech in this audio to {lang}: {audio_token}",
     ],
     "speechqe": [
@@ -116,10 +124,6 @@ TASK_TEMPLATES: dict[str, list[str]] = {
         "Listen to this audio, assess the provided {lang} translation, and output only a float between 0 and 1: {audio_token}",
     ]
 }
-# Aliases for common task names
-TASK_TEMPLATES["asr"] = TASK_TEMPLATES["transcribe"]
-TASK_TEMPLATES["st"] = TASK_TEMPLATES["translate"]
-
 
 def _get_config_value(config, key: str, default=None):
     """Get a value from config, supporting both dataclass and dict access."""
@@ -463,16 +467,6 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         Returns:
             Tuple of (task, language) strings.
         """
-        task = "transcribe"  # Default task
-        lang = "en"  # Default language
-
-        # Try to get from cut custom metadata
-        if hasattr(cut, "custom") and cut.custom:
-            task = cut.custom.get("task", task)
-            lang = cut.custom.get("lang", lang)
-            if task in ("st", "translate"):
-                lang = cut.custom.get("tgt_lang", lang)
-
         # Try to get language from supervision
         if cut.supervisions:
             for sup in cut.supervisions:
@@ -482,11 +476,11 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
 
         # Check for tags added during dataset loading
         if hasattr(cut, "tags") and cut.tags:
-            task = cut.tags.get("task", task)
+            task = cut.tags.get("task")
             if task in ("st", "translate"):
-                lang = cut.tags.get("tgt_lang", cut.tags.get("lang", lang))
+                lang = cut.tags.get("tgt_lang")
             else:
-                lang = cut.tags.get("lang", lang)
+                lang = cut.tags.get("lang")
 
         return task, lang
 
@@ -517,7 +511,7 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
 
         for text, task, lang in zip(texts, tasks, langs):
             # Pick a random prompt template for the task
-            templates = TASK_TEMPLATES.get(task, TASK_TEMPLATES["default"])
+            templates = TASK_TEMPLATES.get(task)
             template = random.choice(templates)
 
             lang_key = (lang or "").lower()
