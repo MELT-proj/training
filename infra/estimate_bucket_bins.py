@@ -16,6 +16,7 @@ and writes all results to a JSON file for caching and inspection.
 from __future__ import annotations
 
 import argparse
+import csv
 import gzip
 import json
 from glob import glob
@@ -57,6 +58,20 @@ def _extract_language(cut_data: dict) -> str:
     if lang:
         return str(lang)
     return "unknown"
+
+
+def _has_pnc_text(sample_record: dict | None) -> bool | None:
+    """Return whether the cutset has a custom['pnc_text'] field.
+
+    Checks the metadata of a single representative cut. Returns None if no
+    sample record is available.
+    """
+    if sample_record is None:
+        return None
+    custom = sample_record.get("custom")
+    if not isinstance(custom, dict):
+        return False
+    return "pnc_text" in custom
 
 
 def _base_language(language: str) -> str:
@@ -159,6 +174,8 @@ def _ensure_source_stats(
                 normalized.get("sample_record"),
             )
         )
+    if "has_pnc_text" not in normalized:
+        normalized["has_pnc_text"] = _has_pnc_text(normalized.get("sample_record"))
     return normalized
 
 
@@ -179,8 +196,8 @@ def _process_manifest_file(
     min_duration: float,
     max_duration: float,
     is_first: bool,
-) -> tuple[list[float], dict | None]:
-    """Process a single manifest file and return durations and optionally a sample record.
+) -> tuple[list[float], dict | None, int, int, list[int]]:
+    """Process a single manifest file and return durations, a sample record, and word counts.
 
     Args:
         manifest_file: Path to the gzipped JSONL manifest.
@@ -189,10 +206,15 @@ def _process_manifest_file(
         is_first: If True, capture and return the first JSON record as a sample.
 
     Returns:
-        Tuple of (filtered durations, sample_record or None).
+        Tuple of (filtered durations, sample_record or None, total_words, cuts_with_text,
+        word_counts).  All word fields are accumulated only for cuts that pass the duration
+        filter.
     """
-    durations = []
+    durations: list[float] = []
     sample_record = None
+    total_words = 0
+    cuts_with_text = 0
+    word_counts: list[int] = []
     try:
         with gzip.open(manifest_file, "rt", encoding="utf-8") as f:
             for line in f:
@@ -203,9 +225,17 @@ def _process_manifest_file(
                     duration = cut_data.get("duration", 0.0)
                     if min_duration <= duration <= max_duration:
                         durations.append(duration)
+                        supervisions = cut_data.get("supervisions", [])
+                        if supervisions and isinstance(supervisions, list):
+                            text = supervisions[0].get("text", "") or ""
+                            if text:
+                                wc = len(text.split())
+                                total_words += wc
+                                cuts_with_text += 1
+                                word_counts.append(wc)
     except Exception as e:
         print(f"  Warning: Error reading manifest {manifest_file}: {e}")
-    return durations, sample_record
+    return durations, sample_record, total_words, cuts_with_text, word_counts
 
 
 def get_durations_from_shar(
@@ -213,7 +243,7 @@ def get_durations_from_shar(
     min_duration: float = 0.0,
     max_duration: float = float("inf"),
     n_jobs: int = 8,
-) -> tuple[list[float], dict | None]:
+) -> tuple[list[float], dict | None, int, int, list[int]]:
     """
     Read durations from SHAR manifest files without loading audio.
 
@@ -226,7 +256,8 @@ def get_durations_from_shar(
         n_jobs: Number of parallel workers.
 
     Returns:
-        Tuple of (list of durations, sample_record).
+        Tuple of (list of durations, sample_record, total_words, cuts_with_text).
+        total_words and cuts_with_text only cover cuts that pass the duration filter.
     """
     shar_path = Path(shar_path)
 
@@ -234,7 +265,7 @@ def get_durations_from_shar(
 
     if not manifest_files:
         print(f"  Warning: No manifest files found in {shar_path}")
-        return [], None
+        return [], None, 0, 0, []
 
     # Only the first manifest file should capture a sample record
     results = Parallel(n_jobs=n_jobs)(
@@ -242,17 +273,23 @@ def get_durations_from_shar(
         for i, mf in enumerate(tqdm(manifest_files, desc=f"  Reading {shar_path.name}", unit="file"))
     )
 
-    durations = []
+    durations: list[float] = []
     sample_record = None
+    total_words = 0
+    cuts_with_text = 0
+    word_counts: list[int] = []
     for result in results:
         if result is None:
             continue
-        file_durations, file_sample = result
+        file_durations, file_sample, file_words, file_cwt, file_wc = result
         durations.extend(file_durations)
         if sample_record is None and file_sample is not None:
             sample_record = file_sample
+        total_words += file_words
+        cuts_with_text += file_cwt
+        word_counts.extend(file_wc)
 
-    return durations, sample_record
+    return durations, sample_record, total_words, cuts_with_text, word_counts
 
 
 def _source_cache_key(source_cfg: dict[str, object]) -> str:
@@ -272,9 +309,18 @@ def load_cutset_from_config(
     cached_sources: dict[str, dict] | None = None,
     force_recompute: bool = False,
     n_jobs: int = 8,
-) -> tuple[list[float], dict[str, dict]]:
+) -> tuple[list[float], dict[str, dict], bool]:
     """
     Load durations from all data sources specified in input_cfg.
+
+    Fast path: if every source in input_cfg has complete metadata in
+    cached_sources, returns immediately without reading any manifest files.
+    The returned durations list will be empty in that case and all_from_cache
+    will be True.
+
+    Slow path: when any source is missing from cache (or --force-recompute),
+    ALL sources are re-read from disk so that bin estimates are always computed
+    from the full dataset.
 
     Args:
         input_cfg: List of data source configurations (can be DictConfig from OmegaConf).
@@ -285,28 +331,38 @@ def load_cutset_from_config(
         n_jobs: Number of parallel workers for manifest reading.
 
     Returns:
-        Tuple of (all_durations, per_source_results dict keyed by cache key).
+        Tuple of (all_durations, per_source_results dict keyed by cache key,
+        all_from_cache bool).
     """
-    all_durations = []
-    per_source_results: dict[str, dict] = {}
     if cached_sources is None:
         cached_sources = {}
+
+    # ── Fast path: all sources cached with complete metadata ──────────────
+    if not force_recompute:
+        cached_results: dict[str, dict] = {}
+        all_in_cache = True
+        for raw_source_cfg in input_cfg:
+            source_cfg = _normalize_source_cfg(raw_source_cfg)
+            cache_key = _source_cache_key(source_cfg)
+            entry = cached_sources.get(cache_key)
+            if entry is None or entry.get("num_cuts") is None:
+                all_in_cache = False
+                break
+            cached_results[cache_key] = _ensure_source_stats(source_cfg, entry)
+
+        if all_in_cache and cached_results:
+            for cache_key, info in cached_results.items():
+                print(f"  [cached] {cache_key} — {info['num_cuts']} cuts")
+            return [], cached_results, True
+
+    # ── Slow path: read all sources from disk ─────────────────────────────
+    all_durations: list[float] = []
+    per_source_results: dict[str, dict] = {}
 
     for raw_source_cfg in input_cfg:
         source_cfg = _normalize_source_cfg(raw_source_cfg)
         source_type = source_cfg.get("type", "lhotse_shar")
         cache_key = _source_cache_key(source_cfg)
-
-        # Check cache
-        if not force_recompute and cache_key in cached_sources:
-            cached = _ensure_source_stats(source_cfg, cached_sources[cache_key])
-            cached_durations = cached.get("durations")
-            if isinstance(cached_durations, list):
-                print(f"  [cached] {cache_key} — {cached['num_cuts']} cuts")
-                all_durations.extend(cached_durations)
-                per_source_results[cache_key] = cached
-                continue
-            print(f"  [cached-metadata-only] {cache_key} — recomputing durations")
 
         if source_type == "lhotse_shar":
             shar_path = source_cfg.get("shar_path")
@@ -318,19 +374,27 @@ def load_cutset_from_config(
                 raise FileNotFoundError(f"Shar path not found: {shar_path}")
 
             print(f"  Loading from: {shar_path}")
-            durations, sample_record = get_durations_from_shar(
+            durations, sample_record, total_words, cuts_with_text, word_counts = get_durations_from_shar(
                 shar_path, min_duration, max_duration, n_jobs=n_jobs
             )
             print(f"    Found {len(durations)} cuts")
             all_durations.extend(durations)
+            median_duration = float(np.median(durations)) if durations else None
+            median_words = float(np.median(word_counts)) if word_counts else None
 
             per_source_results[cache_key] = _ensure_source_stats(source_cfg, {
                 "source_type": source_type,
                 "path": shar_path,
                 "num_cuts": len(durations),
                 "total_duration_hours": sum(durations) / 3600 if durations else 0.0,
+                "median_duration": median_duration,
+                "median_words_per_cut": median_words,
                 "durations": durations,
+                "word_counts": word_counts,
                 "sample_record": sample_record,
+                "has_pnc_text": _has_pnc_text(sample_record),
+                "total_words": total_words,
+                "cuts_with_text": cuts_with_text,
             })
 
         elif source_type == "lhotse_cuts":
@@ -346,28 +410,45 @@ def load_cutset_from_config(
             try:
                 cuts = CutSet.from_file(cuts_path)
                 durations = []
+                word_counts = []
                 sample_record = None
+                total_words = 0
+                cuts_with_text = 0
                 for i, cut in enumerate(cuts):
                     if i == 0:
-                        # Capture sample record from first cut
                         sample_record = cut.to_dict() if hasattr(cut, "to_dict") else {"id": cut.id, "duration": cut.duration}
                     if min_duration <= cut.duration <= max_duration:
                         durations.append(cut.duration)
+                        if hasattr(cut, "supervisions") and cut.supervisions:
+                            text = getattr(cut.supervisions[0], "text", None) or ""
+                            if text:
+                                wc = len(text.split())
+                                total_words += wc
+                                cuts_with_text += 1
+                                word_counts.append(wc)
                 print(f"    Found {len(durations)} cuts")
                 all_durations.extend(durations)
+                median_duration = float(np.median(durations)) if durations else None
+                median_words = float(np.median(word_counts)) if word_counts else None
 
                 per_source_results[cache_key] = _ensure_source_stats(source_cfg, {
                     "source_type": source_type,
                     "path": cuts_path,
                     "num_cuts": len(durations),
                     "total_duration_hours": sum(durations) / 3600 if durations else 0.0,
+                    "median_duration": median_duration,
+                    "median_words_per_cut": median_words,
                     "durations": durations,
+                    "word_counts": word_counts,
                     "sample_record": sample_record,
+                    "has_pnc_text": _has_pnc_text(sample_record),
+                    "total_words": total_words,
+                    "cuts_with_text": cuts_with_text,
                 })
             except Exception as e:
                 raise RuntimeError(f"Failed to read cuts from {cuts_path}: {e}") from e
 
-    return all_durations, per_source_results
+    return all_durations, per_source_results, False
 
 
 def estimate_bins_from_durations(
@@ -438,15 +519,17 @@ def save_results(output_path: Path, results: dict) -> None:
 def _compact_sources_for_output(per_source: dict[str, dict]) -> dict[str, dict]:
     """Drop per-cut arrays from per-source stats before persisting to JSON.
 
-    ``sample_record`` (a single cut dict) is retained; only the ``durations``
-    list (one float per cut) is stripped to keep the output compact.
+    ``sample_record`` (a single cut dict) is retained; ``durations`` and
+    ``word_counts`` (one value per cut) are stripped to keep the output compact.
+    Scalar summary stats (median_duration, median_words_per_cut, etc.) are kept.
     """
+    _STRIP_KEYS = {"durations", "word_counts"}
     compact_sources: dict[str, dict] = {}
     for cache_key, source_info in per_source.items():
         compact_info = {
             key: value
             for key, value in source_info.items()
-            if key != "durations"
+            if key not in _STRIP_KEYS
         }
         compact_sources[cache_key] = compact_info
     return compact_sources
@@ -513,6 +596,219 @@ def _aggregate_base_language_pair_stats(per_source: dict[str, dict]) -> dict[str
 def _aggregate_task_stats(per_source: dict[str, dict]) -> dict[str, dict]:
     """Aggregate per-task statistics across all sources in a split."""
     return _aggregate_stats(per_source, "task_stats")
+
+
+def _fmt_optional(value: float | None, precision: int = 2) -> str:
+    """Format an optional float, returning empty string for None."""
+    return "" if value is None else str(round(value, precision))
+
+
+def _fmt_mean_dur(total_hours: float, num_cuts: int) -> str:
+    """Format mean duration in seconds, or empty string if unavailable."""
+    if num_cuts == 0:
+        return ""
+    return str(round(total_hours * 3600 / num_cuts, 2))
+
+
+def _fmt_avg_words(total_words: int, cuts_with_text: int) -> str:
+    """Format average words per cut, or empty string if no text was available."""
+    if cuts_with_text == 0:
+        return ""
+    return str(round(total_words / cuts_with_text, 1))
+
+
+def generate_csv(data: dict, csv_path: Path) -> None:
+    """Generate a CSV summary table from the computed bucket-info JSON.
+
+    Produces one row per source dataset plus aggregate rows at four granularities:
+    task, language (ASR), language-pair (ST), split total, and grand total.
+    Word-count columns are left blank when the underlying JSON was produced by an
+    older version of the script that did not track word counts.
+
+    Args:
+        data: Parsed JSON dict (as written by save_results).
+        csv_path: Destination path for the CSV file.
+    """
+    fieldnames = [
+        "split", "dataset", "name",
+        "task", "src_lang", "tgt_lang", "has_pnc_text",
+        "num_cuts", "total_hours",
+        "mean_duration_sec", "median_duration_sec",
+        "avg_words_per_cut", "median_words_per_cut",
+    ]
+
+    rows: list[dict] = []
+    grand_cuts = 0
+    grand_hours = 0.0
+    grand_words = 0
+    grand_cwt = 0
+
+    for split_key in ("train_ds", "validation_ds"):
+        split_data = data.get(split_key)
+        if not isinstance(split_data, dict) or not split_data:
+            continue
+
+        split_label = "train" if split_key == "train_ds" else "validation"
+        sources = split_data.get("sources", {})
+
+        # Accumulate per-group word counts from source-level data.
+        # Keys: "task::<task>", "lang::<lang>", "base_pair::<src>-><tgt>"
+        group_words: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+        split_words = 0
+        split_cwt = 0
+
+        for source_info in sources.values():
+            tw = source_info.get("total_words", 0) or 0
+            cwt = source_info.get("cuts_with_text", 0) or 0
+            split_words += tw
+            split_cwt += cwt
+            for task in source_info.get("task_stats", {}):
+                group_words[f"task::{task}"][0] += tw
+                group_words[f"task::{task}"][1] += cwt
+            for lang in source_info.get("language_stats", {}):
+                group_words[f"lang::{lang}"][0] += tw
+                group_words[f"lang::{lang}"][1] += cwt
+            for pair in source_info.get("language_pair_stats", {}):
+                if "->" in pair:
+                    src_p, tgt_p = pair.split("->", 1)
+                    macro_pair = f"{_base_language(src_p)}->{_base_language(tgt_p)}"
+                else:
+                    macro_pair = pair
+                group_words[f"base_pair::{macro_pair}"][0] += tw
+                group_words[f"base_pair::{macro_pair}"][1] += cwt
+
+        # ── Source-level rows ──────────────────────────────────────────────
+        for source_info in sorted(sources.values(), key=lambda s: s.get("path", "")):
+            task_stats = source_info.get("task_stats", {})
+            task = max(task_stats, key=lambda k: task_stats[k]["num_cuts"]) if task_stats else "unknown"
+
+            src_lang = ""
+            tgt_lang = ""
+            if task == "st":
+                lp_stats = source_info.get("language_pair_stats", {})
+                if lp_stats:
+                    pair = max(lp_stats, key=lambda k: lp_stats[k]["num_cuts"])
+                    parts = pair.split("->", 1)
+                    src_lang = parts[0]
+                    tgt_lang = parts[1] if len(parts) > 1 else ""
+            else:
+                lang_stats = source_info.get("language_stats", {})
+                if lang_stats:
+                    src_lang = max(lang_stats, key=lambda k: lang_stats[k]["num_cuts"])
+
+            has_pnc = source_info.get("has_pnc_text")
+            has_pnc_str = "" if has_pnc is None else ("yes" if has_pnc else "no")
+            num_cuts = source_info.get("num_cuts", 0)
+            total_hours = source_info.get("total_duration_hours", 0.0)
+            tw = source_info.get("total_words", 0) or 0
+            cwt = source_info.get("cuts_with_text", 0) or 0
+            path_str = source_info.get("path", "")
+            path_parts = Path(path_str).parts
+            dataset_name = path_parts[-3] if len(path_parts) >= 3 else (path_parts[-1] if path_parts else path_str)
+            name = path_parts[-1] if path_parts else path_str
+
+            rows.append({
+                "split": split_label, "dataset": dataset_name, "name": name,
+                "task": task, "src_lang": src_lang, "tgt_lang": tgt_lang,
+                "has_pnc_text": has_pnc_str,
+                "num_cuts": num_cuts,
+                "total_hours": round(total_hours, 4),
+                "mean_duration_sec": _fmt_mean_dur(total_hours, num_cuts),
+                "median_duration_sec": _fmt_optional(source_info.get("median_duration")),
+                "avg_words_per_cut": _fmt_avg_words(tw, cwt),
+                "median_words_per_cut": _fmt_optional(source_info.get("median_words_per_cut")),
+            })
+
+        # ── Per-task rows ──────────────────────────────────────────────────
+        for task, stats in sorted(split_data.get("task_stats", {}).items()):
+            gw = group_words.get(f"task::{task}", [0, 0])
+            num_cuts = stats["num_cuts"]
+            total_hours = stats["total_duration_hours"]
+            rows.append({
+                "split": split_label, "dataset": f"[task:{task}]", "name": task,
+                "task": task, "src_lang": "", "tgt_lang": "", "has_pnc_text": "",
+                "num_cuts": num_cuts,
+                "total_hours": round(total_hours, 4),
+                "mean_duration_sec": _fmt_mean_dur(total_hours, num_cuts),
+                "median_duration_sec": "",
+                "avg_words_per_cut": _fmt_avg_words(gw[0], gw[1]),
+                "median_words_per_cut": "",
+            })
+
+        # ── Per-language rows (ASR) ────────────────────────────────────────
+        for lang, stats in sorted(split_data.get("language_stats", {}).items()):
+            gw = group_words.get(f"lang::{lang}", [0, 0])
+            num_cuts = stats["num_cuts"]
+            total_hours = stats["total_duration_hours"]
+            rows.append({
+                "split": split_label, "dataset": f"[lang:{lang}]", "name": lang,
+                "task": stats.get("task", ""), "src_lang": lang, "tgt_lang": "",
+                "has_pnc_text": "",
+                "num_cuts": num_cuts,
+                "total_hours": round(total_hours, 4),
+                "mean_duration_sec": _fmt_mean_dur(total_hours, num_cuts),
+                "median_duration_sec": "",
+                "avg_words_per_cut": _fmt_avg_words(gw[0], gw[1]),
+                "median_words_per_cut": "",
+            })
+
+        # ── Per-language-pair rows (ST, macro level) ───────────────────────
+        for pair, stats in sorted(split_data.get("base_language_pair_stats", {}).items()):
+            gw = group_words.get(f"base_pair::{pair}", [0, 0])
+            num_cuts = stats["num_cuts"]
+            total_hours = stats["total_duration_hours"]
+            pair_parts = pair.split("->", 1)
+            src_lang = pair_parts[0]
+            tgt_lang = pair_parts[1] if len(pair_parts) > 1 else ""
+            rows.append({
+                "split": split_label, "dataset": f"[pair:{pair}]", "name": pair,
+                "task": "st", "src_lang": src_lang, "tgt_lang": tgt_lang,
+                "has_pnc_text": "",
+                "num_cuts": num_cuts,
+                "total_hours": round(total_hours, 4),
+                "mean_duration_sec": _fmt_mean_dur(total_hours, num_cuts),
+                "median_duration_sec": "",
+                "avg_words_per_cut": _fmt_avg_words(gw[0], gw[1]),
+                "median_words_per_cut": "",
+            })
+
+        # ── Split-total row ────────────────────────────────────────────────
+        num_cuts = split_data.get("total_cuts", 0)
+        total_hours = split_data.get("total_duration_hours", 0.0)
+        rows.append({
+            "split": split_label, "dataset": "[total]", "name": f"{split_label}_total",
+            "task": "", "src_lang": "", "tgt_lang": "", "has_pnc_text": "",
+            "num_cuts": num_cuts,
+            "total_hours": round(total_hours, 4),
+            "mean_duration_sec": _fmt_mean_dur(total_hours, num_cuts),
+            "median_duration_sec": "",
+            "avg_words_per_cut": _fmt_avg_words(split_words, split_cwt),
+            "median_words_per_cut": "",
+        })
+
+        grand_cuts += num_cuts
+        grand_hours += total_hours
+        grand_words += split_words
+        grand_cwt += split_cwt
+
+    # ── Grand-total row ────────────────────────────────────────────────────
+    rows.append({
+        "split": "all", "dataset": "[total]", "name": "grand_total",
+        "task": "", "src_lang": "", "tgt_lang": "", "has_pnc_text": "",
+        "num_cuts": grand_cuts,
+        "total_hours": round(grand_hours, 4),
+        "mean_duration_sec": _fmt_mean_dur(grand_hours, grand_cuts),
+        "median_duration_sec": "",
+        "avg_words_per_cut": _fmt_avg_words(grand_words, grand_cwt),
+        "median_words_per_cut": "",
+    })
+
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    print(f"CSV table written to:  {csv_path}")
 
 
 def main():
@@ -586,15 +882,45 @@ Examples:
         default=8,
         help="Number of parallel workers for reading manifest files (default: 8).",
     )
+    parser.add_argument(
+        "--csv-output",
+        type=str,
+        default=None,
+        help="Path for the output CSV file. Defaults to <config_stem>_bucket_info.csv next to the config.",
+    )
+    parser.add_argument(
+        "--no-csv",
+        action="store_true",
+        help="Skip CSV table generation.",
+    )
+    parser.add_argument(
+        "--csv-only",
+        action="store_true",
+        help="Only regenerate the CSV from an existing JSON output; skip all data processing.",
+    )
 
     args = parser.parse_args()
 
-    # Determine output path
+    # Determine output paths
     config_path = Path(args.config)
     if args.output:
         output_path = Path(args.output)
     else:
         output_path = config_path.parent / f"{config_path.stem}_bucket_info.json"
+
+    if args.csv_output:
+        csv_path = Path(args.csv_output)
+    else:
+        csv_path = output_path.with_suffix(".csv")
+
+    # --csv-only: regenerate CSV from an existing JSON, then exit.
+    if args.csv_only:
+        if not output_path.exists():
+            print(f"Error: JSON output not found at {output_path}. Run without --csv-only first.")
+            raise SystemExit(1)
+        print(f"Loading existing results from: {output_path}")
+        generate_csv(load_cached_results(output_path), csv_path)
+        return
 
     # Load config
     print(f"\nLoading config from: {args.config}")
@@ -639,7 +965,7 @@ Examples:
             print(f"Duration filter: [{min_duration}, {max_duration}] seconds")
 
             cached_sources = _get_cached_sources("train_ds")
-            train_durations, per_source = load_cutset_from_config(
+            train_durations, per_source, all_cached = load_cutset_from_config(
                 train_input_cfg,
                 min_duration=min_duration,
                 max_duration=max_duration,
@@ -648,7 +974,20 @@ Examples:
                 n_jobs=args.n_jobs,
             )
 
-            if train_durations:
+            if all_cached and per_source:
+                total_cuts = sum(s.get("num_cuts", 0) for s in per_source.values())
+                total_hours = sum(s.get("total_duration_hours", 0.0) for s in per_source.values())
+                print(f"\nAll sources loaded from cache — skipping manifest reads.")
+                print(f"Total training cuts (cached): {total_cuts}")
+                print(f"Total duration (cached): {total_hours:.2f} hours")
+                # Preserve existing split-level output; refresh per-source entries
+                # (picks up any newly backfilled fields like has_pnc_text, median_*, etc.)
+                if output["train_ds"]:
+                    output["train_ds"]["sources"] = _compact_sources_for_output(per_source)
+                    cached_bins = output["train_ds"].get("bucket_duration_bins", [])
+                    if cached_bins:
+                        results["train_ds"] = cached_bins
+            elif train_durations:
                 print(f"\nTotal training cuts: {len(train_durations)}")
                 print(f"Total duration: {sum(train_durations) / 3600:.2f} hours")
                 print(f"Duration range: [{min(train_durations):.2f}, {max(train_durations):.2f}] seconds")
@@ -696,7 +1035,7 @@ Examples:
             print(f"Duration filter: [{min_duration}, {max_duration}] seconds")
 
             cached_sources = _get_cached_sources("validation_ds")
-            val_durations, per_source = load_cutset_from_config(
+            val_durations, per_source, all_cached = load_cutset_from_config(
                 val_input_cfg,
                 min_duration=min_duration,
                 max_duration=max_duration,
@@ -705,7 +1044,18 @@ Examples:
                 n_jobs=args.n_jobs,
             )
 
-            if val_durations:
+            if all_cached and per_source:
+                total_cuts = sum(s.get("num_cuts", 0) for s in per_source.values())
+                total_hours = sum(s.get("total_duration_hours", 0.0) for s in per_source.values())
+                print(f"\nAll sources loaded from cache — skipping manifest reads.")
+                print(f"Total validation cuts (cached): {total_cuts}")
+                print(f"Total duration (cached): {total_hours:.2f} hours")
+                if output["validation_ds"]:
+                    output["validation_ds"]["sources"] = _compact_sources_for_output(per_source)
+                    cached_bins = output["validation_ds"].get("bucket_duration_bins", [])
+                    if cached_bins:
+                        results["validation_ds"] = cached_bins
+            elif val_durations:
                 print(f"\nTotal validation cuts: {len(val_durations)}")
                 print(f"Total duration: {sum(val_durations) / 3600:.2f} hours")
                 print(f"Duration range: [{min(val_durations):.2f}, {max(val_durations):.2f}] seconds")
@@ -739,6 +1089,10 @@ Examples:
 
     # Write output JSON
     save_results(output_path, output)
+
+    # Write CSV summary table
+    if not args.no_csv:
+        generate_csv(output, csv_path)
 
     # Summary
     if results:
