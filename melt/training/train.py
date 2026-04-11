@@ -76,18 +76,32 @@ def prepare_model(
 
     # Detect last checkpoint
     last_checkpoint = None
-    if os.path.isdir(targs.output_dir) and targs.do_train and not targs.overwrite_output_dir:
-        last_checkpoint = get_last_checkpoint(targs.output_dir)
-        if last_checkpoint is None and len(os.listdir(targs.output_dir)) > 0:
+    resume = targs.resume_from_checkpoint
+    if isinstance(resume, str):
+        # resume_from_checkpoint is a directory path: find the latest checkpoint inside it.
+        last_checkpoint = get_last_checkpoint(resume)
+        if last_checkpoint is None:
             raise ValueError(
-                f"Output directory ({targs.output_dir}) already exists and is not empty. "
-                "Use --overwrite_output_dir to overcome."
+                f"No checkpoint found in '{resume}'. "
+                "Ensure the directory contains at least one checkpoint, "
+                "or unset `trainer.resume_from_checkpoint`."
             )
-        elif last_checkpoint is not None and targs.resume_from_checkpoint is None:
-            logger.info(
-                f"Checkpoint detected, resuming training at {last_checkpoint}. To avoid this behavior, change "
-                "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
-            )
+        logger.info(f"Resuming from checkpoint: {last_checkpoint} (scanned from {resume})")
+    elif resume is not True:
+        # resume is None: auto-detect from output_dir (existing behaviour).
+        if os.path.isdir(targs.output_dir) and targs.do_train and not targs.overwrite_output_dir:
+            last_checkpoint = get_last_checkpoint(targs.output_dir)
+            if last_checkpoint is None and len(os.listdir(targs.output_dir)) > 0:
+                raise ValueError(
+                    f"Output directory ({targs.output_dir}) already exists and is not empty. "
+                    "Use --overwrite_output_dir to overcome."
+                )
+            elif last_checkpoint is not None:
+                logger.info(
+                    f"Checkpoint detected, resuming training at {last_checkpoint}. To avoid this "
+                    "behavior, change `--output_dir` or add `--overwrite_output_dir` to train from scratch."
+                )
+    # else: resume is True — HF Trainer will scan output_dir for the last checkpoint internally.
 
     # Load or create model
     logger.info("Loading model...")
@@ -217,10 +231,14 @@ def main(cfg: DictConfig) -> None:
         compute_metrics=compute_metrics
     )
 
-    # Determine checkpoint to resume from
+    # Determine checkpoint to resume from.
+    # - True  → pass through so HF Trainer auto-detects the last checkpoint in output_dir.
+    # - str   → prepare_model already resolved it to the actual checkpoint path via
+    #           get_last_checkpoint(); use that resolved path.
+    # - None  → fall back to any checkpoint auto-detected from output_dir.
     checkpoint = None
-    if targs.resume_from_checkpoint is not None:
-        checkpoint = targs.resume_from_checkpoint
+    if targs.resume_from_checkpoint is True:
+        checkpoint = True
     elif last_checkpoint is not None:
         checkpoint = last_checkpoint
 
