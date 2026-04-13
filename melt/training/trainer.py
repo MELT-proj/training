@@ -32,7 +32,7 @@ from transformers.trainer_utils import (
 )
 
 from .. import ddp
-from ..logging_utils import get_logger
+from ..logging_utils import force_print, get_logger
 from ..modeling import MELTProcessor
 from .data.audio.lhotse import (
     FallbackDataset,
@@ -132,6 +132,25 @@ class MELTTrainer(Trainer):
 
         # Initialize parent (may set up distributed)
         super().__init__(model=model, args=args, eval_dataset=eval_dataset, **kwargs)
+
+        # Start CUDA memory history recording if memory_profiling is enabled.
+        # Must happen after super().__init__() so the CUDA device is already initialised.
+        self._memory_profiling = bool(
+            config is not None and config.get("run", {}).get("memory_profiling", False)
+        )
+        if self._memory_profiling:
+            if torch.cuda.is_available():
+                torch.cuda.memory._record_memory_history(max_entries=100_000)
+                force_print(
+                    f"[MemProf] rank={self._global_rank} — CUDA memory history recording enabled "
+                    "(snapshot will be written to output_dir on OOM)"
+                )
+            else:
+                force_print(
+                    f"[MemProf] rank={self._global_rank} — memory_profiling=true but CUDA is not "
+                    "available; skipping."
+                )
+                self._memory_profiling = False
 
     # ------------------------------------------------------------------
     # Training entry point override: capture resume path for sampler
@@ -719,17 +738,23 @@ class MELTTrainer(Trainer):
             return super().training_step(model, inputs, num_items_in_batch)
         except torch.OutOfMemoryError:
             self._log_oom_batch_info(inputs)
+            if self._memory_profiling:
+                self._dump_memory_snapshot()
             raise
 
     def _log_oom_batch_info(self, inputs: dict) -> None:
-        """Log tensor shapes, model info, and GPU memory state on OOM to identify the offending batch."""
-        logger.error(
+        """Log tensor shapes, model info, and GPU memory state on OOM to identify the offending batch.
+
+        Uses force_print (direct stderr write) instead of logger so that the
+        diagnostic is visible on every rank, not just rank 0.
+        """
+        force_print(
             f"[OOM] rank={self._global_rank} step={self.state.global_step} — "
             "dumping batch info to help identify the offending batch"
         )
 
         # --- Training context ---
-        logger.error(
+        force_print(
             f"[OOM] Training context: "
             f"fp16={self.args.fp16}, bf16={self.args.bf16}, "
             f"grad_accum={self.args.gradient_accumulation_steps}, "
@@ -741,27 +766,31 @@ class MELTTrainer(Trainer):
         param_dtypes = {p.dtype for p in model.parameters()}
         param_mem_mb = sum(p.numel() * p.element_size() for p in model.parameters()) / 1024**2
         buf_mem_mb = sum(b.numel() * b.element_size() for b in model.buffers()) / 1024**2
-        logger.error(
+        force_print(
             f"[OOM] Model: dtypes={[str(d) for d in param_dtypes]}, "
             f"param_mem={param_mem_mb:.1f} MB, buffer_mem={buf_mem_mb:.1f} MB"
         )
 
         # --- Batch tensors ---
-        logger.error("[OOM] Batch tensors:")
+        force_print("[OOM] Batch tensors:")
         for key, val in inputs.items():
             if isinstance(val, torch.Tensor):
                 mem_mb = val.numel() * val.element_size() / 1024**2
-                logger.error(
+                force_print(
                     f"[OOM]   {key}: shape={list(val.shape)}, dtype={val.dtype}, "
                     f"device={val.device}, mem={mem_mb:.2f} MB"
                 )
             elif isinstance(val, list):
-                logger.error(f"[OOM]   {key}: list of {len(val)} items")
+                force_print(f"[OOM]   {key}: list of {len(val)} items")
                 if val and isinstance(val[0], str):
                     # e.g. cut IDs — log all of them so the exact cuts can be reproduced
-                    logger.error(f"[OOM]     values={val}")
+                    force_print(f"[OOM]     values={val}")
+                elif val and isinstance(val[0], float):
+                    # e.g. audio_lengths — print each value in seconds for easy inspection
+                    formatted = ", ".join(f"{v:.2f}s" for v in val)
+                    force_print(f"[OOM]     values=[{formatted}]")
             else:
-                logger.error(f"[OOM]   {key}: {type(val).__name__} = {val!r}")
+                force_print(f"[OOM]   {key}: {type(val).__name__} = {val!r}")
 
         # --- GPU memory ---
         if torch.cuda.is_available():
@@ -769,10 +798,38 @@ class MELTTrainer(Trainer):
                 allocated = torch.cuda.memory_allocated(i) / 1024**3
                 reserved = torch.cuda.memory_reserved(i) / 1024**3
                 max_allocated = torch.cuda.max_memory_allocated(i) / 1024**3
-                logger.error(
+                force_print(
                     f"[OOM]   GPU {i}: allocated={allocated:.2f} GB, "
                     f"reserved={reserved:.2f} GB, peak={max_allocated:.2f} GB"
                 )
+
+    def _dump_memory_snapshot(self) -> None:
+        """Dump a PyTorch CUDA memory snapshot to disk and stop recording.
+
+        The snapshot is a pickle file that can be inspected interactively at
+        https://pytorch.org/memory_viz (runs entirely client-side, no upload).
+
+        Recording is stopped after the dump so that repeated OOMs in the same
+        run don't accumulate unbounded history.
+        """
+        import pathlib
+        import pickle
+
+        try:
+            snapshot = torch.cuda.memory._snapshot()
+            out = (
+                pathlib.Path(self.args.output_dir)
+                / f"oom_memory_snapshot_rank{self._global_rank}_step{self.state.global_step}.pkl"
+            )
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(pickle.dumps(snapshot))
+            force_print(f"[MemProf] rank={self._global_rank} — memory snapshot written to {out}")
+        except Exception as exc:
+            force_print(f"[MemProf] rank={self._global_rank} — failed to write snapshot: {exc}")
+        finally:
+            # Stop recording to avoid unbounded accumulation if training continues.
+            torch.cuda.memory._record_memory_history(None)
+            self._memory_profiling = False
 
     def evaluation_loop(
         self,

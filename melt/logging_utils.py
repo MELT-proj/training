@@ -75,6 +75,18 @@ def get_logger(name: str) -> logging.Logger:
     return logging.getLogger(name)
 
 
+def force_print(msg: str) -> None:
+    """Write *msg* directly to stderr, bypassing Python's logging system.
+
+    Use this for critical diagnostics (e.g. OOM errors) that must be visible
+    on every rank even though `configure_logging()` silences non-master ranks
+    via `logging.disable(logging.CRITICAL)`.
+    """
+    import sys
+
+    print(msg, file=sys.stderr, flush=True)
+
+
 # Print model layers for inspection/debugging and write to file
 def _print_model_layers(m, out_dir: str | None = None):
     """Log leaf-level model modules (layers) by name and type and optionally write to file."""

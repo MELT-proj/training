@@ -57,9 +57,10 @@ DEFAULT_CONFIG = """
 # Run Configuration (non-TrainingArguments settings)
 # =============================================================================
 run:
-  exp_name: null  # Experiment name for wandb
-  dry_run: false  # Run in dry-run mode (no actual training)
-  config: null    # Path to config file (set via CLI)
+  exp_name: null          # Experiment name for wandb
+  dry_run: false          # Run in dry-run mode (no actual training)
+  config: null            # Path to config file (set via CLI)
+  memory_profiling: false # Enable PyTorch CUDA memory snapshot on OOM (writes .pkl to output_dir)
 
 # =============================================================================
 # Model Configuration
