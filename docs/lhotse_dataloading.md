@@ -191,11 +191,11 @@ From `src/config.py` and `src/data/audio/lhotse/dataloader.py`:
 class DatasetConfig:
     # ...
     max_duration: float = 300.0        # Max seconds per batch
-    shuffle_buffer_size: int = 10000   # Shuffle buffer size (affects randomness vs memory)
+    buffer_size: int = 10000   # Buffer size (affects randomness vs memory)
     num_workers: int = 8               # DataLoader workers (parallel audio loading)
 ```
 
-### Tuning `shuffle_buffer_size`:
+### Tuning `buffer_size`:
 - **Larger** (e.g., 50k): Better shuffle quality, more memory
 - **Smaller** (e.g., 5k): Less memory, slightly less random (but usually fine)
 - **Rule of thumb**: 10k-20k is good for most cases
