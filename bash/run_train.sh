@@ -199,6 +199,20 @@ SRUN_ARGS=" \
     --kill-on-bad-exit=1 \
     "
 
+# ------------------------------------------------------------------
+# GPU memory monitoring (per node, runs for the duration of training)
+# ------------------------------------------------------------------
+_NVIDIA_SMI_PID=""
+if command -v nvidia-smi >/dev/null 2>&1; then
+    mkdir -p logs
+    _GPU_LOG="logs/gpu_mem_${SLURM_JOB_ID:-local}_node${SLURM_NODEID:-0}.csv"
+    nvidia-smi --query-gpu=timestamp,index,memory.used,memory.total \
+        --format=csv -l 30 > "$_GPU_LOG" 2>/dev/null &
+    _NVIDIA_SMI_PID=$!
+    trap '[[ -n "${_NVIDIA_SMI_PID}" ]] && kill "${_NVIDIA_SMI_PID}" 2>/dev/null; exit' EXIT
+    log_master "GPU memory log: $_GPU_LOG"
+fi
+
 if [[ "$RUNNING_UNDER_SLURM" -eq 1 ]]; then
     # If we're already inside an interactive srun allocation (a Slurm "step"),
     # re-invoking srun from inside that step can fail or create nested steps.

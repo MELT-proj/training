@@ -265,6 +265,20 @@ SRUN_ARGS=(
   --wait=60
 )
 
+# ------------------------------------------------------------------
+# GPU memory monitoring (host side, master node only)
+# Per-node logs are also written from inside the container by run_train.sh.
+# ------------------------------------------------------------------
+_NVIDIA_SMI_PID=""
+if command -v nvidia-smi >/dev/null 2>&1; then
+    _GPU_LOG="${SUBMIT_DIR}/logs/gpu_mem_${SLURM_JOB_ID:-local}_host.csv"
+    nvidia-smi --query-gpu=timestamp,index,memory.used,memory.total \
+        --format=csv -l 30 > "$_GPU_LOG" 2>/dev/null &
+    _NVIDIA_SMI_PID=$!
+    trap '[[ -n "${_NVIDIA_SMI_PID}" ]] && kill "${_NVIDIA_SMI_PID}" 2>/dev/null; exit' EXIT
+    log_master "GPU memory log (host): $_GPU_LOG"
+fi
+
 log_master "Starting training via srun + ${SINGULARITY_BIN} ..."
 
 # NOTE: SLURM_PROCID, SLURM_NODEID, SLURM_LOCALID, SLURM_STEP_ID are set by srun
