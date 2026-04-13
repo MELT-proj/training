@@ -13,6 +13,7 @@ authors = [
 ]
 requires-python = ">=3.10"
 dependencies = [
+    "torch>=2.9,<2.10",
     "transformers==4.57.1",
     "wandb>=0.23",
     "datasets>=4.0",
@@ -29,6 +30,7 @@ dependencies = [
     "jiwer>=4.0",
     "setuptools",
     "peft>=0.18.1",
+    "flash-attn",
 ]
 
 [project.optional-dependencies]
@@ -72,3 +74,11 @@ known-first-party = ["transformers"]
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+
+[tool.uv.sources]
+torch = { index = "pytorch" }
+flash-attn = { url = "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl" }
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu126"

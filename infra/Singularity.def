@@ -27,7 +27,7 @@ From: nvidia/cuda:12.6.1-runtime-ubuntu22.04
     curl -LsSf https://astral.sh/uv/install.sh | sh
     /usr/local/bin/uv --version
     
-    /usr/local/bin/uv python install 3.11.11
+    /usr/local/bin/uv python install 3.12.9
     # Verify installation
     /usr/local/bin/uv python list
 
@@ -35,14 +35,11 @@ From: nvidia/cuda:12.6.1-runtime-ubuntu22.04
     
     # Create the venv outside the project directory so it won't be hidden
     # when /workspace/training is bind-mounted from the host.
-    /usr/local/bin/uv venv /workspace/venv --python 3.11.11
+    /usr/local/bin/uv venv /workspace/venv --python 3.12.9
     export UV_PROJECT_ENVIRONMENT=/workspace/venv
 
     # Install the package    
-    /usr/local/bin/uv sync --python 3.13 --link-mode copy --cache-dir /usr/local/share/uv/cache --no-editable
-
-    # Install flash-attn
-    /usr/local/bin/uv pip install --python /workspace/venv/bin/python https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.8cxx11abiTRUE-cp313-cp313-linux_x86_64.whl
+    /usr/local/bin/uv sync --python 3.12 --link-mode copy --cache-dir /usr/local/share/uv/cache --no-editable --index-strategy unsafe-best-match
 
     # test torch installation
     /usr/local/bin/uv run python -c "import torch; print(torch.__version__)"
