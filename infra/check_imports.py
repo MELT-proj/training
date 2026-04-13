@@ -14,19 +14,19 @@ import sys
 
 
 MODULES = [
-    "src",
-    "src.ddp",
-    "src.logging_utils",
-    "src.modeling",
-    "src.modeling.configuration_melt",
-    "src.modeling.modeling_melt",
-    "src.modeling.processing_melt",
-    "src.training",
-    "src.training.config",
-    "src.training.trainer",
-    "src.training.train",
-    "src.evaluation",
-    "src.evaluation.evaluate",
+    "melt",
+    "melt.ddp",
+    "melt.logging_utils",
+    "melt.modeling",
+    "melt.modeling.configuration_melt",
+    "melt.modeling.modeling_melt",
+    "melt.modeling.processing_melt",
+    "melt.training",
+    "melt.training.config",
+    "melt.training.trainer",
+    "melt.training.train",
+    "melt.evaluation",
+    "melt.evaluation.evaluate",
 ]
 
 

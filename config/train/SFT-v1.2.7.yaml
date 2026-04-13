@@ -18,12 +18,27 @@ run:
 # =============================================================================
 model:
   encoder:
+    name: facebook/w2v-bert-2.0
     freeze: true
     max_audio_seq_len: 1500 # for frames of 20ms, this is 30s
 
   decoder:
+    name: Qwen/Qwen3-1.7B
     attn_implementation: flash_attention_2
     freeze: false
+    bos_token: <|startoftext|>
+    eos_token: <|endoftext|>
+    pad_token: <|text_pad|> # used if not specified in tokenizer
+    audio_token: <|audio|>
+    audio_bos_token: <|audio_bos|>
+    audio_eos_token: <|audio_eos|>
+  
+  adapter:
+    freeze: true
+    _type: conformer
+    num_adapter_layers: 2
+    adapter_kernel_size: 3
+    adapter_stride: 2
   
   ckpt: null # IMPORTANT: this should be set from the CLI!
 
@@ -681,27 +696,26 @@ data:
     total_cuts: 91330322
     force_estimate: false
 
+    # Duration filtering
+    min_duration: 0.5
+    max_duration: 120.0
+    
     # Batch settings
     batch_size: null  # Use batch_duration instead for dynamic batching
-    batch_duration: 480  # seconds of audio per batch
-    quadratic_duration: 20 # see https://lhotse.readthedocs.io/en/latest/datasets.html#lhotse.dataset.sampling.TimeConstraint
+    batch_duration: 90  # seconds of audio per batch
+    quadratic_duration: 30 # see https://lhotse.readthedocs.io/en/latest/datasets.html#lhotse.dataset.sampling.TimeConstraint
 
     # Bucketing for efficient batching
-    use_bucketing: true
+    lhotse_sampler_type: dynamic_bucketing  # One among: dynamic_bucketing, dynamic, bucketing
     num_buckets: 30
-    bucket_buffer_size: 10000
+    buffer_size: 10000
     bucket_duration_bins: [2.42, 3.6, 4.54, 5.41, 6.26, 7.18, 8.24, 9.52, 10.64, 11.64, 12.61, 13.56, 14.42, 14.89, 15.62, 16.58, 17.58, 18.58, 19.64, 21.6, 23.92, 26.18, 28.44, 31.7, 34.9, 36.4, 37.5, 38.42, 39.24]
 
     # Sampling
     shuffle: true
-    shuffle_buffer_size: 20000
     drop_last: false
     seed: 42
     shard_seed: 42
-
-    # Duration filtering
-    min_duration: 0.5
-    max_duration: 300.0
 
     # DataLoader settings
     num_workers: 1
@@ -713,17 +727,39 @@ data:
 
   validation_ds:
     input_cfg:
+      # English Validation
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/validation
         tags:
           task: asr
           lang: en
+          text_field: custom.pnc_text
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/other/validation
+        tags:
+          task: asr
+          lang: en
+          text_field: custom.pnc_text
+
+      # Multilingual Validation
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/es_419/validation
         tags:
           task: asr
           lang: es_419
           text_field: custom.pnc_text
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/cs/validation
+        tags:
+          task: asr
+          lang: cs
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/de/validation
+        tags:
+          task: asr
+          lang: de
+          text_field: custom.metadata.sentence
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/zh-CN/validation
         tags:
@@ -743,22 +779,26 @@ data:
           lang: pl
           text_field: custom.pnc_text
   
+    # Statistics
     total_hours: null
     total_cuts: null
     force_estimate: true
-    batch_size: null
-    batch_duration: 300.0
-    use_bucketing: true
+
+    # Batch composition
+    batch_size: 4
+    batch_duration: null
+    lhotse_sampler_type: dynamic_bucketing
     num_buckets: 30
     bucket_duration_bins: null
-    bucket_buffer_size: 15000
+    
+    buffer_size: 20000
     shuffle: false
     drop_last: false
     min_duration: 0.5
-    max_duration: 300.0
+    max_duration: 120.0
     num_workers: 1
     pin_memory: true
-    prefetch_factor: 1
+    prefetch_factor: 2
     sample_rate: 16000
     text_field: text
     lang_field: lang
@@ -768,7 +808,8 @@ data:
 # =============================================================================
 trainer:
   output_dir: ${oc.env:OUTPUT_DIR}
-  overwrite_output_dir: true
+  overwrite_output_dir: false
+  resume_from_checkpoint: null
   seed: 42
   do_train: true
   do_eval: true
@@ -790,7 +831,7 @@ trainer:
 
   # Logging
   logging_strategy: steps
-  logging_steps: 2
+  logging_steps: 5
   report_to: wandb
 
   # Evaluation
@@ -805,8 +846,8 @@ trainer:
 
   # Performance
   bf16: true
-  group_by_length: false  # Handled by Lhotse bucketing
-  dataloader_num_workers: 0  # Workers handled by Lhotse
+  group_by_length: false
+  dataloader_num_workers: 0
   remove_unused_columns: false
   ddp_find_unused_parameters: false
 
@@ -819,8 +860,7 @@ evaluation:
 optimization:
   adam_beta1: 0.9
   adam_beta2: 0.95
-
   encoder_lr: 6e-6
   decoder_lr: 2e-5
-  adapter_lr: 2e-5
+  adapter_lr: 2e-4
   min_lr_scale: 0.1

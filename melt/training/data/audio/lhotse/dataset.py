@@ -535,8 +535,6 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
             )
             formatted.append(full_text)
 
-            print(full_text)
-
         return formatted
 
     def _apply_qe_chat_template(self, texts: list[str], langs: list[str]) -> list[str]:

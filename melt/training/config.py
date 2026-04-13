@@ -122,10 +122,9 @@ data:
     quadratic_duration: null
     use_bucketing: true
     num_buckets: 30
-    bucket_buffer_size: 10000
+    buffer_size: 10000
     bucket_duration_bins: null
     shuffle: true
-    shuffle_buffer_size: 10000
     drop_last: false
     seed: 42
     shard_seed: trng

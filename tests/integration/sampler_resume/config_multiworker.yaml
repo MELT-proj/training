@@ -52,11 +52,10 @@ data:
 
     use_bucketing: true
     num_buckets: 10
-    bucket_buffer_size: 1000
+    buffer_size: 1000
     bucket_duration_bins: null
 
     shuffle: true
-    shuffle_buffer_size: 1000
     drop_last: false
     seed: 42
     shard_seed: 42

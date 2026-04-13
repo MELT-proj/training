@@ -2,7 +2,6 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=32
 #SBATCH --output="logs/%x.%j.out"
-#SBATCH --error="logs/%x.%j.err"
 #SBATCH --job-name=melt-train-container
 
 set -euo pipefail
