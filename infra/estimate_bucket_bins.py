@@ -494,6 +494,33 @@ def estimate_bins_from_durations(
     return bins
 
 
+def _print_extreme_cuts(label: str, durations: list[float], n: int = 10) -> None:
+    """Print the N longest and N shortest cut durations for a given split.
+
+    Args:
+        label: Human-readable split name (e.g. "train" or "validation").
+        durations: Full list of cut durations in seconds.
+        n: Number of extreme cuts to display at each end.
+    """
+    if not durations:
+        return
+    n = min(n, len(durations))
+    arr = np.array(durations)
+    # Shortest: n smallest values, sorted ascending
+    shortest_idx = np.argpartition(arr, n - 1)[:n]
+    shortest = sorted(arr[shortest_idx])
+    # Longest: n largest values, sorted descending
+    longest_idx = np.argpartition(arr, -n)[-n:]
+    longest = sorted(arr[longest_idx], reverse=True)
+
+    print(f"\n  Top {n} shortest {label} cuts (seconds):")
+    for i, d in enumerate(shortest, 1):
+        print(f"    {i:>3}. {d:.3f}s")
+    print(f"\n  Top {n} longest {label} cuts (seconds):")
+    for i, d in enumerate(longest, 1):
+        print(f"    {i:>3}. {d:.3f}s")
+
+
 def format_bins_for_yaml(bins: list[float], precision: int = 2) -> str:
     """Format bins as a YAML-compatible list string."""
     formatted = [round(b, precision) for b in bins]
@@ -898,6 +925,12 @@ Examples:
         action="store_true",
         help="Only regenerate the CSV from an existing JSON output; skip all data processing.",
     )
+    parser.add_argument(
+        "--top-n",
+        type=int,
+        default=10,
+        help="Number of longest/shortest cuts to print per split (default: 10).",
+    )
 
     args = parser.parse_args()
 
@@ -992,6 +1025,7 @@ Examples:
                 print(f"Total duration: {sum(train_durations) / 3600:.2f} hours")
                 print(f"Duration range: [{min(train_durations):.2f}, {max(train_durations):.2f}] seconds")
                 print(f"Mean duration: {np.mean(train_durations):.2f} seconds")
+                _print_extreme_cuts("train", train_durations, args.top_n)
 
                 train_bins = estimate_bins_from_durations(train_durations, args.train_buckets)
                 results["train_ds"] = train_bins
@@ -1060,6 +1094,7 @@ Examples:
                 print(f"Total duration: {sum(val_durations) / 3600:.2f} hours")
                 print(f"Duration range: [{min(val_durations):.2f}, {max(val_durations):.2f}] seconds")
                 print(f"Mean duration: {np.mean(val_durations):.2f} seconds")
+                _print_extreme_cuts("validation", val_durations, args.top_n)
 
                 val_bins = estimate_bins_from_durations(val_durations, args.val_buckets)
                 results["validation_ds"] = val_bins
