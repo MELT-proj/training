@@ -304,9 +304,10 @@ SRUN_ARGS=(
 # ------------------------------------------------------------------
 # GPU memory monitoring (host side, master node only)
 # Per-node logs are also written from inside the container by run_train.sh.
+# Set GPU_MEM_MONITORING=1 to enable.
 # ------------------------------------------------------------------
 _NVIDIA_SMI_PID=""
-if command -v nvidia-smi >/dev/null 2>&1; then
+if [[ "${GPU_MEM_MONITORING:-0}" -eq 1 ]] && command -v nvidia-smi >/dev/null 2>&1; then
     _GPU_LOG="${SUBMIT_DIR}/logs/gpu_mem_${SLURM_JOB_ID:-local}_host.csv"
     nvidia-smi --query-gpu=timestamp,index,memory.used,memory.total \
         --format=csv -l 30 > "$_GPU_LOG" 2>/dev/null &

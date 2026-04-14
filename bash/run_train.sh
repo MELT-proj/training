@@ -201,9 +201,10 @@ SRUN_ARGS=" \
 
 # ------------------------------------------------------------------
 # GPU memory monitoring (per node, runs for the duration of training)
+# Set GPU_MEM_MONITORING=1 to enable.
 # ------------------------------------------------------------------
 _NVIDIA_SMI_PID=""
-if command -v nvidia-smi >/dev/null 2>&1; then
+if [[ "${GPU_MEM_MONITORING:-0}" -eq 1 ]] && command -v nvidia-smi >/dev/null 2>&1; then
     mkdir -p logs
     _GPU_LOG="logs/gpu_mem_${SLURM_JOB_ID:-local}_node${SLURM_NODEID:-0}.csv"
     nvidia-smi --query-gpu=timestamp,index,memory.used,memory.total \
