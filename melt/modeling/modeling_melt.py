@@ -63,7 +63,7 @@ class MELTMLPAdapter(nn.Module):
         self.fc2 = nn.Linear(mid, out, bias=True)
 
         self.post_norm = nn.LayerNorm(out)
-        self.gain = nn.Parameter(torch.tensor([0.1], dtype=torch.float32))
+        self.gain = nn.Parameter(torch.tensor([0.1]))
         self.output_hidden_size = out
 
     def _get_output_features_shape(
@@ -91,9 +91,7 @@ class MELTMLPAdapter(nn.Module):
         hidden_states = self.fc1(audio_features)
         hidden_states = self.act(hidden_states)
         hidden_states = self.fc2(hidden_states)
-        hidden_states = self.post_norm(hidden_states) * self.gain.to(
-            dtype=hidden_states.dtype
-        )
+        hidden_states = self.post_norm(hidden_states) * self.gain
         return hidden_states
 
 

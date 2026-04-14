@@ -720,7 +720,7 @@ data:
     # DataLoader settings
     num_workers: 1
     pin_memory: true
-    prefetch_factor: 2
+    prefetch_factor: 32
     sample_rate: 16000
     text_field: text
     lang_field: lang
@@ -785,7 +785,7 @@ data:
     force_estimate: true
 
     # Batch composition
-    batch_size: 4
+    batch_size: 16
     batch_duration: null
     lhotse_sampler_type: dynamic_bucketing
     num_buckets: 30
@@ -793,12 +793,12 @@ data:
     
     buffer_size: 20000
     shuffle: false
-    drop_last: false
+    drop_last: true
     min_duration: 0.5
     max_duration: 120.0
-    num_workers: 1
+    num_workers: 0
     pin_memory: true
-    prefetch_factor: 2
+    prefetch_factor: null
     sample_rate: 16000
     text_field: text
     lang_field: lang

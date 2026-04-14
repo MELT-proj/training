@@ -177,6 +177,18 @@ export SINGULARITYENV_TMPDIR="${CONTAINER_TMPDIR}"
 export SINGULARITYENV_WANDB_PROJECT="${WANDB_PROJECT:-melt}"
 export SINGULARITYENV_WANDB_MODE="${WANDB_MODE:-online}"
 
+# Redirect tool/JIT caches to the writable tmp bind-mount.
+# The home dir may be mounted read-only inside the container, which causes
+# deepspeed/triton (TRITON_CACHE_DIR), lhotse, and wandb to fail when trying
+# to create cache dirs under ~/.triton, ~/.lhotse, ~/.cache, etc.
+export SINGULARITYENV_TRITON_CACHE_DIR="${CONTAINER_TMPDIR}/.triton"
+export APPTAINERENV_TRITON_CACHE_DIR="${CONTAINER_TMPDIR}/.triton"
+export SINGULARITYENV_TRITON_HOME="${CONTAINER_TMPDIR}/.triton"
+export APPTAINERENV_TRITON_HOME="${CONTAINER_TMPDIR}/.triton"
+# Redirect general XDG/pip/torch caches too
+export SINGULARITYENV_XDG_CACHE_HOME="${CONTAINER_TMPDIR}/.cache"
+export APPTAINERENV_XDG_CACHE_HOME="${CONTAINER_TMPDIR}/.cache"
+
 # Base output directory for runs.
 # IMPORTANT: don't point the container at host paths like /mnt/scratch-... directly.
 # Some clusters bind those paths read-only inside the container. Instead, bind-mount
@@ -206,6 +218,33 @@ else
 fi
 export SINGULARITYENV_MASTER_ADDR="${MASTER_ADDR_HOST}"
 export SINGULARITYENV_MASTER_PORT="${MASTER_PORT}"
+
+# ------------------------------------------------------------------
+# OpenMP tuning (PyTorch CPU-thread performance guide)
+# - OMP_NUM_THREADS: default to SLURM cpus-per-task; override by setting the
+#   variable before calling sbatch.
+# - GOMP_CPU_AFFINITY: bind OpenMP threads to the same CPU range so they don't
+#   migrate.  Defaults to "0-<OMP_NUM_THREADS-1>"; override if needed.
+# ------------------------------------------------------------------
+_OMP_NUM_THREADS="${OMP_NUM_THREADS:-${SLURM_CPUS_PER_TASK:-1}}"
+_GOMP_CPU_AFFINITY="${GOMP_CPU_AFFINITY:-0-$(( _OMP_NUM_THREADS - 1 ))}"
+
+export SINGULARITYENV_OMP_NUM_THREADS="${_OMP_NUM_THREADS}"
+export APPTAINERENV_OMP_NUM_THREADS="${_OMP_NUM_THREADS}"
+
+export SINGULARITYENV_OMP_SCHEDULE="${OMP_SCHEDULE:-STATIC}"
+export APPTAINERENV_OMP_SCHEDULE="${OMP_SCHEDULE:-STATIC}"
+
+export SINGULARITYENV_OMP_PROC_BIND="${OMP_PROC_BIND:-CLOSE}"
+export APPTAINERENV_OMP_PROC_BIND="${OMP_PROC_BIND:-CLOSE}"
+
+export SINGULARITYENV_GOMP_CPU_AFFINITY="${_GOMP_CPU_AFFINITY}"
+export APPTAINERENV_GOMP_CPU_AFFINITY="${_GOMP_CPU_AFFINITY}"
+
+log_master "OMP_NUM_THREADS: ${_OMP_NUM_THREADS}"
+log_master "OMP_SCHEDULE: ${OMP_SCHEDULE:-STATIC}"
+log_master "OMP_PROC_BIND: ${OMP_PROC_BIND:-CLOSE}"
+log_master "GOMP_CPU_AFFINITY: ${_GOMP_CPU_AFFINITY}"
 
 # ------------------------------------------------------------------
 # SLURM variables: pass through to container (--cleanenv strips them)
