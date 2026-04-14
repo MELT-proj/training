@@ -710,6 +710,11 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
         # Initialize the text decoder (language model)
         self.text_decoder = self._create_text_stack(config)
 
+        # Cache EOS token id once to avoid repeated config lookups and temporary
+        # tensor allocations inside _inject_tensor on every forward pass.
+        eos_id = self.text_decoder.config.eos_token_id
+        self._eos_token_id: int = eos_id[0] if isinstance(eos_id, list) else eos_id
+
         # Propagate tied weights keys if present
         if self.text_decoder._tied_weights_keys is not None:
             self._tied_weights_keys = [
@@ -842,69 +847,73 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
         ndim = target_tensor.ndim
         batch_size = target_tensor.shape[0]
 
-        # Determine pad_item based on tensor type
+        # Step D: look up the EOS embedding via direct weight indexing rather than
+        # running a full embedding forward pass with a freshly allocated tmp tensor.
+        # self._eos_token_id is cached once in __init__ to avoid the config lookup.
+        # For masks (2D) keep the raw Python float so torch.full / F.pad can use it
+        # without any GPU synchronization.
         if ndim == 3:
-            # Embeddings: use eos embedding for padding
             hidden_size = target_tensor.shape[-1]
-            eos_token_id = self.text_decoder.config.eos_token_id
-            pad_item = self.text_decoder.get_input_embeddings()(
-                torch.tensor(
-                    [eos_token_id], device=target_tensor.device, dtype=torch.long
-                )
-            ).squeeze(0)  # (hidden_size,)
+            pad_embed = self.text_decoder.get_input_embeddings().weight[self._eos_token_id]  # (D,)
         else:
-            # Attention masks: use 0.0 for padding (masked positions)
-            pad_item = torch.tensor(
-                pad_item, device=target_tensor.device, dtype=target_tensor.dtype
-            )
+            pad_float = float(pad_item)
+
+        # Step A: bulk-transfer the small integer/bool control tensors to CPU once.
+        # This replaces all per-batch-item .item(), .tolist(), torch.where (GPU
+        # nonzero), and len(cuda_tensor) syncs with a single bulk host transfer of
+        # tiny tensors, letting the CPU run ahead without stalling on the GPU.
+        input_ids_cpu = input_ids.cpu()            # (B, S_t)
+        source_lengths_cpu = source_lengths.cpu()  # (B, max_injects)
+        if source_tensor_mask is not None:
+            source_tensor_mask_cpu = source_tensor_mask.cpu()  # (B, S_a)
+        else:
+            source_tensor_mask_cpu = None
 
         merged_sequences = []
 
         for batch_idx in range(batch_size):
-            input_id_seq = input_ids[batch_idx]  # (seq_len,)
-            item_lengths = source_lengths[batch_idx]  # (max_num_injects,)
+            # All comparisons and list conversions operate on CPU tensors -- no GPU sync.
+            item_lengths_cpu = source_lengths_cpu[batch_idx]
+            valid_audio_lens: list[int] = item_lengths_cpu[item_lengths_cpu > 0].tolist()
 
-            # Filter valid audio lengths (remove -1 or 0 padding)
-            valid_audio_lens = item_lengths[item_lengths > 0].tolist()
-
-            # Filter valid source tensor based on source mask
-            if ndim == 3 and source_tensor_mask is not None:
-                item_source_mask = source_tensor_mask[batch_idx]  # (s_a,)
-                valid_source_tensor = source_tensor[batch_idx][
-                    item_source_mask
-                ]  # (valid_s_a, d)
+            # Compute valid source indices on CPU, then index the GPU tensor with a
+            # plain Python list of ints.  This avoids the boolean-indexing sync
+            # (output size is no longer data-dependent on the GPU side).
+            if ndim == 3 and source_tensor_mask_cpu is not None:
+                valid_src_idx: list[int] = (
+                    source_tensor_mask_cpu[batch_idx].nonzero(as_tuple=False).squeeze(1).tolist()
+                )
+                valid_source_tensor = source_tensor[batch_idx][valid_src_idx]
             else:
-                valid_source_tensor = source_tensor[batch_idx]  # (d)
+                valid_source_tensor = source_tensor[batch_idx]
 
-            # Find positions where injection should happen
-            inject_positions = torch.where(input_id_seq == inject_token_id)[0]
+            # nonzero on a CPU tensor -- no GPU sync.
+            inject_positions: list[int] = (
+                input_ids_cpu[batch_idx].eq(inject_token_id).nonzero(as_tuple=False).squeeze(1).tolist()
+            )
 
-            # If no inject tokens or no audio lengths, keep target data as-is
-            if len(inject_positions) == 0 or len(valid_audio_lens) == 0:
+            if not inject_positions or not valid_audio_lens:
                 merged_sequences.append(target_tensor[batch_idx])
                 continue
 
-            # Build the merged sequence by concatenating slices
+            # Build the merged sequence by concatenating GPU slices.
+            # All position arithmetic uses plain Python ints from the CPU lists above.
             slices = []
             prev_pos = 0
             source_pos = 0
 
             for audio_idx, pos in enumerate(inject_positions):
                 if audio_idx >= len(valid_audio_lens):
-                    # No more audio to inject, but there may be more inject tokens
-                    # Skip remaining inject tokens
+                    # No more audio to inject; skip remaining inject tokens.
                     break
 
-                pos = pos.item()
-                audio_len = int(valid_audio_lens[audio_idx])
+                audio_len: int = valid_audio_lens[audio_idx]
 
                 # Add target slice before the inject position (excluding the inject token itself)
                 if pos > prev_pos:
                     slices.append(target_tensor[batch_idx, prev_pos:pos])
 
-                # Add the source (audio) slice
-                audio_slice = valid_source_tensor[source_pos : source_pos + audio_len]
-                slices.append(audio_slice)
+                slices.append(valid_source_tensor[source_pos : source_pos + audio_len])
 
                 # Update positions: skip the inject_token_id in target
                 prev_pos = pos + 1
@@ -914,40 +923,30 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
             if prev_pos < target_tensor.shape[1]:
                 slices.append(target_tensor[batch_idx, prev_pos:])
 
-            # Concatenate all slices for this batch item
-            if slices:
-                merged_seq = torch.cat(slices, dim=0)  # (new_seq_len, hidden_size)
-            else:
-                merged_seq = target_tensor[batch_idx]
+            merged_sequences.append(torch.cat(slices, dim=0) if slices else target_tensor[batch_idx])
 
-            merged_sequences.append(merged_seq)
+        # Step C: replace the per-sequence expand+cat loop and final torch.stack with
+        # a single pre-allocated output tensor filled with the pad value.  Sequences
+        # are right-aligned (left-padded) by writing each one into the tail of its row.
+        max_seq_len = max(seq.shape[0] for seq in merged_sequences)  # CPU .shape, no sync
 
-        # Find max sequence length for padding
-        max_seq_len = max(seq.shape[0] for seq in merged_sequences)
+        if ndim == 3:
+            # Pre-fill every position with the EOS embedding; valid positions are
+            # then overwritten by the right-aligned sequence copies below.
+            out = target_tensor.new_zeros(batch_size, max_seq_len, hidden_size)
+            out[:] = pad_embed  # broadcast (D,) → (B, S, D)
+        else:
+            out = torch.full(
+                (batch_size, max_seq_len),
+                pad_float,
+                dtype=target_tensor.dtype,
+                device=target_tensor.device,
+            )
 
-        # Left-pad all sequences to max_seq_len
-        padded_sequences = []
-        for seq in merged_sequences:
-            seq_len = seq.shape[0]
-            if seq_len < max_seq_len:
-                pad_len = max_seq_len - seq_len
-                if ndim == 3:
-                    # Embeddings: expand pad_item to (pad_len, hidden_size)
-                    padding = pad_item.unsqueeze(0).expand(pad_len, hidden_size)
-                else:
-                    # Masks: create tensor of zeros with shape (pad_len,)
-                    padding = pad_item.expand(pad_len)
-                padded_seq = torch.cat([padding, seq], dim=0)
-            else:
-                padded_seq = seq
-            padded_sequences.append(padded_seq)
+        for i, seq in enumerate(merged_sequences):
+            out[i, max_seq_len - seq.shape[0] :] = seq  # right-align = left-pad
 
-        # Stack into batch tensor
-        # Shape: (batch_size, max_seq_len, hidden_size) for embeddings
-        # Shape: (batch_size, max_seq_len) for masks
-        merged_tensor = torch.stack(padded_sequences, dim=0)
-
-        return merged_tensor
+        return out
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
