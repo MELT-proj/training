@@ -223,11 +223,13 @@ export SINGULARITYENV_MASTER_PORT="${MASTER_PORT}"
 # OpenMP tuning (PyTorch CPU-thread performance guide)
 # - OMP_NUM_THREADS: default to SLURM cpus-per-task; override by setting the
 #   variable before calling sbatch.
-# - GOMP_CPU_AFFINITY: bind OpenMP threads to the same CPU range so they don't
-#   migrate.  Defaults to "0-<OMP_NUM_THREADS-1>"; override if needed.
+# - OMP_PROC_BIND=CLOSE binds threads to nearby CPUs within the cpuset that
+#   SLURM already assigned to this job — no need to specify physical CPU IDs.
+# - GOMP_CPU_AFFINITY is intentionally omitted: it requires knowing the exact
+#   physical CPU IDs in the job's cpuset and causes libgomp thread-creation
+#   failures (EINVAL) when those IDs don't start from 0.
 # ------------------------------------------------------------------
 _OMP_NUM_THREADS="${OMP_NUM_THREADS:-${SLURM_CPUS_PER_TASK:-1}}"
-_GOMP_CPU_AFFINITY="${GOMP_CPU_AFFINITY:-0-$(( _OMP_NUM_THREADS - 1 ))}"
 
 export SINGULARITYENV_OMP_NUM_THREADS="${_OMP_NUM_THREADS}"
 export APPTAINERENV_OMP_NUM_THREADS="${_OMP_NUM_THREADS}"
@@ -238,13 +240,9 @@ export APPTAINERENV_OMP_SCHEDULE="${OMP_SCHEDULE:-STATIC}"
 export SINGULARITYENV_OMP_PROC_BIND="${OMP_PROC_BIND:-CLOSE}"
 export APPTAINERENV_OMP_PROC_BIND="${OMP_PROC_BIND:-CLOSE}"
 
-export SINGULARITYENV_GOMP_CPU_AFFINITY="${_GOMP_CPU_AFFINITY}"
-export APPTAINERENV_GOMP_CPU_AFFINITY="${_GOMP_CPU_AFFINITY}"
-
 log_master "OMP_NUM_THREADS: ${_OMP_NUM_THREADS}"
 log_master "OMP_SCHEDULE: ${OMP_SCHEDULE:-STATIC}"
 log_master "OMP_PROC_BIND: ${OMP_PROC_BIND:-CLOSE}"
-log_master "GOMP_CPU_AFFINITY: ${_GOMP_CPU_AFFINITY}"
 
 # ------------------------------------------------------------------
 # SLURM variables: pass through to container (--cleanenv strips them)

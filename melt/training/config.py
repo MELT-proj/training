@@ -61,6 +61,7 @@ run:
   dry_run: false          # Run in dry-run mode (no actual training)
   config: null            # Path to config file (set via CLI)
   memory_profiling: false # Enable PyTorch CUDA memory snapshot on OOM (writes .pkl to output_dir)
+  memory_preallocation: false # Run a max-length warmup forward+backward pass before training to preallocate CUDA buffers
 
 # =============================================================================
 # Model Configuration

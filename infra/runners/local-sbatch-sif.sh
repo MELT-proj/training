@@ -15,7 +15,7 @@ export TMPDIR_HOST=/tmp
 export MASTER_PORT=60001
 
 ACCELERATE_CONFIG="config/accelerate/fsdp2.yaml"
-EXP_NAME=SFT-v1.2.7.3
+EXP_NAME=SFT-v1.2.7.5
 TRAIN_CONFIG=./config/train/SFT-v1.2.7.yaml
 # OUTPUT_DIR is the host-side path used for bind-mounting by the sbatch script.
 # Inside the container it is always mounted at /workspace/outputs, so train args
@@ -34,9 +34,10 @@ sbatch --time=01:00:00 \
     --trainer.report_to "wandb" \
     --trainer.output_dir ${CONTAINER_OUTPUT_DIR}/${EXP_NAME} \
     --run.exp_name ${EXP_NAME} \
-    --data.train_ds.buffer_size 100000 \
+    --data.train_ds.buffer_size 500000 \
     --trainer.eval_on_start false \
-    --run.memory_profiling true
+    --run.memory_profiling true \
+    --run.memory_preallocation true
 
     # --trainer.resume_from_checkpoint true \
     # --model.decoder.attn_implementation sdpa
