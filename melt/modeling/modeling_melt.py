@@ -845,13 +845,12 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
             or (batch_size, max_new_seq_len) for masks, with left-padding.
         """
         ndim = target_tensor.ndim
-        batch_size = target_tensor.shape[0]
+        B, S_t = target_tensor.shape[0], input_ids.shape[1]
+        device = target_tensor.device
 
-        # Step D: look up the EOS embedding via direct weight indexing rather than
-        # running a full embedding forward pass with a freshly allocated tmp tensor.
-        # self._eos_token_id is cached once in __init__ to avoid the config lookup.
-        # For masks (2D) keep the raw Python float so torch.full / F.pad can use it
-        # without any GPU synchronization.
+        # Step D: look up the EOS embedding via direct weight indexing (no tmp tensor /
+        # forward pass). self._eos_token_id is cached once in __init__.
+        # For masks (2D) keep the raw Python float for torch.full (no GPU sync).
         if ndim == 3:
             hidden_size = target_tensor.shape[-1]
             pad_embed = self.text_decoder.get_input_embeddings().weight[self._eos_token_id]  # (D,)
@@ -859,92 +858,126 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
             pad_float = float(pad_item)
 
         # Step A: bulk-transfer the small integer/bool control tensors to CPU once.
-        # This replaces all per-batch-item .item(), .tolist(), torch.where (GPU
-        # nonzero), and len(cuda_tensor) syncs with a single bulk host transfer of
-        # tiny tensors, letting the CPU run ahead without stalling on the GPU.
+        # This eliminates every per-batch-item .item(), .tolist(), GPU nonzero, and
+        # len(cuda_tensor) sync, replacing them with a single bulk host transfer.
         input_ids_cpu = input_ids.cpu()            # (B, S_t)
         source_lengths_cpu = source_lengths.cpu()  # (B, max_injects)
-        if source_tensor_mask is not None:
-            source_tensor_mask_cpu = source_tensor_mask.cpu()  # (B, S_a)
-        else:
-            source_tensor_mask_cpu = None
+        source_tensor_mask_cpu = source_tensor_mask.cpu() if source_tensor_mask is not None else None
 
-        merged_sequences = []
+        # ----------------------------------------------------------------
+        # Step B: fully-vectorized index computation — zero GPU syncs.
+        #
+        # Key identity for output position of a token at (batch b, seq pos j):
+        #
+        #   out_pos(b, j) = j
+        #                   - inject_ci(b, j)              # remove inject placeholders
+        #                   + audio_cumsum[b, inject_ci(b,j)]  # insert audio frames
+        #                   + pad_offset[b]                # left-padding
+        #
+        # where inject_ci(b, j) = # inject tokens STRICTLY before position j in item b.
+        # ----------------------------------------------------------------
 
-        for batch_idx in range(batch_size):
-            # All comparisons and list conversions operate on CPU tensors -- no GPU sync.
-            item_lengths_cpu = source_lengths_cpu[batch_idx]
-            valid_audio_lens: list[int] = item_lengths_cpu[item_lengths_cpu > 0].tolist()
+        inject_mask_cpu = input_ids_cpu.eq(inject_token_id)  # (B, S_t) bool
+        text_mask_cpu = ~inject_mask_cpu
 
-            # Compute valid source indices on CPU, then index the GPU tensor with a
-            # plain Python list of ints.  This avoids the boolean-indexing sync
-            # (output size is no longer data-dependent on the GPU side).
-            if ndim == 3 and source_tensor_mask_cpu is not None:
-                valid_src_idx: list[int] = (
-                    source_tensor_mask_cpu[batch_idx].nonzero(as_tuple=False).squeeze(1).tolist()
-                )
-                valid_source_tensor = source_tensor[batch_idx][valid_src_idx]
-            else:
-                valid_source_tensor = source_tensor[batch_idx]
+        # inject_ci[b, j] = exclusive cumsum of inject tokens (# injects before j)
+        inject_ci = inject_mask_cpu.long().cumsum(dim=1) - inject_mask_cpu.long()  # (B, S_t)
 
-            # nonzero on a CPU tensor -- no GPU sync.
-            inject_positions: list[int] = (
-                input_ids_cpu[batch_idx].eq(inject_token_id).nonzero(as_tuple=False).squeeze(1).tolist()
-            )
+        # audio_cumsum_cpu[b, k] = total audio frames contributed by the first k injects
+        # Shape (B, max_injects+1); audio_cumsum_cpu[:, 0] == 0 (prepended by F.pad).
+        valid_lens_cpu = source_lengths_cpu.clamp(min=0)  # negative padding sentinel → 0
+        max_injects = valid_lens_cpu.shape[1]
+        audio_cumsum_cpu = F.pad(valid_lens_cpu.long().cumsum(dim=1), (1, 0))  # (B, max_injects+1)
 
-            if not inject_positions or not valid_audio_lens:
-                merged_sequences.append(target_tensor[batch_idx])
-                continue
+        # Per-item output lengths and left-pad offsets (all CPU arithmetic, no sync)
+        out_lengths = text_mask_cpu.long().sum(dim=1) + valid_lens_cpu.sum(dim=1)  # (B,)
+        max_out_len = int(out_lengths.max())
+        pad_offsets = (max_out_len - out_lengths).unsqueeze(1)  # (B, 1)
 
-            # Build the merged sequence by concatenating GPU slices.
-            # All position arithmetic uses plain Python ints from the CPU lists above.
-            slices = []
-            prev_pos = 0
-            source_pos = 0
+        # ---- Text token output positions ----
+        # audio_at_ci[b, j] = audio_cumsum[b, inject_ci[b, j]]  (look up cumulative frames at j)
+        audio_at_ci = torch.gather(
+            audio_cumsum_cpu, dim=1,
+            index=inject_ci.clamp(0, max_injects),
+        )  # (B, S_t)
+        j_range = torch.arange(S_t, dtype=torch.long).unsqueeze(0)  # (1, S_t)
+        text_out_pos_cpu = j_range - inject_ci + audio_at_ci + pad_offsets  # (B, S_t)
 
-            for audio_idx, pos in enumerate(inject_positions):
-                if audio_idx >= len(valid_audio_lens):
-                    # No more audio to inject; skip remaining inject tokens.
-                    break
+        # Flatten to only the non-inject (text) positions
+        text_b_cpu, text_j_cpu = text_mask_cpu.nonzero(as_tuple=True)
+        text_out_cpu = text_out_pos_cpu[text_b_cpu, text_j_cpu]
 
-                audio_len: int = valid_audio_lens[audio_idx]
+        # ---- Audio frame output positions ----
+        # For the k-th inject of item b at original position p = inject_positions_2d[b, k]:
+        #   first_frame_out_pos = pad_offset[b] + (p - k) + audio_cumsum[b, k]
+        inj_b_cpu, inj_j_cpu = inject_mask_cpu.nonzero(as_tuple=True)
+        inj_k_cpu = inject_ci[inj_b_cpu, inj_j_cpu]
 
-                # Add target slice before the inject position (excluding the inject token itself)
-                if pos > prev_pos:
-                    slices.append(target_tensor[batch_idx, prev_pos:pos])
+        # inject_positions_2d[b, k] = original seq position of the k-th inject in item b
+        inject_positions_2d = torch.zeros(B, max_injects, dtype=torch.long)
+        inject_positions_2d[inj_b_cpu, inj_k_cpu] = inj_j_cpu
 
-                slices.append(valid_source_tensor[source_pos : source_pos + audio_len])
+        k_range = torch.arange(max_injects, dtype=torch.long).unsqueeze(0)  # (1, max_injects)
+        audio_block_start = (
+            pad_offsets + inject_positions_2d - k_range + audio_cumsum_cpu[:, :max_injects]
+        )  # (B, max_injects) — output position of first frame for each audio block
 
-                # Update positions: skip the inject_token_id in target
-                prev_pos = pos + 1
-                source_pos += audio_len
+        has_audio = bool(valid_lens_cpu.sum() > 0)
+        if has_audio:
+            max_audio = int(valid_lens_cpu.max())
+            f_range = torch.arange(max_audio, dtype=torch.long)
 
-            # Add remaining target slice after the last injection
-            if prev_pos < target_tensor.shape[1]:
-                slices.append(target_tensor[batch_idx, prev_pos:])
+            # audio_valid_mask[b, k, f] = True if frame f belongs to inject k of item b
+            audio_valid_mask = f_range.view(1, 1, -1) < valid_lens_cpu.unsqueeze(2)  # (B, max_injects, max_audio)
 
-            merged_sequences.append(torch.cat(slices, dim=0) if slices else target_tensor[batch_idx])
+            # Source index in the (already-filtered) valid source: audio_cumsum[b,k] + f
+            src_frame_idx = audio_cumsum_cpu[:, :max_injects].unsqueeze(2) + f_range  # (B, max_injects, max_audio)
+            out_frame_idx = audio_block_start.unsqueeze(2) + f_range  # (B, max_injects, max_audio)
+            batch_idx_3d = torch.arange(B, dtype=torch.long).view(B, 1, 1).expand_as(audio_valid_mask)
 
-        # Step C: replace the per-sequence expand+cat loop and final torch.stack with
-        # a single pre-allocated output tensor filled with the pad value.  Sequences
-        # are right-aligned (left-padded) by writing each one into the tail of its row.
-        max_seq_len = max(seq.shape[0] for seq in merged_sequences)  # CPU .shape, no sync
+            audio_b_cpu = batch_idx_3d[audio_valid_mask]   # (total_valid_frames,)
+            audio_src_cpu = src_frame_idx[audio_valid_mask]  # filtered-source index
+            audio_out_cpu = out_frame_idx[audio_valid_mask]  # output position
 
+            # Translate filtered source indices → actual indices in source_tensor[b].
+            # valid_src_map[b, k] = actual position of the k-th valid frame of item b.
+            if source_tensor_mask_cpu is not None:
+                mask_ci = (
+                    source_tensor_mask_cpu.long().cumsum(dim=1) - source_tensor_mask_cpu.long()
+                )  # per-row exclusive cumsum of valid-frame count
+                max_valid_src = int(source_tensor_mask_cpu.sum(dim=1).max())
+                valid_src_map = torch.zeros(B, max_valid_src, dtype=torch.long)
+                msk_b_cpu, msk_j_cpu = source_tensor_mask_cpu.nonzero(as_tuple=True)
+                valid_src_map[msk_b_cpu, mask_ci[msk_b_cpu, msk_j_cpu]] = msk_j_cpu
+                audio_src_cpu = valid_src_map[audio_b_cpu, audio_src_cpu]
+            # else: audio_src_cpu already indexes source_tensor[b] directly
+
+        # ----------------------------------------------------------------
+        # Step C: single pre-allocated output tensor, filled with pad value.
+        # ----------------------------------------------------------------
         if ndim == 3:
-            # Pre-fill every position with the EOS embedding; valid positions are
-            # then overwritten by the right-aligned sequence copies below.
-            out = target_tensor.new_zeros(batch_size, max_seq_len, hidden_size)
+            out = target_tensor.new_zeros(B, max_out_len, hidden_size)
             out[:] = pad_embed  # broadcast (D,) → (B, S, D)
         else:
             out = torch.full(
-                (batch_size, max_seq_len),
-                pad_float,
-                dtype=target_tensor.dtype,
-                device=target_tensor.device,
+                (B, max_out_len), pad_float,
+                dtype=target_tensor.dtype, device=device,
             )
 
-        for i, seq in enumerate(merged_sequences):
-            out[i, max_seq_len - seq.shape[0] :] = seq  # right-align = left-pad
+        # Single scatter for all text tokens across the full batch
+        text_b = text_b_cpu.to(device)
+        text_j = text_j_cpu.to(device)
+        text_out = text_out_cpu.to(device)
+        out[text_b, text_out] = target_tensor[text_b, text_j]
+
+        # Single scatter for all audio frames across the full batch.
+        # Cast to out.dtype in case source_tensor uses a narrower type (e.g. Bool
+        # encoder_outputs_mask injected into a Long attention_mask).
+        if has_audio:
+            audio_b = audio_b_cpu.to(device)
+            audio_src = audio_src_cpu.to(device)
+            audio_out = audio_out_cpu.to(device)
+            out[audio_b, audio_out] = source_tensor[audio_b, audio_src].to(out.dtype)
 
         return out
 
