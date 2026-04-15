@@ -732,53 +732,73 @@ class MELTTrainer(Trainer):
     # Memory preallocation
     # ------------------------------------------------------------------
 
-    def _build_max_length_batch(self, model: torch.nn.Module) -> dict:
-        """Build a synthetic batch at the maximum possible sequence lengths.
+    def _build_max_length_batch(self, model: torch.nn.Module, duration_per_utt: float | None = None) -> dict:
+        """Build a synthetic batch for a given per-utterance audio duration.
 
         Tensor shapes are derived entirely from config and the feature extractor
         so that no actual audio needs to be loaded.
 
-        Audio frame count:
-            max_audio_frames = int(max_duration / (frame_resolution_s * fe_stride))
-            feature_dim      = feature_size * fe_stride
+        Args:
+            duration_per_utt: Audio duration in seconds for each item in the batch.
+                Defaults to train_ds.max_duration (encoder worst-case: longest
+                sequences, fewest items). Pass train_ds.min_duration to get the
+                decoder worst-case: shortest sequences, most items, maximum total
+                text tokens in one forward pass.
 
-            where frame_resolution_s = hop_length / sampling_rate and fe_stride is
-            the feature extractor's frame-stacking stride (e.g. SeamlessM4T stride=2
-            stacks adjacent frames → output is (T//2, feature_size*2)).
-            Example: wav2vec-bert-2.0 with stride=2, feature_size=80, hop=320 →
-              frame_resolution_s=0.02s, feature_dim=160, 30s → 750 frames.
+        Audio frame count:
+            audio_frames = int(duration_per_utt / effective_frame_duration_s)
+            feature_dim  = feature_size * fe_stride
+
+            where effective_frame_duration_s = (hop_length / sampling_rate) * fe_stride,
+            i.e. the time between consecutive *output* frames after stride-stacking.
+            Example: wav2vec-bert-2.0 with stride=2, hop=160, sr=16000 →
+              effective_frame_duration_s=0.02s, feature_dim=160, 90s → 4500 frames.
 
         Batch size:
-            n_utts = max(1, int(batch_duration / max_duration))
+            n_utts = max(1, int(batch_duration / duration_per_utt))
         """
-        train_ds_cfg = self.config.data.train_ds
-        max_duration  = float(train_ds_cfg.max_duration)   # seconds per utterance
+        train_ds_cfg   = self.config.data.train_ds
+        if duration_per_utt is None:
+            duration_per_utt = float(train_ds_cfg.max_duration)
         batch_duration = float(train_ds_cfg.batch_duration) # seconds per batch
 
         # --- derive frame resolution from the feature extractor ---
         fe = self.processor.feature_extractor
         hop_length    = getattr(fe, "hop_length", None)
         sampling_rate = getattr(fe, "sampling_rate", 16_000)
-        if hop_length is not None:
-            frame_resolution_s = hop_length / sampling_rate
-        else:
-            frame_resolution_s = 0.02  # 20 ms fallback (wav2vec-bert-2.0 default)
-            logger.warning(
-                "[Preallocation] feature_extractor has no hop_length attribute; "
-                "falling back to 20 ms frame resolution."
-            )
 
         # SeamlessM4TFeatureExtractor (and similar) stack `stride` consecutive
         # frames: output shape is (T // stride, feature_size * stride).
-        fe_stride        = getattr(fe, "stride", 1)
-        feature_dim      = getattr(fe, "feature_size", 80) * fe_stride
-        max_audio_frames = int(max_duration / (frame_resolution_s * fe_stride))
-        n_utts           = max(1, int(batch_duration / max_duration))
+        fe_stride   = getattr(fe, "stride", 1)
+        feature_dim = getattr(fe, "feature_size", 80) * fe_stride
+
+        # effective_frame_duration_s is the time between consecutive *output* frames,
+        # i.e. after any stride-stacking applied by the feature extractor.
+        # - When hop_length is available it is the raw hop; multiply by fe_stride to
+        #   get the output frame duration (e.g. hop=160/16000=0.01 s × stride=2 → 0.02 s).
+        # - The fallback 0.02 s is already the effective output frame duration for
+        #   wav2vec-bert-2.0 (raw hop 10 ms × stride 2); do NOT multiply by fe_stride
+        #   again or the frame count will be halved.
+        if hop_length is not None:
+            effective_frame_duration_s = (hop_length / sampling_rate) * fe_stride
+        else:
+            effective_frame_duration_s = 0.02  # 20 ms effective output frame (wav2vec-bert-2.0 default)
+            logger.warning(
+                "[Preallocation] feature_extractor has no hop_length attribute; "
+                "falling back to 20 ms effective output frame duration."
+            )
+
+        max_audio_frames = int(duration_per_utt / effective_frame_duration_s)
+        n_utts           = max(1, int(batch_duration / duration_per_utt))
+        # batch_size in config maps to Lhotse's max_cuts: a hard cap on items per batch.
+        max_cuts = getattr(train_ds_cfg, "batch_size", None)
+        if max_cuts is not None:
+            n_utts = min(n_utts, int(max_cuts))
 
         # Use a fixed text length that covers typical ASR/ST transcriptions.
         # model_max_length on large LMs can be 128 k; we only need a realistic
         # worst-case for memory preallocation, not the theoretical maximum.
-        max_text_len = 256
+        max_text_len = 128
 
         device = self.args.device
         dtype  = (
@@ -790,7 +810,7 @@ class MELTTrainer(Trainer):
         logger.warning(
             f"[Preallocation] rank={self._global_rank} — synthetic batch: "
             f"n_utts={n_utts}, max_audio_frames={max_audio_frames} "
-            f"({max_duration:.0f}s / {frame_resolution_s*1000:.0f}ms), "
+            f"({duration_per_utt:.1f}s / {effective_frame_duration_s*1000:.0f}ms output frame), "
             f"feature_dim={feature_dim}, max_text_len={max_text_len}, dtype={dtype}"
         )
 
@@ -810,49 +830,33 @@ class MELTTrainer(Trainer):
             "labels":                  labels,
         }
 
-    def _run_preallocation(self, model: torch.nn.Module) -> None:
-        """Run a max-length forward+backward warmup to preallocate CUDA memory buffers.
+    def _run_preallocation_pass(self, model: torch.nn.Module, duration_per_utt: float, label: str) -> bool:
+        """Run a single forward+backward warmup pass for the given per-utterance duration.
 
-        Follows the PyTorch performance guide for variable-length inputs:
-        allocate the largest buffers that will appear during training so the
-        caching allocator never needs to release and re-request memory for a
-        longer sequence mid-run.
-
-        The optimizer and LR scheduler are intentionally NOT stepped.
-        Gradients are cleared with set_to_none=True after the pass.
+        Returns True if the pass succeeded, False on OOM (caller may choose to abort).
         """
-        if not self._memory_preallocation:
-            return
-
-        logger.warning(
-            f"[Preallocation] rank={self._global_rank} — starting max-length warmup pass …"
-        )
         mem_before_gb = (
             torch.cuda.max_memory_allocated() / 1024 ** 3
             if torch.cuda.is_available() else 0.0
         )
-
         try:
-            batch = self._build_max_length_batch(model)
+            batch = self._build_max_length_batch(model, duration_per_utt=duration_per_utt)
             logger.warning(
-                f"[Preallocation] rank={self._global_rank} — batch shapes: "
+                f"[Preallocation/{label}] rank={self._global_rank} — batch shapes: "
                 f"input_features={tuple(batch['input_features'].shape)}, "
                 f"input_ids={tuple(batch['input_ids'].shape)}"
             )
-            loss  = self.compute_loss(model, batch)
+            loss = self.compute_loss(model, batch)
             self.accelerator.backward(loss)
         except torch.OutOfMemoryError:
             logger.warning(
-                f"[Preallocation] rank={self._global_rank} — OOM during warmup pass "
-                "(max batch exceeds available memory). Skipping preallocation; "
-                "training will proceed normally."
+                f"[Preallocation/{label}] rank={self._global_rank} — OOM during warmup pass "
+                "(batch exceeds available memory). Training will proceed but may OOM later."
             )
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-            return
+            return False
         finally:
-            # Always zero gradients — with set_to_none=True to free the memory
-            # immediately rather than leaving zero-filled gradient tensors alive.
             model.zero_grad(set_to_none=True)
 
         mem_after_gb = (
@@ -860,9 +864,47 @@ class MELTTrainer(Trainer):
             if torch.cuda.is_available() else 0.0
         )
         logger.warning(
-            f"[Preallocation] rank={self._global_rank} — warmup pass complete. "
+            f"[Preallocation/{label}] rank={self._global_rank} — pass complete. "
             f"Peak CUDA memory: {mem_before_gb:.2f} GB → {mem_after_gb:.2f} GB"
         )
+        return True
+
+    def _run_preallocation(self, model: torch.nn.Module) -> None:
+        """Run forward+backward warmup passes to preallocate CUDA memory buffers.
+
+        Follows the PyTorch performance guide for variable-length inputs:
+        allocate the largest buffers that will appear during training so the
+        caching allocator never needs to release and re-request memory for a
+        longer sequence mid-run.
+
+        Two passes cover the two memory extremes:
+          1. max_duration items  — encoder worst-case: O(T²) conformer attention.
+          2. min_duration items  — decoder worst-case: maximum number of items in one
+             batch, hence maximum total text tokens and decoder hidden-state memory.
+
+        The optimizer and LR scheduler are intentionally NOT stepped.
+        Gradients are cleared with set_to_none=True after each pass.
+        """
+        if not self._memory_preallocation:
+            return
+
+        train_ds_cfg = self.config.data.train_ds
+        max_duration = float(train_ds_cfg.max_duration)
+        min_duration = float(train_ds_cfg.min_duration)
+
+        logger.warning(
+            f"[Preallocation] rank={self._global_rank} — starting warmup passes "
+            f"(max_duration={max_duration}s, min_duration={min_duration}s) …"
+        )
+
+        # Pass 1: few long items — stresses the conformer's quadratic self-attention.
+        self._run_preallocation_pass(model, duration_per_utt=max_duration, label="max_duration")
+
+        # Pass 2: many short items — stresses the decoder with maximum total tokens.
+        # Total audio tokens per batch are constant (batch_duration × token_rate), but
+        # each item adds its own full text sequence, so more items → more decoder memory.
+        if min_duration < max_duration:
+            self._run_preallocation_pass(model, duration_per_utt=min_duration, label="min_duration")
 
     # ------------------------------------------------------------------
     # OOM diagnostics
