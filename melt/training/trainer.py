@@ -798,7 +798,7 @@ class MELTTrainer(Trainer):
         # Use a fixed text length that covers typical ASR/ST transcriptions.
         # model_max_length on large LMs can be 128 k; we only need a realistic
         # worst-case for memory preallocation, not the theoretical maximum.
-        max_text_len = 128
+        max_text_len = 1024
 
         device = self.args.device
         dtype  = (
