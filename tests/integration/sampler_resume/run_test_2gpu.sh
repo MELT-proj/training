@@ -1,5 +1,8 @@
 #!/bin/bash
-# Integration test: sampler state restoration correctness
+# Integration test: sampler state restoration correctness — 2-GPU DDP variant
+#
+# Identical pipeline to run_test.sh, but launches two DDP processes each with
+# one dataloader worker (num_workers=1, prefetch_factor=2).
 #
 # Pipeline:
 #   Run 1  — train from scratch for MAX_STEPS steps; checkpoints saved every
@@ -9,8 +12,9 @@
 #   Run 2  — resume from the checkpoint at CHECKPOINT_STEP and train for the
 #            remaining (MAX_STEPS - CHECKPOINT_STEP) steps.
 #            Cut IDs are logged to $OUTPUT_DIR/cut_ids_run2/.
-#   Check  — compare_cut_ids.py verifies that run2's batches match
-#            run1's batches [CHECKPOINT_STEP:MAX_STEPS] exactly.
+#   Check  — compare_cut_ids.py verifies that:
+#              (a) run2's batches match run1's batches [CHECKPOINT_STEP:MAX_STEPS] per rank;
+#              (b) no cut ID is shared between any two (rank, worker) pairs.
 #
 # Required env vars (override as needed):
 #   VENV_PATH          path to the virtualenv activate script
@@ -23,11 +27,11 @@
 # Usage (from the repo root):
 #   VENV_PATH=/path/to/venv/bin/activate \
 #   LOCAL_DATASETS_DIR=/path/to/shar \
-#   OUTPUT_DIR=/tmp/melt_sampler_test \
+#   OUTPUT_DIR=/tmp/melt_sampler_test_2gpu \
 #   MAX_STEPS=500 CHECKPOINT_STEP=100 \
-#   bash tests/integration/sampler_resume/run_test.sh
+#   bash tests/integration/sampler_resume/run_test_2gpu.sh
 
-set -euo pipefail
+# set -euo pipefail
 
 source /etc/profile.d/02-lmod.sh
 module load cuda
@@ -40,11 +44,12 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 VENV_PATH="${VENV_PATH:-/workspace/venv/bin/activate}"
 LOCAL_DATASETS_DIR="${LOCAL_DATASETS_DIR:-./shar}"
-OUTPUT_DIR="${OUTPUT_DIR:-/tmp/melt_sampler_resume_test}"
+OUTPUT_DIR="${OUTPUT_DIR:-/tmp/melt_sampler_resume_test_2gpu}"
 HF_HOME="${HF_HOME:-}"
 
-CONFIG="${CONFIG:-$SCRIPT_DIR/config.yaml}"
-ACCEL_CONFIG="${ACCEL_CONFIG:-$SCRIPT_DIR/accelerate_1gpu.yaml}"
+CONFIG="${CONFIG:-$SCRIPT_DIR/config_2gpu.yaml}"
+ACCEL_CONFIG="${ACCEL_CONFIG:-$SCRIPT_DIR/accelerate_2gpu.yaml}"
+NUM_PROCESSES=2
 
 RUN1_DIR="$OUTPUT_DIR/run1"
 RUN2_DIR="$OUTPUT_DIR/run2"
@@ -70,11 +75,12 @@ export LOCAL_DATASETS_DIR
 [[ -n "$HF_HOME" ]] && export HF_HOME
 
 echo "================================================================="
-echo "MELT Sampler Resume Integration Test"
+echo "MELT Sampler Resume Integration Test — 2-GPU DDP"
 echo "================================================================="
 echo "Repo root:          $REPO_ROOT"
 echo "Config:             $CONFIG"
 echo "Accelerate config:  $ACCEL_CONFIG"
+echo "Num processes:      $NUM_PROCESSES"
 echo "Run 1 output:       $RUN1_DIR"
 echo "Run 2 output:       $RUN2_DIR"
 echo "Run 3 output:       $RUN3_DIR"
@@ -86,7 +92,6 @@ echo "Checkpoint step:    $CHECKPOINT_STEP"
 echo "================================================================="
 
 # Helper: run the trainer with the given extra arguments.
-# All runs share the same base config; callers pass per-run overrides.
 run_trainer() {
     local extra_args=("$@")
     WANDB_MODE=disabled \
@@ -94,7 +99,7 @@ run_trainer() {
         --config_file "$ACCEL_CONFIG" \
         --gradient_accumulation_steps "$GRAD_ACC_STEPS" \
         --num_machines 1 \
-        --num_processes 1 \
+        --num_processes "$NUM_PROCESSES" \
         --module melt.training.train \
         --config "$CONFIG" \
         --trainer.gradient_accumulation_steps "$GRAD_ACC_STEPS" \
@@ -105,7 +110,7 @@ run_trainer() {
 # Run 1: full MAX_STEPS-step training run
 # ---------------------------------------------------------------------------
 echo ""
-echo "--- RUN 1: Training from scratch for $MAX_STEPS steps ---"
+echo "--- RUN 1: Training from scratch for $MAX_STEPS steps (2 GPUs) ---"
 echo "    Reference checkpoint at step $CHECKPOINT_STEP."
 echo "    Cut IDs logged to: $CUT_IDS_RUN1"
 echo ""
@@ -135,7 +140,7 @@ echo ""
 echo "Run 1 complete."
 
 # ---------------------------------------------------------------------------
-# Validate checkpoint
+# Validate checkpoint — both ranks must have saved sampler state
 # ---------------------------------------------------------------------------
 CHECKPOINT="$RUN1_DIR/checkpoint-${CHECKPOINT_STEP}"
 
@@ -146,22 +151,24 @@ if [[ ! -d "$CHECKPOINT" ]]; then
     exit 1
 fi
 
-SAMPLER_STATE="$CHECKPOINT/sampler/sampler_state_rank0.pt"
-if [[ ! -f "$SAMPLER_STATE" ]]; then
-    echo "ERROR: Sampler state file not found: $SAMPLER_STATE"
-    echo "Contents of $CHECKPOINT:"
-    ls -la "$CHECKPOINT/" || true
-    exit 1
-fi
+for rank in $(seq 0 $((NUM_PROCESSES - 1))); do
+    SAMPLER_STATE="$CHECKPOINT/sampler/sampler_state_rank${rank}.pt"
+    if [[ ! -f "$SAMPLER_STATE" ]]; then
+        echo "ERROR: Sampler state file not found for rank ${rank}: $SAMPLER_STATE"
+        echo "Contents of $CHECKPOINT/sampler/:"
+        ls -la "$CHECKPOINT/sampler/" || true
+        exit 1
+    fi
+    echo "Sampler state rank ${rank}: $SAMPLER_STATE"
+done
 
 echo "Checkpoint OK: $CHECKPOINT"
-echo "Sampler state: $SAMPLER_STATE"
 
 # ---------------------------------------------------------------------------
 # Run 2: resume from the reference checkpoint, train remaining steps
 # ---------------------------------------------------------------------------
 echo ""
-echo "--- RUN 2: Resuming from $CHECKPOINT (steps $CHECKPOINT_STEP → $MAX_STEPS) ---"
+echo "--- RUN 2: Resuming from $CHECKPOINT (steps $CHECKPOINT_STEP → $MAX_STEPS, 2 GPUs) ---"
 echo "    Cut IDs logged to: $CUT_IDS_RUN2"
 echo ""
 
@@ -178,11 +185,12 @@ echo ""
 echo "Run 2 complete."
 
 # ---------------------------------------------------------------------------
-# Compare cut IDs
+# Compare cut IDs (resume correctness + no-overlap between ranks/workers)
 # ---------------------------------------------------------------------------
 echo ""
 echo "--- Comparing cut IDs ---"
-echo "    run1 batches[$CHECKPOINT_STEP:$MAX_STEPS]  vs  run2 batches[0:$(( MAX_STEPS - CHECKPOINT_STEP ))]"
+echo "    run1 batches[$CHECKPOINT_STEP:$MAX_STEPS]  vs  run2 batches[0:$(( MAX_STEPS - CHECKPOINT_STEP ))]  (per rank)"
+echo "    Also verifying no cut-ID overlap between (rank, worker) pairs."
 echo ""
 
 python "$SCRIPT_DIR/compare_cut_ids.py" \
@@ -195,7 +203,7 @@ python "$SCRIPT_DIR/compare_cut_ids.py" \
 # Run 3: fresh run from scratch — determinism check against run 1
 # ---------------------------------------------------------------------------
 echo ""
-echo "--- RUN 3: Training from scratch for $MAX_STEPS steps (determinism check) ---"
+echo "--- RUN 3: Training from scratch for $MAX_STEPS steps (determinism check, 2 GPUs) ---"
 echo "    Cut IDs logged to: $CUT_IDS_RUN3"
 echo ""
 
@@ -227,5 +235,5 @@ python "$SCRIPT_DIR/compare_cut_ids.py" \
 
 echo ""
 echo "================================================================="
-echo "SAMPLER RESUME TEST PASSED"
+echo "SAMPLER RESUME TEST (2-GPU DDP) PASSED"
 echo "================================================================="

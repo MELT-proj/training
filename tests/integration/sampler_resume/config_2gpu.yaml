@@ -1,18 +1,15 @@
-# Integration test config: sampler resume correctness — num_workers=1 variant
+# Integration test config: sampler resume correctness — 2-GPU DDP variant
 #
-# Identical to config.yaml except:
-#   - num_workers: 1       (shar data read by a forked worker process)
-#   - prefetch_factor: 2   (worker prefetches 2 batches ahead)
+# Two DDP processes, each with one dataloader worker (num_workers=1).
+# This gives two dataloader workers total and exercises both cross-rank
+# and cross-worker data-sharding invariants verified by compare_cut_ids.py.
 #
-# Restoration relies on Linux fork: the forked worker inherits the
-# fast-forwarded cuts_iter from the main process, so the worker resumes
-# at exactly position global_step (the first batch not yet consumed by
-# the optimizer at checkpoint time).
-#
-# The augmented sampler diagnostics (kept_batches = global_step) are
-# correct because prefetched-but-not-consumed batches sit at positions
-# [global_step, global_step + prefetch_factor), which is precisely where
-# the resumed sampler is placed by _fast_forward.
+# Key choices that affect reproducibility:
+#   - shard_seed: 42       (fixed so shard order is deterministic across runs)
+#   - seed: 42             (sampler / shuffle seed)
+#   - num_workers: 1       (one forked worker per rank)
+#   - prefetch_factor: 2   (worker keeps 2 batches prefetched ahead)
+#   - gradient_accumulation_steps: 1  (1 microbatch == 1 optimizer step)
 
 model:
   encoder:
@@ -45,12 +42,19 @@ data:
         tags:
           task: asr
           lang: en
+          text_field: custom.pnc_text
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/train.360
+        tags:
+          task: asr
+          lang: en
+          text_field: custom.pnc_text
 
     batch_size: null
     batch_duration: 30.0
     quadratic_duration: null
 
-    use_bucketing: true
+    lhotse_sampler_type: dynamic_bucketing
     num_buckets: 10
     buffer_size: 1000
     bucket_duration_bins: null
@@ -58,18 +62,19 @@ data:
     shuffle: true
     drop_last: false
     seed: 42
-    shard_seed: 42
+    shard_seed: randomized             # fixed: essential for cross-run reproducibility
 
     min_duration: 0.5
     max_duration: 30.0
 
-    num_workers: 1          # shar data read by one forked worker process
+    num_workers: 1             # one forked worker per rank (2 workers total in DDP)
     pin_memory: false
-    prefetch_factor: 2      # worker keeps 2 batches prefetched ahead
+    prefetch_factor: 2         # worker keeps 2 batches prefetched
     sample_rate: 16000
     text_field: text
     lang_field: lang
 
+  # No validation needed for this test
   validation_ds:
     input_cfg: []
 
@@ -82,7 +87,7 @@ trainer:
 
   per_device_train_batch_size: 1
   per_device_eval_batch_size: 1
-  gradient_accumulation_steps: 1
+  gradient_accumulation_steps: 1    # 1 microbatch per optimizer step
 
   learning_rate: 2.0e-5
   lr_scheduler_type: cosine
@@ -99,12 +104,12 @@ trainer:
   eval_strategy: "no"
 
   save_strategy: steps
-  save_steps: 50
+  save_steps: 50             # checkpoint at step 50
   save_total_limit: 5
 
   bf16: true
   group_by_length: false
-  dataloader_num_workers: 0
+  dataloader_num_workers: 1
   remove_unused_columns: false
   ddp_find_unused_parameters: false
 

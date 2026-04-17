@@ -16,6 +16,10 @@ Files have the naming pattern:
 With num_workers=0 and a single GPU there is exactly one file per run.
 With multiple ranks there is one file per rank, and each rank is compared
 independently.
+
+Additionally, the script verifies that no cut ID is shared between any two
+(rank, worker) pairs within a run — i.e. data-parallel sharding and intra-rank
+worker partitioning both produce mutually disjoint subsets of the corpus.
 """
 
 import argparse
@@ -35,9 +39,34 @@ FILENAME_RE = re.compile(
 )
 
 
-def _rank_from_path(path: Path) -> int | None:
+def _parse_path(path: Path) -> tuple[int, int] | None:
+    """Return (rank, worker_id) parsed from *path*, or None if unrecognised."""
     m = FILENAME_RE.search(path.name)
-    return int(m.group("rank")) if m else None
+    return (int(m.group("rank")), int(m.group("worker_id"))) if m else None
+
+
+def _rank_from_path(path: Path) -> int | None:
+    parsed = _parse_path(path)
+    return parsed[0] if parsed is not None else None
+
+
+def _read_jsonl(
+    path: Path,
+) -> list[tuple[int, list[str]]]:
+    """Read a single JSONL file and return a list of (batch_idx, cut_ids) tuples."""
+    records: list[tuple[int, list[str]]] = []
+    with path.open(encoding="utf-8") as fh:
+        for lineno, line in enumerate(fh, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as exc:
+                print(f"  WARNING: {path.name}:{lineno}: JSON decode error: {exc}")
+                continue
+            records.append((record["batch_idx"], record["cut_ids"]))
+    return records
 
 
 def load_batches(directory: Path) -> dict[int, list[list[str]]]:
@@ -57,17 +86,7 @@ def load_batches(directory: Path) -> dict[int, list[list[str]]]:
         if rank is None:
             print(f"  WARNING: could not parse rank from {path.name}, skipping")
             continue
-        with path.open(encoding="utf-8") as fh:
-            for lineno, line in enumerate(fh, 1):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError as exc:
-                    print(f"  WARNING: {path.name}:{lineno}: JSON decode error: {exc}")
-                    continue
-                by_rank[rank].append((record["batch_idx"], record["cut_ids"]))
+        by_rank[rank].extend(_read_jsonl(path))
 
     result: dict[int, list[list[str]]] = {}
     for rank, entries in by_rank.items():
@@ -86,6 +105,93 @@ def load_batches(directory: Path) -> dict[int, list[list[str]]]:
     return result
 
 
+def load_batches_by_worker(
+    directory: Path,
+) -> dict[tuple[int, int], list[list[str]]]:
+    """Return {(rank, worker_id): [cut_id_list, ...]} sorted by batch_idx.
+
+    Each (rank, worker_id) key corresponds to a single JSONL file (or the
+    merged contents of multiple files sharing that key, e.g. after a restart).
+    """
+    by_key: dict[tuple[int, int], list[tuple[int, list[str]]]] = defaultdict(list)
+
+    jsonl_files = list(directory.glob("*.jsonl"))
+    if not jsonl_files:
+        raise FileNotFoundError(f"No JSONL files found in {directory}")
+
+    for path in jsonl_files:
+        key = _parse_path(path)
+        if key is None:
+            print(f"  WARNING: could not parse rank/worker from {path.name}, skipping")
+            continue
+        by_key[key].extend(_read_jsonl(path))
+
+    result: dict[tuple[int, int], list[list[str]]] = {}
+    for key, entries in by_key.items():
+        entries.sort(key=lambda x: x[0])
+        seen: set[int] = set()
+        deduped: list[list[str]] = []
+        for idx, cut_ids in entries:
+            if idx not in seen:
+                seen.add(idx)
+                deduped.append(cut_ids)
+        result[key] = deduped
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# No-overlap check
+# ---------------------------------------------------------------------------
+
+def check_no_shared_cut_ids(directory: Path, label: str) -> bool:
+    """Verify that every (rank, worker) pair in *directory* sees disjoint cut IDs.
+
+    This catches two classes of bugs:
+      - Cross-rank overlap: the same audio cut consumed by two DDP processes.
+      - Cross-worker overlap: the same cut consumed by two dataloader workers
+        within the same rank.
+
+    Returns True if all pairs are disjoint, False otherwise.
+    """
+    print(f"\n[no-overlap] Checking {label} ({directory})")
+    by_worker = load_batches_by_worker(directory)
+
+    if not by_worker:
+        print("  WARNING: no (rank, worker) data found — skipping overlap check")
+        return True
+
+    # Build a flat set of all cut IDs per (rank, worker_id)
+    all_ids: dict[tuple[int, int], set[str]] = {}
+    for key, batches in sorted(by_worker.items()):
+        flat: set[str] = set()
+        for batch in batches:
+            flat.update(batch)
+        all_ids[key] = flat
+        print(f"  (rank={key[0]}, worker={key[1]}): {len(flat)} unique cut IDs across {len(batches)} batches")
+
+    keys = sorted(all_ids)
+    overlap_found = False
+    for i, ka in enumerate(keys):
+        for kb in keys[i + 1 :]:
+            shared = all_ids[ka] & all_ids[kb]
+            if shared:
+                overlap_found = True
+                examples = sorted(shared)[:5]
+                print(
+                    f"  OVERLAP between (rank={ka[0]}, worker={ka[1]}) and "
+                    f"(rank={kb[0]}, worker={kb[1]}): "
+                    f"{len(shared)} shared ID(s), e.g. {examples}"
+                )
+
+    if overlap_found:
+        print(f"  FAILED: shared cut IDs detected in {label}.")
+        return False
+
+    print(f"  OK: all {len(keys)} (rank, worker) pair(s) have disjoint cut ID sets.")
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Comparison logic
 # ---------------------------------------------------------------------------
@@ -95,10 +201,14 @@ def compare(
     run2_dir: Path,
     checkpoint_step: int,
     grad_accum_steps: int,
+    check_overlap: bool = True,
 ) -> bool:
     """Compare the post-checkpoint segment of run1 against run2.
 
-    Returns True if all ranks match, False otherwise.
+    When *check_overlap* is True (default) also verifies that no cut ID is
+    shared between any two (rank, worker) pairs within each run directory.
+
+    Returns True if all checks pass, False otherwise.
     """
     print(f"Loading run1 batches from: {run1_dir}")
     run1 = load_batches(run1_dir)
@@ -179,6 +289,12 @@ def compare(
             )
             all_ok = False
 
+    if check_overlap:
+        if not check_no_shared_cut_ids(run1_dir, "run1"):
+            all_ok = False
+        if not check_no_shared_cut_ids(run2_dir, "run2"):
+            all_ok = False
+
     return all_ok
 
 
@@ -218,6 +334,15 @@ def main() -> None:
         default=1,
         help="Gradient accumulation steps used during training (default: 1).",
     )
+    parser.add_argument(
+        "--no-check-overlap",
+        action="store_true",
+        default=False,
+        help=(
+            "Skip the check that verifies no cut ID is shared between "
+            "different (rank, worker) pairs within each run."
+        ),
+    )
     args = parser.parse_args()
 
     ok = compare(
@@ -225,6 +350,7 @@ def main() -> None:
         run2_dir=args.run2_dir,
         checkpoint_step=args.checkpoint_step,
         grad_accum_steps=args.grad_accum_steps,
+        check_overlap=not args.no_check_overlap,
     )
 
     if ok:

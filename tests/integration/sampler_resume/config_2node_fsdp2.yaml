@@ -1,16 +1,15 @@
-# Integration test config: sampler resume correctness
+# Integration test config: sampler resume correctness — 2-node × 2-GPU FSDP2 variant.
 #
-# Trains on LibriSpeech train-clean-100 for 100 steps total.
-# A checkpoint is saved at step 50 (including sampler state).
-# The test verifies that resuming from that checkpoint reproduces
-# the exact same sequence of cut IDs for the remaining 50 steps.
+# Four DDP-equivalent processes (2 nodes × 2 GPUs each), each with one
+# dataloader worker.  FSDP2 shards the model across all 4 ranks while data
+# loading remains per-rank (standard data-parallel sharding).
 #
 # Key choices that affect reproducibility:
-#   - shard_seed: 42       (fixed seed so shard order is deterministic)
-#   - seed: 42             (sampler/shuffle seed)
-#   - num_workers: 0       (sampler runs in main process → accurate state_dict)
+#   - shard_seed: randomized  (fixed per-run; essential for cross-run determinism)
+#   - seed: 42                (sampler / shuffle seed)
+#   - num_workers: 1          (one forked worker per rank → 4 workers total)
+#   - prefetch_factor: 2      (worker keeps 2 batches prefetched)
 #   - gradient_accumulation_steps: 1  (1 microbatch == 1 optimizer step)
-#
 
 model:
   encoder:
@@ -43,6 +42,7 @@ data:
         tags:
           task: asr
           lang: en
+          text_field: custom.pnc_text
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/train.360
         tags:
@@ -51,7 +51,7 @@ data:
           text_field: custom.pnc_text
 
     batch_size: null
-    batch_duration: 30.0       # small batches → fast steps
+    batch_duration: 30.0
     quadratic_duration: null
 
     lhotse_sampler_type: dynamic_bucketing
@@ -62,14 +62,14 @@ data:
     shuffle: true
     drop_last: false
     seed: 42
-    shard_seed: randomized             # fixed: essential for cross-run reproducibility
+    shard_seed: randomized        # fixed per-run: essential for cross-run reproducibility
 
     min_duration: 0.5
     max_duration: 30.0
 
-    num_workers: 0             # main-process dataloader → sampler state is accurate
+    num_workers: 1                # one forked worker per rank (4 workers total across 2 nodes)
     pin_memory: false
-    prefetch_factor: null      # must be null when num_workers=0
+    prefetch_factor: 2
     sample_rate: 16000
     text_field: text
     lang_field: lang
@@ -87,7 +87,7 @@ trainer:
 
   per_device_train_batch_size: 1
   per_device_eval_batch_size: 1
-  gradient_accumulation_steps: 1    # 1 microbatch per optimizer step
+  gradient_accumulation_steps: 1
 
   learning_rate: 2.0e-5
   lr_scheduler_type: cosine
@@ -104,14 +104,13 @@ trainer:
   eval_strategy: "no"
 
   save_strategy: steps
-  save_steps: 50             # checkpoint at step 50
+  save_steps: 50
   save_total_limit: 5
 
   bf16: true
   group_by_length: false
-  dataloader_num_workers: 0
+  dataloader_num_workers: 1
   remove_unused_columns: false
-  ddp_find_unused_parameters: false
 
 optimization:
   encoder_lr: 6.0e-6
