@@ -15,6 +15,7 @@ import json
 import math
 import os
 import warnings
+from copy import deepcopy
 from functools import partial
 from glob import glob
 from pathlib import Path
@@ -334,7 +335,7 @@ def read_cutset_from_config(config: DictConfig, repeat: bool = True) -> tuple[Cu
     cutsets = []
     use_iterable = False
 
-    shard_seed = config.shard_seed
+    seed = config.seed
     shuffle = config.shuffle
 
     # For SHAR/WebDataset-style streaming, each PyTorch DataLoader worker (and each DDP rank)
@@ -359,33 +360,33 @@ def read_cutset_from_config(config: DictConfig, repeat: bool = True) -> tuple[Cu
             if not Path(shar_path).exists():
                 raise FileNotFoundError(f"Shar path not found: {shar_path}")
 
-            logger.info(f"Loading CutSet from shar: {shar_path} (seed: {shard_seed})")
+            logger.info(f"Loading CutSet from shar: {shar_path} (seed: {seed})")
+            
+            # Some notes:
+            # Training (repeat=True): split shards across workers for efficiency;
+            # uneven shard counts don't matter because the CutSet repeats infinitely.
+            # Eval (repeat=False): every rank reads all shards; the sampler handles
+            # rank-based sharding to guarantee even batch counts and avoid deadlocks.
             cuts = CutSet.from_shar(
                 in_dir=shar_path,
                 shuffle_shards=shuffle,
-                seed=config.seed,
+                seed=seed,  
                 stateful_shuffle=shuffle,
-                # Training (repeat=True): split shards across workers for efficiency;
-                # uneven shard counts don't matter because the CutSet repeats infinitely.
-                # Eval (repeat=False): every rank reads all shards; the sampler handles
-                # rank-based sharding to guarantee even batch counts and avoid deadlocks.
                 split_for_dataloading=repeat,
             )
             use_iterable = True  # Shar always uses iterable dataset
+        # elif source_type == "lhotse_cuts":
+        #     cuts_path = _get_config_value(source_cfg, "cuts_path")
+        #     if cuts_path is None:
+        #         raise ValueError("cuts_path must be specified for lhotse_cuts type")
 
-        elif source_type == "lhotse_cuts":
-            cuts_path = _get_config_value(source_cfg, "cuts_path")
-            if cuts_path is None:
-                raise ValueError("cuts_path must be specified for lhotse_cuts type")
+        #     cuts_path = os.path.expandvars(str(cuts_path))
 
-            cuts_path = os.path.expandvars(str(cuts_path))
+        #     if not Path(cuts_path).exists():
+        #         raise FileNotFoundError(f"Cuts path not found: {cuts_path}")
 
-            if not Path(cuts_path).exists():
-                raise FileNotFoundError(f"Cuts path not found: {cuts_path}")
-
-            logger.info(f"Loading CutSet from cuts: {cuts_path}")
-            cuts = CutSet.from_file(cuts_path)
-
+        #     logger.info(f"Loading CutSet from cuts: {cuts_path}")
+        #     cuts = CutSet.from_file(cuts_path)
         else:
             raise ValueError(f"Unknown data source type: {source_type}")
 
@@ -408,7 +409,8 @@ def read_cutset_from_config(config: DictConfig, repeat: bool = True) -> tuple[Cu
             weights.append(float(weight))
 
         logger.info(f"Mux-ing data sources. Weights: {weights}")
-        combined = CutSet.mux(*cutsets, weights=weights, seed=shard_seed)
+
+        combined = CutSet.mux(*cutsets, weights=weights, seed=config.shard_seed)
 
     # Since we split cuts across data workers (split_for_dataloading=True),
     # to avoid deadlocks we force the combined CutSet to repeat infinitely.
@@ -501,9 +503,7 @@ def get_lhotse_sampler_from_config(
     shuffle = _get_config_value(config, "shuffle", True)
     drop_last = _get_config_value(config, "drop_last", False)
     buffer_size = _get_config_value(config, "buffer_size", 10000)
-
-    # seed = resolve_seed(_get_config_value(config, "seed", 0))
-    shard_seed = _get_config_value(config, "shard_seed", "randomized")
+    shard_seed = _get_config_value(config, "shard_seed")
 
     # Important: do NOT resolve shard_seed='randomized' in the main process.
     # Lhotse's resolve_seed('randomized') is designed to run in DataLoader workers after
@@ -546,7 +546,7 @@ def get_lhotse_sampler_from_config(
             quadratic_duration=quadratic_duration,
             shuffle=shuffle,
             drop_last=drop_last,
-            seed=shard_seed,
+            seed=config.seed,
             num_buckets=num_buckets,
             duration_bins=bucket_duration_bins,
             buffer_size=buffer_size,
@@ -625,9 +625,9 @@ def get_lhotse_dataloader_from_config(
     _maybe_set_cuda_expandable_segments(enabled=True)
 
     # Resolve seed
-    seed = resolve_seed(_get_config_value(config, "seed", 0))
-    logger.info(f"Creating a lhotse dataloader with seed {seed}")
-    fix_random_seed(seed)
+    config.seed = resolve_seed(config.seed)
+    logger.info(f"Creating a lhotse dataloader with seed {config.seed}")
+    fix_random_seed(config.seed)
 
     # Get sampler
     sampler, use_iterable = get_lhotse_sampler_from_config(
@@ -709,7 +709,7 @@ def get_lhotse_dataloader_from_config(
             "worker_init_fn": make_worker_init_fn(
                 rank=global_rank,
                 world_size=world_size,
-                seed=seed,
+                seed=config.seed,
                 set_different_node_and_worker_seeds=True,
             ),
             "persistent_workers": num_workers > 0 and repeat,  # Only persistent for training
