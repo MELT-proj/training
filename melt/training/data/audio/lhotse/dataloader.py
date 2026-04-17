@@ -115,6 +115,10 @@ class InfiniteIterableDatasetWrapper(IterableDatasetWrapper):
     ):
         super().__init__(dataset=dataset, sampler=sampler, **kwargs)
         self._estimated_batches = estimated_batches_per_epoch
+        # Holds a sampler state_dict to be applied lazily inside the worker process
+        # (after make_worker_init_fn has set LHOTSE_PROCESS_SEED). Set by
+        # MeltTrainer._restore_sampler_state when num_workers > 0.
+        self._pending_lhotse_state: dict | None = None
 
     def __len__(self) -> int:
         """Return estimated number of batches per epoch for progress bars."""
@@ -546,7 +550,7 @@ def get_lhotse_sampler_from_config(
             quadratic_duration=quadratic_duration,
             shuffle=shuffle,
             drop_last=drop_last,
-            seed=config.seed,
+            seed=config.shard_seed,
             num_buckets=num_buckets,
             duration_bins=bucket_duration_bins,
             buffer_size=buffer_size,
@@ -599,6 +603,31 @@ def get_lhotse_sampler_from_config(
         raise ValueError(f"Lhotse sampler type `{lhotse_sampler_type}` unknown.")
 
     return sampler, use_iterable
+
+
+def _make_lhotse_worker_init_fn(lhotse_init_fn):
+    """Wraps lhotse's worker_init_fn to also apply any deferred sampler state.
+
+    With num_workers > 0, _fast_forward() must run inside the worker AFTER
+    make_worker_init_fn has set LHOTSE_PROCESS_SEED (which determines shard
+    assignment for split_for_dataloading=True).  We store the state dict on
+    the dataset and apply it here, in the worker, at the right moment.
+    """
+    def _init(worker_id: int) -> None:
+        lhotse_init_fn(worker_id)  # sets LHOTSE_PROCESS_SEED first
+        worker_info = torch.utils.data.get_worker_info()
+        if worker_info is None:
+            return
+        dataset = worker_info.dataset
+        pending = getattr(dataset, "_pending_lhotse_state", None)
+        if pending is not None:
+            sampler = getattr(dataset, "sampler", None)
+            if sampler is not None:
+                sampler.load_state_dict(deepcopy(pending))
+                dataset._pending_lhotse_state = None
+                logger.info(f"[Worker {worker_id}] Lhotse sampler state restored (fast-forward complete).")
+
+    return _init
 
 
 def get_lhotse_dataloader_from_config(
@@ -704,14 +733,15 @@ def get_lhotse_dataloader_from_config(
                 estimated_batches_per_epoch=batches_per_worker_int,
             )
 
+        lhotse_worker_init = make_worker_init_fn(
+            rank=global_rank,
+            world_size=world_size,
+            seed=config.seed,
+            set_different_node_and_worker_seeds=True,
+        )
         dloader_kwargs = {
             "dataset": wrapped_dataset,
-            "worker_init_fn": make_worker_init_fn(
-                rank=global_rank,
-                world_size=world_size,
-                seed=config.seed,
-                set_different_node_and_worker_seeds=True,
-            ),
+            "worker_init_fn": _make_lhotse_worker_init_fn(lhotse_worker_init),
             "persistent_workers": num_workers > 0 and repeat,  # Only persistent for training
         }
     else:

@@ -599,12 +599,43 @@ class MELTTrainer(Trainer):
             )
             return
 
-        logger.info(
-            "Restoring lhotse sampler state (this may take a while "
-            "as the sampler fast-forwards through already-seen data)…"
-        )
-        sampler.load_state_dict(deepcopy(sampler_sd))
-        logger.info("Lhotse sampler state restored successfully.")
+        num_workers = getattr(dataloader, "num_workers", 0)
+        if num_workers > 0:
+            # With num_workers > 0, the sampler runs exclusively in worker processes.
+            # _fast_forward() inside load_state_dict() must execute AFTER
+            # make_worker_init_fn sets LHOTSE_PROCESS_SEED, otherwise the
+            # CutSet shard assignment (split_for_dataloading=True) differs from
+            # the original run and all resumed batches are wrong.
+            # We defer the restore: store the state dict on the dataset wrapper;
+            # _make_lhotse_worker_init_fn picks it up and calls load_state_dict()
+            # in the worker after LHOTSE_PROCESS_SEED is set.
+            dataset = dataloader.dataset
+            if hasattr(dataset, "_pending_lhotse_state"):
+                dataset._pending_lhotse_state = sampler_sd
+                logger.info(
+                    f"Deferred lhotse sampler restoration to worker process "
+                    f"(num_workers={num_workers}); _fast_forward will run after "
+                    "LHOTSE_PROCESS_SEED is set by make_worker_init_fn."
+                )
+            else:
+                logger.warning(
+                    "DataLoader has num_workers > 0 but dataset does not support "
+                    "deferred sampler state. Falling back to main-process restore — "
+                    "shard assignment may not match the original run."
+                )
+                logger.info(
+                    "Restoring lhotse sampler state (this may take a while "
+                    "as the sampler fast-forwards through already-seen data)…"
+                )
+                sampler.load_state_dict(deepcopy(sampler_sd))
+                logger.info("Lhotse sampler state restored successfully.")
+        else:
+            logger.info(
+                "Restoring lhotse sampler state (this may take a while "
+                "as the sampler fast-forwards through already-seen data)…"
+            )
+            sampler.load_state_dict(deepcopy(sampler_sd))
+            logger.info("Lhotse sampler state restored successfully.")
 
         # The sampler now handles data positioning internally, so we
         # disable HF Trainer's own batch-skipping to avoid double-skipping.
