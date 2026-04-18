@@ -132,6 +132,8 @@ data:
     shard_seed: trng
     min_duration: 0.5
     max_duration: 30.0
+    max_tokens: null
+    max_tps: null
     num_workers: 2
     pin_memory: true
     prefetch_factor: 2
@@ -154,6 +156,8 @@ data:
     shard_seed: trng
     min_duration: 0.5
     max_duration: 30.0
+    max_tokens: null
+    max_tps: null
     num_workers: 4
     pin_memory: true
     prefetch_factor: 2
