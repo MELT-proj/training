@@ -826,10 +826,10 @@ class MELTTrainer(Trainer):
         if max_cuts is not None:
             n_utts = min(n_utts, int(max_cuts))
 
-        # Use a fixed text length that covers typical ASR/ST transcriptions.
-        # model_max_length on large LMs can be 128 k; we only need a realistic
-        # worst-case for memory preallocation, not the theoretical maximum.
-        max_text_len = 1024
+        # Use max_tokens from config if set, otherwise fall back to a fixed realistic
+        # worst-case (model_max_length on large LMs can be 128k; we don't need that).
+        cfg_max_tokens = getattr(train_ds_cfg, "max_tokens", None)
+        max_text_len = int(cfg_max_tokens) if cfg_max_tokens is not None else 1024
 
         device = self.args.device
         dtype  = (
