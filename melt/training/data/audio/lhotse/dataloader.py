@@ -466,6 +466,40 @@ def get_lhotse_sampler_from_config(
         cuts = cuts.filter(lambda c: min_dur <= c.duration <= max_dur)
         logger.info(f"Applied duration filter: [{min_dur}, {max_dur}]")
 
+    max_tokens = _get_config_value(config, "max_tokens", None)
+    max_tps = _get_config_value(config, "max_tps", None)
+
+    if max_tokens is not None or max_tps is not None:
+        _max_tokens = int(max_tokens) if max_tokens is not None else None
+        _max_tps = float(max_tps) if max_tps is not None else None
+
+        filter_parts = []
+        if _max_tokens is not None:
+            filter_parts.append(f"max_tokens={_max_tokens}")
+        if _max_tps is not None:
+            filter_parts.append(f"max_tps={_max_tps}")
+        logger.info(f"Applied token filter: {', '.join(filter_parts)}")
+
+        def _token_filter(c: Cut, max_tokens: int | None, max_tps: float | None) -> bool:
+            custom = getattr(c, "custom", None) or {}
+            num_tokens = custom.get("num_tokens") if isinstance(custom, dict) else None
+
+            if max_tokens is not None:
+                if num_tokens is None:
+                    logger.warning(f"Cut {c.id} has no custom.num_tokens; skipping max_tokens filter for this cut.")
+                elif num_tokens > max_tokens:
+                    return False
+
+            if max_tps is not None:
+                if num_tokens is None:
+                    logger.warning(f"Cut {c.id} has no custom.num_tokens; skipping max_tps filter for this cut.")
+                elif c.duration > 0 and (num_tokens / c.duration) > max_tps:
+                    return False
+
+            return True
+
+        cuts = cuts.filter(partial(_token_filter, max_tokens=_max_tokens, max_tps=_max_tps))
+
     # Apply max_samples subsampling if requested.
     # A shuffle + subset gives a random subsample that works lazily for both
     # shar (iterable) and cuts (map-style) CutSets without loading everything
