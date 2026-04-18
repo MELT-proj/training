@@ -829,7 +829,7 @@ class MELTTrainer(Trainer):
         # Use max_tokens from config if set, otherwise fall back to a fixed realistic
         # worst-case (model_max_length on large LMs can be 128k; we don't need that).
         cfg_max_tokens = getattr(train_ds_cfg, "max_tokens", None)
-        max_text_len = int(cfg_max_tokens) if cfg_max_tokens is not None else 1024
+        max_text_len = int(cfg_max_tokens) + 32 if cfg_max_tokens is not None else 1024
 
         device = self.args.device
         dtype  = (
