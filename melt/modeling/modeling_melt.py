@@ -1217,11 +1217,57 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
         # apply decoder cache reordering here
         return self.text_decoder._reorder_cache(past_key_values, beam_idx)
 
-    def generate(self, *args, **kwargs):
-        # TODO this needs to be improved using cache in output classes
-        if hasattr(self, "audio_attention_mask"):
-            del self.audio_attention_mask
-        return super().generate(*args, **kwargs)
+    def generate(
+        self,
+        input_ids: torch.Tensor,
+        input_features: torch.FloatTensor | None = None,
+        features_attention_mask: torch.FloatTensor | None = None,
+        inputs_embeds: torch.FloatTensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        **kwargs,
+    ):
+        # 1. Extract text embeddings
+        if inputs_embeds is None:
+            inputs_embeds = self._get_text_embeddings(input_ids)
+
+        # 2. If there's audio, compute and merge audio embeddings
+        if input_features is not None:
+            kwargs_encoder = {
+                k: v
+                for k, v in kwargs.items()
+                if k.startswith("encoder_")
+            }
+            encoder_hidden_states, encoder_outputs_mask, audio_lengths = (
+                self._get_audio_embeddings(
+                    input_features=input_features,
+                    features_attention_mask=features_attention_mask,
+                    output_attentions=False,
+                    output_hidden_states=False,
+                    return_dict=True,
+                    **kwargs_encoder,
+                )
+            )
+
+            inputs_embeds, attention_mask, _ = self._merge_embeddings(
+                decoder_input_embs=inputs_embeds,
+                encoder_hidden_states=encoder_hidden_states,
+                encoder_outputs_mask=encoder_outputs_mask,
+                audio_lengths=audio_lengths,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=None,
+            )
+
+        # 3. Delegate to the text decoder's generate, forwarding all
+        #    generation parameters (temperature, top_p, max_new_tokens, etc.)
+        generate_kwargs = {
+            k: v for k, v in kwargs.items() if not k.startswith("encoder_")
+        }
+        return self.text_decoder.generate(
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            **generate_kwargs,
+        )
 
 
 class MELTForSequenceClassification(MELTPreTrainedModel):
