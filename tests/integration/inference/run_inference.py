@@ -43,6 +43,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+import pdb
 
 import torch
 from tqdm import tqdm
@@ -244,8 +245,8 @@ def build_parser() -> argparse.ArgumentParser:
     # --- Generation ---
     parser.add_argument(
         "--prompt", type=str,
-        default="<|audio|>Transcribe this audio.",
-        help="Prompt template (default: '<|audio|>Transcribe this audio.').",
+        default="<|audio|> Transcribe this audio.",
+        help="Prompt template (default: '<|audio|> Transcribe this audio.').",
     )
     parser.add_argument(
         "--max-new-tokens", type=int, default=256,
@@ -468,7 +469,7 @@ def _append_result(results_path: Path, result: SampleResult) -> None:
     }
     if result.input_tokens is not None:
         obj["input_tokens"] = result.input_tokens
-    line = json.dumps(obj)
+    line = json.dumps(obj, ensure_ascii=False)
     with open(results_path, "a", encoding="utf-8") as fh:
         fh.write(line + "\n")
         fh.flush()
@@ -478,7 +479,7 @@ def _append_result(results_path: Path, result: SampleResult) -> None:
 def _save_metadata(metadata_path: Path, metadata: dict[str, Any]) -> None:
     """Write the metadata dictionary to *metadata_path* as JSON."""
     with open(metadata_path, "w", encoding="utf-8") as fh:
-        json.dump(metadata, fh, indent=2, default=str)
+        json.dump(metadata, fh, indent=2, default=str, ensure_ascii=False)
         fh.write("\n")
 
 
@@ -540,6 +541,7 @@ def run_inference(
                 "--apply-chat-template is set but the tokenizer does not "
                 "support apply_chat_template()."
             )
+
         text_prompt = tokenizer.apply_chat_template(
             [{"role": "user", "content": text_prompt}],
             tokenize=False,
@@ -553,8 +555,8 @@ def run_inference(
         "max_new_tokens": max_new_tokens,
         "do_sample": temperature is not None,
         "use_cache": True,
-        "pad_token_id": processor.tokenizer.pad_token_id,
-        "eos_token_id": processor.tokenizer.eos_token_id,
+        # "pad_token_id": processor.tokenizer.pad_token_id,
+        # "eos_token_id": processor.tokenizer.eos_token_id,
     }
     if temperature is not None:
         generate_kwargs["temperature"] = temperature
@@ -594,6 +596,7 @@ def run_inference(
 
             # --- Generation ------------------------------------------------
             with torch.no_grad():
+
                 generated_ids = model.generate(
                     input_ids=inputs["input_ids"],
                     input_features=inputs.get("input_features"),
@@ -602,12 +605,7 @@ def run_inference(
                     **generate_kwargs,
                 )
 
-            prompt_len = inputs["input_ids"].shape[1]
-            hypothesis = processor.batch_decode(
-                generated_ids[:, prompt_len:],
-                skip_special_tokens=True,
-            )[0].strip().lower()
-
+            hypothesis = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
             row_wer, row_cer = _single_wer_cer(reference_text, hypothesis)
 
             input_tokens = None
