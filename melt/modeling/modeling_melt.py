@@ -1106,7 +1106,7 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
         logits_to_keep: int | torch.Tensor = 0,
         **kwargs,
     ) -> tuple[torch.FloatTensor] | CausalLMOutputWithPast:
-        if input_ids is None and input_embeds is None:
+        if input_ids is None and inputs_embeds is None:
             raise ValueError("Either `input_ids` or `inputs_embeds` must be provided.")
         if input_ids.dtype != torch.long:
             raise TypeError(f"input_ids must be torch.long, got {input_ids.dtype}")
@@ -1171,9 +1171,9 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
         outputs: CausalLMOutputWithPast = self.text_decoder(
             inputs_embeds=decoder_input_embs,
             attention_mask=attention_mask,
-            input_features=input_features,
-            features_attention_mask=features_attention_mask,
-            audio_lengths=audio_lengths,
+            input_features=input_features, # TODO: remove, it's a leftover?
+            features_attention_mask=features_attention_mask, # TODO: remove, it's a leftover?
+            audio_lengths=audio_lengths, # TODO: remove, it's a leftover?
             past_key_values=past_key_values,
             use_cache=use_cache,
             output_attentions=output_attentions,
@@ -1232,6 +1232,14 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
 
         # 2. If there's audio, compute and merge audio embeddings
         if input_features is not None:
+            if attention_mask is None:
+                raise ValueError(
+                    "`attention_mask` must be provided to `generate()` when "
+                    "`input_features` (audio) is supplied. The merged embeddings "
+                    "produced by `_inject_tensor` are left-padded, and without "
+                    "an attention mask the text decoder cannot distinguish pad "
+                    "positions from real tokens."
+                )
             kwargs_encoder = {
                 k: v
                 for k, v in kwargs.items()
