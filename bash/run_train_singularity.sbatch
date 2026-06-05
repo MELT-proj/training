@@ -244,6 +244,10 @@ log_master "OMP_NUM_THREADS: ${_OMP_NUM_THREADS}"
 log_master "OMP_SCHEDULE: ${OMP_SCHEDULE:-STATIC}"
 log_master "OMP_PROC_BIND: ${OMP_PROC_BIND:-CLOSE}"
 
+export SINGULARITYENV_TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=1800
+export APPTAINERENV_TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=1800
+log_master "TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC: 1800"
+
 # ------------------------------------------------------------------
 # SLURM variables: pass through to container (--cleanenv strips them)
 # These are critical for multi-node training to detect world size.
