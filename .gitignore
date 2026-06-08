@@ -6,6 +6,7 @@ recording*
 *._*
 scratch-artemis
 runs
+eval-runs
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

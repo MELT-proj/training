@@ -177,6 +177,11 @@ export SINGULARITYENV_TMPDIR="${CONTAINER_TMPDIR}"
 export SINGULARITYENV_WANDB_PROJECT="${WANDB_PROJECT:-melt}"
 export SINGULARITYENV_WANDB_MODE="${WANDB_MODE:-online}"
 
+# Debug: log cut IDs per batch (see melt/training/data/audio/lhotse/dataset.py:_maybe_log_cut_ids)
+export SINGULARITYENV_MELT_DEBUG_CUT_IDS_DIR="${MELT_DEBUG_CUT_IDS_DIR:-}"
+export SINGULARITYENV_MELT_DEBUG_CUT_IDS_MAX_BATCHES="${MELT_DEBUG_CUT_IDS_MAX_BATCHES:-0}"
+export SINGULARITYENV_MELT_DEBUG_CUT_IDS_EVERY="${MELT_DEBUG_CUT_IDS_EVERY:-1}"
+
 # Redirect tool/JIT caches to the writable tmp bind-mount.
 # The home dir may be mounted read-only inside the container, which causes
 # deepspeed/triton (TRITON_CACHE_DIR), lhotse, and wandb to fail when trying
