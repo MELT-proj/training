@@ -848,6 +848,15 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
         B, S_t = target_tensor.shape[0], input_ids.shape[1]
         device = target_tensor.device
 
+        # The inject token must be present in at least one batch item.  If it
+        # isn't, the caller is using the method incorrectly (no audio to inject
+        # but _inject_tensor was still called).
+        if not input_ids.eq(inject_token_id).any():
+            raise ValueError(
+                f"Inject token ID {inject_token_id} not found in any input_ids. "
+                f"_inject_tensor must only be called when audio tokens are present in the batch."
+            )
+
         # Step D: look up the EOS embedding via direct weight indexing (no tmp tensor /
         # forward pass). self._eos_token_id is cached once in __init__.
         # For masks (2D) keep the raw Python float for torch.full (no GPU sync).
@@ -1377,6 +1386,12 @@ class MELTForSequenceClassification(MELTPreTrainedModel):
         """Inject source_tensor embeddings or masks into target_tensor."""
         ndim = target_tensor.ndim
         batch_size = target_tensor.shape[0]
+
+        if not input_ids.eq(inject_token_id).any():
+            raise ValueError(
+                f"Inject token ID {inject_token_id} not found in any input_ids. "
+                f"_inject_tensor must only be called when audio tokens are present in the batch."
+            )
 
         if ndim == 3:
             hidden_size = target_tensor.shape[-1]
