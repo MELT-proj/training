@@ -194,7 +194,7 @@ class TestAdapterOutputFeaturesShape:
         config.text_decoder_config = MagicMock()
         config.text_decoder_config.hidden_size = 1024
 
-        with patch("src.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
+        with patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
             adapter = MELTConformerAdapter(config)
 
         seq_len = 100
@@ -224,7 +224,7 @@ class TestAdapterOutputFeaturesShape:
         config.text_decoder_config = MagicMock()
         config.text_decoder_config.hidden_size = 1024
 
-        with patch("src.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
+        with patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
             adapter = MELTConformerAdapter(config)
 
         seq_len = 100
@@ -257,7 +257,7 @@ class TestAdapterOutputFeaturesShape:
         config.text_decoder_config = MagicMock()
         config.text_decoder_config.hidden_size = 2048
 
-        with patch("src.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
+        with patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
             adapter = MELTConformerAdapter(config)
 
         batch_size = 2
@@ -290,7 +290,7 @@ class TestAdapterOutputFeaturesShape:
         config.text_decoder_config = MagicMock()
         config.text_decoder_config.hidden_size = 1024
 
-        with patch("src.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
+        with patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
             adapter = MELTConformerAdapter(config)
 
         batch_size = 2

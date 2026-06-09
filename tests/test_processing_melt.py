@@ -47,69 +47,47 @@ def tokenizer():
 
 @pytest.fixture(scope="module")
 def processor(feature_extractor, tokenizer):
-    """Create a MELTProcessor instance with proper MELTConfig."""
-    config = MELTConfig(
-        audio_encoder="facebook/w2v-bert-2.0",
-        text_decoder="Qwen/Qwen2.5-1.5B",
-        adapter_config={"_type": "mlp"},
-    )
-
-    # Add decoder attribute with special tokens
-    config.decoder = SimpleNamespace(
-        image_token="<|IMAGE|>",
-        audio_token="<|AUDIO|>",
-        video_token="<|VIDEO|>",
-        audio_bos_token="<|audio_bos|>",
-        audio_eos_token="<|audio_eos|>",
-    )
-
+    """Create a MELTProcessor instance with special tokens pre-set on the tokenizer."""
+    # Add MELT special tokens to the tokenizer vocabulary and set attributes
+    _add_melt_special_tokens(tokenizer)
     return MELTProcessor(
         feature_extractor=feature_extractor,
         tokenizer=tokenizer,
-        config=config,
     )
+
+
+def _add_melt_special_tokens(tokenizer):
+    """Add MELT-required special tokens to a tokenizer in-place."""
+    specials = {
+        "audio_token": "<|audio|>",
+        "audio_bos_token": "<|audio_bos|>",
+        "audio_eos_token": "<|audio_eos|>",
+    }
+    tokenizer.add_tokens(list(specials.values()))
+    for attr_name, token_str in specials.items():
+        setattr(tokenizer, attr_name, token_str)
 
 
 class TestMELTProcessorInit:
     def test_init_with_required_components(self, feature_extractor, tokenizer):
-        config = MELTConfig(
-            audio_encoder="facebook/w2v-bert-2.0",
-            text_decoder="Qwen/Qwen2.5-1.5B",
-            adapter_config={"_type": "mlp"},
-        )
-
-        # Add decoder attribute with special tokens
-        config.decoder = SimpleNamespace(
-            audio_token="<|AUDIO|>",
-            audio_bos_token="<|audio_bos|>",
-            audio_eos_token="<|audio_eos|>",
-        )
-
+        _add_melt_special_tokens(tokenizer)
         processor = MELTProcessor(
             feature_extractor=feature_extractor,
             tokenizer=tokenizer,
-            config=config,
         )
         assert processor.feature_extractor is not None
         assert processor.tokenizer is not None
 
-    def test_init_without_config_raises(self, feature_extractor, tokenizer):
-        with pytest.raises(TypeError):
-            MELTProcessor(feature_extractor=feature_extractor, tokenizer=tokenizer)
+    def test_init_without_required_special_tokens_raises(self, feature_extractor):
+        """MELTProcessor must raise RuntimeError when special tokens are missing."""
+        fresh_tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-1.5B")
+        with pytest.raises(RuntimeError):
+            MELTProcessor(feature_extractor=feature_extractor, tokenizer=fresh_tokenizer)
 
-    def test_init_without_tokenizer_raises(self, feature_extractor):
-        config = MELTConfig(
-            audio_encoder="facebook/w2v-bert-2.0",
-            text_decoder="Qwen/Qwen2.5-1.5B",
-            adapter_config={"_type": "mlp"},
-        )
-        config.decoder = SimpleNamespace(
-            audio_token="<|AUDIO|>",
-            audio_bos_token="<|audio_bos|>",
-            audio_eos_token="<|audio_eos|>",
-        )
+    def test_init_without_tokenizer_raises(self, feature_extractor, tokenizer):
+        _add_melt_special_tokens(tokenizer)
         with pytest.raises(Exception):
-            MELTProcessor(feature_extractor=feature_extractor, tokenizer=None, config=config)
+            MELTProcessor(feature_extractor=feature_extractor, tokenizer=None)
 
     def test_special_tokens_added(self, processor):
         vocab = processor.tokenizer.get_vocab()
@@ -120,7 +98,7 @@ class TestMELTProcessorInit:
     def test_token_attributes_set(self, processor):
         # The processor guarantees audio-related tokens exist; image/video/vision
         # tokens are optional in this implementation and may not be set.
-        assert processor.audio_token == "<|AUDIO|>"
+        assert processor.audio_token == "<|audio|>"
         assert processor.audio_bos_token == "<|audio_bos|>"
         assert processor.audio_eos_token == "<|audio_eos|>"
 

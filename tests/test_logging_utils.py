@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.logging_utils import configure_logging, get_logger
+from melt.logging_utils import configure_logging, get_logger
 
 
 def _emit_message(name: str, message: str) -> str:

@@ -20,16 +20,12 @@ pytest.importorskip("lhotse")
 
 
 def get_librispeech_shar_base_path() -> str | None:
-    """Get the base path to LibriSpeech shar data, checking multiple locations."""
-
-    paths = [
-        "/mnt/scratch-artemis/giuseppe/melt-data/shar/librispeech",
-        "/mnt/home/giuseppe/myscratch/melt-data/shar/librispeech",
-    ]
-    for path in paths:
-        if Path(path).exists():
-            return path
-    return None
+    """Get the base path to LibriSpeech shar data from LOCAL_DATASETS_DIR."""
+    base = os.environ.get("LOCAL_DATASETS_DIR")
+    if base is None:
+        return None
+    path = Path(base) / "librispeech"
+    return str(path) if path.exists() else None
 
 
 @pytest.fixture(scope="module")
@@ -56,7 +52,7 @@ class TestConfigIO:
     def test_load_config_from_yaml(self):
         from melt.training.config import load_config
 
-        cfg = load_config("config/train/asr.yaml")
+        cfg = load_config("config/train/SFT-v1.2.7.yaml")
         assert cfg.model.encoder.name
         assert cfg.model.decoder.name
         assert cfg.model.adapter is not None
@@ -80,7 +76,7 @@ class TestConfigIO:
         monkeypatch.setenv("LOCAL_DATASETS_DIR", "/tmp/fake_datasets")
         monkeypatch.setenv("OUTPUT_DIR", "/tmp/fake_output")
 
-        cfg = load_config("config/train/asr.yaml")
+        cfg = load_config("config/train/SFT-v1.2.7.yaml")
         cfg.trainer.max_steps = 321
 
         out = tmp_path / "cfg.yaml"
@@ -107,6 +103,8 @@ class TestCutSetLoading:
                     }
                 ],
                 "shuffle": False,
+                "seed": 42,
+                "shard_seed": 0,
             }
         )
 
@@ -134,10 +132,13 @@ class TestSamplerAndDataloader:
                     }
                 ],
                 "batch_duration": 60.0,
-                "use_bucketing": True,
+                "lhotse_sampler_type": "dynamic_bucketing",
+                "num_buckets": 10,
                 "shuffle": True,
                 "min_duration": 0.5,
                 "max_duration": 20.0,
+                "seed": 42,
+                "shard_seed": "randomized",
             }
         )
 
@@ -162,11 +163,13 @@ class TestSamplerAndDataloader:
                     }
                 ],
                 "batch_duration": 10.0,
-                "use_bucketing": False,
+                "lhotse_sampler_type": "dynamic",
                 "shuffle": False,
                 "min_duration": 0.5,
                 "max_duration": 10.0,
                 "num_workers": 1,
+                "seed": 42,
+                "shard_seed": 0,
             }
         )
 
