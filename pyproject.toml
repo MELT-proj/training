@@ -30,7 +30,6 @@ dependencies = [
     "jiwer>=4.0",
     "setuptools",
     "peft>=0.18.1",
-    "flash-attn",
 ]
 
 [project.optional-dependencies]
@@ -38,6 +37,9 @@ dev = [
     "pytest",
     "black",
     "isort",
+]
+flash-attn = [
+    "flash-attn",
 ]
 
 [tool.setuptools.packages.find]
