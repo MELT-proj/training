@@ -2,12 +2,11 @@ import json
 import os
 import tempfile
 import urllib.request
-from types import SimpleNamespace
 
 import librosa
 import pytest
 
-from melt.modeling import MELT_REQUIRED_SPECIAL_TOKENS, MELTConfig, MELTProcessor
+from melt.modeling import MELT_REQUIRED_SPECIAL_TOKENS, MELTProcessor
 from transformers import AutoConfig, AutoFeatureExtractor, AutoTokenizer
 
 
@@ -39,38 +38,44 @@ def feature_extractor():
     return AutoFeatureExtractor.from_pretrained("facebook/w2v-bert-2.0")
 
 
+# Token strings used throughout the test suite — match the production config.
+MELT_SPECIAL_TOKEN_STRINGS: dict[str, str] = {
+    "audio_token": "<|audio|>",
+    "audio_bos_token": "<|audio_bos|>",
+    "audio_eos_token": "<|audio_eos|>",
+}
+
+
 @pytest.fixture(scope="module")
 def tokenizer():
-    """Load a tokenizer for testing."""
-    return AutoTokenizer.from_pretrained("Qwen/Qwen2.5-1.5B")
+    """Load a tokenizer for testing with MELT special tokens pre-registered.
+
+    Mirrors :func:`melt.training.setup.prepare_processor`: ``extra_special_tokens``
+    is passed to :meth:`AutoTokenizer.from_pretrained` so that the named attributes
+    are registered, and then :meth:`~PreTrainedTokenizerBase.add_special_tokens`
+    inserts them into the vocabulary (and sets ``additional_special_tokens``).
+    """
+    tok = AutoTokenizer.from_pretrained(
+        "Qwen/Qwen2.5-1.5B",
+        use_fast=True,
+        extra_special_tokens=MELT_SPECIAL_TOKEN_STRINGS,
+    )
+    tok.add_special_tokens(MELT_SPECIAL_TOKEN_STRINGS)
+    return tok
 
 
 @pytest.fixture(scope="module")
 def processor(feature_extractor, tokenizer):
-    """Create a MELTProcessor instance with special tokens pre-set on the tokenizer."""
-    # Add MELT special tokens to the tokenizer vocabulary and set attributes
-    _add_melt_special_tokens(tokenizer)
+    """Create a MELTProcessor instance with special tokens already on the tokenizer."""
     return MELTProcessor(
         feature_extractor=feature_extractor,
         tokenizer=tokenizer,
     )
 
 
-def _add_melt_special_tokens(tokenizer):
-    """Add MELT-required special tokens to a tokenizer in-place."""
-    specials = {
-        "audio_token": "<|audio|>",
-        "audio_bos_token": "<|audio_bos|>",
-        "audio_eos_token": "<|audio_eos|>",
-    }
-    tokenizer.add_tokens(list(specials.values()))
-    for attr_name, token_str in specials.items():
-        setattr(tokenizer, attr_name, token_str)
-
-
 class TestMELTProcessorInit:
     def test_init_with_required_components(self, feature_extractor, tokenizer):
-        _add_melt_special_tokens(tokenizer)
+        # tokenizer fixture already has MELT special tokens pre-configured
         processor = MELTProcessor(
             feature_extractor=feature_extractor,
             tokenizer=tokenizer,
@@ -85,7 +90,6 @@ class TestMELTProcessorInit:
             MELTProcessor(feature_extractor=feature_extractor, tokenizer=fresh_tokenizer)
 
     def test_init_without_tokenizer_raises(self, feature_extractor, tokenizer):
-        _add_melt_special_tokens(tokenizer)
         with pytest.raises(Exception):
             MELTProcessor(feature_extractor=feature_extractor, tokenizer=None)
 
@@ -460,16 +464,20 @@ class TestMELTProcessorSaveLoad:
                 assert name in tc, f"'{name}' missing from tokenizer_config.json top-level keys"
                 assert tc[name] == getattr(processor, name)
 
-    def test_special_tokens_in_additional_special_tokens(self, processor):
-        """MELT special tokens must be listed inside additional_special_tokens."""
+    def test_special_tokens_in_extra_special_tokens(self, processor):
+        """MELT special tokens must be in extra_special_tokens after a round-trip."""
         with tempfile.TemporaryDirectory() as d:
             processor.save_pretrained(d)
             tc = json.load(open(os.path.join(d, "tokenizer_config.json")))
-            additional = tc.get("additional_special_tokens", [])
+            extra = tc.get("extra_special_tokens", {})
             for name in MELT_REQUIRED_SPECIAL_TOKENS:
                 token_str = getattr(processor, name)
-                assert token_str in additional, (
-                    f"'{token_str}' ({name}) not found in additional_special_tokens"
+                assert name in extra, (
+                    f"'{name}' missing from extra_special_tokens"
+                )
+                assert extra[name] == token_str, (
+                    f"extra_special_tokens['{name}'] mismatch: "
+                    f"{extra[name]!r} != {token_str!r}"
                 )
 
     def test_from_pretrained_restores_token_strings(self, processor):
