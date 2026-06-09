@@ -202,11 +202,13 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         config: DictConfig,
         is_train: bool = True,
         return_labels: bool = True,
+        return_langs: bool = False,
     ) -> None:
         self.processor = processor
         self.config = config
         self.is_train = is_train
         self.return_labels = return_labels
+        self.return_langs = return_langs
         self.apply_chat_template = bool(_get_config_value(config, "apply_chat_template", False))
         self.sample_rate = int(_get_config_value(config, "sample_rate", 16000))
         self.min_chars = int(_get_config_value(config, "min_chars", 0))
@@ -363,6 +365,11 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
                     )
                     labels[mask] = -100
                 inputs["labels"] = labels
+
+            # Attach per-sample language codes (evaluation only) so metrics
+            # can compute a per-language WER/CER breakdown.
+            if self.return_langs:
+                inputs["langs"] = langs
 
             return inputs
 
@@ -675,12 +682,14 @@ class SpeechTextQEDataset(SpeechToTextDataset):
         config: DictConfig,
         is_train: bool = True,
         return_labels: bool = True,
+        return_langs: bool = False,
     ) -> None:
         super().__init__(
             processor=processor,
             config=config,
             is_train=is_train,
             return_labels=return_labels,
+            return_langs=return_langs,
         )
 
     def _get_score(self, cut: Cut) -> float:
@@ -826,6 +835,9 @@ class SpeechTextQEDataset(SpeechToTextDataset):
                 # Shape [B, 1] to match the (batch_size, num_labels) convention
                 # expected by AutoModelForSequenceClassification with num_labels=1.
                 inputs["labels"] = torch.tensor(scores, dtype=torch.float32).unsqueeze(-1)
+
+            if self.return_langs:
+                inputs["langs"] = langs
 
             return inputs
 

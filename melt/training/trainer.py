@@ -120,6 +120,7 @@ class MELTTrainer(Trainer):
                 config=config.data,
                 is_train=False,
                 return_labels=True,  # we need labels for evaluation metrics
+                return_langs=True,  # enable per-language WER/CER breakdown
             )
             # Wrap with fallback for fault tolerance
             eval_dataset = FallbackDataset(eval_dataset)
@@ -294,6 +295,7 @@ class MELTTrainer(Trainer):
                 config=self.config.data,
                 is_train=False,
                 return_labels=True,
+                return_langs=True,
             )
             dataset = FallbackDataset(dataset)
 
@@ -1123,6 +1125,7 @@ class MELTTrainer(Trainer):
         all_preds = EvalLoopContainer(self.args.eval_do_concat_batches, padding_index=-100)
         all_labels = EvalLoopContainer(self.args.eval_do_concat_batches, padding_index=-100)
         all_inputs = EvalLoopContainer(self.args.eval_do_concat_batches, padding_index=-100)
+        all_langs: list[str] = []
 
         metrics = None
         observed_num_examples = 0
@@ -1131,6 +1134,9 @@ class MELTTrainer(Trainer):
             observed_batch_size = find_batch_size(inputs)
             if observed_batch_size is not None:
                 observed_num_examples += observed_batch_size
+
+            # Pop non-tensor fields before they reach prediction_step (model forward)
+            langs = inputs.pop("langs", None)
 
             losses, logits, labels = self.prediction_step(
                 model, inputs, prediction_loss_only, ignore_keys=ignore_keys,
@@ -1160,6 +1166,9 @@ class MELTTrainer(Trainer):
             if inputs_decode is not None:
                 if not self.args.batch_eval_metrics or description == "Prediction":
                     all_inputs.add(inputs_decode)
+            if langs is not None:
+                if not self.args.batch_eval_metrics or description == "Prediction":
+                    all_langs.extend(langs)
 
             self.control = self.callback_handler.on_prediction_step(
                 args, self.state, self.control,
@@ -1176,10 +1185,9 @@ class MELTTrainer(Trainer):
                     )
                     # Always accumulate; never compute_result inside the loop.
                     # Final computation happens after the loop exits.
-                    metrics = self.compute_metrics(
-                        EvalPrediction(predictions=logits, label_ids=labels, **batch_kwargs),
-                        compute_result=False,
-                    )
+                    ep = EvalPrediction(predictions=logits, label_ids=labels, **batch_kwargs)
+                    ep.langs = langs
+                    metrics = self.compute_metrics(ep, compute_result=False)
                 del losses, logits, labels, inputs
                 torch.cuda.empty_cache()
 
@@ -1198,10 +1206,9 @@ class MELTTrainer(Trainer):
             # Pass empty tensors so no new data is accumulated, only the result
             # is computed from what was already buffered inside compute_metrics.
             empty = torch.zeros(0)
-            metrics = self.compute_metrics(
-                EvalPrediction(predictions=empty, label_ids=empty),
-                compute_result=True,
-            )
+            ep = EvalPrediction(predictions=empty, label_ids=empty)
+            ep.langs = []
+            metrics = self.compute_metrics(ep, compute_result=True)
 
         if args.past_index and hasattr(self, "_past"):
             delattr(self, "_past")
@@ -1234,13 +1241,13 @@ class MELTTrainer(Trainer):
             eval_set_kwargs["inputs"] = (
                 all_inputs_arr if "inputs" in args.include_for_metrics else None
             )
-            metrics = self.compute_metrics(
-                EvalPrediction(
-                    predictions=all_preds_arr,
-                    label_ids=all_labels_arr,
-                    **eval_set_kwargs,
-                )
+            ep = EvalPrediction(
+                predictions=all_preds_arr,
+                label_ids=all_labels_arr,
+                **eval_set_kwargs,
             )
+            ep.langs = all_langs
+            metrics = self.compute_metrics(ep)
         elif metrics is None:
             metrics = {}
 

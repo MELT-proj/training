@@ -608,7 +608,7 @@ def get_lhotse_sampler_from_config(
             quadratic_duration=quadratic_duration,
             shuffle=shuffle,
             drop_last=drop_last,
-            buffer_size=buffer_size,
+            shuffle_buffer_size=buffer_size,
             rank=sampler_rank,
             world_size=sampler_world_size,
             seed=shard_seed,

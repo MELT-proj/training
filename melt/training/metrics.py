@@ -1,20 +1,32 @@
-from transformers import EvalPrediction
-from ..evaluation import BasicTextNormalizer
+from collections import defaultdict
+
 import jiwer
 import torch
+from transformers import EvalPrediction
+
+from ..evaluation import BasicTextNormalizer
 
 
 def pull_final_logits(logits: torch.Tensor, labels: torch.Tensor):
     """Pull the final logits corresponding to the label sequence length."""
     return logits[:, -labels.shape[1]:, :]
 
+
 class TrainingEvaluator:
+    """Computes WER and CER during evaluation, with optional per-language breakdown.
+
+    Args:
+        config: Evaluation configuration (enable_whisper_normalization, etc.).
+        processor: MELTProcessor whose tokenizer is used for decoding.
+    """
+
     def __init__(self, config, processor):
         self.config = config
         self.processor = processor
 
-        self._predictions = []
-        self._references = []
+        self._predictions: list[str] = []
+        self._references: list[str] = []
+        self._langs: list[str] = []
 
         if self.config.enable_whisper_normalization:
             self.normalizer = BasicTextNormalizer()
@@ -22,13 +34,18 @@ class TrainingEvaluator:
     def _normalize_text(self, text: str) -> str:
         return self.normalizer(text).strip()
 
-    def __call__(self, predictions: list[EvalPrediction], compute_result: bool) -> dict[str, float]:
-        logits, label_ids = predictions
+    def __call__(self, predictions: EvalPrediction, compute_result: bool) -> dict[str, float]:
+        logits, labels = predictions
 
-        # Logits and label_ids contain n_batch elements of shape (seq_len, vocab_size) and (seq_len,) respectively
-        # 1. iterate over each row and extract the predicted tokens and reference token only when the label is not -100 (the default ignore index for labels in Hugging Face)
-        # 2. decode using the processor's tokenizer to get the predicted and reference transcripts
-        for logit, label_id in zip(logits, label_ids):
+        # Access per-sample language codes if available
+        langs = getattr(predictions, "langs", None)
+
+        # Logits and label_ids contain n_batch elements of shape
+        # (seq_len, vocab_size) and (seq_len,) respectively.
+        # 1. iterate over each row and extract predicted / reference tokens
+        #    only when the label is not -100 (HF ignore index).
+        # 2. decode using the processor's tokenizer.
+        for i, (logit, label_id) in enumerate(zip(logits, labels)):
             ref_tokens = label_id.cpu().tolist()
             pred_tokens = logit.argmax(dim=-1).cpu().tolist()
 
@@ -39,18 +56,42 @@ class TrainingEvaluator:
             self._predictions.append(self.processor.decode(pred_tokens, skip_special_tokens=True))
             self._references.append(self.processor.decode(ref_tokens, skip_special_tokens=True))
 
+            if langs is not None and i < len(langs):
+                self._langs.append(langs[i])
+            else:
+                self._langs.append("unknown")
+
         if compute_result:
+            preds = list(self._predictions)
+            refs = list(self._references)
+            run_langs = list(self._langs)
 
             if self.config.enable_whisper_normalization:
-                # TODO: technically, there another normalizer for English but we are not using it for now
-                self._predictions = [self._normalize_text(pred) for pred in self._predictions]
-                self._references = [self._normalize_text(ref) for ref in self._references]
+                preds = [self._normalize_text(p) for p in preds]
+                refs = [self._normalize_text(r) for r in refs]
 
-            r = {
-                "wer": jiwer.wer(self._references, self._predictions),
-                "cer": jiwer.cer(self._references, self._predictions)
+            # --- Overall metrics ---
+            r: dict[str, float] = {
+                "wer": jiwer.wer(refs, preds),
+                "cer": jiwer.cer(refs, preds),
             }
+
+            # --- Per-language metrics ---
+            lang_to_preds: dict[str, list[str]] = defaultdict(list)
+            lang_to_refs: dict[str, list[str]] = defaultdict(list)
+            for pred, ref, lang in zip(preds, refs, run_langs):
+                lang_to_preds[lang].append(pred)
+                lang_to_refs[lang].append(ref)
+
+            for lang in sorted(lang_to_preds):
+                lp = lang_to_preds[lang]
+                lr = lang_to_refs[lang]
+                r[f"wer_{lang}"] = jiwer.wer(lr, lp)
+                r[f"cer_{lang}"] = jiwer.cer(lr, lp)
+
             # We finished, hence we clean the buffers for the next evaluation phase
             self._predictions = []
             self._references = []
+            self._langs = []
+
             return r
