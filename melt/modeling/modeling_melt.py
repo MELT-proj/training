@@ -848,24 +848,15 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
         B, S_t = target_tensor.shape[0], input_ids.shape[1]
         device = target_tensor.device
 
-        # If the inject token is not present in any batch item there is nothing
-        # to inject — just return the target tensor unchanged.  This can happen
-        # legitimately during memory preallocation (dummy all-zero input_ids).
+        # The inject token must be present in at least one batch item.  If it
+        # isn't, the caller is using the method incorrectly (no audio to inject
+        # but _inject_tensor was still called).
         if not input_ids.eq(inject_token_id).any():
-            logger.warning(
-                "Inject token ID %d not found in any input_ids "
-                "(input_ids shape=%s, dtype=%s, first_row[:32]=%s). "
-                "Returning target_tensor unchanged (dtype=%s, shape=%s). "
-                "This is expected during memory preallocation but may indicate "
-                "a bug if it happens during actual training/evaluation.",
-                inject_token_id,
-                tuple(input_ids.shape),
-                input_ids.dtype,
-                input_ids[0, :32].tolist(),
-                target_tensor.dtype,
-                tuple(target_tensor.shape),
+            raise ValueError(
+                f"Inject token ID {inject_token_id} not found in any input_ids "
+                f"(first row[:32]={input_ids[0, :32].tolist()}). "
+                f"_inject_tensor must only be called when audio tokens are present in the batch."
             )
-            return target_tensor
 
         # Step D: look up the EOS embedding via direct weight indexing (no tmp tensor /
         # forward pass). self._eos_token_id is cached once in __init__.
@@ -1397,24 +1388,15 @@ class MELTForSequenceClassification(MELTPreTrainedModel):
         ndim = target_tensor.ndim
         batch_size = target_tensor.shape[0]
 
-        # If the inject token is not present in any batch item there is nothing
-        # to inject — just return the target tensor unchanged.  This can happen
-        # legitimately during memory preallocation (dummy all-zero input_ids).
+        # The inject token must be present in at least one batch item.  If it
+        # isn't, the caller is using the method incorrectly (no audio to inject
+        # but _inject_tensor was still called).
         if not input_ids.eq(inject_token_id).any():
-            logger.warning(
-                "Inject token ID %d not found in any input_ids "
-                "(input_ids shape=%s, dtype=%s, first_row[:32]=%s). "
-                "Returning target_tensor unchanged (dtype=%s, shape=%s). "
-                "This is expected during memory preallocation but may indicate "
-                "a bug if it happens during actual training/evaluation.",
-                inject_token_id,
-                tuple(input_ids.shape),
-                input_ids.dtype,
-                input_ids[0, :32].tolist(),
-                target_tensor.dtype,
-                tuple(target_tensor.shape),
+            raise ValueError(
+                f"Inject token ID {inject_token_id} not found in any input_ids "
+                f"(first row[:32]={input_ids[0, :32].tolist()}). "
+                f"_inject_tensor must only be called when audio tokens are present in the batch."
             )
-            return target_tensor
 
         if ndim == 3:
             hidden_size = target_tensor.shape[-1]

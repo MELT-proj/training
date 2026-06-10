@@ -849,7 +849,11 @@ class MELTTrainer(Trainer):
 
         input_features        = torch.zeros(n_utts, max_audio_frames, feature_dim, device=device, dtype=dtype)
         features_attention_mask = torch.ones(n_utts, max_audio_frames, device=device, dtype=torch.long)
-        input_ids             = torch.zeros(n_utts, max_text_len, device=device, dtype=torch.long)
+        # Place the audio token in the synthetic batch so the audio-injection path
+        # (and its CUDA memory) is exercised during preallocation.
+        audio_token_id = model.config.audio_token_id
+        input_ids             = torch.full((n_utts, max_text_len), fill_value=0, device=device, dtype=torch.long)
+        input_ids[:, 1]       = audio_token_id
         attention_mask        = torch.ones(n_utts, max_text_len, device=device, dtype=torch.long)
         # All -100 except the first token per row to produce a valid (non-NaN) loss.
         labels                = torch.full((n_utts, max_text_len), fill_value=-100, device=device, dtype=torch.long)
