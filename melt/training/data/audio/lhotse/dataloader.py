@@ -327,6 +327,7 @@ def read_cutset_from_config(config: DictConfig, repeat: bool = True) -> tuple[Cu
 
     Args:
         config: DictConfig with input_cfg specifying data sources.
+        repeat: If True, the combined CutSet is repeated infinitely (for training).
 
     Returns:
         Tuple of (CutSet, use_iterable_dataset).
@@ -342,13 +343,12 @@ def read_cutset_from_config(config: DictConfig, repeat: bool = True) -> tuple[Cu
     seed = config.seed
     shuffle = config.shuffle
 
-    # For SHAR/WebDataset-style streaming, each PyTorch DataLoader worker (and each DDP rank)
-    # will host its own iterator/sampler replica.
-    # Unless the underlying CutSet shards are explicitly split between node+worker
-    # combinations, this can easily lead to duplicated data across workers/ranks.
-    #
-    # Lhotse provides a dedicated mechanism for this: CutSet.from_shar(..., split_for_dataloading=True).
-    # split_for_dataloading_default = bool(_get_config_value(config, "split_for_dataloading", True))
+    # Data uniqueness across DDP ranks / DataLoader workers is achieved via
+    # per-worker seed differentiation (make_worker_init_fn) rather than shard
+    # partitioning (split_for_dataloading).  Every worker sees every shard but
+    # iterates them in a different random order, so at any given batch index
+    # different workers see different cuts.  This matches NeMo's approach and
+    # avoids fragmentation issues when datasets have few shards.
 
     for source_cfg in input_cfg:
         source_type = _get_config_value(source_cfg, "type", "lhotse_shar")
@@ -365,18 +365,16 @@ def read_cutset_from_config(config: DictConfig, repeat: bool = True) -> tuple[Cu
                 raise FileNotFoundError(f"Shar path not found: {shar_path}")
 
             logger.info(f"Loading CutSet from shar: {shar_path} (seed: {seed})")
-            
-            # Some notes:
-            # Training (repeat=True): split shards across workers for efficiency;
-            # uneven shard counts don't matter because the CutSet repeats infinitely.
-            # Eval (repeat=False): every rank reads all shards; the sampler handles
-            # rank-based sharding to guarantee even batch counts and avoid deadlocks.
+
+            # split_for_dataloading=False: every worker loads all shards.
+            # Uniqueness comes from per-worker shuffle seeds set by
+            # make_worker_init_fn, not from shard-level partitioning.
             cuts = CutSet.from_shar(
                 in_dir=shar_path,
                 shuffle_shards=shuffle,
-                seed=seed,  
+                seed=seed,
                 stateful_shuffle=shuffle,
-                split_for_dataloading=repeat,
+                split_for_dataloading=False,
             )
             use_iterable = True  # Shar always uses iterable dataset
         # elif source_type == "lhotse_cuts":
@@ -406,18 +404,52 @@ def read_cutset_from_config(config: DictConfig, repeat: bool = True) -> tuple[Cu
     if len(cutsets) == 1:
         combined = cutsets[0]
     else:
-        # Use mux for weighted combination if weights differ
-        weights = []
-        for cfg in input_cfg:
-            weight = _get_config_value(cfg, "weight", 1.0)
-            weights.append(float(weight))
+        # Compute per-dataset weights proportional to cut count so that a cut
+        # from a large dataset and a cut from a small dataset are sampled at
+        # the same per-cut rate.  If a source config sets an explicit ``weight``
+        # key, that value is used instead of the auto-computed length.
+        weights: list[float] = []
+        for idx, (source_cfg, cs) in enumerate(zip(input_cfg, cutsets)):
+            has_explicit = (
+                "weight" in source_cfg
+                if isinstance(source_cfg, (dict, DictConfig))
+                else False
+            )
+            if has_explicit:
+                weight = float(_get_config_value(source_cfg, "weight", 1.0))
+                weights.append(weight)
+                logger.info(
+                    f"  Dataset {idx}: explicit weight={weight:.1f}"
+                )
+            else:
+                # Auto-weight by number of cuts in the dataset (NeMo convention).
+                # SHAR CutSets are lazy — len(cs) only counts manifest lines,
+                # it does not load audio.
+                try:
+                    n_cuts = len(cs)
+                    # Floor at 1 to avoid zero-weight for empty datasets.
+                    w = max(1, n_cuts)
+                    weights.append(float(w))
+                    logger.info(
+                        f"  Dataset {idx}: auto-weight={w} ({n_cuts} cuts)"
+                    )
+                except (TypeError, ValueError) as exc:
+                    logger.warning(
+                        f"  Dataset {idx}: len() not supported ({exc}), "
+                        f"falling back to weight=1.0"
+                    )
+                    weights.append(1.0)
 
-        logger.info(f"Mux-ing data sources. Weights: {weights}")
+        logger.info(
+            f"Mux-ing {len(cutsets)} data sources.  "
+            f"Weights: {[f'{w:.0f}' for w in weights]}"
+        )
 
         combined = CutSet.mux(*cutsets, weights=weights, seed=config.shard_seed)
 
-    # Since we split cuts across data workers (split_for_dataloading=True),
-    # to avoid deadlocks we force the combined CutSet to repeat infinitely.
+    # With split_for_dataloading=False every worker sees all shards.
+    # Repeating guarantees infinite data; uniqueness across workers/ranks
+    # is provided by per-worker shuffle seeds (make_worker_init_fn).
     if repeat:
         combined = combined.repeat()
 
@@ -570,10 +602,12 @@ def get_lhotse_sampler_from_config(
             f"num_buckets={num_buckets}"
         )
 
-        # Training (repeat=True) with iterable data: sharding is at the CutSet level
-        # via split_for_dataloading=True, so the sampler sees rank=0/world_size=1.
-        # Eval (repeat=False): split_for_dataloading=False, so the sampler must handle
-        # rank-based sharding to ensure each GPU processes the same number of batches.
+        # Training (repeat=True, iterable): split_for_dataloading=False so every
+        # worker sees all shards.  Different shuffle seeds per worker (set by
+        # make_worker_init_fn) provide uniqueness — the sampler just draws from
+        # its local iterator with rank=0 / world_size=1.
+        # Eval (repeat=False): split_for_dataloading=False, so the sampler must
+        # handle rank-based partitioning to guarantee even batch counts across GPUs.
         sampler_rank = 0 if (use_iterable and repeat) else global_rank
         sampler_world_size = 1 if (use_iterable and repeat) else world_size
 
