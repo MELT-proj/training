@@ -213,6 +213,28 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         self.sample_rate = int(_get_config_value(config, "sample_rate", 16000))
         self.min_chars = int(_get_config_value(config, "min_chars", 0))
 
+        # Template selection strategy when apply_chat_template is True.
+        # "random"        – randomly pick from all templates for the task (current default)
+        # "with_language" – only pick templates that include the {lang} placeholder
+        # "custom"        – use the exact template string from self.prompt_template
+        self.prompt_template_selection = str(
+            _get_config_value(config, "prompt_template_selection", "random")
+        )
+        if self.prompt_template_selection not in ("random", "with_language", "custom"):
+            raise ValueError(
+                f"Invalid prompt_template_selection '{self.prompt_template_selection}'. "
+                "Must be one of: 'random', 'with_language', 'custom'."
+            )
+
+        # Optional custom prompt template. Used when:
+        # - apply_chat_template=True and prompt_template_selection="custom"
+        # - apply_chat_template=False, to override the default "{audio_token}{t}" format
+        self.prompt_template = _get_config_value(config, "prompt_template", None)
+        if self.prompt_template_selection == "custom" and not self.prompt_template:
+            raise ValueError(
+                "prompt_template_selection='custom' requires prompt_template to be set in config."
+            )
+
         # Pre-compute boundary token IDs for chat-template label masking.
         if self.apply_chat_template:
             ct_name = str(_get_config_value(config, "chat_template_config", "chatml"))
@@ -334,8 +356,15 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         if self.apply_chat_template:
             formatted_texts = self._apply_chat_template(texts, tasks, langs)
         else:
-            # Simple format: audio token + transcription
-            formatted_texts = [f"{self.processor.audio_token}{t}" for t in texts]
+            if self.prompt_template:
+                # Custom template: may use {audio_token} and {t} placeholders
+                formatted_texts = [
+                    self.prompt_template.format(audio_token=self.processor.audio_token, t=t)
+                    for t in texts
+                ]
+            else:
+                # Simple format: audio token + transcription
+                formatted_texts = [f"{self.processor.audio_token}{t}" for t in texts]
 
         # Process through MELTProcessor
         try:
@@ -491,6 +520,41 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
 
         return task, lang
 
+    def _select_template(self, templates: list[str]) -> str:
+        """Select a template from *templates* based on the configured strategy.
+
+        Args:
+            templates: List of template strings to choose from.
+
+        Returns:
+            A single template string.
+
+        Raises:
+            ValueError: If ``prompt_template_selection`` is unrecognised or
+                if no suitable templates are found for the chosen strategy.
+        """
+        if self.prompt_template_selection == "random":
+            return random.choice(templates)
+        elif self.prompt_template_selection == "with_language":
+            # Only pick templates that explicitly mention the source language.
+            lang_templates = [t for t in templates if "{lang}" in t]
+            if not lang_templates:
+                raise ValueError(
+                    "prompt_template_selection='with_language' but no templates "
+                    f"with {{lang}} placeholder found among: {templates}"
+                )
+            return random.choice(lang_templates)
+        elif self.prompt_template_selection == "custom":
+            if self.prompt_template is None:
+                raise ValueError(
+                    "prompt_template_selection='custom' but prompt_template has not been set."
+                )
+            return self.prompt_template
+        else:
+            raise ValueError(
+                f"Unknown prompt_template_selection: {self.prompt_template_selection}"
+            )
+
     def _apply_chat_template(
         self, texts: list[str], tasks: list[str], langs: list[str]
     ) -> list[str]:
@@ -517,9 +581,14 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         formatted: list[str] = []
 
         for text, task, lang in zip(texts, tasks, langs):
-            # Pick a random prompt template for the task
+            # Pick a prompt template for the task according to the selection strategy
             templates = TASK_TEMPLATES.get(task)
-            template = random.choice(templates)
+            if not templates:
+                raise ValueError(
+                    f"No templates defined for task '{task}'. "
+                    f"Available tasks: {list(TASK_TEMPLATES.keys())}"
+                )
+            template = self._select_template(templates)
 
             lang_key = (lang or "").lower()
             language_name = LANGUAGE_ISO_TO_NAME.get(lang_key)
@@ -570,7 +639,7 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         qe_task_templates = TASK_TEMPLATES["speechqe"]
 
         for text, lang in zip(texts, langs):
-            template = random.choice(qe_task_templates)
+            template = self._select_template(qe_task_templates)
 
             lang_key = (lang or "").lower()
             language_name = LANGUAGE_ISO_TO_NAME.get(lang_key)
@@ -821,7 +890,14 @@ class SpeechTextQEDataset(SpeechToTextDataset):
             if self.apply_chat_template:
                 formatted_texts = self._apply_qe_chat_template(texts, langs)
             else:
-                formatted_texts = [f"{self.processor.audio_token}{text}" for text in texts]
+                if self.prompt_template:
+                    # Custom template: may use {audio_token} and {t} placeholders
+                    formatted_texts = [
+                        self.prompt_template.format(audio_token=self.processor.audio_token, t=t)
+                        for t in texts
+                    ]
+                else:
+                    formatted_texts = [f"{self.processor.audio_token}{t}" for t in texts]
 
             inputs = self.processor(
                 text=formatted_texts,
