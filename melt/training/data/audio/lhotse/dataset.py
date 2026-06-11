@@ -357,10 +357,14 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
             formatted_texts = self._apply_chat_template(texts, tasks, langs)
         else:
             if self.prompt_template:
-                # Custom template: may use {audio_token} and {t} placeholders
+                # Custom template: supports {audio_token}, {t}, and {lang} placeholders.
                 formatted_texts = [
-                    self.prompt_template.format(audio_token=self.processor.audio_token, t=t)
-                    for t in texts
+                    self.prompt_template.format(
+                        audio_token=self.processor.audio_token,
+                        t=t,
+                        lang=self._resolve_language_name(lang),
+                    )
+                    for t, lang in zip(texts, langs)
                 ]
             else:
                 # Simple format: audio token + transcription
@@ -520,6 +524,29 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
 
         return task, lang
 
+    @staticmethod
+    def _resolve_language_name(lang: str | None) -> str:
+        """Resolve an ISO 639-1 language code to a human-readable name.
+
+        Args:
+            lang: Lowercase ISO code (e.g. ``"en"``, ``"fr"``) or ``None``.
+
+        Returns:
+            Spelled-out language name (e.g. ``"English"``, ``"French"``).
+
+        Raises:
+            ValueError: If *lang* is ``None`` or an unsupported code.
+        """
+        lang_key = (lang or "").lower()
+        language_name = LANGUAGE_ISO_TO_NAME.get(lang_key)
+        if language_name is None:
+            supported = ", ".join(sorted(LANGUAGE_ISO_TO_NAME.keys()))
+            raise ValueError(
+                f"Unsupported language ISO code '{lang}'. "
+                f"Expected one of: {supported}"
+            )
+        return language_name
+
     def _select_template(self, templates: list[str]) -> str:
         """Select a template from *templates* based on the configured strategy.
 
@@ -589,15 +616,7 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
                     f"Available tasks: {list(TASK_TEMPLATES.keys())}"
                 )
             template = self._select_template(templates)
-
-            lang_key = (lang or "").lower()
-            language_name = LANGUAGE_ISO_TO_NAME.get(lang_key)
-            if language_name is None:
-                supported = ", ".join(sorted(LANGUAGE_ISO_TO_NAME.keys()))
-                raise ValueError(
-                    f"Unsupported language ISO code '{lang}'. "
-                    f"Expected one of: {supported}"
-                )
+            language_name = self._resolve_language_name(lang)
             prompt = template.format(audio_token=audio_token, lang=language_name)
 
             full_text = tokenizer.apply_chat_template(
@@ -640,16 +659,7 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
 
         for text, lang in zip(texts, langs):
             template = self._select_template(qe_task_templates)
-
-            lang_key = (lang or "").lower()
-            language_name = LANGUAGE_ISO_TO_NAME.get(lang_key)
-            if language_name is None:
-                supported = ", ".join(sorted(LANGUAGE_ISO_TO_NAME.keys()))
-                raise ValueError(
-                    f"Unsupported language ISO code '{lang}'. "
-                    f"Expected one of: {supported}"
-                )
-
+            language_name = self._resolve_language_name(lang)
             prompt = template.format(audio_token=audio_token, lang=language_name)
             full_text = tokenizer.apply_chat_template(
                 [
@@ -891,10 +901,14 @@ class SpeechTextQEDataset(SpeechToTextDataset):
                 formatted_texts = self._apply_qe_chat_template(texts, langs)
             else:
                 if self.prompt_template:
-                    # Custom template: may use {audio_token} and {t} placeholders
+                    # Custom template: supports {audio_token}, {t}, and {lang} placeholders.
                     formatted_texts = [
-                        self.prompt_template.format(audio_token=self.processor.audio_token, t=t)
-                        for t in texts
+                        self.prompt_template.format(
+                            audio_token=self.processor.audio_token,
+                            t=t,
+                            lang=self._resolve_language_name(lang),
+                        )
+                        for t, lang in zip(texts, langs)
                     ]
                 else:
                     formatted_texts = [f"{self.processor.audio_token}{t}" for t in texts]
