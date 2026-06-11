@@ -28,19 +28,23 @@ from lhotse import CutSet, MonoCut, Recording, SupervisionSegment
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _build_processor():
-    """Build a minimal MELTProcessor around a GPT-2 tokenizer.
+_TOKENIZER_NAME = "Qwen/Qwen3-1.7B"
 
-    The GPT-2 tokenizer is augmented with the MELT-required special tokens
-    so that the processor validates successfully.  A dummy feature extractor
-    is wired in so that neither real audio nor model downloads are needed.
+
+def _build_processor():
+    """Build a minimal MELTProcessor around the Qwen3-1.7B tokenizer.
+
+    The tokenizer is augmented with the MELT-required special tokens so that
+    the processor validates successfully.  A dummy feature extractor is wired
+    in so that neither real audio nor model downloads are needed (only the
+    tokenizer is loaded from HuggingFace).
     """
     from transformers import AutoTokenizer
     from transformers.feature_extraction_utils import FeatureExtractionMixin
 
     from melt.modeling.processing_melt import MELTProcessor
 
-    tokenizer = AutoTokenizer.from_pretrained("gpt2")
+    tokenizer = AutoTokenizer.from_pretrained(_TOKENIZER_NAME)
 
     # Add MELT-required special tokens.
     specials = {
@@ -51,8 +55,6 @@ def _build_processor():
     tokenizer.add_special_tokens({"additional_special_tokens": list(specials.values())})
     for attr, token_str in specials.items():
         setattr(tokenizer, attr, token_str)
-    # GPT-2 uses EOS as pad; ensure pad_token is set.
-    tokenizer.pad_token = tokenizer.eos_token
 
     class _DummyFeatureExtractor(FeatureExtractionMixin):
         """Returns fixed-size random features — no real audio processing."""

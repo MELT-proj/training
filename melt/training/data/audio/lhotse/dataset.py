@@ -401,23 +401,42 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
                     # template) so that only the target text {t} contributes to the loss.
                     if self.prompt_template and _prompt_texts:
                         for i in range(labels.size(0)):
-                            # Apply the same BOS/EOS wrapping that the processor
-                            # does internally (see MELTProcessor.__call__), so the
-                            # token count matches what appears in the full sequence.
+                            # Apply the same BOS/EOS wrapping the processor does
+                            # internally (see MELTProcessor.__call__).
                             wrapped_prompt = self.processor._surround_bos_eos_mm_tokens(
                                 _prompt_texts[i]
                             )
-                            prompt_ids = self.processor.tokenizer.encode(
-                                wrapped_prompt, add_special_tokens=False
+                            wrapped_full = self.processor._surround_bos_eos_mm_tokens(
+                                formatted_texts[i]
                             )
-                            prompt_len = len(prompt_ids)
-                            # Account for BOS token that the tokenizer may prepend.
-                            off = (
-                                1
-                                if labels[i, 0].item() == self.processor.tokenizer.bos_token_id
-                                else 0
+                            prompt_char_len = len(wrapped_prompt)
+
+                            # Use character-offset mapping to find the true
+                            # token boundary.  BPE-based tokenizers often merge
+                            # the last prompt character (e.g. a space) with the
+                            # first target word into a single token, so we
+                            # cannot simply measure the prompt token count in
+                            # isolation — we must check where each token's
+                            # character span lies.
+                            encoding = self.processor.tokenizer(
+                                wrapped_full,
+                                add_special_tokens=True,
+                                return_offsets_mapping=True,
+                                return_tensors=None,
                             )
-                            labels[i, off : off + prompt_len] = -100
+                            offsets = encoding["offset_mapping"]
+
+                            for j, (start, end) in enumerate(offsets):
+                                # Skip special tokens (offset 0,0) — handled
+                                # by the element-wise mask below.
+                                if start == 0 and end == 0:
+                                    continue
+                                # Mask tokens whose character span is entirely
+                                # within the prompt portion.  Tokens that
+                                # straddle the boundary (start < prompt_char_len
+                                # < end) belong to the target and are kept.
+                                if end <= prompt_char_len:
+                                    labels[i, j] = -100
 
                     # Mask individual special tokens (overlapping masks are idempotent).
                     mask = (
