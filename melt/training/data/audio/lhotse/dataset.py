@@ -401,11 +401,17 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
                     # template) so that only the target text {t} contributes to the loss.
                     if self.prompt_template and _prompt_texts:
                         for i in range(labels.size(0)):
+                            # Apply the same BOS/EOS wrapping that the processor
+                            # does internally (see MELTProcessor.__call__), so the
+                            # token count matches what appears in the full sequence.
+                            wrapped_prompt = self.processor._surround_bos_eos_mm_tokens(
+                                _prompt_texts[i]
+                            )
                             prompt_ids = self.processor.tokenizer.encode(
-                                _prompt_texts[i], add_special_tokens=False
+                                wrapped_prompt, add_special_tokens=False
                             )
                             prompt_len = len(prompt_ids)
-                            # Account for BOS token that the processor may prepend.
+                            # Account for BOS token that the tokenizer may prepend.
                             off = (
                                 1
                                 if labels[i, 0].item() == self.processor.tokenizer.bos_token_id
