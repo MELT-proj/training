@@ -356,16 +356,25 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         if self.apply_chat_template:
             formatted_texts = self._apply_chat_template(texts, tasks, langs)
         else:
+            _prompt_texts = None  # only populated when self.prompt_template is set
             if self.prompt_template:
                 # Custom template: supports {audio_token}, {t}, and {lang} placeholders.
-                formatted_texts = [
-                    self.prompt_template.format(
+                formatted_texts = []
+                _prompt_texts = []  # template with {t} stripped — used for label masking
+                for t, lang in zip(texts, langs):
+                    language_name = self._resolve_language_name(lang)
+                    full_text = self.prompt_template.format(
                         audio_token=self.processor.audio_token,
                         t=t,
-                        lang=self._resolve_language_name(lang),
+                        lang=language_name,
                     )
-                    for t, lang in zip(texts, langs)
-                ]
+                    prompt_text = self.prompt_template.format(
+                        audio_token=self.processor.audio_token,
+                        t="",
+                        lang=language_name,
+                    )
+                    formatted_texts.append(full_text)
+                    _prompt_texts.append(prompt_text)
             else:
                 # Simple format: audio token + transcription
                 formatted_texts = [f"{self.processor.audio_token}{t}" for t in texts]
@@ -388,7 +397,23 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
                 if self.apply_chat_template:
                     labels = self._mask_non_assistant_tokens(labels)
                 else:
-                    # Non-chat-template mode: mask individual special tokens
+                    # Non-chat-template mode: mask prompt tokens (if using a custom
+                    # template) so that only the target text {t} contributes to the loss.
+                    if self.prompt_template and _prompt_texts:
+                        for i in range(labels.size(0)):
+                            prompt_ids = self.processor.tokenizer.encode(
+                                _prompt_texts[i], add_special_tokens=False
+                            )
+                            prompt_len = len(prompt_ids)
+                            # Account for BOS token that the processor may prepend.
+                            off = (
+                                1
+                                if labels[i, 0].item() == self.processor.tokenizer.bos_token_id
+                                else 0
+                            )
+                            labels[i, off : off + prompt_len] = -100
+
+                    # Mask individual special tokens (overlapping masks are idempotent).
                     mask = (
                         (labels == self.processor.audio_token_id)
                         | (labels == self.processor.audio_bos_token_id)
