@@ -911,6 +911,184 @@ def _maybe_set_cuda_expandable_segments(enabled: bool = True) -> None:
         logger.debug("Could not enable CUDA expandable segments")
 
 
+def materialize_cuts_for_eval(config: DictConfig) -> list[Cut]:
+    """Materialize Cut metadata from SHAR manifests into an in-memory list.
+
+    Iterates over SHAR manifests (reads gzipped JSONL — NO audio loaded),
+    applies duration/token/max_samples filters, and returns a plain
+    ``list[Cut]``.  Multi-source configs are handled by simple concatenation
+    (every cut appears exactly once).
+
+    Args:
+        config: DictConfig with ``input_cfg``, ``min_duration``, etc.
+
+    Returns:
+        List of Lhotse Cut objects.
+    """
+    input_cfg = _get_config_value(config, "input_cfg", [])
+    if not input_cfg:
+        raise ValueError("No data sources specified in input_cfg for eval")
+
+    all_cuts: list[Cut] = []
+    min_duration = _get_config_value(config, "min_duration")
+    max_duration = _get_config_value(config, "max_duration")
+    max_samples = _get_config_value(config, "max_samples", None)
+    max_tokens = _get_config_value(config, "max_tokens", None)
+    max_tps = _get_config_value(config, "max_tps", None)
+    seed = int(_get_config_value(config, "seed", 0))
+
+    for source_cfg in input_cfg:
+        source_type = _get_config_value(source_cfg, "type", "lhotse_shar")
+        if source_type != "lhotse_shar":
+            raise ValueError(
+                f"Unknown data source type for eval: {source_type}"
+            )
+
+        shar_path = os.path.expandvars(
+            str(_get_config_value(source_cfg, "shar_path"))
+        )
+        if not Path(shar_path).exists():
+            raise FileNotFoundError(f"Shar path not found: {shar_path}")
+
+        logger.info(
+            "Materialising cuts for eval from: %s", shar_path,
+        )
+
+        cuts = CutSet.from_shar(
+            in_dir=shar_path,
+            shuffle_shards=False,
+            seed=seed,
+            split_for_dataloading=False,
+        )
+
+        # --- Filters (mirrors read_cutset_from_config) ---
+        if min_duration is not None or max_duration is not None:
+            _min = float(min_duration) if min_duration is not None else None
+            _max = float(max_duration) if max_duration is not None else None
+            cuts = cuts.filter(
+                lambda c: (_min is None or c.duration >= _min)
+                and (_max is None or c.duration <= _max)
+            )
+
+        if max_tokens is not None:
+            _mt = int(max_tokens)
+            cuts = cuts.filter(
+                lambda c: (
+                    c.custom.get("num_tokens", 0)
+                    if hasattr(c, "custom") and c.custom
+                    else 0
+                )
+                <= _mt
+            )
+
+        if max_tps is not None and max_tps > 0:
+            _mtps = float(max_tps)
+            cuts = cuts.filter(
+                lambda c: (
+                    (
+                        c.custom.get("num_tokens", 0) / max(c.duration, 1e-6)
+                        if hasattr(c, "custom") and c.custom
+                        else 0
+                    )
+                    <= _mtps
+                )
+            )
+
+        # Attach tags (task, lang, dataset_id, etc.)
+        tags = _get_config_value(source_cfg, "tags", {})
+        tag_dict = dict(tags) if not isinstance(tags, dict) else tags
+        if tag_dict:
+            cuts = cuts.map(
+                partial(_add_tags_to_cut, tags=tag_dict), apply_fn=None,
+            )
+
+        # Materialise
+        for cut in cuts:
+            all_cuts.append(cut)
+
+    if max_samples is not None:
+        import random as _random
+        _random.Random(seed).shuffle(all_cuts)
+        all_cuts = all_cuts[: int(max_samples)]
+
+    logger.info(
+        "Materialized %d cuts for eval from %d source(s).",
+        len(all_cuts), len(input_cfg),
+    )
+    return all_cuts
+
+
+def create_eval_dataloader(
+    data_config: DictConfig,
+    processor: "MELTProcessor",  # noqa: F821
+    batch_size: int,
+    num_workers: int = 2,
+) -> torch.utils.data.DataLoader:
+    """Create a standard PyTorch DataLoader for evaluation.
+
+    Uses :class:`MELTMapDataset` + :class:`MELTDataCollator` instead of
+    Lhotse's :class:`DynamicBucketingSampler` + :class:`IterableDatasetWrapper`.
+
+    The returned DataLoader is suitable for HF Trainer's evaluation loop.
+    Distributed sampling is handled by Accelerator via ``prepare_data_loader``.
+
+    Args:
+        data_config: Full DictConfig with ``validation_ds`` settings.
+        processor: :class:`MELTProcessor` for audio/text processing.
+        batch_size: Fixed number of cuts per batch.
+        num_workers: Number of DataLoader worker processes.
+
+    Returns:
+        Standard PyTorch DataLoader (NOT wrapped by Accelerator — the caller
+        must pass it through ``self.accelerator.prepare_data_loader``).
+    """
+    from .collator import MELTDataCollator
+    from .map_dataset import MELTMapDataset
+
+    validation_ds = _get_config_value(data_config, "validation_ds")
+
+    # 1. Materialize cuts
+    cuts = materialize_cuts_for_eval(validation_ds)
+
+    # 2. Create map-style dataset
+    dataset = MELTMapDataset(
+        cuts=cuts,
+        processor=processor,
+        config=validation_ds,
+        is_train=False,
+        return_langs=True,
+    )
+
+    # 3. Create collator
+    collator = MELTDataCollator(
+        processor=processor,
+        config=validation_ds,
+        is_train=False,
+    )
+
+    # 4. Build DataLoader (no DistributedSampler — Accelerator adds it)
+    dataloader = torch.utils.data.DataLoader(
+        dataset=dataset,
+        batch_size=batch_size,
+        collate_fn=collator,
+        num_workers=num_workers,
+        pin_memory=True,
+        shuffle=False,
+        drop_last=False,
+    )
+
+    logger.info(
+        "Eval DataLoader: %d valid cuts, batch_size=%d, ~%d batches, "
+        "num_workers=%d.",
+        len(dataset),
+        batch_size,
+        math.ceil(len(dataset) / batch_size),
+        num_workers,
+    )
+
+    return dataloader
+
+
 __all__ = [
     "read_cutset_from_config",
     "get_lhotse_sampler_from_config",
@@ -922,5 +1100,7 @@ __all__ = [
     "compute_dataset_duration",
     "estimate_steps_per_epoch",
     # "estimate_num_batches",
+    "materialize_cuts_for_eval",
+    "create_eval_dataloader",
     "InfiniteIterableDatasetWrapper",
 ]
