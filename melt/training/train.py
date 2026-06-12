@@ -145,33 +145,35 @@ def prepare_model(
         model = get_peft_model(model, peft_config)
         model.print_trainable_parameters()
 
-    def _freeze(module: torch.nn.Module, exclude_names: list[str] | None = None):
-        """Freeze parameters in a module, optionally excluding by name.
+    def _set_requires_grad(module: torch.nn.Module, value: bool):
+        """Set requires_grad on all parameters of a module."""
+        for param in module.parameters():
+            param.requires_grad = value
 
-        Args:
-            module: The module to freeze.
-            exclude_names: List of parameter name substrings to exclude from freezing.
-        """
-        if exclude_names is None:
-            exclude_names = []
+    # Apply freeze/unfreeze per component.
+    # When LoRA is enabled get_peft_model freezes all base params, so here we
+    # explicitly unfreeze any component whose freeze flag is false.
+    adapter_freeze = adapter_cfg.freeze
+    encoder_freeze = encoder_cfg.freeze
+    decoder_freeze = decoder_cfg.freeze
 
-        for name, param in module.named_parameters():
-            is_excluded = any(exclude in name for exclude in exclude_names)
-            if is_excluded:
-                logger.info(f"Excluding parameter from freezing: {name}")
-
-            if not any(exclude in name for exclude in exclude_names):
-                param.requires_grad = False
-
-    if adapter_cfg.freeze:
+    if adapter_freeze:
         logger.info("Freezing the adapter")
-        _freeze(model.audio_stack.adapter)
-    if encoder_cfg.freeze:
+    elif lora_enabled:
+        logger.info("Unfreezing the adapter (overriding LoRA freeze)")
+    _set_requires_grad(model.audio_stack.adapter, not adapter_freeze)
+
+    if encoder_freeze:
         logger.info("Freezing the encoder")
-        _freeze(model.audio_stack.encoder)
-    if decoder_cfg.freeze and not lora_enabled:
+    elif lora_enabled:
+        logger.info("Unfreezing the encoder (overriding LoRA freeze)")
+    _set_requires_grad(model.audio_stack.encoder, not encoder_freeze)
+
+    if decoder_freeze:
         logger.info("Freezing the decoder")
-        _freeze(model.text_decoder)
+    elif lora_enabled:
+        logger.info("Unfreezing the decoder (overriding LoRA freeze)")
+    _set_requires_grad(model.text_decoder, not decoder_freeze)
 
     return model, last_checkpoint, config, processor
 
