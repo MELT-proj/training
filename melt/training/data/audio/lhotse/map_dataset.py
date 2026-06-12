@@ -80,6 +80,23 @@ class MELTMapDataset(torch.utils.data.Dataset):
             else:
                 skipped += 1
 
+        # Sort valid indices by descending length proxy so that batches
+        # produced by sequential iteration contain similarly-sized items,
+        # minimising padding waste.  The longest items land in the first
+        # batch, which also catches OOMs early.
+        if self._valid_indices:
+            self._valid_indices.sort(
+                key=lambda idx: (
+                    cuts[idx].duration
+                    + (
+                        cuts[idx].custom.get("num_tokens", 0)
+                        if hasattr(cuts[idx], "custom") and cuts[idx].custom
+                        else 0
+                    )
+                ),
+                reverse=True,
+            )
+
         logger.info(
             "MELTMapDataset: %d valid cuts out of %d total (skipped=%d).",
             len(self._valid_indices),
