@@ -308,7 +308,7 @@ class MELTTrainer(Trainer):
             eval_dataset,
             batch_size=self.args.per_device_eval_batch_size,
             collate_fn=self._eval_collator,
-            num_workers=self.args.dataloader_num_workers,
+            num_workers=min(self.args.dataloader_num_workers, 1),
             pin_memory=True,
             shuffle=False,
             drop_last=False,
