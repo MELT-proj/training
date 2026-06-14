@@ -327,6 +327,7 @@ def read_cutset_from_config(config: DictConfig, repeat: bool = True) -> tuple[Cu
 
     Args:
         config: DictConfig with input_cfg specifying data sources.
+        repeat: If True, the combined CutSet is repeated infinitely (for training).
 
     Returns:
         Tuple of (CutSet, use_iterable_dataset).
@@ -342,13 +343,12 @@ def read_cutset_from_config(config: DictConfig, repeat: bool = True) -> tuple[Cu
     seed = config.seed
     shuffle = config.shuffle
 
-    # For SHAR/WebDataset-style streaming, each PyTorch DataLoader worker (and each DDP rank)
-    # will host its own iterator/sampler replica.
-    # Unless the underlying CutSet shards are explicitly split between node+worker
-    # combinations, this can easily lead to duplicated data across workers/ranks.
-    #
-    # Lhotse provides a dedicated mechanism for this: CutSet.from_shar(..., split_for_dataloading=True).
-    # split_for_dataloading_default = bool(_get_config_value(config, "split_for_dataloading", True))
+    # Data uniqueness across DDP ranks / DataLoader workers is achieved via
+    # per-worker seed differentiation (make_worker_init_fn) rather than shard
+    # partitioning (split_for_dataloading).  Every worker sees every shard but
+    # iterates them in a different random order, so at any given batch index
+    # different workers see different cuts.  This matches NeMo's approach and
+    # avoids fragmentation issues when datasets have few shards.
 
     for source_cfg in input_cfg:
         source_type = _get_config_value(source_cfg, "type", "lhotse_shar")
@@ -365,18 +365,16 @@ def read_cutset_from_config(config: DictConfig, repeat: bool = True) -> tuple[Cu
                 raise FileNotFoundError(f"Shar path not found: {shar_path}")
 
             logger.info(f"Loading CutSet from shar: {shar_path} (seed: {seed})")
-            
-            # Some notes:
-            # Training (repeat=True): split shards across workers for efficiency;
-            # uneven shard counts don't matter because the CutSet repeats infinitely.
-            # Eval (repeat=False): every rank reads all shards; the sampler handles
-            # rank-based sharding to guarantee even batch counts and avoid deadlocks.
+
+            # split_for_dataloading=False: every worker loads all shards.
+            # Uniqueness comes from per-worker shuffle seeds set by
+            # make_worker_init_fn, not from shard-level partitioning.
             cuts = CutSet.from_shar(
                 in_dir=shar_path,
                 shuffle_shards=shuffle,
-                seed=seed,  
+                seed=seed,
                 stateful_shuffle=shuffle,
-                split_for_dataloading=repeat,
+                split_for_dataloading=False,
             )
             use_iterable = True  # Shar always uses iterable dataset
         # elif source_type == "lhotse_cuts":
@@ -406,18 +404,52 @@ def read_cutset_from_config(config: DictConfig, repeat: bool = True) -> tuple[Cu
     if len(cutsets) == 1:
         combined = cutsets[0]
     else:
-        # Use mux for weighted combination if weights differ
-        weights = []
-        for cfg in input_cfg:
-            weight = _get_config_value(cfg, "weight", 1.0)
-            weights.append(float(weight))
+        # Compute per-dataset weights proportional to cut count so that a cut
+        # from a large dataset and a cut from a small dataset are sampled at
+        # the same per-cut rate.  If a source config sets an explicit ``weight``
+        # key, that value is used instead of the auto-computed length.
+        weights: list[float] = []
+        for idx, (source_cfg, cs) in enumerate(zip(input_cfg, cutsets)):
+            has_explicit = (
+                "weight" in source_cfg
+                if isinstance(source_cfg, (dict, DictConfig))
+                else False
+            )
+            if has_explicit:
+                weight = float(_get_config_value(source_cfg, "weight", 1.0))
+                weights.append(weight)
+                logger.info(
+                    f"  Dataset {idx}: explicit weight={weight:.1f}"
+                )
+            else:
+                # Auto-weight by number of cuts in the dataset (NeMo convention).
+                # SHAR CutSets are lazy — len(cs) only counts manifest lines,
+                # it does not load audio.
+                try:
+                    n_cuts = len(cs)
+                    # Floor at 1 to avoid zero-weight for empty datasets.
+                    w = max(1, n_cuts)
+                    weights.append(float(w))
+                    logger.info(
+                        f"  Dataset {idx}: auto-weight={w} ({n_cuts} cuts)"
+                    )
+                except (TypeError, ValueError) as exc:
+                    logger.warning(
+                        f"  Dataset {idx}: len() not supported ({exc}), "
+                        f"falling back to weight=1.0"
+                    )
+                    weights.append(1.0)
 
-        logger.info(f"Mux-ing data sources. Weights: {weights}")
+        logger.info(
+            f"Mux-ing {len(cutsets)} data sources.  "
+            f"Weights: {[f'{w:.0f}' for w in weights]}"
+        )
 
         combined = CutSet.mux(*cutsets, weights=weights, seed=config.shard_seed)
 
-    # Since we split cuts across data workers (split_for_dataloading=True),
-    # to avoid deadlocks we force the combined CutSet to repeat infinitely.
+    # With split_for_dataloading=False every worker sees all shards.
+    # Repeating guarantees infinite data; uniqueness across workers/ranks
+    # is provided by per-worker shuffle seeds (make_worker_init_fn).
     if repeat:
         combined = combined.repeat()
 
@@ -570,10 +602,12 @@ def get_lhotse_sampler_from_config(
             f"num_buckets={num_buckets}"
         )
 
-        # Training (repeat=True) with iterable data: sharding is at the CutSet level
-        # via split_for_dataloading=True, so the sampler sees rank=0/world_size=1.
-        # Eval (repeat=False): split_for_dataloading=False, so the sampler must handle
-        # rank-based sharding to ensure each GPU processes the same number of batches.
+        # Training (repeat=True, iterable): split_for_dataloading=False so every
+        # worker sees all shards.  Different shuffle seeds per worker (set by
+        # make_worker_init_fn) provide uniqueness — the sampler just draws from
+        # its local iterator with rank=0 / world_size=1.
+        # Eval (repeat=False): split_for_dataloading=False, so the sampler must
+        # handle rank-based partitioning to guarantee even batch counts across GPUs.
         sampler_rank = 0 if (use_iterable and repeat) else global_rank
         sampler_world_size = 1 if (use_iterable and repeat) else world_size
 
@@ -877,6 +911,184 @@ def _maybe_set_cuda_expandable_segments(enabled: bool = True) -> None:
         logger.debug("Could not enable CUDA expandable segments")
 
 
+def materialize_cuts_for_eval(config: DictConfig) -> list[Cut]:
+    """Materialize Cut metadata from SHAR manifests into an in-memory list.
+
+    Iterates over SHAR manifests (reads gzipped JSONL — NO audio loaded),
+    applies duration/token/max_samples filters, and returns a plain
+    ``list[Cut]``.  Multi-source configs are handled by simple concatenation
+    (every cut appears exactly once).
+
+    Args:
+        config: DictConfig with ``input_cfg``, ``min_duration``, etc.
+
+    Returns:
+        List of Lhotse Cut objects.
+    """
+    input_cfg = _get_config_value(config, "input_cfg", [])
+    if not input_cfg:
+        raise ValueError("No data sources specified in input_cfg for eval")
+
+    all_cuts: list[Cut] = []
+    min_duration = _get_config_value(config, "min_duration")
+    max_duration = _get_config_value(config, "max_duration")
+    max_samples = _get_config_value(config, "max_samples", None)
+    max_tokens = _get_config_value(config, "max_tokens", None)
+    max_tps = _get_config_value(config, "max_tps", None)
+    seed = int(_get_config_value(config, "seed", 0))
+
+    for source_cfg in input_cfg:
+        source_type = _get_config_value(source_cfg, "type", "lhotse_shar")
+        if source_type != "lhotse_shar":
+            raise ValueError(
+                f"Unknown data source type for eval: {source_type}"
+            )
+
+        shar_path = os.path.expandvars(
+            str(_get_config_value(source_cfg, "shar_path"))
+        )
+        if not Path(shar_path).exists():
+            raise FileNotFoundError(f"Shar path not found: {shar_path}")
+
+        logger.info(
+            "Materialising cuts for eval from: %s", shar_path,
+        )
+
+        cuts = CutSet.from_shar(
+            in_dir=shar_path,
+            shuffle_shards=False,
+            seed=seed,
+            split_for_dataloading=False,
+        )
+
+        # --- Filters (mirrors read_cutset_from_config) ---
+        if min_duration is not None or max_duration is not None:
+            _min = float(min_duration) if min_duration is not None else None
+            _max = float(max_duration) if max_duration is not None else None
+            cuts = cuts.filter(
+                lambda c: (_min is None or c.duration >= _min)
+                and (_max is None or c.duration <= _max)
+            )
+
+        if max_tokens is not None:
+            _mt = int(max_tokens)
+            cuts = cuts.filter(
+                lambda c: (
+                    c.custom.get("num_tokens", 0)
+                    if hasattr(c, "custom") and c.custom
+                    else 0
+                )
+                <= _mt
+            )
+
+        if max_tps is not None and max_tps > 0:
+            _mtps = float(max_tps)
+            cuts = cuts.filter(
+                lambda c: (
+                    (
+                        c.custom.get("num_tokens", 0) / max(c.duration, 1e-6)
+                        if hasattr(c, "custom") and c.custom
+                        else 0
+                    )
+                    <= _mtps
+                )
+            )
+
+        # Attach tags (task, lang, dataset_id, etc.)
+        tags = _get_config_value(source_cfg, "tags", {})
+        tag_dict = dict(tags) if not isinstance(tags, dict) else tags
+        if tag_dict:
+            cuts = cuts.map(
+                partial(_add_tags_to_cut, tags=tag_dict), apply_fn=None,
+            )
+
+        # Materialise
+        for cut in cuts:
+            all_cuts.append(cut)
+
+    if max_samples is not None:
+        import random as _random
+        _random.Random(seed).shuffle(all_cuts)
+        all_cuts = all_cuts[: int(max_samples)]
+
+    logger.info(
+        "Materialized %d cuts for eval from %d source(s).",
+        len(all_cuts), len(input_cfg),
+    )
+    return all_cuts
+
+
+def create_eval_dataloader(
+    data_config: DictConfig,
+    processor: "MELTProcessor",  # noqa: F821
+    batch_size: int,
+    num_workers: int = 2,
+) -> torch.utils.data.DataLoader:
+    """Create a standard PyTorch DataLoader for evaluation.
+
+    Uses :class:`MELTMapDataset` + :class:`MELTDataCollator` instead of
+    Lhotse's :class:`DynamicBucketingSampler` + :class:`IterableDatasetWrapper`.
+
+    The returned DataLoader is suitable for HF Trainer's evaluation loop.
+    Distributed sampling is handled by Accelerator via ``prepare_data_loader``.
+
+    Args:
+        data_config: Full DictConfig with ``validation_ds`` settings.
+        processor: :class:`MELTProcessor` for audio/text processing.
+        batch_size: Fixed number of cuts per batch.
+        num_workers: Number of DataLoader worker processes.
+
+    Returns:
+        Standard PyTorch DataLoader (NOT wrapped by Accelerator — the caller
+        must pass it through ``self.accelerator.prepare_data_loader``).
+    """
+    from .collator import MELTDataCollator
+    from .map_dataset import MELTMapDataset
+
+    validation_ds = _get_config_value(data_config, "validation_ds")
+
+    # 1. Materialize cuts
+    cuts = materialize_cuts_for_eval(validation_ds)
+
+    # 2. Create map-style dataset
+    dataset = MELTMapDataset(
+        cuts=cuts,
+        processor=processor,
+        config=validation_ds,
+        is_train=False,
+        return_langs=True,
+    )
+
+    # 3. Create collator
+    collator = MELTDataCollator(
+        processor=processor,
+        config=validation_ds,
+        is_train=False,
+    )
+
+    # 4. Build DataLoader (no DistributedSampler — Accelerator adds it)
+    dataloader = torch.utils.data.DataLoader(
+        dataset=dataset,
+        batch_size=batch_size,
+        collate_fn=collator,
+        num_workers=num_workers,
+        pin_memory=True,
+        shuffle=False,
+        drop_last=False,
+    )
+
+    logger.info(
+        "Eval DataLoader: %d valid cuts, batch_size=%d, ~%d batches, "
+        "num_workers=%d.",
+        len(dataset),
+        batch_size,
+        math.ceil(len(dataset) / batch_size),
+        num_workers,
+    )
+
+    return dataloader
+
+
 __all__ = [
     "read_cutset_from_config",
     "get_lhotse_sampler_from_config",
@@ -888,5 +1100,7 @@ __all__ = [
     "compute_dataset_duration",
     "estimate_steps_per_epoch",
     # "estimate_num_batches",
+    "materialize_cuts_for_eval",
+    "create_eval_dataloader",
     "InfiniteIterableDatasetWrapper",
 ]

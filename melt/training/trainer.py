@@ -16,19 +16,14 @@ import sys
 from copy import deepcopy
 from typing import Any, Optional, Union
 
-import numpy as np
 import torch
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 from transformers import Trainer, TrainingArguments
-from transformers.trainer_pt_utils import EvalLoopContainer, find_batch_size, nested_detach
 from transformers.trainer_utils import (
-    EvalLoopOutput,
     EvalPrediction,
     PREFIX_CHECKPOINT_DIR,
-    denumpify_detensorize,
     get_last_checkpoint,
-    has_length,
 )
 
 from .. import ddp
@@ -36,11 +31,13 @@ from ..logging_utils import force_print, get_logger
 from ..modeling import MELTProcessor
 from .data.audio.lhotse import (
     FallbackDataset,
+    MELTDataCollator,
+    MELTMapDataset,
     SpeechToTextDataset,
     # estimate_num_batches,
     estimate_steps_per_epoch,
-    get_eval_dataloader_from_config,
     get_train_dataloader_from_config,
+    materialize_cuts_for_eval,
 )
 
 logger = get_logger(__name__)
@@ -101,10 +98,11 @@ class MELTTrainer(Trainer):
         self.eval_num_cuts = 0
         self.eval_num_batches = 0
 
-        # Create eval dataset before super().__init__() so HF Trainer can use it
-        # Uses Lhotse's DynamicBucketingSampler for memory-efficient evaluation
-        # (supports lazy CutSets from shar/webdataset without materialization)
+        # Create eval dataset before super().__init__() so HF Trainer can use it.
+        # Uses the new map-style MELTMapDataset + MELTDataCollator pattern
+        # instead of Lhotse's DynamicBucketingSampler.
         eval_dataset = None
+        self._eval_collator = None
         if (
             processor is not None
             and config is not None
@@ -112,27 +110,57 @@ class MELTTrainer(Trainer):
             and hasattr(config.data, "validation_ds")
             and config.data.validation_ds.input_cfg
         ):
-            # Create SpeechToTextDataset for evaluation (same class as training)
-            # The finite iteration is handled by the dataloader, not the dataset
-            logger.info("Creating evaluation SpeechToTextDataset...")
-            eval_dataset = SpeechToTextDataset(
+            logger.info("Creating MELTMapDataset for evaluation...")
+            cuts = materialize_cuts_for_eval(config.data.validation_ds)
+            eval_dataset = MELTMapDataset(
+                cuts=cuts,
                 processor=processor,
-                config=config.data,
+                config=config.data.validation_ds,
                 is_train=False,
-                return_labels=True,  # we need labels for evaluation metrics
-                return_langs=True,  # enable per-language WER/CER breakdown
+                return_langs=True,
             )
-            # Wrap with fallback for fault tolerance
-            eval_dataset = FallbackDataset(eval_dataset)
-            logger.info(f"Eval dataset ready ({self.eval_num_cuts} cuts)")
+            self._eval_collator = MELTDataCollator(
+                processor=processor,
+                config=config.data.validation_ds,
+                is_train=False,
+            )
+            logger.info(
+                "Eval dataset ready: %d valid cuts",
+                len(eval_dataset),
+            )
 
         # Sampler state restoration flag (set in train(), consumed in get_train_dataloader())
         self._lhotse_resume_from: str | None = None
         # Reference to the training dataloader (for sampler access during checkpoint saving)
         self._train_dataloader_ref: DataLoader | None = None
 
+        # Buffer for per-sample language codes collected during evaluation.
+        # Populated by prediction_step(), consumed by the compute_metrics wrapper below.
+        self._eval_langs_buffer: list[str] = []
+
         # Initialize parent (may set up distributed)
         super().__init__(model=model, args=args, eval_dataset=eval_dataset, **kwargs)
+
+        # Wrap compute_metrics so that language codes buffered during
+        # prediction_step are attached to EvalPrediction before the real
+        # metric function runs.  This avoids the need to override the entire
+        # evaluation_loop just for langs plumbing.
+        _original_compute_metrics = self.compute_metrics
+        if _original_compute_metrics is not None:
+
+            def _compute_metrics_with_langs(
+                eval_prediction: EvalPrediction, **kwargs
+            ) -> dict:
+                if self._eval_langs_buffer:
+                    eval_prediction.langs = list(self._eval_langs_buffer)
+                result = _original_compute_metrics(eval_prediction, **kwargs)
+                # Clear the buffer on the *final* call (batch_eval_metrics mode
+                # makes per-batch calls with compute_result=False).
+                if kwargs.get("compute_result", True):
+                    self._eval_langs_buffer = []
+                return result
+
+            self.compute_metrics = _compute_metrics_with_langs
 
         # Start CUDA memory history recording if memory_profiling is enabled.
         # Must happen after super().__init__() so the CUDA device is already initialised.
@@ -256,58 +284,39 @@ class MELTTrainer(Trainer):
         return dataloader
 
     def get_eval_dataloader(self, eval_dataset=None) -> DataLoader:
-        """Create evaluation dataloader using Lhotse.
+        """Create evaluation dataloader using standard PyTorch Dataset + DataLoader.
 
-        This overrides the default HF Trainer method to use Lhotse's
-        distributed-aware samplers with proper bucketing for efficiency.
-
-        Key characteristics:
-        - Finite iteration: iterates exactly once through the eval data
-        - Distributed: properly shards data across ranks
-        - Efficient: uses DynamicBucketingSampler for batching by duration
-        - Multi-worker: supports num_workers > 0 via Lhotse's worker_init_fn
-        - Progress bars: has __len__ for proper progress tracking
+        Uses MELTMapDataset + MELTDataCollator instead of Lhotse's
+        DynamicBucketingSampler.  Distributed sampling is handled by
+        Accelerator via ``prepare_data_loader``.
 
         Args:
-            eval_dataset: Ignored when using Lhotse (config specifies data).
-                         If provided, uses self.eval_dataset instead.
+            eval_dataset: If provided, used instead of self.eval_dataset.
 
         Returns:
-            DataLoader for evaluation.
+            DataLoader for evaluation (prepared by Accelerator for DDP).
         """
-        if self.processor is None:
-            raise ValueError("processor must be provided for Lhotse data loading")
+        if eval_dataset is None:
+            eval_dataset = self.eval_dataset
+        if eval_dataset is None:
+            raise ValueError("No eval dataset configured")
 
-        # Check if validation data is configured
-        if not self.config.data.validation_ds.input_cfg:
-            raise ValueError(
-                "No validation data configured (validation_ds.input_cfg is empty)"
-            )
+        if self._eval_collator is None:
+            raise ValueError("No eval collator configured — was __init__ called correctly?")
 
-        logger.info("Creating Lhotse evaluation dataloader")
-
-        # Use the eval_dataset created in __init__ (SpeechToTextDataset wrapped in FallbackDataset)
-        dataset = self.eval_dataset if self.eval_dataset is not None else eval_dataset
-        if dataset is None:
-            # Create it now if not available
-            dataset = SpeechToTextDataset(
-                processor=self.processor,
-                config=self.config.data,
-                is_train=False,
-                return_labels=True,
-                return_langs=True,
-            )
-            dataset = FallbackDataset(dataset)
-
-        # Create finite dataloader using Lhotse's distributed-aware sampler
-        dataloader = get_eval_dataloader_from_config(
-            data_config=self.config.data,
-            dataset=dataset,
-            global_rank=self._global_rank,
-            world_size=self._world_size,
+        dataloader = DataLoader(
+            eval_dataset,
+            batch_size=self.args.per_device_eval_batch_size,
+            collate_fn=self._eval_collator,
+            num_workers=min(self.args.dataloader_num_workers, 1),
+            prefetch_factor=8,
+            pin_memory=True,
+            shuffle=False,
+            drop_last=False,
         )
 
-        return dataloader
+        # Let Accelerator handle DistributedSampler
+        return self.accelerator.prepare_data_loader(dataloader)
 
     def get_total_train_batch_size(self, args):
         """
@@ -849,7 +858,11 @@ class MELTTrainer(Trainer):
 
         input_features        = torch.zeros(n_utts, max_audio_frames, feature_dim, device=device, dtype=dtype)
         features_attention_mask = torch.ones(n_utts, max_audio_frames, device=device, dtype=torch.long)
-        input_ids             = torch.zeros(n_utts, max_text_len, device=device, dtype=torch.long)
+        # Place the audio token in the synthetic batch so the audio-injection path
+        # (and its CUDA memory) is exercised during preallocation.
+        audio_token_id = model.config.audio_token_id
+        input_ids             = torch.full((n_utts, max_text_len), fill_value=0, device=device, dtype=torch.long)
+        input_ids[:, 1]       = audio_token_id
         attention_mask        = torch.ones(n_utts, max_text_len, device=device, dtype=torch.long)
         # All -100 except the first token per row to produce a valid (non-NaN) loss.
         labels                = torch.full((n_utts, max_text_len), fill_value=-100, device=device, dtype=torch.long)
@@ -1051,239 +1064,26 @@ class MELTTrainer(Trainer):
             torch.cuda.memory._record_memory_history(None)
             self._memory_profiling = False
 
-    def evaluation_loop(
+    def prediction_step(
         self,
-        dataloader: DataLoader,
-        description: str,
-        prediction_loss_only: Optional[bool] = None,
-        ignore_keys: Optional[list[str]] = None,
-        metric_key_prefix: str = "eval",
-    ) -> EvalLoopOutput:
-        """Override evaluation_loop to handle Lhotse dynamic batching.
+        model: torch.nn.Module,
+        inputs: dict,
+        prediction_loss_only: bool,
+        ignore_keys: list[str] | None = None,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
+        """Pop ``langs`` from inputs before delegating to the base implementation.
 
-        Key differences from the base implementation:
-        - Uses observed_batch_size per step instead of a fixed batch_size for loss repeating
-        - Skips gather_function calls that deadlock when the dataloader isn't
-          prepared by accelerator (Lhotse handles distribution internally)
+        Language codes are buffered on the trainer so that the
+        ``compute_metrics`` wrapper can attach them to the
+        :class:`EvalPrediction` later.
         """
-        args = self.args
-        prediction_loss_only = (
-            prediction_loss_only if prediction_loss_only is not None else args.prediction_loss_only
-        )
-
-        # Model prep (same as base)
-        if self.is_deepspeed_enabled and self.deepspeed is None:
-            from transformers.integrations.deepspeed import deepspeed_init
-            _, _ = deepspeed_init(self, num_training_steps=0, inference=True)
-
-        model = self._wrap_model(self.model, training=False, dataloader=dataloader)
-
-        if len(self.accelerator._models) == 0 and model is self.model:
-            import time as _time
-            start_time = _time.time()
-            model = (
-                self.accelerator.prepare(model)
-                if self.is_deepspeed_enabled
-                or (self.is_fsdp_enabled and self.accelerator.mixed_precision != "fp8" and not self.args.torch_compile)
-                else self.accelerator.prepare_model(model, evaluation_mode=True)
-            )
-            self.model_preparation_time = round(_time.time() - start_time, 4)
-
-            if self.is_fsdp_enabled:
-                self.model = model
-            if model is not self.model:
-                self.model_wrapped = model
-            if self.is_deepspeed_enabled:
-                self.deepspeed = self.model_wrapped
-
-        if not self.is_in_train:
-            if args.fp16_full_eval:
-                model = model.to(dtype=torch.float16, device=args.device)
-            elif args.bf16_full_eval:
-                model = model.to(dtype=torch.bfloat16, device=args.device)
-
-        logger.info(f"\n***** Running {description} *****")
-        if has_length(dataloader):
-            logger.info(f"  Num examples = {self.num_examples(dataloader)}")
-        else:
-            logger.info("  Num examples: Unknown")
-        logger.info("  Batch size = dynamic (Lhotse)")
-
-        if hasattr(model, "eval") and callable(model.eval):
-            model.eval()
-        if hasattr(self.optimizer, "eval") and callable(self.optimizer.eval):
-            self.optimizer.eval()
-
-        self.callback_handler.eval_dataloader = dataloader
-        eval_dataset = getattr(dataloader, "dataset", None)
-
-        if args.past_index >= 0:
-            self._past = None
-
-        # Initialize containers — no gather, just accumulate locally
-        all_losses: list[float] = []
-        all_preds = EvalLoopContainer(self.args.eval_do_concat_batches, padding_index=-100)
-        all_labels = EvalLoopContainer(self.args.eval_do_concat_batches, padding_index=-100)
-        all_inputs = EvalLoopContainer(self.args.eval_do_concat_batches, padding_index=-100)
-        all_langs: list[str] = []
-
-        metrics = None
-        observed_num_examples = 0
-
-        for step, inputs in enumerate(dataloader):
-            observed_batch_size = find_batch_size(inputs)
-            if observed_batch_size is not None:
-                observed_num_examples += observed_batch_size
-
-            # Pop non-tensor fields before they reach prediction_step (model forward)
-            langs = inputs.pop("langs", None)
-
-            losses, logits, labels = self.prediction_step(
-                model, inputs, prediction_loss_only, ignore_keys=ignore_keys,
-            )
-            main_input_name = getattr(self.model, "main_input_name", "input_ids")
-            inputs_decode = (
-                self._prepare_input(inputs[main_input_name])
-                if "inputs" in args.include_for_metrics
-                else None
-            )
-
-            # --- Collect losses without gather / repeat ---
-            if losses is not None:
-                # losses is a scalar tensor from prediction_step (.mean() already applied)
-                all_losses.append(losses.item())
-
-            if logits is not None:
-                logits = nested_detach(logits)
-                if self.preprocess_logits_for_metrics is not None:
-                    logits = self.preprocess_logits_for_metrics(logits, labels)
-                if not self.args.batch_eval_metrics or description == "Prediction":
-                    all_preds.add(logits)
-            if labels is not None:
-                labels = nested_detach(labels) if isinstance(labels, torch.Tensor) else labels
-                if not self.args.batch_eval_metrics or description == "Prediction":
-                    all_labels.add(labels)
-            if inputs_decode is not None:
-                if not self.args.batch_eval_metrics or description == "Prediction":
-                    all_inputs.add(inputs_decode)
-            if langs is not None:
-                if not self.args.batch_eval_metrics or description == "Prediction":
-                    all_langs.extend(langs)
-
-            self.control = self.callback_handler.on_prediction_step(
-                args, self.state, self.control,
-            )
-
-            if self.args.batch_eval_metrics:
-                if self.compute_metrics is not None and logits is not None and labels is not None:
-                    batch_kwargs: dict = {}
-                    batch_kwargs["losses"] = (
-                        losses if "loss" in args.include_for_metrics else None
-                    )
-                    batch_kwargs["inputs"] = (
-                        inputs if "inputs" in args.include_for_metrics else None
-                    )
-                    # Always accumulate; never compute_result inside the loop.
-                    # Final computation happens after the loop exits.
-                    ep = EvalPrediction(predictions=logits, label_ids=labels, **batch_kwargs)
-                    ep.langs = langs
-                    metrics = self.compute_metrics(ep, compute_result=False)
-                del losses, logits, labels, inputs
-                torch.cuda.empty_cache()
-
-            elif (
-                args.eval_accumulation_steps is not None
-                and (step + 1) % args.eval_accumulation_steps == 0
-            ):
-                all_preds.to_cpu_and_numpy()
-                all_labels.to_cpu_and_numpy()
-                all_inputs.to_cpu_and_numpy()
-                del losses, logits, labels, inputs
-                torch.cuda.empty_cache()
-
-        # Loop is done — trigger final metric computation for batch_eval_metrics
-        if self.args.batch_eval_metrics and self.compute_metrics is not None:
-            # Pass empty tensors so no new data is accumulated, only the result
-            # is computed from what was already buffered inside compute_metrics.
-            empty = torch.zeros(0)
-            ep = EvalPrediction(predictions=empty, label_ids=empty)
-            ep.langs = []
-            metrics = self.compute_metrics(ep, compute_result=True)
-
-        if args.past_index and hasattr(self, "_past"):
-            delattr(self, "_past")
-
-        # Finalise containers
-        all_preds_arr = all_preds.get_arrays()
-        all_labels_arr = all_labels.get_arrays()
-        all_inputs_arr = all_inputs.get_arrays()
-
-        # Number of samples
-        if has_length(eval_dataset):
-            num_samples = len(eval_dataset)
-        else:
-            num_samples = observed_num_examples
-
-        if num_samples == 0 and observed_num_examples > 0:
-            num_samples = observed_num_examples
-
-        # Compute metrics
-        if (
-            self.compute_metrics is not None
-            and all_preds_arr is not None
-            and all_labels_arr is not None
-            and not self.args.batch_eval_metrics
-        ):
-            eval_set_kwargs: dict = {}
-            eval_set_kwargs["losses"] = (
-                np.array(all_losses) if "loss" in args.include_for_metrics else None
-            )
-            eval_set_kwargs["inputs"] = (
-                all_inputs_arr if "inputs" in args.include_for_metrics else None
-            )
-            ep = EvalPrediction(
-                predictions=all_preds_arr,
-                label_ids=all_labels_arr,
-                **eval_set_kwargs,
-            )
-            ep.langs = all_langs
-            metrics = self.compute_metrics(ep)
-        elif metrics is None:
-            metrics = {}
-
-        metrics = denumpify_detensorize(metrics)
-
-        # if all_losses:
-        #     metrics[f"{metric_key_prefix}_loss"] = np.mean(all_losses).item()
-        # At the end of the loop, after computing mean loss:
-        if all_losses:
-            if torch.distributed.is_initialized():
-                loss_tensor = torch.tensor([np.sum(all_losses), len(all_losses)], device=args.device)
-                torch.distributed.all_reduce(loss_tensor, op=torch.distributed.ReduceOp.SUM)
-                global_mean_loss = (loss_tensor[0] / loss_tensor[1]).item()
-                metrics[f"{metric_key_prefix}_loss"] = global_mean_loss
-            else:
-                metrics[f"{metric_key_prefix}_loss"] = np.mean(all_losses).item()
-
-        if hasattr(self, "jit_compilation_time"):
-            metrics[f"{metric_key_prefix}_jit_compilation_time"] = self.jit_compilation_time
-        if hasattr(self, "model_preparation_time"):
-            metrics[f"{metric_key_prefix}_model_preparation_time"] = self.model_preparation_time
-
-        for key in list(metrics.keys()):
-            if not key.startswith(f"{metric_key_prefix}_"):
-                metrics[f"{metric_key_prefix}_{key}"] = metrics.pop(key)
-
-        logger.info(f"***** RANK: {self._global_rank} -- {description} results *****")
-        logger.info(f"  Num samples = {num_samples}")
-        for key, value in metrics.items():
-            logger.info(f"  {key} = {value}")
-
-        return EvalLoopOutput(
-            predictions=all_preds_arr,
-            label_ids=all_labels_arr,
-            metrics=metrics,
-            num_samples=num_samples,
+        langs = inputs.pop("langs", None)
+        if langs is not None:
+            # Buffer is initialised in __init__ and cleared by the
+            # compute_metrics wrapper on the final call.
+            self._eval_langs_buffer.extend(langs)
+        return super().prediction_step(
+            model, inputs, prediction_loss_only, ignore_keys=ignore_keys,
         )
 
 

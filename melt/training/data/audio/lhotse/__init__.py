@@ -34,9 +34,11 @@ Example usage:
 """
 
 from .base import BaseLhotseDataset
+from .collator import MELTDataCollator
 from .dataloader import (
     # FiniteIterableDatasetWrapper,
     compute_dataset_duration,
+    create_eval_dataloader,
     # estimate_num_batches,
     estimate_steps_per_epoch,
     get_eval_dataloader_from_config,
@@ -45,16 +47,22 @@ from .dataloader import (
     get_lhotse_dataloader_from_config,
     get_lhotse_sampler_from_config,
     get_train_dataloader_from_config,
+    materialize_cuts_for_eval,
     read_cutset_from_config,
 )
 from .dataset import FallbackDataset, SpeechTextQEDataset, SpeechToTextDataset
+from .map_dataset import MELTMapDataset
 
 __all__ = [
     # Base classes
     "BaseLhotseDataset",
     # Dataset classes
     "SpeechToTextDataset",
+    "SpeechTextQEDataset",
     "FallbackDataset",
+    "MELTMapDataset",
+    # Collator
+    "MELTDataCollator",
     # Sampler/dataloader functions
     "read_cutset_from_config",
     "get_lhotse_sampler_from_config",
@@ -64,6 +72,8 @@ __all__ = [
     "get_eval_dataloader_from_config",
     "get_finite_dataloader_from_config",
     "FiniteIterableDatasetWrapper",
+    "materialize_cuts_for_eval",
+    "create_eval_dataloader",
     # Epoch estimation utilities
     "compute_dataset_duration",
     "estimate_steps_per_epoch",

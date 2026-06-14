@@ -853,7 +853,8 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
         # but _inject_tensor was still called).
         if not input_ids.eq(inject_token_id).any():
             raise ValueError(
-                f"Inject token ID {inject_token_id} not found in any input_ids. "
+                f"Inject token ID {inject_token_id} not found in any input_ids "
+                f"(first row[:32]={input_ids[0, :32].tolist()}). "
                 f"_inject_tensor must only be called when audio tokens are present in the batch."
             )
 
@@ -1387,9 +1388,13 @@ class MELTForSequenceClassification(MELTPreTrainedModel):
         ndim = target_tensor.ndim
         batch_size = target_tensor.shape[0]
 
+        # The inject token must be present in at least one batch item.  If it
+        # isn't, the caller is using the method incorrectly (no audio to inject
+        # but _inject_tensor was still called).
         if not input_ids.eq(inject_token_id).any():
             raise ValueError(
-                f"Inject token ID {inject_token_id} not found in any input_ids. "
+                f"Inject token ID {inject_token_id} not found in any input_ids "
+                f"(first row[:32]={input_ids[0, :32].tolist()}). "
                 f"_inject_tensor must only be called when audio tokens are present in the batch."
             )
 
