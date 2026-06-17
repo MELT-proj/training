@@ -26,6 +26,71 @@ def _get_config_value(config, key: str, default=None):
     return default
 
 
+def _normalize_prompt_template(value) -> str | dict[str, str] | None:
+    """Normalize prompt_template config value to ``str``, ``dict``, or ``None``.
+
+    In YAML (via OmegaConf), the value may arrive as:
+
+    - A string: ``"Transcribe: {t}"``
+    - A mapping: ``{asr: "...", st: "..."}`` → DictConfig / OrderedDict
+    - A list of single-key mappings: ``[{asr: "..."}, {st: "..."}]``
+
+    All forms are normalized to ``str``, ``dict``, or ``None``.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    # OmegaConf DictConfig / list-of-DictConfig / plain dict / plain list
+    if isinstance(value, dict):
+        return dict(value)  # shallow copy, normalise to plain dict
+    if isinstance(value, (list, tuple)):
+        result: dict[str, str] = {}
+        for item in value:
+            if isinstance(item, dict):
+                result.update(item)
+            else:
+                raise TypeError(
+                    f"Expected dict-like item in prompt_template list, got {type(item)}"
+                )
+        return result
+    # OmegaConf's DictConfig is not a plain dict but is iterable
+    if hasattr(value, "keys") and hasattr(value, "items"):
+        return dict(value)
+    raise TypeError(f"Unexpected type for prompt_template: {type(value)}")
+
+
+def resolve_custom_template(
+    prompt_template: str | dict[str, str] | None, task: str
+) -> str:
+    """Resolve a single template string for *task* from a custom prompt_template.
+
+    Args:
+        prompt_template: Normalised value (str, dict, or None).
+        task: Task identifier (e.g. ``"asr"``, ``"st"``).
+
+    Returns:
+        The template string for *task*.
+
+    Raises:
+        ValueError: If *prompt_template* is ``None``, or is a dict
+            that does not contain *task*.
+    """
+    if prompt_template is None:
+        raise ValueError(
+            "prompt_template has not been set but custom template resolution was requested."
+        )
+    if isinstance(prompt_template, str):
+        return prompt_template
+    # dict
+    if task not in prompt_template:
+        raise ValueError(
+            f"Task '{task}' not found in prompt_template dict. "
+            f"Available tasks: {sorted(prompt_template.keys())}"
+        )
+    return prompt_template[task]
+
+
 def _get_nested_value(obj, path: str, default=None):
     """Get a nested value from an object using dot notation.
 
@@ -257,8 +322,10 @@ def apply_chat_template_to_texts(
     langs: list[str],
     tokenizer: "PreTrainedTokenizerBase",  # noqa: F821
     audio_token: str,
+    prompt_template: str | dict[str, str] | None = None,
+    prompt_template_selection: str = "random",
 ) -> list[str]:
-    """Format each sample with a random task-specific prompt wrapped in the
+    """Format each sample with a task-specific prompt wrapped in the
     tokenizer's chat template.
 
     Args:
@@ -267,6 +334,11 @@ def apply_chat_template_to_texts(
         langs: Language ISO codes.
         tokenizer: HuggingFace tokenizer with ``apply_chat_template``.
         audio_token: The string representation of the audio placeholder token.
+        prompt_template: Custom prompt template (str for all tasks, or dict
+            mapping task→template).  Only used when *prompt_template_selection*
+            is ``"custom"``.
+        prompt_template_selection: Template selection strategy:
+            ``"random"`` (default), ``"with_language"``, or ``"custom"``.
 
     Returns:
         List of fully formatted chat strings ready for the processor.
@@ -280,12 +352,28 @@ def apply_chat_template_to_texts(
 
     formatted: list[str] = []
     for text, task, lang in zip(texts, tasks, langs):
-        templates = TASK_TEMPLATES.get(task)
-        if templates is None:
-            raise ValueError(
-                f"Unknown task '{task}'. Expected one of: {', '.join(sorted(TASK_TEMPLATES.keys()))}"
-            )
-        template = random.choice(templates)
+        if prompt_template_selection == "custom":
+            template = resolve_custom_template(prompt_template, task)
+        else:
+            templates = TASK_TEMPLATES.get(task)
+            if templates is None:
+                raise ValueError(
+                    f"Unknown task '{task}'. Expected one of: {', '.join(sorted(TASK_TEMPLATES.keys()))}"
+                )
+            if prompt_template_selection == "random":
+                template = random.choice(templates)
+            elif prompt_template_selection == "with_language":
+                lang_templates = [t for t in templates if "{lang}" in t]
+                if not lang_templates:
+                    raise ValueError(
+                        "prompt_template_selection='with_language' but no templates "
+                        f"with {{lang}} placeholder found among: {templates}"
+                    )
+                template = random.choice(lang_templates)
+            else:
+                raise ValueError(
+                    f"Unknown prompt_template_selection: {prompt_template_selection}"
+                )
 
         lang_key = (lang or "").lower()
         language_name = LANGUAGE_ISO_TO_NAME.get(lang_key)
@@ -315,11 +403,24 @@ def apply_qe_chat_template_to_texts(
     langs: list[str],
     tokenizer: "PreTrainedTokenizerBase",  # noqa: F821
     audio_token: str,
+    prompt_template: str | dict[str, str] | None = None,
+    prompt_template_selection: str = "random",
 ) -> list[str]:
     """Like :func:`apply_chat_template_to_texts` but for quality-estimation tasks.
 
     The assistant turn contains the candidate translation text whose quality
     is to be scored.
+
+    Args:
+        texts: Candidate translations (assistant responses).
+        langs: Language ISO codes.
+        tokenizer: HuggingFace tokenizer with ``apply_chat_template``.
+        audio_token: The string representation of the audio placeholder token.
+        prompt_template: Custom prompt template (str for all tasks, or dict
+            mapping task→template).  Only used when *prompt_template_selection*
+            is ``"custom"``.
+        prompt_template_selection: Template selection strategy:
+            ``"random"`` (default), ``"with_language"``, or ``"custom"``.
     """
     import random
 
@@ -331,7 +432,23 @@ def apply_qe_chat_template_to_texts(
     formatted: list[str] = []
     qe_templates = TASK_TEMPLATES["speechqe"]
     for text, lang in zip(texts, langs):
-        template = random.choice(qe_templates)
+        if prompt_template_selection == "custom":
+            template = resolve_custom_template(prompt_template, "speechqe")
+        else:
+            if prompt_template_selection == "random":
+                template = random.choice(qe_templates)
+            elif prompt_template_selection == "with_language":
+                lang_templates = [t for t in qe_templates if "{lang}" in t]
+                if not lang_templates:
+                    raise ValueError(
+                        "prompt_template_selection='with_language' but no templates "
+                        f"with {{lang}} placeholder found among: {qe_templates}"
+                    )
+                template = random.choice(lang_templates)
+            else:
+                raise ValueError(
+                    f"Unknown prompt_template_selection: {prompt_template_selection}"
+                )
         lang_key = (lang or "").lower()
         language_name = LANGUAGE_ISO_TO_NAME.get(lang_key)
         if language_name is None:

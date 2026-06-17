@@ -11,9 +11,12 @@ from .....logging_utils import get_logger
 from .....modeling import MELTProcessor
 from ....data.chat_templates import ChatTemplateConfig, get_chat_template_config
 from .helpers import (
+    LANGUAGE_ISO_TO_NAME,
     _get_config_value,
+    _normalize_prompt_template,
     apply_chat_template_to_texts,
     mask_non_assistant_tokens,
+    resolve_custom_template,
 )
 
 logger = get_logger(__name__)
@@ -41,6 +44,19 @@ class MELTDataCollator:
             _get_config_value(config, "apply_chat_template", False)
         )
         self.sample_rate = int(_get_config_value(config, "sample_rate", 16000))
+
+        # Template selection strategy when apply_chat_template is True.
+        raw_prompt_template = _get_config_value(config, "prompt_template", None)
+        self.prompt_template = _normalize_prompt_template(raw_prompt_template)
+
+        self.prompt_template_selection = str(
+            _get_config_value(config, "prompt_template_selection", "random")
+        )
+        if self.prompt_template_selection not in ("random", "with_language", "custom"):
+            raise ValueError(
+                f"Invalid prompt_template_selection '{self.prompt_template_selection}'. "
+                "Must be one of: 'random', 'with_language', 'custom'."
+            )
 
         # Pre-compute boundary token IDs for chat-template label masking
         if self.apply_chat_template:
@@ -77,9 +93,31 @@ class MELTDataCollator:
                 langs,
                 tokenizer=self.processor.tokenizer,
                 audio_token=self.processor.audio_token,
+                prompt_template=self.prompt_template,
+                prompt_template_selection=self.prompt_template_selection,
             )
         else:
-            formatted = [f"{self.processor.audio_token}{t}" for t in texts]
+            if self.prompt_template:
+                # Custom template: supports {audio_token}, {t}, and {lang}.
+                # May be a single string or a dict mapping task → template.
+                formatted = []
+                for t, lang, task in zip(texts, langs, tasks):
+                    template = (
+                        resolve_custom_template(self.prompt_template, task)
+                        if isinstance(self.prompt_template, dict)
+                        else self.prompt_template
+                    )
+                    lang_key = (lang or "").lower()
+                    language_name = LANGUAGE_ISO_TO_NAME.get(lang_key, "")
+                    formatted.append(
+                        template.format(
+                            audio_token=self.processor.audio_token,
+                            t=t,
+                            lang=language_name,
+                        )
+                    )
+            else:
+                formatted = [f"{self.processor.audio_token}{t}" for t in texts]
 
         # 4. Batch-process through MELTProcessor
         audio_inputs = [[a] for a in audios]  # list of lists

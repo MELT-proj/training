@@ -228,3 +228,297 @@ class TestPromptTemplateLabels:
                 f"Sample {i}: active token count {len(active_ids)} deviates too much "
                 f"from expected {len(target_ids)} for target {target_text!r}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Per-task prompt_template tests (non-chat-template mode)
+# ---------------------------------------------------------------------------
+
+
+class TestPerTaskPromptTemplateLabels:
+    """Verify per-task custom ``prompt_template`` dict in non-chat-template mode."""
+
+    @pytest.fixture(scope="class")
+    def processor(self):
+        return _build_processor()
+
+    @pytest.fixture(scope="class")
+    def per_task_dataset(self, processor):
+        from melt.training.data.audio.lhotse.dataset import SpeechToTextDataset
+
+        config = OmegaConf.create({
+            "apply_chat_template": False,
+            "prompt_template": {
+                "asr": "{audio_token}ASR {lang}: {t}",
+                "st": "{audio_token}ST {lang}: {t}",
+            },
+            "sample_rate": 16000,
+        })
+        return SpeechToTextDataset(
+            processor=processor,
+            config=config,
+            is_train=False,
+            return_labels=True,
+            return_langs=False,
+        )
+
+    def test_asr_cut_uses_asr_template(self, per_task_dataset, processor):
+        """An ASR cut should use the 'asr' template from the dict."""
+        cut = _make_cut("en-1", "hello world", "en", task="asr")
+        cuts = CutSet.from_cuts([cut])
+        batch = per_task_dataset[cuts]
+        assert batch is not None
+
+        # Decode the full input to verify the prompt prefix is ASR-specific.
+        input_ids = batch["input_ids"][0]
+        decoded = processor.tokenizer.decode(input_ids, skip_special_tokens=False)
+        assert "ASR" in decoded, f"Expected ASR prompt in decoded text, got: {decoded!r}"
+        assert "ST" not in decoded, f"ST prompt should not appear for ASR task"
+
+        labels = batch["labels"]
+        TestPromptTemplateLabels._assert_labels_match_target(
+            labels, processor.tokenizer, target_text="hello world",
+        )
+
+    def test_st_cut_uses_st_template(self, per_task_dataset, processor):
+        """An ST cut should use the 'st' template from the dict."""
+        cut = _make_cut("en-1", "bonjour le monde", "en", task="st")
+        cuts = CutSet.from_cuts([cut])
+        batch = per_task_dataset[cuts]
+        assert batch is not None
+
+        input_ids = batch["input_ids"][0]
+        decoded = processor.tokenizer.decode(input_ids, skip_special_tokens=False)
+        assert "ST" in decoded, f"Expected ST prompt in decoded text, got: {decoded!r}"
+        assert "ASR" not in decoded, f"ASR prompt should not appear for ST task"
+
+        labels = batch["labels"]
+        TestPromptTemplateLabels._assert_labels_match_target(
+            labels, processor.tokenizer, target_text="bonjour le monde",
+        )
+
+    def test_mixed_asr_st_batch(self, per_task_dataset, processor):
+        """A mixed ASR+ST batch should use the correct template per sample."""
+        cut_asr = _make_cut("en-1", "hello world", "en", task="asr")
+        cut_st = _make_cut("fr-1", "bonjour le monde", "fr", task="st")
+        cuts = CutSet.from_cuts([cut_asr, cut_st])
+        batch = per_task_dataset[cuts]
+        assert batch is not None
+        assert batch["input_ids"].size(0) == 2
+
+        # Sample 0 = ASR
+        decoded_0 = processor.tokenizer.decode(batch["input_ids"][0], skip_special_tokens=False)
+        assert "ASR" in decoded_0
+        assert "ST" not in decoded_0
+
+        # Sample 1 = ST
+        decoded_1 = processor.tokenizer.decode(batch["input_ids"][1], skip_special_tokens=False)
+        assert "ST" in decoded_1
+        assert "ASR" not in decoded_1
+
+        # Both labels should match their respective targets
+        labels = batch["labels"]
+        TestPromptTemplateLabels._assert_labels_match_target(
+            labels[0:1], processor.tokenizer, target_text="hello world",
+        )
+        TestPromptTemplateLabels._assert_labels_match_target(
+            labels[1:2], processor.tokenizer, target_text="bonjour le monde",
+        )
+
+    def test_missing_task_in_dict_raises(self, per_task_dataset):
+        """A task not in the dict should raise ValueError."""
+        cut = _make_cut("en-1", "hello world", "en", task="transcribe")
+        cuts = CutSet.from_cuts([cut])
+        with pytest.raises(ValueError, match="Task 'transcribe' not found"):
+            per_task_dataset[cuts]
+
+
+# ---------------------------------------------------------------------------
+# Per-task prompt_template tests (chat-template mode)
+# ---------------------------------------------------------------------------
+
+
+class TestPerTaskChatTemplateLabels:
+    """Verify per-task custom ``prompt_template`` dict in chat-template mode."""
+
+    @pytest.fixture(scope="class")
+    def processor(self):
+        return _build_processor()
+
+    @pytest.fixture(scope="class")
+    def per_task_chat_dataset(self, processor):
+        from melt.training.data.audio.lhotse.dataset import SpeechToTextDataset
+
+        config = OmegaConf.create({
+            "apply_chat_template": True,
+            "prompt_template_selection": "custom",
+            "prompt_template": {
+                "asr": "{audio_token} Transcribe this {lang} audio.",
+                "st": "{audio_token} Translate this audio to {lang}.",
+            },
+            "sample_rate": 16000,
+        })
+        return SpeechToTextDataset(
+            processor=processor,
+            config=config,
+            is_train=False,
+            return_labels=True,
+            return_langs=False,
+        )
+
+    def test_asr_cut_uses_custom_chat_template(self, per_task_chat_dataset, processor):
+        """ASR cut with chat-template + custom per-task prompt."""
+        cut = _make_cut("en-1", "hello world", "en", task="asr")
+        cuts = CutSet.from_cuts([cut])
+        batch = per_task_chat_dataset[cuts]
+        assert batch is not None
+
+        input_ids = batch["input_ids"][0]
+        decoded = processor.tokenizer.decode(input_ids, skip_special_tokens=False)
+        assert "Transcribe" in decoded
+        assert "Translate" not in decoded
+
+        # Labels: only the assistant (target) tokens survive
+        labels = batch["labels"][0]
+        active = labels[labels != -100]
+        assert len(active) > 0
+        target_decoded = processor.tokenizer.decode(
+            active.tolist(), skip_special_tokens=True
+        ).strip()
+        assert "hello world" in target_decoded
+
+    def test_st_cut_uses_custom_chat_template(self, per_task_chat_dataset, processor):
+        """ST cut with chat-template + custom per-task prompt."""
+        cut = _make_cut("fr-1", "bonjour le monde", "fr", task="st")
+        cuts = CutSet.from_cuts([cut])
+        batch = per_task_chat_dataset[cuts]
+        assert batch is not None
+
+        input_ids = batch["input_ids"][0]
+        decoded = processor.tokenizer.decode(input_ids, skip_special_tokens=False)
+        assert "Translate" in decoded
+        assert "Transcribe" not in decoded
+
+        labels = batch["labels"][0]
+        active = labels[labels != -100]
+        target_decoded = processor.tokenizer.decode(
+            active.tolist(), skip_special_tokens=True
+        ).strip()
+        assert "bonjour le monde" in target_decoded
+
+    def test_missing_task_in_chat_dict_raises(self, per_task_chat_dataset):
+        """A task not in the dict should raise ValueError."""
+        cut = _make_cut("en-1", "hello", "en", task="transcribe")
+        cuts = CutSet.from_cuts([cut])
+        with pytest.raises(ValueError, match="Task 'transcribe' not found"):
+            per_task_chat_dataset[cuts]
+
+
+# ---------------------------------------------------------------------------
+# Backward compatibility tests
+# ---------------------------------------------------------------------------
+
+
+class TestPromptTemplateBackwardCompat:
+    """Verify single-string prompt_template still works identically."""
+
+    @pytest.fixture(scope="class")
+    def processor(self):
+        return _build_processor()
+
+    def test_string_template_still_works(self, processor):
+        """Single-string prompt_template is backward compatible."""
+        from melt.training.data.audio.lhotse.dataset import SpeechToTextDataset
+
+        config = OmegaConf.create({
+            "apply_chat_template": False,
+            "prompt_template": "{audio_token}{lang}: {t}",
+            "sample_rate": 16000,
+        })
+        dataset = SpeechToTextDataset(
+            processor=processor,
+            config=config,
+            is_train=False,
+            return_labels=True,
+            return_langs=False,
+        )
+
+        cut = _make_cut("en-1", "hello world", "en")
+        cuts = CutSet.from_cuts([cut])
+        batch = dataset[cuts]
+        assert batch is not None
+
+        labels = batch["labels"]
+        TestPromptTemplateLabels._assert_labels_match_target(
+            labels, processor.tokenizer, target_text="hello world",
+        )
+
+    def test_string_template_chat_mode_still_works(self, processor):
+        """Single-string prompt_template with chat-template mode is backward compatible."""
+        from melt.training.data.audio.lhotse.dataset import SpeechToTextDataset
+
+        config = OmegaConf.create({
+            "apply_chat_template": True,
+            "prompt_template_selection": "custom",
+            "prompt_template": "{audio_token} Listen and transcribe in {lang}.",
+            "sample_rate": 16000,
+        })
+        dataset = SpeechToTextDataset(
+            processor=processor,
+            config=config,
+            is_train=False,
+            return_labels=True,
+            return_langs=False,
+        )
+
+        cut = _make_cut("en-1", "hello world", "en")
+        cuts = CutSet.from_cuts([cut])
+        batch = dataset[cuts]
+        assert batch is not None
+
+        input_ids = batch["input_ids"][0]
+        decoded = processor.tokenizer.decode(input_ids, skip_special_tokens=False)
+        assert "Listen and transcribe" in decoded
+
+
+# ---------------------------------------------------------------------------
+# OmegaConf list-of-dicts normalization test
+# ---------------------------------------------------------------------------
+
+
+class TestPromptTemplateNormalization:
+    """Verify prompt_template normalization handles various YAML shapes."""
+
+    def test_list_of_dicts_normalized(self):
+        """OmegaConf list-of-dicts format normalizes to a plain dict."""
+        from melt.training.data.audio.lhotse.helpers import _normalize_prompt_template
+
+        config = OmegaConf.create({
+            "prompt_template": [
+                {"asr": "ASR template {t}"},
+                {"st": "ST template {t}"},
+            ],
+        })
+        result = _normalize_prompt_template(config.prompt_template)
+        assert result == {"asr": "ASR template {t}", "st": "ST template {t}"}
+
+    def test_plain_dict_preserved(self):
+        """Plain dict is preserved as-is."""
+        from melt.training.data.audio.lhotse.helpers import _normalize_prompt_template
+
+        result = _normalize_prompt_template({"asr": "template {t}"})
+        assert result == {"asr": "template {t}"}
+
+    def test_string_preserved(self):
+        """String is returned as-is."""
+        from melt.training.data.audio.lhotse.helpers import _normalize_prompt_template
+
+        result = _normalize_prompt_template("template {t}")
+        assert result == "template {t}"
+
+    def test_none_returns_none(self):
+        """None returns None."""
+        from melt.training.data.audio.lhotse.helpers import _normalize_prompt_template
+
+        result = _normalize_prompt_template(None)
+        assert result is None

@@ -26,12 +26,14 @@ from .helpers import (
     TASK_TEMPLATES,
     _get_config_value,
     _get_nested_value,
+    _normalize_prompt_template,
     apply_chat_template_to_texts,
     apply_qe_chat_template_to_texts,
     get_tags_from_cut,
     get_text_from_cut,
     load_audio_from_cut,
     mask_non_assistant_tokens,
+    resolve_custom_template,
 )
 
 
@@ -95,7 +97,10 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         # Optional custom prompt template. Used when:
         # - apply_chat_template=True and prompt_template_selection="custom"
         # - apply_chat_template=False, to override the default "{audio_token}{t}" format
-        self.prompt_template = _get_config_value(config, "prompt_template", None)
+        # Accepts a single string (applied to all tasks) or a dict mapping
+        # task name → template string (e.g. {"asr": "...", "st": "..."}).
+        raw_prompt_template = _get_config_value(config, "prompt_template", None)
+        self.prompt_template = _normalize_prompt_template(raw_prompt_template)
         if self.prompt_template_selection == "custom" and not self.prompt_template:
             raise ValueError("prompt_template_selection='custom' requires prompt_template to be set in config.")
 
@@ -225,16 +230,23 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
             _prompt_texts = None  # only populated when self.prompt_template is set
             if self.prompt_template:
                 # Custom template: supports {audio_token}, {t}, and {lang} placeholders.
+                # self.prompt_template may be a single string (used for all tasks) or
+                # a dict mapping task → template string.
                 formatted_texts = []
                 _prompt_texts = []  # template with {t} stripped — used for label masking
-                for t, lang in zip(texts, langs):
+                for t, lang, task in zip(texts, langs, tasks):
+                    template = (
+                        resolve_custom_template(self.prompt_template, task)
+                        if isinstance(self.prompt_template, dict)
+                        else self.prompt_template
+                    )
                     language_name = self._resolve_language_name(lang)
-                    full_text = self.prompt_template.format(
+                    full_text = template.format(
                         audio_token=self.processor.audio_token,
                         t=t,
                         lang=language_name,
                     )
-                    prompt_text = self.prompt_template.format(
+                    prompt_text = template.format(
                         audio_token=self.processor.audio_token,
                         t="",
                         lang=language_name,
@@ -361,11 +373,14 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
             raise ValueError(f"Unsupported language ISO code '{lang}'. Expected one of: {supported}")
         return language_name
 
-    def _select_template(self, templates: list[str]) -> str:
+    def _select_template(self, templates: list[str], task: str = "") -> str:
         """Select a template from *templates* based on the configured strategy.
 
         Args:
             templates: List of template strings to choose from.
+            task: Task identifier (e.g. ``"asr"``, ``"st"``).  Required when
+                ``prompt_template_selection`` is ``"custom"`` and
+                ``self.prompt_template`` is a dict.
 
         Returns:
             A single template string.
@@ -386,9 +401,7 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
                 )
             return random.choice(lang_templates)
         elif self.prompt_template_selection == "custom":
-            if self.prompt_template is None:
-                raise ValueError("prompt_template_selection='custom' but prompt_template has not been set.")
-            return self.prompt_template
+            return resolve_custom_template(self.prompt_template, task)
         else:
             raise ValueError(f"Unknown prompt_template_selection: {self.prompt_template_selection}")
 
@@ -422,7 +435,7 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
                 raise ValueError(
                     f"No templates defined for task '{task}'. Available tasks: {list(TASK_TEMPLATES.keys())}"
                 )
-            template = self._select_template(templates)
+            template = self._select_template(templates, task=task)
             language_name = self._resolve_language_name(lang)
             prompt = template.format(audio_token=audio_token, lang=language_name)
 
@@ -671,8 +684,15 @@ class SpeechTextQEDataset(SpeechToTextDataset):
             else:
                 if self.prompt_template:
                     # Custom template: supports {audio_token}, {t}, and {lang} placeholders.
+                    # self.prompt_template may be a single string or a dict
+                    # mapping task → template string.  QE always uses "speechqe".
+                    template = (
+                        resolve_custom_template(self.prompt_template, "speechqe")
+                        if isinstance(self.prompt_template, dict)
+                        else self.prompt_template
+                    )
                     formatted_texts = [
-                        self.prompt_template.format(
+                        template.format(
                             audio_token=self.processor.audio_token,
                             t=t,
                             lang=self._resolve_language_name(lang),
