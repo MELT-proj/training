@@ -38,29 +38,26 @@ def _normalize_prompt_template(value) -> str | dict[str, str] | None:
 
     All forms are normalized to ``str``, ``dict``, or ``None``.
     """
-    from omegaconf import ListConfig
+    from omegaconf import DictConfig as _DictConfig, ListConfig as _ListConfig
 
     if value is None:
         return None
     if isinstance(value, str):
         return value
     # OmegaConf DictConfig / plain dict
-    if isinstance(value, dict):
+    if isinstance(value, (dict, _DictConfig)):
         return dict(value)  # shallow copy, normalise to plain dict
     # Plain list, tuple, or OmegaConf ListConfig
-    if isinstance(value, (list, tuple, ListConfig)):
+    if isinstance(value, (list, tuple, _ListConfig)):
         result: dict[str, str] = {}
         for item in value:
-            if isinstance(item, dict):
+            if isinstance(item, (dict, _DictConfig)):
                 result.update(item)
             else:
                 raise TypeError(
                     f"Expected dict-like item in prompt_template list, got {type(item)}"
                 )
         return result
-    # OmegaConf's DictConfig is not a plain dict but is iterable
-    if hasattr(value, "keys") and hasattr(value, "items"):
-        return dict(value)
     raise TypeError(f"Unexpected type for prompt_template: {type(value)}")
 
 
