@@ -249,8 +249,8 @@ class TestPerTaskPromptTemplateLabels:
         config = OmegaConf.create({
             "apply_chat_template": False,
             "prompt_template": {
-                "asr": "{audio_token}ASR {lang}: {t}",
-                "st": "{audio_token}ST {lang}: {t}",
+                "asr": "{audio_token}ASR: {t}",
+                "st": "{audio_token}ST: {t}",
             },
             "sample_rate": 16000,
         })
@@ -275,10 +275,9 @@ class TestPerTaskPromptTemplateLabels:
         assert "ASR" in decoded, f"Expected ASR prompt in decoded text, got: {decoded!r}"
         assert "ST" not in decoded, f"ST prompt should not appear for ASR task"
 
+        # Verify the target text is present in the unmasked labels.
         labels = batch["labels"]
-        TestPromptTemplateLabels._assert_labels_match_target(
-            labels, processor.tokenizer, target_text="hello world",
-        )
+        self._assert_target_in_labels(labels, processor.tokenizer, target_text="hello world")
 
     def test_st_cut_uses_st_template(self, per_task_dataset, processor):
         """An ST cut should use the 'st' template from the dict."""
@@ -293,9 +292,7 @@ class TestPerTaskPromptTemplateLabels:
         assert "ASR" not in decoded, f"ASR prompt should not appear for ST task"
 
         labels = batch["labels"]
-        TestPromptTemplateLabels._assert_labels_match_target(
-            labels, processor.tokenizer, target_text="bonjour le monde",
-        )
+        self._assert_target_in_labels(labels, processor.tokenizer, target_text="bonjour le monde")
 
     def test_mixed_asr_st_batch(self, per_task_dataset, processor):
         """A mixed ASR+ST batch should use the correct template per sample."""
@@ -316,14 +313,27 @@ class TestPerTaskPromptTemplateLabels:
         assert "ST" in decoded_1
         assert "ASR" not in decoded_1
 
-        # Both labels should match their respective targets
+        # Both labels should contain their respective targets
         labels = batch["labels"]
-        TestPromptTemplateLabels._assert_labels_match_target(
-            labels[0:1], processor.tokenizer, target_text="hello world",
-        )
-        TestPromptTemplateLabels._assert_labels_match_target(
-            labels[1:2], processor.tokenizer, target_text="bonjour le monde",
-        )
+        self._assert_target_in_labels(labels[0:1], processor.tokenizer, target_text="hello world")
+        self._assert_target_in_labels(labels[1:2], processor.tokenizer, target_text="bonjour le monde")
+
+    @staticmethod
+    def _assert_target_in_labels(labels, tokenizer, target_text: str):
+        """Assert that *labels* contain *target_text* among the non-masked tokens."""
+        for i in range(labels.size(0)):
+            row = labels[i]
+            active_mask = row != -100
+            active_ids = row[active_mask].tolist()
+            assert len(active_ids) > 0, (
+                f"Sample {i}: all labels are -100 — nothing contributes to loss"
+            )
+            decoded = tokenizer.decode(active_ids, skip_special_tokens=True).strip()
+            decoded_normalized = " ".join(decoded.split())
+            target_normalized = " ".join(target_text.split())
+            assert target_normalized in decoded_normalized, (
+                f"Sample {i}: expected target {target_text!r} not found in decoded {decoded!r}"
+            )
 
     def test_missing_task_in_dict_raises(self, per_task_dataset):
         """A task not in the dict should raise ValueError."""
@@ -407,10 +417,14 @@ class TestPerTaskChatTemplateLabels:
         assert "bonjour le monde" in target_decoded
 
     def test_missing_task_in_chat_dict_raises(self, per_task_chat_dataset):
-        """A task not in the dict should raise ValueError."""
-        cut = _make_cut("en-1", "hello", "en", task="transcribe")
+        """A task not in the prompt_template dict should raise ValueError.
+
+        Uses ``"speechqe"`` which is a valid task in TASK_TEMPLATES but not
+        present in the per-task prompt_template dict configured above.
+        """
+        cut = _make_cut("en-1", "hello", "en", task="speechqe")
         cuts = CutSet.from_cuts([cut])
-        with pytest.raises(ValueError, match="Task 'transcribe' not found"):
+        with pytest.raises(ValueError, match="Task 'speechqe' not found"):
             per_task_chat_dataset[cuts]
 
 

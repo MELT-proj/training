@@ -34,17 +34,21 @@ def _normalize_prompt_template(value) -> str | dict[str, str] | None:
     - A string: ``"Transcribe: {t}"``
     - A mapping: ``{asr: "...", st: "..."}`` → DictConfig / OrderedDict
     - A list of single-key mappings: ``[{asr: "..."}, {st: "..."}]``
+      (plain ``list`` or OmegaConf ``ListConfig``)
 
     All forms are normalized to ``str``, ``dict``, or ``None``.
     """
+    from omegaconf import ListConfig
+
     if value is None:
         return None
     if isinstance(value, str):
         return value
-    # OmegaConf DictConfig / list-of-DictConfig / plain dict / plain list
+    # OmegaConf DictConfig / plain dict
     if isinstance(value, dict):
         return dict(value)  # shallow copy, normalise to plain dict
-    if isinstance(value, (list, tuple)):
+    # Plain list, tuple, or OmegaConf ListConfig
+    if isinstance(value, (list, tuple, ListConfig)):
         result: dict[str, str] = {}
         for item in value:
             if isinstance(item, dict):
