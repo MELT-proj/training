@@ -277,44 +277,63 @@ def get_text_from_cut(cut: Cut, text_field: str) -> str | None:
     return text or None
 
 
-def get_tags_from_cut(cut: Cut) -> tuple[str, str]:
+def get_tags_from_cut(cut: Cut) -> tuple[str, str, str, str]:
     """Extract task and language tags from a cut.
 
-    For ASR tasks the returned language is the ``lang`` tag.
-    For ST tasks the returned language is ``tgt_lang`` (the target
+    For ASR tasks the returned ``lang`` is the ``lang`` tag (source language).
+    For ST tasks the returned ``lang`` is ``tgt_lang`` (the target
     language), falling back to ``lang``.
 
     Args:
         cut: Lhotse Cut object.
 
     Returns:
-        Tuple of ``(task, language)`` strings.  Both may be ``""`` if
-        the cut carries no tags.
+        Tuple of ``(task, lang, src_lang, tgt_lang)`` strings.
+        All may be ``""`` if the cut carries no tags.
     """
     task = ""
     lang = ""
+    src_lang = ""
+    tgt_lang = ""
 
     # Supervision-level language
     if cut.supervisions:
         for sup in cut.supervisions:
             if sup.language:
                 lang = sup.language
+                src_lang = sup.language
                 break
 
     # Per-cut tags (set during dataset construction) take precedence
     if hasattr(cut, "tags") and cut.tags:
         task = cut.tags.get("task", task)
         if task in ("st", "translate"):
-            lang = cut.tags.get("tgt_lang", lang)
+            tgt_lang = cut.tags.get("tgt_lang", lang)
+            src_lang = cut.tags.get("src_lang", lang)
+            lang = tgt_lang  # keep 'lang' as target for backward compat
         else:
-            lang = cut.tags.get("lang", lang)
+            tag_lang = cut.tags.get("lang", "")
+            if tag_lang:
+                lang = tag_lang
+                src_lang = tag_lang
 
-    return task, lang
+    return task, lang, src_lang, tgt_lang
 
 
 # =============================================================================
 # Chat-template helpers
 # =============================================================================
+
+
+def _resolve_language_name_safe(lang: str | None) -> str:
+    """Resolve an ISO code to a human-readable name, returning the raw
+    code (or empty string) for missing / unsupported values instead of
+    raising an error.
+    """
+    if not lang:
+        return ""
+    lang_key = lang.lower()
+    return LANGUAGE_ISO_TO_NAME.get(lang_key, lang)
 
 
 def apply_chat_template_to_texts(
@@ -325,6 +344,8 @@ def apply_chat_template_to_texts(
     audio_token: str,
     prompt_template: str | dict[str, str] | None = None,
     prompt_template_selection: str = "random",
+    src_langs: list[str] | None = None,
+    tgt_langs: list[str] | None = None,
 ) -> list[str]:
     """Format each sample with a task-specific prompt wrapped in the
     tokenizer's chat template.
@@ -340,11 +361,18 @@ def apply_chat_template_to_texts(
             is ``"custom"``.
         prompt_template_selection: Template selection strategy:
             ``"random"`` (default), ``"with_language"``, or ``"custom"``.
+        src_langs: Source language ISO codes (per sample).  May be empty.
+        tgt_langs: Target language ISO codes (per sample).  May be empty.
 
     Returns:
         List of fully formatted chat strings ready for the processor.
     """
     import random
+
+    if src_langs is None:
+        src_langs = [""] * len(texts)
+    if tgt_langs is None:
+        tgt_langs = [""] * len(texts)
 
     if not hasattr(tokenizer, "apply_chat_template"):
         raise ValueError(
@@ -352,7 +380,7 @@ def apply_chat_template_to_texts(
         )
 
     formatted: list[str] = []
-    for text, task, lang in zip(texts, tasks, langs):
+    for text, task, lang, src_lang, tgt_lang in zip(texts, tasks, langs, src_langs, tgt_langs):
         if prompt_template_selection == "custom":
             template = resolve_custom_template(prompt_template, task)
         else:
@@ -383,7 +411,14 @@ def apply_chat_template_to_texts(
             raise ValueError(
                 f"Unsupported language ISO code '{lang}'. Expected one of: {supported}"
             )
-        prompt = template.format(audio_token=audio_token, lang=language_name)
+        src_lang_name = _resolve_language_name_safe(src_lang)
+        tgt_lang_name = _resolve_language_name_safe(tgt_lang)
+        prompt = template.format(
+            audio_token=audio_token,
+            lang=language_name,
+            src_lang=src_lang_name,
+            tgt_lang=tgt_lang_name,
+        )
 
         full_text = tokenizer.apply_chat_template(
             [
@@ -406,6 +441,8 @@ def apply_qe_chat_template_to_texts(
     audio_token: str,
     prompt_template: str | dict[str, str] | None = None,
     prompt_template_selection: str = "random",
+    src_langs: list[str] | None = None,
+    tgt_langs: list[str] | None = None,
 ) -> list[str]:
     """Like :func:`apply_chat_template_to_texts` but for quality-estimation tasks.
 
@@ -422,8 +459,15 @@ def apply_qe_chat_template_to_texts(
             is ``"custom"``.
         prompt_template_selection: Template selection strategy:
             ``"random"`` (default), ``"with_language"``, or ``"custom"``.
+        src_langs: Source language ISO codes (per sample).  May be empty.
+        tgt_langs: Target language ISO codes (per sample).  May be empty.
     """
     import random
+
+    if src_langs is None:
+        src_langs = [""] * len(texts)
+    if tgt_langs is None:
+        tgt_langs = [""] * len(texts)
 
     if not hasattr(tokenizer, "apply_chat_template"):
         raise ValueError(
@@ -432,7 +476,7 @@ def apply_qe_chat_template_to_texts(
 
     formatted: list[str] = []
     qe_templates = TASK_TEMPLATES["speechqe"]
-    for text, lang in zip(texts, langs):
+    for text, lang, src_lang, tgt_lang in zip(texts, langs, src_langs, tgt_langs):
         if prompt_template_selection == "custom":
             template = resolve_custom_template(prompt_template, "speechqe")
         else:
@@ -457,7 +501,14 @@ def apply_qe_chat_template_to_texts(
             raise ValueError(
                 f"Unsupported language ISO code '{lang}'. Expected one of: {supported}"
             )
-        prompt = template.format(audio_token=audio_token, lang=language_name)
+        src_lang_name = _resolve_language_name_safe(src_lang)
+        tgt_lang_name = _resolve_language_name_safe(tgt_lang)
+        prompt = template.format(
+            audio_token=audio_token,
+            lang=language_name,
+            src_lang=src_lang_name,
+            tgt_lang=tgt_lang_name,
+        )
         full_text = tokenizer.apply_chat_template(
             [
                 {"role": "user", "content": prompt},

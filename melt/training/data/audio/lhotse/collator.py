@@ -14,6 +14,7 @@ from .helpers import (
     LANGUAGE_ISO_TO_NAME,
     _get_config_value,
     _normalize_prompt_template,
+    _resolve_language_name_safe,
     apply_chat_template_to_texts,
     mask_non_assistant_tokens,
     resolve_custom_template,
@@ -84,6 +85,8 @@ class MELTDataCollator:
         texts: list[str] = [it["text"] for it in valid]
         tasks: list[str] = [it.get("task", "asr") for it in valid]
         langs: list[str] = [it.get("lang", "") for it in valid]
+        src_langs: list[str] = [it.get("src_lang", "") for it in valid]
+        tgt_langs: list[str] = [it.get("tgt_lang", "") for it in valid]
 
         # 3. Format texts
         if self.apply_chat_template:
@@ -95,13 +98,18 @@ class MELTDataCollator:
                 audio_token=self.processor.audio_token,
                 prompt_template=self.prompt_template,
                 prompt_template_selection=self.prompt_template_selection,
+                src_langs=src_langs,
+                tgt_langs=tgt_langs,
             )
         else:
             if self.prompt_template:
-                # Custom template: supports {audio_token}, {t}, and {lang}.
+                # Custom template: supports {audio_token}, {t}, {lang},
+                # {src_lang}, and {tgt_lang}.
                 # May be a single string or a dict mapping task → template.
                 formatted = []
-                for t, lang, task in zip(texts, langs, tasks):
+                for t, lang, task, src_lang, tgt_lang in zip(
+                    texts, langs, tasks, src_langs, tgt_langs
+                ):
                     template = (
                         resolve_custom_template(self.prompt_template, task)
                         if isinstance(self.prompt_template, dict)
@@ -114,6 +122,8 @@ class MELTDataCollator:
                             audio_token=self.processor.audio_token,
                             t=t,
                             lang=language_name,
+                            src_lang=_resolve_language_name_safe(src_lang),
+                            tgt_lang=_resolve_language_name_safe(tgt_lang),
                         )
                     )
             else:

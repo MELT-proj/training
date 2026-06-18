@@ -27,6 +27,7 @@ from .helpers import (
     _get_config_value,
     _get_nested_value,
     _normalize_prompt_template,
+    _resolve_language_name_safe,
     apply_chat_template_to_texts,
     apply_qe_chat_template_to_texts,
     get_tags_from_cut,
@@ -188,6 +189,8 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         texts = []
         tasks = []
         langs = []
+        src_langs = []
+        tgt_langs = []
         for idx, cut in enumerate(cuts):
             # Load audio
             audio = self._load_audio(cut)
@@ -212,11 +215,13 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
             text = text.strip().lower()
 
             # Get task and language tags
-            task, lang = self._get_tags(cut)
+            task, lang, src_lang, tgt_lang = self._get_tags(cut)
             audios.append(audio)
             texts.append(text)
             tasks.append(task)
             langs.append(lang)
+            src_langs.append(src_lang)
+            tgt_langs.append(tgt_lang)
 
         if not audios:
             logger.warning("All %d cuts in this batch were skipped.", len(cuts))
@@ -225,32 +230,38 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         # Format texts with audio token for the processor
         # This adds <|audio|> token to indicate where audio embeddings go
         if self.apply_chat_template:
-            formatted_texts = self._apply_chat_template(texts, tasks, langs)
+            formatted_texts = self._apply_chat_template(
+                texts, tasks, langs, src_langs, tgt_langs
+            )
         else:
             _prompt_texts = None  # only populated when self.prompt_template is set
             if self.prompt_template:
-                # Custom template: supports {audio_token}, {t}, and {lang} placeholders.
+                # Custom template: supports {audio_token}, {t}, {lang},
+                # {src_lang}, and {tgt_lang} placeholders.
                 # self.prompt_template may be a single string (used for all tasks) or
                 # a dict mapping task → template string.
                 formatted_texts = []
                 _prompt_texts = []  # template with {t} stripped — used for label masking
-                for t, lang, task in zip(texts, langs, tasks):
+                for t, lang, task, src_lang, tgt_lang in zip(
+                    texts, langs, tasks, src_langs, tgt_langs
+                ):
                     template = (
                         resolve_custom_template(self.prompt_template, task)
                         if isinstance(self.prompt_template, dict)
                         else self.prompt_template
                     )
                     language_name = self._resolve_language_name(lang)
-                    full_text = template.format(
+                    src_lang_name = _resolve_language_name_safe(src_lang)
+                    tgt_lang_name = _resolve_language_name_safe(tgt_lang)
+                    fmt_kwargs = dict(
                         audio_token=self.processor.audio_token,
                         t=t,
                         lang=language_name,
+                        src_lang=src_lang_name,
+                        tgt_lang=tgt_lang_name,
                     )
-                    prompt_text = template.format(
-                        audio_token=self.processor.audio_token,
-                        t="",
-                        lang=language_name,
-                    )
+                    full_text = template.format(**fmt_kwargs)
+                    prompt_text = template.format(**{**fmt_kwargs, "t": ""})
                     formatted_texts.append(full_text)
                     _prompt_texts.append(prompt_text)
             else:
@@ -349,8 +360,12 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
                 text_field = tags["text_field"]
         return get_text_from_cut(cut, text_field)
 
-    def _get_tags(self, cut: Cut) -> tuple[str, str]:
-        """Extract task and language tags from a cut (delegates to shared helper)."""
+    def _get_tags(self, cut: Cut) -> tuple[str, str, str, str]:
+        """Extract task and language tags from a cut (delegates to shared helper).
+
+        Returns:
+            Tuple of ``(task, lang, src_lang, tgt_lang)``.
+        """
         return get_tags_from_cut(cut)
 
     @staticmethod
@@ -405,7 +420,14 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         else:
             raise ValueError(f"Unknown prompt_template_selection: {self.prompt_template_selection}")
 
-    def _apply_chat_template(self, texts: list[str], tasks: list[str], langs: list[str]) -> list[str]:
+    def _apply_chat_template(
+        self,
+        texts: list[str],
+        tasks: list[str],
+        langs: list[str],
+        src_langs: list[str] | None = None,
+        tgt_langs: list[str] | None = None,
+    ) -> list[str]:
         """Apply chat template formatting to texts.
 
         For each sample a task-specific prompt is randomly sampled from
@@ -415,10 +437,17 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
             texts: List of transcripts (ground-truth assistant responses).
             tasks: List of task identifiers ("asr", "transcribe", "st", …).
             langs: List of language codes.
+            src_langs: Source language ISO codes (per sample). May be empty.
+            tgt_langs: Target language ISO codes (per sample). May be empty.
 
         Returns:
             List of fully formatted chat strings ready for the processor.
         """
+        if src_langs is None:
+            src_langs = [""] * len(texts)
+        if tgt_langs is None:
+            tgt_langs = [""] * len(texts)
+
         tokenizer = getattr(self.processor, "tokenizer", None)
         if tokenizer is None or not hasattr(tokenizer, "apply_chat_template"):
             raise ValueError(
@@ -428,7 +457,9 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         audio_token = self.processor.audio_token
         formatted: list[str] = []
 
-        for text, task, lang in zip(texts, tasks, langs):
+        for text, task, lang, src_lang, tgt_lang in zip(
+            texts, tasks, langs, src_langs, tgt_langs
+        ):
             # Pick a prompt template for the task according to the selection strategy
             templates = TASK_TEMPLATES.get(task)
             if not templates:
@@ -437,7 +468,14 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
                 )
             template = self._select_template(templates, task=task)
             language_name = self._resolve_language_name(lang)
-            prompt = template.format(audio_token=audio_token, lang=language_name)
+            src_lang_name = _resolve_language_name_safe(src_lang)
+            tgt_lang_name = _resolve_language_name_safe(tgt_lang)
+            prompt = template.format(
+                audio_token=audio_token,
+                lang=language_name,
+                src_lang=src_lang_name,
+                tgt_lang=tgt_lang_name,
+            )
 
             full_text = tokenizer.apply_chat_template(
                 [
@@ -452,7 +490,13 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
 
         return formatted
 
-    def _apply_qe_chat_template(self, texts: list[str], langs: list[str]) -> list[str]:
+    def _apply_qe_chat_template(
+        self,
+        texts: list[str],
+        langs: list[str],
+        src_langs: list[str] | None = None,
+        tgt_langs: list[str] | None = None,
+    ) -> list[str]:
         """Apply chat-template formatting for quality estimation inputs.
 
         Each sample is formatted as a user prompt containing the audio token and
@@ -462,10 +506,17 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         Args:
             texts: Candidate translations to be evaluated.
             langs: List of target language ISO codes.
+            src_langs: Source language ISO codes (per sample). May be empty.
+            tgt_langs: Target language ISO codes (per sample). May be empty.
 
         Returns:
             List of fully formatted chat strings ready for the processor.
         """
+        if src_langs is None:
+            src_langs = [""] * len(texts)
+        if tgt_langs is None:
+            tgt_langs = [""] * len(texts)
+
         tokenizer = getattr(self.processor, "tokenizer", None)
         if tokenizer is None or not hasattr(tokenizer, "apply_chat_template"):
             raise ValueError(
@@ -477,10 +528,19 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
 
         qe_task_templates = TASK_TEMPLATES["speechqe"]
 
-        for text, lang in zip(texts, langs):
-            template = self._select_template(qe_task_templates)
+        for text, lang, src_lang, tgt_lang in zip(
+            texts, langs, src_langs, tgt_langs
+        ):
+            template = self._select_template(qe_task_templates, task="speechqe")
             language_name = self._resolve_language_name(lang)
-            prompt = template.format(audio_token=audio_token, lang=language_name)
+            src_lang_name = _resolve_language_name_safe(src_lang)
+            tgt_lang_name = _resolve_language_name_safe(tgt_lang)
+            prompt = template.format(
+                audio_token=audio_token,
+                lang=language_name,
+                src_lang=src_lang_name,
+                tgt_lang=tgt_lang_name,
+            )
             full_text = tokenizer.apply_chat_template(
                 [
                     {"role": "user", "content": prompt},
@@ -648,6 +708,8 @@ class SpeechTextQEDataset(SpeechToTextDataset):
         scores: list[float] = []
         texts: list[str] = []
         langs: list[str] = []
+        src_langs: list[str] = []
+        tgt_langs: list[str] = []
 
         for cut in cuts:
             audio = self._load_audio(cut)
@@ -667,11 +729,13 @@ class SpeechTextQEDataset(SpeechToTextDataset):
                 logger.warning("Skipping cut %s: translation text missing: %s", cut.id, exc)
                 continue
 
-            _, lang = self._get_tags(cut)
+            _, lang, src_lang, tgt_lang = self._get_tags(cut)
             audios.append(audio)
             scores.append(score)
             texts.append(text)
             langs.append(lang)
+            src_langs.append(src_lang)
+            tgt_langs.append(tgt_lang)
 
         if not audios:
             logger.warning("All %d cuts in this batch were skipped.", len(cuts))
@@ -680,10 +744,13 @@ class SpeechTextQEDataset(SpeechToTextDataset):
         try:
             audio_inputs = [[a] for a in audios]
             if self.apply_chat_template:
-                formatted_texts = self._apply_qe_chat_template(texts, langs)
+                formatted_texts = self._apply_qe_chat_template(
+                    texts, langs, src_langs, tgt_langs
+                )
             else:
                 if self.prompt_template:
-                    # Custom template: supports {audio_token}, {t}, and {lang} placeholders.
+                    # Custom template: supports {audio_token}, {t}, {lang},
+                    # {src_lang}, and {tgt_lang} placeholders.
                     # self.prompt_template may be a single string or a dict
                     # mapping task → template string.  QE always uses "speechqe".
                     template = (
@@ -691,14 +758,19 @@ class SpeechTextQEDataset(SpeechToTextDataset):
                         if isinstance(self.prompt_template, dict)
                         else self.prompt_template
                     )
-                    formatted_texts = [
-                        template.format(
-                            audio_token=self.processor.audio_token,
-                            t=t,
-                            lang=self._resolve_language_name(lang),
+                    formatted_texts = []
+                    for t, lang, src_lang, tgt_lang in zip(
+                        texts, langs, src_langs, tgt_langs
+                    ):
+                        formatted_texts.append(
+                            template.format(
+                                audio_token=self.processor.audio_token,
+                                t=t,
+                                lang=self._resolve_language_name(lang),
+                                src_lang=_resolve_language_name_safe(src_lang),
+                                tgt_lang=_resolve_language_name_safe(tgt_lang),
+                            )
                         )
-                        for t, lang in zip(texts, langs)
-                    ]
                 else:
                     formatted_texts = [f"{self.processor.audio_token}{t}" for t in texts]
 

@@ -130,7 +130,7 @@ class MELTMapDataset(torch.utils.data.Dataset):
         text = text.strip().lower()
 
         # --- tags ---
-        task, lang = get_tags_from_cut(cut)
+        task, lang, src_lang, tgt_lang = get_tags_from_cut(cut)
 
         # --- dataset_id ---
         dataset_id = ""
@@ -142,6 +142,8 @@ class MELTMapDataset(torch.utils.data.Dataset):
             "text": text,
             "task": task,
             "lang": lang,
+            "src_lang": src_lang,
+            "tgt_lang": tgt_lang,
             "cut_id": cut.id,
             "dataset_id": dataset_id,
         }

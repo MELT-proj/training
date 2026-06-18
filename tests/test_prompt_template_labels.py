@@ -536,3 +536,72 @@ class TestPromptTemplateNormalization:
 
         result = _normalize_prompt_template(None)
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# ST templates with src_lang / tgt_lang placeholders
+# ---------------------------------------------------------------------------
+
+
+class TestSTLanguagePlaceholders:
+    """Verify that {src_lang} and {tgt_lang} work in ST prompt templates."""
+
+    @pytest.fixture(scope="class")
+    def processor(self):
+        return _build_processor()
+
+    @pytest.fixture(scope="class")
+    def st_dataset(self, processor):
+        from melt.training.data.audio.lhotse.dataset import SpeechToTextDataset
+
+        config = OmegaConf.create({
+            "apply_chat_template": False,
+            "prompt_template": (
+                "{audio_token} Translate this {src_lang} source audio to {tgt_lang}: {t}"
+            ),
+            "sample_rate": 16000,
+        })
+        return SpeechToTextDataset(
+            processor=processor,
+            config=config,
+            is_train=False,
+            return_labels=True,
+            return_langs=False,
+        )
+
+    def _make_st_cut(self, cut_id: str, text: str, src_lang: str, tgt_lang: str):
+        """Create a cut with ST task and both src_lang and tgt_lang tags."""
+        cut = _make_cut(cut_id, text, src_lang, task="st")
+        # _make_cut sets tags = {"task": "st", "lang": src_lang}
+        # but for ST we also need tgt_lang in the tags.
+        if hasattr(cut, "custom") and cut.custom:
+            cut.custom["tags"]["tgt_lang"] = tgt_lang
+            cut.custom["tags"]["src_lang"] = src_lang
+        return cut
+
+    def test_src_lang_and_tgt_lang_in_prompt(self, st_dataset, processor):
+        """Verify src_lang and tgt_lang appear resolved in the formatted text."""
+        cut = self._make_st_cut("st-1", "bonjour", "en", "fr")
+        cuts = CutSet.from_cuts([cut])
+        batch = st_dataset[cuts]
+        assert batch is not None
+
+        input_ids = batch["input_ids"][0]
+        decoded = processor.tokenizer.decode(input_ids, skip_special_tokens=False)
+        assert "English" in decoded, f"Expected 'English' (src_lang) in: {decoded!r}"
+        assert "French" in decoded, f"Expected 'French' (tgt_lang) in: {decoded!r}"
+
+    def test_labels_only_contain_target_text(self, st_dataset, processor):
+        """Verify only the target text survives in labels."""
+        cut = self._make_st_cut("st-1", "bonjour", "en", "fr")
+        cuts = CutSet.from_cuts([cut])
+        batch = st_dataset[cuts]
+        assert batch is not None
+
+        labels = batch["labels"][0]
+        active = labels[labels != -100]
+        assert len(active) > 0
+        decoded = processor.tokenizer.decode(active.tolist(), skip_special_tokens=True).strip()
+        assert "bonjour" in decoded
+        assert "English" not in decoded  # src_lang should be masked
+        assert "French" not in decoded   # tgt_lang should be masked
