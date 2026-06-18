@@ -16,6 +16,7 @@ Usage:
     python src/train.py --config config/train/asr.yaml --run.exp_name my_experiment
 """
 
+import json
 import os
 from pathlib import Path
 
@@ -224,10 +225,27 @@ def main(cfg: DictConfig) -> None:
             project=os.getenv("WANDB_PROJECT", "melt"),
             config=dict_cfg,
             name=cfg.run.get("exp_name", None),
-            # dir="runs",
-            # tags=cfg.run_tags,
-            # save_code=True,
         )
+
+        # Log SLURM job ID so it is visible in the wandb UI.
+        slurm_job_id = os.environ.get("SLURM_JOB_ID", "NOSLURM")
+        wandb.config.update({"slurm_job_id": slurm_job_id}, allow_val_change=True)
+
+        # Upload the fully-resolved config (after env-var expansion and CLI
+        # overrides) as a wandb artifact for reproducibility.  Write the
+        # file into the output directory so it is easy to inspect locally.
+        output_dir = cfg.trainer.output_dir
+        os.makedirs(output_dir, exist_ok=True)
+        config_path = os.path.join(output_dir, "resolved_config.json")
+        with open(config_path, "w") as f:
+            json.dump(dict_cfg, f, indent=2, default=str)
+        config_artifact = wandb.Artifact(
+            name=f"config-{wandb.run.id}",
+            type="config",
+            description="Resolved training configuration after env var expansion and CLI overrides",
+        )
+        config_artifact.add_file(config_path)
+        wandb.log_artifact(config_artifact)
 
     # Create training arguments
     targs = TrainingArguments(**trainer_args_dict(cfg))
