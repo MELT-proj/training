@@ -81,7 +81,16 @@ Fixed container paths (host dirs are bind sources, set in
 
 # Part A — one-time preparation
 
-Normally already done. Redo a step only when the reason for it changes.
+Setup done once, not per experiment. **Ownership splits in two:**
+
+| steps | owner | why |
+|---|---|---|
+| **A1** container image, **A2** SHAR datasets, **A3** model checkpoints | **the project maintainer** | shared, account-independent artefacts living in the group project space. Done once for everyone; you should not need to repeat them. |
+| **A4** repo checkout on MN5 | **each collaborator, for themselves** | lives in *your* MN5 home directory under *your* account, so every person joining the project does this once |
+
+So if you are picking up training runs: **do A4, skim A1–A3** to understand what
+exists and why, and only revisit them if something is genuinely missing or a
+dependency changed.
 
 ## A1. Build and ship the container image
 
@@ -158,7 +167,7 @@ Download on a machine with internet, then ship the cache:
 
 ```bash
 # [artemis] or [laptop] -- populates the local HF cache
-python -c 'from huggingface_hub import snapshot_download; snapshot_download("Qwen/Qwen2.5-0.5B-Instruct")'
+python -c 'from huggingface_hub import snapshot_download; snapshot_download("<org>/<model-id>")'
 # (or use infra/setup/download_hf_models.sh for the standard set)
 
 # [artemis] ship the cache to MN5 via the transfer node
@@ -169,36 +178,23 @@ rsync -avh --partial --info=progress2 \
 Gated repos (e.g. `meta-llama/*`) need `huggingface-cli login` on the machine
 doing the download; the token is never needed on MN5.
 
-Check what is already staged:
+**Always check the cache before planning a sweep** — this listing is the source
+of truth for what will load offline:
 
 ```bash
 # [mn5]
-ls /gpfs/projects/epor48/melt-data/hf_cache/hub/ | sed 's/^models--//; s/--/\//'
+ls $HF_HOME/hub/ | sed 's/^models--//; s/--/\//'
 ```
 
-### Currently staged
+Two things worth checking deliberately, because both fail the same way and only
+after the job is scheduled:
 
-| | |
-|---|---|
-| encoders | `facebook/w2v-bert-2.0` |
-| decoders | `Qwen/Qwen2.5-0.5B`, `Qwen/Qwen2.5-1.5B`, `Qwen/Qwen2.5-1.5B-Instruct`, `Qwen/Qwen3-1.7B`, `Qwen/Qwen3-2B`, `Qwen/Qwen3-4B`, `Qwen/Qwen3.5-2B`, `meta-llama/Llama-3.2-1B`, `meta-llama/Llama-3.2-1B-Instruct`, `utter-project/EuroLLM-1.7B`, `CohereLabs/tiny-aya-global` |
+- **Both halves of a base-vs-instruct pair.** A sweep with one half missing runs
+  the arm that exists and dies on the other.
+- **Every encoder in an audio-stack sweep,** not just the default one.
 
-### Gaps against the planned ablations
-
-The base-vs-instruct sweep needs both halves of each pair present. Missing today:
-
-| pair | base | instruct |
-|---|---|---|
-| Qwen2.5 0.5B | staged | **missing** (`Qwen/Qwen2.5-0.5B-Instruct`) |
-| Qwen2.5 1.5B | staged | staged |
-| EuroLLM 1.7B | staged | **missing** (`utter-project/EuroLLM-1.7B-Instruct`) |
-| Llama 3.2 1B | staged | staged |
-| Tiny Aya 3.3B | **missing** (base counterpart) | staged (`tiny-aya-global`) |
-
-The audio-stack sweep needs encoders beyond w2v-BERT — **Whisper, HuBERT /
-mHuBERT, and FastConformer (Canary) are all unstaged.** Stage them in the same
-pass; they are large, and discovering one is missing after a two-day queue wait
-is expensive.
+Checkpoints are large and the queue wait is long, so stage everything a planned
+set of experiments needs in one pass rather than discovering a gap mid-sweep.
 
 ## A4. Get the repo onto MN5
 
@@ -267,9 +263,8 @@ infra/runners/submit-container.sh mn5 config/accelerate/fsdp2.yaml \
    The host `OUTPUT_DIR` is only the bind source; a host path here fails.
 2. **Always pass `--trainer.per_device_eval_batch_size` explicitly.** The YAMLs
    set `-1` ("Lhotse handles batching"), which the train path understands but the
-   eval path does not — it crashes at the first eval
-   ([#32](https://github.com/MELT-proj/training/issues/32)). `4` is known-good;
-   `16` OOMs on 64 GB H100s.
+   eval path does not — it crashes at the first eval. `4` is known-good; `16`
+   OOMs on 64 GB H100s.
 3. **Pick the QoS in the site file** (`SBATCH_ARGS` in `infra/runners/sites/mn5.sh`):
 
    | QoS | wall limit | jobs/user | use for |
@@ -483,7 +478,7 @@ from the eval metrics in §B4.
 - **Eval cuts are sorted longest-first**, so the first batches are the peak in
   both memory and time (≈4× memory, ≈3.4× per-batch time vs the tail). A spot
   `nvidia-smi` mid-eval samples the cheap tail and badly overstates headroom —
-  don't size batches from it ([#33](https://github.com/MELT-proj/training/issues/33)).
+  don't size batches from it.
 - **`logs/` must exist before `sbatch`** or SLURM kills the job silently. The
   `submit-*.sh` runners create it; raw `sbatch` does not.
 - **Model weights must be pre-downloaded** — compute nodes are offline.
@@ -492,7 +487,7 @@ from the eval metrics in §B4.
 
 | symptom | cause |
 |---|---|
-| `batch_size should be a positive integer, but got -1` | missing `--trainer.per_device_eval_batch_size` ([#32](https://github.com/MELT-proj/training/issues/32)) |
+| `batch_size should be a positive integer, but got -1` | missing `--trainer.per_device_eval_batch_size` |
 | Job exits instantly, no log | `logs/` didn't exist, or a bad `--output` path |
 | `SINGULARITY_IMG not found` | image not shipped, or site-file path is stale |
 | Model load fails / tries to reach the Hub | weights not in `$HF_HOME` (§A3) |
@@ -501,11 +496,5 @@ from the eval metrics in §B4.
 | Push rejected by `sync_repo.sh` | remote working tree is dirty — commit/stash on MN5 |
 | Build writes to host `/workspace` | built with `singularity` instead of `apptainer` |
 
-## Known issues
-
-| | |
-|---|---|
-| [#32](https://github.com/MELT-proj/training/issues/32) | eval ignores the `per_device_eval_batch_size=-1` sentinel |
-| [#33](https://github.com/MELT-proj/training/issues/33) | eval batches by fixed count over length-sorted cuts |
-| [#34](https://github.com/MELT-proj/training/issues/34) | eval dataloader capped at one worker, starving the GPUs |
-| [#35](https://github.com/MELT-proj/training/issues/35) | shim oversubscribes `OMP_NUM_THREADS` ~4× |
+If something here does not match what you observe, check the repository's open
+issues before debugging from scratch — known rough edges are tracked there.
