@@ -193,7 +193,9 @@ trainer:
   save_total_limit: 5
   bf16: true
   group_by_length: false
-  dataloader_num_workers: 0
+  # Eval-only: the train path takes its worker count from data.train_ds.num_workers.
+  # 4 is the point where added workers stop paying off on a multi-GPU node.
+  dataloader_num_workers: 4
   remove_unused_columns: false
   ddp_find_unused_parameters: false
   resume_from_checkpoint: null

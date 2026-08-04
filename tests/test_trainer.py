@@ -189,7 +189,7 @@ def test_model_init_is_reproducible_under_set_seed():
     for key in first:
         assert torch.equal(first[key], second[key]), f"adapter param {key} differs"
 
-
+        
 def test_model_init_differs_without_reseeding():
     """Guards the test above against silently passing on a constant init.
 
@@ -205,3 +205,15 @@ def test_model_init_differs_without_reseeding():
     assert any(
         not torch.equal(first[key], second[key]) for key in first
     ), "adapter init appears constant; the reproducibility test proves nothing"
+    
+    
+def test_default_eval_workers_is_nonzero():
+    """The packaged default must actually use workers.
+
+    dataloader_num_workers is read only by the eval path, so a zero here makes
+    every shipped config evaluate single-process. Kept as a test because the
+    value is easy to reset while tuning and hard to notice afterwards.
+    """
+    from melt.training.config import get_default_config
+
+    assert get_default_config().trainer.dataloader_num_workers >= 1
