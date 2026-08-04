@@ -847,7 +847,7 @@ trainer:
   # Performance
   bf16: true
   group_by_length: false
-  dataloader_num_workers: 0
+  dataloader_num_workers: 4  # Eval-only knob (train workers come from data.train_ds.num_workers)
   remove_unused_columns: false
   ddp_find_unused_parameters: false
 

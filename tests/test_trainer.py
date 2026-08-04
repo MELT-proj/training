@@ -159,3 +159,15 @@ def test_eval_dataloader_persistent_workers_reuses_loader():
 def test_eval_dataloader_not_cached_without_persistent_workers():
     trainer = _make_eval_trainer(dataloader_num_workers=2)
     assert trainer.get_eval_dataloader() is not trainer.get_eval_dataloader()
+
+
+def test_default_eval_workers_is_nonzero():
+    """The packaged default must actually use workers.
+
+    dataloader_num_workers is read only by the eval path, so a zero here makes
+    every shipped config evaluate single-process. Kept as a test because the
+    value is easy to reset while tuning and hard to notice afterwards.
+    """
+    from melt.training.config import get_default_config
+
+    assert get_default_config().trainer.dataloader_num_workers >= 1
