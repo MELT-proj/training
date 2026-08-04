@@ -4,12 +4,12 @@ This AGENTS.md file provides guidance for code agents working with this codebase
 
 ## Core Project Structure
 
-- `/src`: Main source code for the training library
+- `/melt`: Main source code for the training library
   - `/config.py`: OmegaConf-based configuration (YAML + CLI overrides)
   - `/logging_utils.py`: Central logging utilities (only global-rank-0 logs)
   - `/data/audio/`: Speech data loading utilities
     - `/lhotse/`: Lhotse-based data loading for speech datasets
-  - `/melt`: Core model components (configuration, modeling, processing)
+  - `/modeling`: Core model components (configuration, modeling, processing)
   - `/evaluation`: Evaluation utilities and text normalizers
 - `/tests`: Unit tests for the project
 - `/bash`: Shell scripts for training and data preparation
@@ -62,20 +62,6 @@ pytest tests/test_peoples_speech_lhotse.py
    ```
 
 ## Key Components
-
-### Data Loading (`src/data/`)
-- `audio/supported_datasets.py`: Registry of supported datasets
-- `audio/lhotse/`: Lhotse-based data loaders for LibriSpeech, People's Speech, etc.
-
-### Model Components (`src/melt/`)
-- `configuration_melt.py`: Model configuration classes
-- `modeling_melt.py`: Model architecture implementations
-- `processing_melt.py`: Processor for input/output handling
-
-### Training (`src/`)
-- `train.py`: Main training entrypoint (OmegaConf config with CLI overrides)
-- `trainer.py`: HF Trainer wrapper using Lhotse dataloaders
-- `ddp.py`: Lightweight distributed rank helpers
 
 ### Training launch scripts (`bash/`)
 - `run_train.sh`: Activates venv and launches `accelerate` + `src/train.py`

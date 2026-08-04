@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "melt-proj"
-version = "0.2.0"
+version = "0.3.0"
 description = "MELT project training utilities"
 readme = "README.md"
 license = {text = "MIT"}
@@ -13,6 +13,7 @@ authors = [
 ]
 requires-python = ">=3.10"
 dependencies = [
+    "torch>=2.9,<2.10",
     "transformers==4.57.1",
     "wandb>=0.23",
     "datasets>=4.0",
@@ -26,7 +27,9 @@ dependencies = [
     "pyyaml>=6.0",
     "webdataset>=1.0",
     "scipy>=1.15",
+    "jiwer>=4.0",
     "setuptools",
+    "peft>=0.18.1",
 ]
 
 [project.optional-dependencies]
@@ -35,27 +38,27 @@ dev = [
     "black",
     "isort",
 ]
+flash-attn = [
+    "flash-attn",
+]
 
 [tool.setuptools.packages.find]
-# The repo uses a package named `src` (i.e. `src/__init__.py` exists), with
-# subpackages like `src.training`, `src.modeling`, and `src.evaluation`.
-#
-# Therefore, package discovery must run from the repository root and include
-# `src*` package names.
+# The top-level package is `melt` (i.e. `melt/__init__.py`), with
+# subpackages like `melt.training`, `melt.modeling`, and `melt.evaluation`.
 where = ["."]
-include = ["src*"]
+include = ["melt*"]
 
 [tool.ruff]
 target-version = "py310"
 line-length = 119
 
-# Only consider Python files under src/
+# Only consider Python files under melt/
 # Patterns are relative to the repository root.
-include = ["src/**/*.py"]
+include = ["melt/**/*.py"]
 
 # Optional: exclude things you never want Ruff to touch
 exclude = [
-  "src/**/migrations",
+  "melt/**/migrations",
   "build",
   "dist",
   ".venv",
@@ -73,3 +76,11 @@ known-first-party = ["transformers"]
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+
+[tool.uv.sources]
+torch = { index = "pytorch" }
+flash-attn = { url = "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl" }
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu126"

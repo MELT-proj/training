@@ -107,6 +107,7 @@ class ChunkTask:
     id_field: str
     text_field: str
     audio_field: str
+    custom_fields: list[str] | None = None  # Extra HF fields to store in cut.custom
 
 
 # -----------------------------------------------------------------------------
@@ -242,6 +243,7 @@ def _process_chunk(
         split=chunk.hf_split,
         num_proc=hf_num_proc,
         trust_remote_code=True,
+        verification_mode="no_checks",
     )
 
     # Don't decode audio - get raw bytes
@@ -291,12 +293,21 @@ def _process_chunk(
                 if not isinstance(text, str):
                     text = str(text) if text is not None else ""
 
+                # Extract custom metadata fields
+                custom = None
+                if chunk.custom_fields:
+                    custom = {}
+                    for field in chunk.custom_fields:
+                        if field in item:
+                            custom[field] = item[field]
+
                 # Create CutData and convert to MonoCut
                 data = CutData(
                     cut_id=cut_id,
                     audio_bytes=audio_bytes,
                     text=text,
                     language=chunk.language,
+                    custom=custom,
                 )
 
                 cut = _create_cut_from_data(data)
@@ -433,6 +444,7 @@ class BatchedSharConverter:
             split=hf_split,
             num_proc=self.hf_num_proc,
             trust_remote_code=True,
+            verification_mode="no_checks",
         )
 
         logger.info("Dataset loaded: %s items", len(dataset))
@@ -475,6 +487,7 @@ class BatchedSharConverter:
         id_field: str = "id",
         text_field: str = "text",
         audio_field: str = "audio",
+        custom_fields: list[str] | None = None,
     ) -> tuple[int, int]:
         """Convert a HuggingFace dataset split to Lhotse Shar format.
 
@@ -489,6 +502,7 @@ class BatchedSharConverter:
             id_field: Field name containing item ID.
             text_field: Field name containing transcription.
             audio_field: Field name containing audio data.
+            custom_fields: Extra HF dataset fields to store in cut.custom.
 
         Returns:
             Tuple of (total cuts processed, total errors).
@@ -524,6 +538,7 @@ class BatchedSharConverter:
                     id_field=id_field,
                     text_field=text_field,
                     audio_field=audio_field,
+                    custom_fields=custom_fields,
                 )
             )
 
@@ -597,6 +612,7 @@ def convert_subset_to_shar_batched(
     id_field: str = "id",
     text_field: str = "text",
     audio_field: str = "audio",
+    custom_fields: list[str] | None = None,
 ) -> tuple[int, int]:
     """Convenience function for batched conversion with multiprocessing.
 
@@ -615,6 +631,7 @@ def convert_subset_to_shar_batched(
         id_field: Field name for item ID.
         text_field: Field name for transcription.
         audio_field: Field name for audio data.
+        custom_fields: Extra HF dataset fields to store in cut.custom.
 
     Returns:
         Tuple of (total cuts processed, total errors).
@@ -636,6 +653,7 @@ def convert_subset_to_shar_batched(
         id_field=id_field,
         text_field=text_field,
         audio_field=audio_field,
+        custom_fields=custom_fields,
     )
 
 

@@ -1,11 +1,12 @@
+import json
+import os
 import tempfile
 import urllib.request
-from types import SimpleNamespace
 
 import librosa
 import pytest
 
-from src.modeling import MELT_REQUIRED_SPECIAL_TOKENS, MELTConfig, MELTProcessor
+from melt.modeling import MELT_REQUIRED_SPECIAL_TOKENS, MELTProcessor
 from transformers import AutoConfig, AutoFeatureExtractor, AutoTokenizer
 
 
@@ -37,77 +38,60 @@ def feature_extractor():
     return AutoFeatureExtractor.from_pretrained("facebook/w2v-bert-2.0")
 
 
+# Token strings used throughout the test suite — match the production config.
+MELT_SPECIAL_TOKEN_STRINGS: dict[str, str] = {
+    "audio_token": "<|audio|>",
+    "audio_bos_token": "<|audio_bos|>",
+    "audio_eos_token": "<|audio_eos|>",
+}
+
+
 @pytest.fixture(scope="module")
 def tokenizer():
-    """Load a tokenizer for testing."""
-    return AutoTokenizer.from_pretrained("Qwen/Qwen2.5-1.5B")
+    """Load a tokenizer for testing with MELT special tokens pre-registered.
+
+    Mirrors :func:`melt.training.setup.prepare_processor`: ``extra_special_tokens``
+    is passed to :meth:`AutoTokenizer.from_pretrained` so that the named attributes
+    are registered, and then :meth:`~PreTrainedTokenizerBase.add_special_tokens`
+    inserts them into the vocabulary (and sets ``additional_special_tokens``).
+    """
+    tok = AutoTokenizer.from_pretrained(
+        "Qwen/Qwen2.5-1.5B",
+        use_fast=True,
+        extra_special_tokens=MELT_SPECIAL_TOKEN_STRINGS,
+    )
+    tok.add_special_tokens(MELT_SPECIAL_TOKEN_STRINGS)
+    return tok
 
 
 @pytest.fixture(scope="module")
 def processor(feature_extractor, tokenizer):
-    """Create a MELTProcessor instance with proper MELTConfig."""
-    config = MELTConfig(
-        audio_encoder="facebook/w2v-bert-2.0",
-        text_decoder="Qwen/Qwen2.5-1.5B",
-        adapter_config={"_type": "mlp"},
-    )
-
-    # Add decoder attribute with special tokens
-    config.decoder = SimpleNamespace(
-        image_token="<|IMAGE|>",
-        audio_token="<|AUDIO|>",
-        video_token="<|VIDEO|>",
-        audio_bos_token="<|audio_bos|>",
-        audio_eos_token="<|audio_eos|>",
-    )
-
+    """Create a MELTProcessor instance with special tokens already on the tokenizer."""
     return MELTProcessor(
         feature_extractor=feature_extractor,
         tokenizer=tokenizer,
-        config=config,
     )
 
 
 class TestMELTProcessorInit:
     def test_init_with_required_components(self, feature_extractor, tokenizer):
-        config = MELTConfig(
-            audio_encoder="facebook/w2v-bert-2.0",
-            text_decoder="Qwen/Qwen2.5-1.5B",
-            adapter_config={"_type": "mlp"},
-        )
-
-        # Add decoder attribute with special tokens
-        config.decoder = SimpleNamespace(
-            audio_token="<|AUDIO|>",
-            audio_bos_token="<|audio_bos|>",
-            audio_eos_token="<|audio_eos|>",
-        )
-
+        # tokenizer fixture already has MELT special tokens pre-configured
         processor = MELTProcessor(
             feature_extractor=feature_extractor,
             tokenizer=tokenizer,
-            config=config,
         )
         assert processor.feature_extractor is not None
         assert processor.tokenizer is not None
 
-    def test_init_without_config_raises(self, feature_extractor, tokenizer):
-        with pytest.raises(TypeError):
-            MELTProcessor(feature_extractor=feature_extractor, tokenizer=tokenizer)
+    def test_init_without_required_special_tokens_raises(self, feature_extractor):
+        """MELTProcessor must raise RuntimeError when special tokens are missing."""
+        fresh_tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-1.5B")
+        with pytest.raises(RuntimeError):
+            MELTProcessor(feature_extractor=feature_extractor, tokenizer=fresh_tokenizer)
 
-    def test_init_without_tokenizer_raises(self, feature_extractor):
-        config = MELTConfig(
-            audio_encoder="facebook/w2v-bert-2.0",
-            text_decoder="Qwen/Qwen2.5-1.5B",
-            adapter_config={"_type": "mlp"},
-        )
-        config.decoder = SimpleNamespace(
-            audio_token="<|AUDIO|>",
-            audio_bos_token="<|audio_bos|>",
-            audio_eos_token="<|audio_eos|>",
-        )
+    def test_init_without_tokenizer_raises(self, feature_extractor, tokenizer):
         with pytest.raises(Exception):
-            MELTProcessor(feature_extractor=feature_extractor, tokenizer=None, config=config)
+            MELTProcessor(feature_extractor=feature_extractor, tokenizer=None)
 
     def test_special_tokens_added(self, processor):
         vocab = processor.tokenizer.get_vocab()
@@ -118,7 +102,7 @@ class TestMELTProcessorInit:
     def test_token_attributes_set(self, processor):
         # The processor guarantees audio-related tokens exist; image/video/vision
         # tokens are optional in this implementation and may not be set.
-        assert processor.audio_token == "<|AUDIO|>"
+        assert processor.audio_token == "<|audio|>"
         assert processor.audio_bos_token == "<|audio_bos|>"
         assert processor.audio_eos_token == "<|audio_eos|>"
 
@@ -466,3 +450,105 @@ class TestMELTProcessorMultipleAudios:
         assert "input_features" in result
         assert result["input_features"].shape[0] == 2
         assert len(result["input_ids"]) == 2
+
+
+class TestMELTProcessorSaveLoad:
+    """Tests for MELTProcessor save_pretrained / from_pretrained round-trip."""
+
+    def test_special_tokens_top_level_in_tokenizer_config(self, processor):
+        """MELT special tokens must appear as top-level keys in tokenizer_config.json."""
+        with tempfile.TemporaryDirectory() as d:
+            processor.save_pretrained(d)
+            tc = json.load(open(os.path.join(d, "tokenizer_config.json")))
+            for name in MELT_REQUIRED_SPECIAL_TOKENS:
+                assert name in tc, f"'{name}' missing from tokenizer_config.json top-level keys"
+                assert tc[name] == getattr(processor, name)
+
+    def test_special_tokens_in_extra_special_tokens(self, processor):
+        """MELT special tokens must be in extra_special_tokens after a round-trip."""
+        with tempfile.TemporaryDirectory() as d:
+            processor.save_pretrained(d)
+            tc = json.load(open(os.path.join(d, "tokenizer_config.json")))
+            extra = tc.get("extra_special_tokens", {})
+            for name in MELT_REQUIRED_SPECIAL_TOKENS:
+                token_str = getattr(processor, name)
+                assert name in extra, (
+                    f"'{name}' missing from extra_special_tokens"
+                )
+                assert extra[name] == token_str, (
+                    f"extra_special_tokens['{name}'] mismatch: "
+                    f"{extra[name]!r} != {token_str!r}"
+                )
+
+    def test_from_pretrained_restores_token_strings(self, processor):
+        """from_pretrained must restore all MELT token string attributes."""
+        with tempfile.TemporaryDirectory() as d:
+            processor.save_pretrained(d)
+            loaded = MELTProcessor.from_pretrained(d)
+            for name in MELT_REQUIRED_SPECIAL_TOKENS:
+                assert getattr(loaded, name) == getattr(processor, name), (
+                    f"Token '{name}' mismatch after round-trip"
+                )
+
+    def test_from_pretrained_restores_token_ids(self, processor):
+        """from_pretrained must restore all MELT token ID attributes."""
+        with tempfile.TemporaryDirectory() as d:
+            processor.save_pretrained(d)
+            loaded = MELTProcessor.from_pretrained(d)
+            for name in MELT_REQUIRED_SPECIAL_TOKENS:
+                orig_id = getattr(processor, name + "_id")
+                loaded_id = getattr(loaded, name + "_id")
+                assert loaded_id == orig_id, (
+                    f"Token ID for '{name}' mismatch after round-trip: {orig_id} vs {loaded_id}"
+                )
+
+    def test_from_pretrained_no_config_argument_needed(self, processor):
+        """from_pretrained must succeed without passing a config argument."""
+        with tempfile.TemporaryDirectory() as d:
+            processor.save_pretrained(d)
+            # Must not raise TypeError about missing 'config' argument
+            loaded = MELTProcessor.from_pretrained(d)
+            assert loaded is not None
+
+    def test_save_and_load_roundtrip(self, processor):
+        """Saved processor must reload without errors and preserve token attributes."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            processor.save_pretrained(tmp_dir)
+            loaded = MELTProcessor.from_pretrained(tmp_dir)
+
+        assert loaded.audio_token == processor.audio_token
+        assert loaded.audio_bos_token == processor.audio_bos_token
+        assert loaded.audio_eos_token == processor.audio_eos_token
+
+    def test_save_and_load_token_ids(self, processor):
+        """Token IDs resolved after from_pretrained() must match the originals."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            processor.save_pretrained(tmp_dir)
+            loaded = MELTProcessor.from_pretrained(tmp_dir)
+
+        assert loaded.audio_token_id == processor.audio_token_id
+        assert loaded.audio_bos_token_id == processor.audio_bos_token_id
+        assert loaded.audio_eos_token_id == processor.audio_eos_token_id
+
+    def test_load_does_not_require_config(self, processor):
+        """from_pretrained() must succeed without passing a config argument."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            processor.save_pretrained(tmp_dir)
+            # Must not raise TypeError about missing 'config' argument
+            loaded = MELTProcessor.from_pretrained(tmp_dir)
+
+        assert isinstance(loaded, MELTProcessor)
+
+    def test_loaded_processor_can_tokenize(self, processor, audio_sample):
+        """A reloaded processor must produce the same token IDs as the original."""
+        text = f"{processor.audio_token}hello world"
+        audio = [[audio_sample]]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            processor.save_pretrained(tmp_dir)
+            loaded = MELTProcessor.from_pretrained(tmp_dir)
+
+        original_out = processor(text=[text], audio=audio, return_tensors="pt")
+        loaded_out = loaded(text=[text], audio=audio, return_tensors="pt")
+
+        assert (original_out["input_ids"] == loaded_out["input_ids"]).all()

@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import torch
 
-from src.modeling import (
+from melt.modeling import (
     MELTAudioAdapter,
     MELTConfig,
     MELTConformerAdapter,
@@ -194,7 +194,7 @@ class TestAdapterOutputFeaturesShape:
         config.text_decoder_config = MagicMock()
         config.text_decoder_config.hidden_size = 1024
 
-        with patch("src.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
+        with patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
             adapter = MELTConformerAdapter(config)
 
         seq_len = 100
@@ -224,7 +224,7 @@ class TestAdapterOutputFeaturesShape:
         config.text_decoder_config = MagicMock()
         config.text_decoder_config.hidden_size = 1024
 
-        with patch("src.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
+        with patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
             adapter = MELTConformerAdapter(config)
 
         seq_len = 100
@@ -257,7 +257,7 @@ class TestAdapterOutputFeaturesShape:
         config.text_decoder_config = MagicMock()
         config.text_decoder_config.hidden_size = 2048
 
-        with patch("src.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
+        with patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
             adapter = MELTConformerAdapter(config)
 
         batch_size = 2
@@ -290,7 +290,7 @@ class TestAdapterOutputFeaturesShape:
         config.text_decoder_config = MagicMock()
         config.text_decoder_config.hidden_size = 1024
 
-        with patch("src.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
+        with patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
             adapter = MELTConformerAdapter(config)
 
         batch_size = 2
@@ -366,23 +366,21 @@ class TestInjectTensor:
         # inject token replaced by 3 source tokens → seq_len = 4 - 1 + 3 = 6
         assert result.shape == (1, 6)
 
-    def test_no_injection_when_no_token(self, model):
-        """If inject token is absent, output equals input."""
+    def test_no_injection_when_no_token_raises(self, model):
+        """If inject token is absent, _inject_tensor must raise ValueError."""
         inject_id = model.config.audio_bos_token_id
         input_ids = torch.tensor([[3, 3, 3, 3]])
         target_mask = torch.ones(1, 4)
         source_mask = torch.ones(1, 2) * 0.5
         source_lengths = torch.tensor([[2]])
 
-        result = model._inject_tensor(
-            source_tensor=source_mask,
-            target_tensor=target_mask,
-            inject_token_id=inject_id,
-            input_ids=input_ids,
-            source_lengths=source_lengths,
-            source_tensor_mask=None,
-            pad_item=0.0,
-        )
-
-        assert result.shape == target_mask.shape
-        assert torch.allclose(result, target_mask)
+        with pytest.raises(ValueError, match=r"not found in any input_ids"):
+            model._inject_tensor(
+                source_tensor=source_mask,
+                target_tensor=target_mask,
+                inject_token_id=inject_id,
+                input_ids=input_ids,
+                source_lengths=source_lengths,
+                source_tensor_mask=None,
+                pad_item=0.0,
+            )

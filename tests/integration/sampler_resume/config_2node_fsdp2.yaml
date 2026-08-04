@@ -1,0 +1,119 @@
+# Integration test config: sampler resume correctness — 2-node × 2-GPU FSDP2 variant.
+#
+# Four DDP-equivalent processes (2 nodes × 2 GPUs each), each with one
+# dataloader worker.  FSDP2 shards the model across all 4 ranks while data
+# loading remains per-rank (standard data-parallel sharding).
+#
+# Key choices that affect reproducibility:
+#   - shard_seed: randomized  (fixed per-run; essential for cross-run determinism)
+#   - seed: 42                (sampler / shuffle seed)
+#   - num_workers: 1          (one forked worker per rank → 4 workers total)
+#   - prefetch_factor: 2      (worker keeps 2 batches prefetched)
+#   - gradient_accumulation_steps: 1  (1 microbatch == 1 optimizer step)
+
+model:
+  encoder:
+    name: facebook/w2v-bert-2.0
+    freeze: true
+
+  decoder:
+    name: Qwen/Qwen2.5-0.5B
+    attn_implementation: flash_attention_2
+    audio_bos_token: "<|audio_bos|>"
+    audio_eos_token: "<|audio_eos|>"
+    audio_token: "<|audio|>"
+    freeze: true
+
+  adapter:
+    type: mlp
+
+  ckpt: null
+
+data:
+  sample_rate: 16000
+  apply_chat_template: false
+  min_chars: 3
+
+  train_ds:
+    force_estimate: true
+    input_cfg:
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/train.100
+        tags:
+          task: asr
+          lang: en
+          text_field: custom.pnc_text
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/train.360
+        tags:
+          task: asr
+          lang: en
+          text_field: custom.pnc_text
+
+    batch_size: null
+    batch_duration: 30.0
+    quadratic_duration: null
+
+    lhotse_sampler_type: dynamic_bucketing
+    num_buckets: 10
+    buffer_size: 1000
+    bucket_duration_bins: null
+
+    shuffle: true
+    drop_last: false
+    seed: 42
+    shard_seed: randomized        # fixed per-run: essential for cross-run reproducibility
+
+    min_duration: 0.5
+    max_duration: 30.0
+
+    num_workers: 1                # one forked worker per rank (4 workers total across 2 nodes)
+    pin_memory: false
+    prefetch_factor: 2
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+  # No validation needed for this test
+  validation_ds:
+    input_cfg: []
+
+trainer:
+  output_dir: ${OUTPUT_DIR}
+  overwrite_output_dir: true
+  seed: 42
+  do_train: true
+  do_eval: false
+
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  gradient_accumulation_steps: 1
+
+  learning_rate: 2.0e-5
+  lr_scheduler_type: cosine
+  warmup_steps: 0
+
+  num_train_epochs: 3
+  max_steps: 100
+
+  logging_strategy: steps
+  logging_steps: 10
+  report_to:
+    - none
+
+  eval_strategy: "no"
+
+  save_strategy: steps
+  save_steps: 50
+  save_total_limit: 5
+
+  bf16: true
+  group_by_length: false
+  dataloader_num_workers: 1
+  remove_unused_columns: false
+
+optimization:
+  encoder_lr: 6.0e-6
+  decoder_lr: 2.0e-5
+  adapter_lr: 2.0e-4
+  min_lr_scale: 0.1

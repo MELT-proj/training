@@ -1,16 +1,10 @@
-import importlib
-import sys
 from types import SimpleNamespace
 
 import pytest
 import torch
 
-
-# Ensure top-level `ddp` import used by src.trainer resolves during tests
-sys.modules["ddp"] = importlib.import_module("src.ddp")
-
-from src.modeling import MELTConfig, MELTForCausalLM
-from src.training.trainer import MELTTrainer
+from melt.modeling import MELTConfig, MELTForCausalLM
+from melt.training.trainer import MELTTrainer
 
 
 def _make_minimal_model():
@@ -30,14 +24,21 @@ def _make_minimal_model():
 def test_create_optimizer_freeze_flags():
     model = _make_minimal_model()
 
-    # Build a fake args object with the flags and lr values
+    # Freeze/unfreeze components by toggling requires_grad (matching train.py's _freeze).
+    # create_optimizer filters by requires_grad, not by freeze flags.
+    for p in model.audio_stack.adapter.parameters():
+        p.requires_grad = False  # freeze_adapter=True
+    for p in model.text_decoder.parameters():
+        p.requires_grad = False  # freeze_decoder=True
+    for p in model.audio_stack.encoder.parameters():
+        p.requires_grad = True   # freeze_encoder=False
+
+    # Build a fake args object with lr values (freeze flags are no longer read
+    # by create_optimizer itself — freezing happens via requires_grad above).
     args = SimpleNamespace(
         adapter_lr=1e-4,
         encoder_lr=1e-5,
         decoder_lr=1e-3,
-        freeze_adapter=True,
-        freeze_encoder=False,
-        freeze_decoder=True,
         adam_beta1=0.9,
         adam_beta2=0.999,
         lr=1e-5,
@@ -73,8 +74,8 @@ def test_create_optimizer_freeze_flags():
         optim_param_ids = {id(p) for g in trainer.optimizer.param_groups for p in g["params"]}
 
         # Frozen components (adapter, decoder) should NOT be in optimizer groups
-        assert not (adapter_param_ids & optim_param_ids), "Adapter params should be excluded when freeze_adapter=True"
-        assert not (decoder_param_ids & optim_param_ids), "Decoder params should be excluded when freeze_decoder=True"
+        assert not (adapter_param_ids & optim_param_ids), "Adapter params should be excluded when frozen"
+        assert not (decoder_param_ids & optim_param_ids), "Decoder params should be excluded when frozen"
 
         # Encoder params (not frozen) should be in optimizer groups
-        assert enc_param_ids & optim_param_ids, "Encoder params should be in optimizer when freeze_encoder=False"
+        assert enc_param_ids & optim_param_ids, "Encoder params should be in optimizer when not frozen"

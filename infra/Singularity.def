@@ -4,9 +4,7 @@ From: nvidia/cuda:12.6.1-runtime-ubuntu22.04
 %setup
     mkdir -p ${APPTAINER_ROOTFS}/usr/local/share/uv/cache
     mkdir -p ${APPTAINER_ROOTFS}/workspace/training
-
-%files
-    . /workspace/training
+    rsync -aLr --exclude-from=.singularityignore . ${APPTAINER_ROOTFS}/workspace/training/
 
 %environment
     export PATH=$PATH:/usr/local/bin
@@ -29,16 +27,19 @@ From: nvidia/cuda:12.6.1-runtime-ubuntu22.04
     curl -LsSf https://astral.sh/uv/install.sh | sh
     /usr/local/bin/uv --version
     
-    /usr/local/bin/uv python install 3.11.11
+    /usr/local/bin/uv python install 3.12.9
     # Verify installation
     /usr/local/bin/uv python list
 
     cd /workspace/training
+    
     # Create the venv outside the project directory so it won't be hidden
     # when /workspace/training is bind-mounted from the host.
-    /usr/local/bin/uv venv /workspace/venv --python 3.11.11
+    /usr/local/bin/uv venv /workspace/venv --python 3.12.9
     export UV_PROJECT_ENVIRONMENT=/workspace/venv
-    /usr/local/bin/uv sync --python 3.11.11 --link-mode copy --cache-dir /usr/local/share/uv/cache --no-editable
+
+    # Install the package    
+    /usr/local/bin/uv sync --python 3.12 --link-mode copy --cache-dir /usr/local/share/uv/cache --no-editable --index-strategy unsafe-best-match
 
     # test torch installation
     /usr/local/bin/uv run python -c "import torch; print(torch.__version__)"

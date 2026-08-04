@@ -53,7 +53,7 @@ _ASR_LANGUAGES = [
 ]
 
 # Default languages to convert
-DEFAULT_LANGUAGES = ["en", "de", "fr", "es", "it"]
+DEFAULT_LANGUAGES = _ASR_LANGUAGES#  ["en", "de", "fr", "es", "it"]
 
 # Default splits
 DEFAULT_SPLITS = ["train", "validation", "test"]

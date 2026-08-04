@@ -20,16 +20,12 @@ pytest.importorskip("lhotse")
 
 
 def get_librispeech_shar_base_path() -> str | None:
-    """Get the base path to LibriSpeech shar data, checking multiple locations."""
-
-    paths = [
-        "/mnt/scratch-artemis/giuseppe/melt-data/shar/librispeech",
-        "/mnt/home/giuseppe/myscratch/melt-data/shar/librispeech",
-    ]
-    for path in paths:
-        if Path(path).exists():
-            return path
-    return None
+    """Get the base path to LibriSpeech shar data from LOCAL_DATASETS_DIR."""
+    base = os.environ.get("LOCAL_DATASETS_DIR")
+    if base is None:
+        return None
+    path = Path(base) / "librispeech"
+    return str(path) if path.exists() else None
 
 
 @pytest.fixture(scope="module")
@@ -54,16 +50,16 @@ class TestConfigIO:
         reason="LOCAL_DATASETS_DIR environment variable not set",
     )
     def test_load_config_from_yaml(self):
-        from src.training.config import load_config
+        from melt.training.config import load_config
 
-        cfg = load_config("config/train/asr.yaml")
+        cfg = load_config("config/train/SFT-v1.2.7.yaml")
         assert cfg.model.encoder.name
         assert cfg.model.decoder.name
         assert cfg.model.adapter is not None
 
     def test_cli_overrides(self):
         """Test that OmegaConf can apply CLI overrides via dotlist."""
-        from src.training.config import load_config
+        from melt.training.config import load_config
 
         cfg = load_config(cli_args=["trainer.max_steps=123", "model.adapter.freeze=true"])
         assert cfg.trainer.max_steps == 123
@@ -74,13 +70,13 @@ class TestConfigIO:
         reason="LOCAL_DATASETS_DIR environment variable not set",
     )
     def test_save_config_roundtrip(self, tmp_path: Path, monkeypatch):
-        from src.training.config import load_config, save_config
+        from melt.training.config import load_config, save_config
 
         # Set env vars that asr.yaml interpolates via ${oc.env:...}
         monkeypatch.setenv("LOCAL_DATASETS_DIR", "/tmp/fake_datasets")
         monkeypatch.setenv("OUTPUT_DIR", "/tmp/fake_output")
 
-        cfg = load_config("config/train/asr.yaml")
+        cfg = load_config("config/train/SFT-v1.2.7.yaml")
         cfg.trainer.max_steps = 321
 
         out = tmp_path / "cfg.yaml"
@@ -95,7 +91,7 @@ class TestConfigIO:
 
 class TestCutSetLoading:
     def test_read_cutset_from_config(self, librispeech_train100_path: str):
-        from src.training.data.audio.lhotse.dataloader import read_cutset_from_config
+        from melt.training.data.audio.lhotse.dataloader import read_cutset_from_config
 
         config = OmegaConf.create(
             {
@@ -107,6 +103,8 @@ class TestCutSetLoading:
                     }
                 ],
                 "shuffle": False,
+                "seed": 42,
+                "shard_seed": 0,
             }
         )
 
@@ -122,7 +120,7 @@ class TestCutSetLoading:
 
 class TestSamplerAndDataloader:
     def test_sampler_creation(self, librispeech_train100_path: str):
-        from src.training.data.audio.lhotse.dataloader import get_lhotse_sampler_from_config
+        from melt.training.data.audio.lhotse.dataloader import get_lhotse_sampler_from_config
 
         config = OmegaConf.create(
             {
@@ -134,10 +132,13 @@ class TestSamplerAndDataloader:
                     }
                 ],
                 "batch_duration": 60.0,
-                "use_bucketing": True,
+                "lhotse_sampler_type": "dynamic_bucketing",
+                "num_buckets": 10,
                 "shuffle": True,
                 "min_duration": 0.5,
                 "max_duration": 20.0,
+                "seed": 42,
+                "shard_seed": "randomized",
             }
         )
 
@@ -146,7 +147,7 @@ class TestSamplerAndDataloader:
         assert use_iterable is True
 
     def test_dataloader_creation(self, librispeech_train100_path: str):
-        from src.training.data.audio.lhotse.dataloader import get_lhotse_dataloader_from_config
+        from melt.training.data.audio.lhotse.dataloader import get_lhotse_dataloader_from_config
 
         class DummyDataset(torch.utils.data.Dataset):
             def __getitem__(self, cuts):
@@ -162,11 +163,13 @@ class TestSamplerAndDataloader:
                     }
                 ],
                 "batch_duration": 10.0,
-                "use_bucketing": False,
+                "lhotse_sampler_type": "dynamic",
                 "shuffle": False,
                 "min_duration": 0.5,
                 "max_duration": 10.0,
                 "num_workers": 1,
+                "seed": 42,
+                "shard_seed": 0,
             }
         )
 
@@ -185,7 +188,7 @@ class TestFallbackDataset:
     def test_fallback_returns_last_good_batch(self):
         from unittest.mock import MagicMock
 
-        from src.training.data.audio.lhotse.dataset import FallbackDataset
+        from melt.training.data.audio.lhotse.dataset import FallbackDataset
 
         inner_dataset = MagicMock()
         good_batch = {"input_features": torch.randn(2, 100, 80)}

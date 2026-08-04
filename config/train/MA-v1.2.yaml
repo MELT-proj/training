@@ -1,0 +1,310 @@
+# MELT Training Configuration
+# Following NeMo SpeechLM2 configuration structure
+#
+# Usage:
+#   python src/train.py --config config/train/asr.yaml
+#   python src/train.py --config config/train/asr.yaml --trainer.max_steps=1000
+#   python src/train.py --config config/train/asr.yaml --run.exp_name=my_experiment
+
+# =============================================================================
+# Run Configuration (non-TrainingArguments settings)
+# =============================================================================
+run:
+  exp_name: mn5-iwslt26
+  dry_run: false
+
+# =============================================================================
+# Model Configuration
+# =============================================================================
+model:
+  encoder:
+    name: facebook/w2v-bert-2.0
+    freeze: true
+    max_audio_seq_len: 1500 # for frames of 20ms, this is 30s
+
+  decoder:
+    name: Qwen/Qwen2.5-0.5B
+    attn_implementation: flash_attention_2
+    bos_token: <|startoftext|>
+    eos_token: <|endoftext|>
+    pad_token: <|text_pad|> # used if not specified in tokenizer
+    audio_token: <|audio|>
+    audio_bos_token: <|audio_bos|>
+    audio_eos_token: <|audio_eos|>
+    freeze: true
+  
+  adapter:
+    _type: conformer
+    num_adapter_layers: 2
+    adapter_kernel_size: 3
+    adapter_stride: 2
+
+  ckpt: null  # Path to checkpoint to resume from
+
+# =============================================================================
+# Data Configuration
+# =============================================================================
+data:
+  sample_rate: 16000
+  apply_chat_template: false
+
+  train_ds:
+    total_hours: 3720.17 #42877.25  # Optional: total hours of data for estimation
+    total_cuts: 2143430 #11588853  # Optional: total number of cuts for estimation
+    force_estimate: false  # Force estimation of total_hours at start
+
+    # Data sources - list of datasets to load
+    input_cfg:
+      # Librispeech
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/train.100
+        tags:
+          task: asr
+          lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/train.360
+        tags:
+          task: asr
+          lang: en
+
+      # # MLS Sidon
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/german/train
+        weight: 2.0
+        tags:
+          task: asr
+          lang: de
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/italian/train
+        weight: 2.0
+        tags:
+          task: asr
+          lang: it
+
+      # # # FLEURS
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/de_de/train
+        weight: 2.0
+        tags:
+          task: asr
+          lang: de
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/it_it/train
+        weight: 2.0
+        tags:
+          task: asr
+          lang: it
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/en_us/train
+        tags:
+          task: asr
+          lang: en
+
+      # # # CV 22 Sidon
+      # For CommonVoice, text is in custom.metadata.sentence, so override text_field
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/de/train
+        weight: 2.0
+        tags:
+          task: asr
+          lang: de
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/en/train
+        tags:
+          task: asr
+          lang: en
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/it/train
+        weight: 2.0
+        tags:
+          task: asr
+          lang: it
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/zh-CN/train
+        weight: 2.0
+        tags:
+          task: asr
+          lang: zh
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/zh-HK/train
+        weight: 2.0
+        tags:
+          task: asr
+          lang: zh
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/zh-TW/train
+        weight: 2.0
+        tags:
+          task: asr
+          lang: zh
+          text_field: custom.metadata.sentence
+
+    # Batch settings
+    batch_size: null  # Use batch_duration instead for dynamic batching
+    batch_duration: 480  # seconds of audio per batch
+    quadratic_duration: 20 # see https://lhotse.readthedocs.io/en/latest/datasets.html#lhotse.dataset.sampling.TimeConstraint
+
+    # Bucketing for efficient batching
+    use_bucketing: true
+    num_buckets: 30
+    buffer_size: 10000
+    bucket_duration_bins: [3.42, 3.88, 4.18, 4.44, 4.68, 4.87, 5.06, 5.23, 5.4, 5.58, 5.76, 5.9, 6.08, 6.24, 6.41, 6.6, 6.8, 7.01, 7.22, 7.46, 7.75, 8.09, 8.5, 9.1, 10.1, 12.67, 14.12, 15.06, 15.9]
+
+    # Sampling
+    shuffle: true
+    drop_last: false
+    seed: 42
+    shard_seed: randomized
+
+    # Duration filtering
+    min_duration: 0.5
+    max_duration: 30.0
+
+    # DataLoader settings
+    num_workers: 1
+    pin_memory: true
+    prefetch_factor: 2
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+  validation_ds:
+    total_hours: 91.49  # Optional: total hours of data for estimation
+    total_cuts: 58238  # Optional: total number of cuts for estimation
+    force_estimate: false
+
+    input_cfg:
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/validation
+        tags:
+          task: asr
+          lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/it/validation
+        tags:
+          task: asr
+          lang: it
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/de/validation
+        tags:
+          task: asr
+          lang: de
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/en/validation
+        tags:
+          task: asr
+          lang: en
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/zh-CN/validation
+        tags:
+          task: asr
+          lang: zh
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/zh-HK/validation
+        tags:
+          task: asr
+          lang: zh
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/zh-TW/validation
+        tags:
+          task: asr
+          lang: zh
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/it_it/validation
+        tags:
+          task: asr
+          lang: it
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/de_de/validation
+        tags:
+          task: asr
+          lang: de
+  
+    batch_size: null
+    batch_duration: 300.0
+    use_bucketing: true
+    num_buckets: 30
+    bucket_duration_bins: [2.86, 3.28, 3.64, 3.94, 4.22, 4.46, 4.7, 4.92, 5.14, 5.33, 5.52, 5.71, 5.9, 6.08, 6.26, 6.43, 6.62, 6.82, 7.01, 7.22, 7.42, 7.67, 7.94, 8.21, 8.57, 8.93, 9.4, 10.04, 13.2]
+    shuffle: false
+    drop_last: false
+    min_duration: 0.5
+    max_duration: 30.0
+    num_workers: 1
+    pin_memory: true
+    prefetch_factor: 1
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+# =============================================================================
+# Trainer Configuration
+# =============================================================================
+trainer:
+  output_dir: ${oc.env:OUTPUT_DIR}/iwslt_replica_v1
+  overwrite_output_dir: true
+  seed: 42
+  do_train: true
+  do_eval: true
+  eval_on_start: true
+  average_tokens_across_devices: true
+
+  # Batch and accumulation
+  per_device_train_batch_size: -1  # Handled by Lhotse, set to 1
+  per_device_eval_batch_size: -1   # Handled by Lhotse, set to 1
+  gradient_accumulation_steps: 4
+
+  # LR schedule
+  lr_scheduler_type: cosine
+  warmup_steps: 20
+
+  # Duration
+  num_train_epochs: 2
+  max_steps: -1
+
+  # Logging
+  logging_strategy: steps
+  logging_steps: 2
+  report_to: wandb
+
+  # Evaluation
+  eval_strategy: steps # "no" # steps
+  eval_steps: 100
+  batch_eval_metrics: true
+
+  # Checkpointing
+  save_strategy: steps
+  save_steps: 1000
+  save_total_limit: 5
+
+  # Performance
+  bf16: true
+  group_by_length: false  # Handled by Lhotse bucketing
+  dataloader_num_workers: 0  # Workers handled by Lhotse
+  remove_unused_columns: false
+  ddp_find_unused_parameters: false
+
+  max_grad_norm: 1.0
+
+evaluation:
+  compute_metrics: true
+  enable_whisper_normalization: true
+
+optimization:
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+
+  # encoder_lr: 6e-6 # Not used since it's frozen
+  # decoder_lr: 2e-5 # Not used since it's frozen
+  adapter_lr: 2e-5
+  min_lr_scale: 0.1

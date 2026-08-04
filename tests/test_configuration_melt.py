@@ -1,6 +1,6 @@
 import json
 
-from src.modeling.configuration_melt import MELTAdapterConfig, MELTConfig
+from melt.modeling.configuration_melt import MELTAdapterConfig, MELTConfig
 from transformers import AutoConfig
 
 
