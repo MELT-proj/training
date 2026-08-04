@@ -1,6 +1,9 @@
 wandb/
 logs/
 results/
+runs/
+outputs/
+shar/
 scratch-artemis
 recording*
 *._*

@@ -139,7 +139,7 @@ container_env MASTER_PORT "${MASTER_PORT}"
 
 # Forward optional host-set vars only when present. WANDB_PROJECT/WANDB_MODE
 # defaults are applied inside run_train.sh, so they are not duplicated here.
-for var in WANDB_PROJECT WANDB_MODE HF_HUB_OFFLINE \
+for var in WANDB_PROJECT WANDB_MODE HF_HUB_OFFLINE GPU_MEM_MONITORING \
            MELT_DEBUG_CUT_IDS_DIR MELT_DEBUG_CUT_IDS_MAX_BATCHES MELT_DEBUG_CUT_IDS_EVERY; do
     [[ -n "${!var:-}" ]] && container_env "$var" "${!var}"
 done

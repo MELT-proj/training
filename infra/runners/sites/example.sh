@@ -23,6 +23,13 @@ export SINGULARITY_IMG=/path/to/melt-data/melt_cuda126.sif
 # --- native mode ----------------------------------------------------------
 export VENV_PATH=/path/to/venvs/melt/bin/activate     # python virtualenv activate script
 
+# --- code sync (infra/sync_repo.sh) ---------------------------------------
+# Only needed for clusters you push code TO (e.g. air-gapped ones that cannot
+# `git pull`). Use an ssh ALIAS, not user@host, so each person can point it at
+# their own account via ~/.ssh/config.
+# export REMOTE_SSH=<ssh-alias>                       # e.g. mn5
+# export REMOTE_REPO=training                         # relative to the remote $HOME
+
 # --- misc -----------------------------------------------------------------
 export WANDB_MODE=online                              # use offline on air-gapped sites (+ export HF_HUB_OFFLINE=1)
 export MASTER_PORT=60001                              # rendezvous port; bump if it clashes on the node

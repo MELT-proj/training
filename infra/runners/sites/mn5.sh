@@ -10,6 +10,14 @@ export TMPDIR_HOST=/gpfs/projects/epor48/melt-data/tmp
 export SINGULARITY_IMG=/gpfs/projects/epor48/melt-data/melt_cuda126.sif
 export SINGULARITY_BIN=singularity
 
+# --- code sync (infra/sync_repo.sh) ---------------------------------------
+# MN5 has no outbound internet, so it cannot `git pull`. Push to it instead:
+# git over SSH needs no internet on the far end. `mn5` is an ssh alias each
+# person defines in their own ~/.ssh/config, so no username is baked in.
+# REMOTE_REPO is relative to the remote $HOME, so it holds for any account.
+export REMOTE_SSH=mn5
+export REMOTE_REPO=training
+
 # --- misc -----------------------------------------------------------------
 # Compute nodes have no internet: pre-download models (infra/setup/download_hf_models.sh)
 # and run fully offline.
