@@ -25,7 +25,7 @@ from omegaconf import DictConfig, OmegaConf
 from peft import LoraConfig, TaskType, get_peft_model
 
 import wandb
-from transformers import TrainingArguments
+from transformers import TrainingArguments, set_seed
 from transformers.modeling_utils import find_tied_parameters
 from transformers.trainer_utils import get_last_checkpoint
 
@@ -187,6 +187,17 @@ def main(cfg: DictConfig) -> None:
     """
     configure_logging()
 
+    # Seed BEFORE anything consumes randomness -- above all before the model is
+    # built further down, since the adapter is randomly initialised. HF's Trainer
+    # calls set_seed itself, but only inside its __init__, which runs long after
+    # our model exists, so it cannot be relied on for init reproducibility.
+    #
+    # The same seed on every rank is intended: FSDP shards a model that must be
+    # identical across ranks. Data-order variation comes from Lhotse's own
+    # shard_seed, so this does not make ranks iterate the same batches.
+    seed = int(cfg.trainer.get("seed", 42))
+    set_seed(seed)
+
     rank = ddp.get_global_rank()
     world_size = ddp.get_world_size()
     local_world_size = ddp.get_local_world_size()
@@ -195,7 +206,7 @@ def main(cfg: DictConfig) -> None:
     is_global_master = ddp.is_global_master()
     is_distributed = ddp.is_distributed()
 
-    logger.info(f"Distributed setup: rank {rank} out of {world_size}")
+    logger.info(f"Distributed setup: rank {rank} out of {world_size}, seed: {seed}")
     logger.info(
         f"world_size: {world_size}, local_world_size: {ddp.get_local_world_size()}"
         f" local_rank: {local_rank}, group_rank: {ddp.get_group_rank()}"
