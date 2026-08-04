@@ -134,6 +134,12 @@ if is_master_node; then
     done
     echo "[run_train] cached models under ${HF_HOME}/hub:"
     ls -1 "${HF_HOME}/hub" 2>/dev/null || echo "  (none cached yet)"
+
+    # OpenMP settings. Note this shell sees the allocation, not the affinity the
+    # training process ends up with: OMP_PROC_BIND collapses it only once libgomp
+    # initialises inside python. The post-import value is logged from train.py.
+    echo "[run_train] cpu: $(nproc) allocated" \
+         "| OMP_NUM_THREADS=${OMP_NUM_THREADS:-unset} OMP_PROC_BIND=${OMP_PROC_BIND:-unset}"
 fi
 
 # GPU memory monitoring (per node, runs for the duration of training).

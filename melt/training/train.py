@@ -203,6 +203,24 @@ def main(cfg: DictConfig) -> None:
         f" is_distributed: {is_distributed}"
     )
 
+    # CPU affinity as it stands *after* torch has initialised OpenMP, which is
+    # where it can silently collapse: OMP_PROC_BIND without OMP_PLACES pins the
+    # main thread to one core, and DataLoader workers forked from it inherit that
+    # mask. A single usable CPU on a multi-CPU allocation means the data pipeline
+    # is confined to one core no matter how many workers are configured.
+    usable_cpus = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else -1
+    logger.info(
+        f"CPU affinity: {usable_cpus} usable, torch threads: {torch.get_num_threads()},"
+        f" OMP_NUM_THREADS={os.environ.get('OMP_NUM_THREADS', 'unset')},"
+        f" OMP_PROC_BIND={os.environ.get('OMP_PROC_BIND', 'unset')}"
+    )
+    if usable_cpus == 1 and int(os.environ.get("SLURM_CPUS_PER_TASK", "1")) > 1:
+        logger.warning(
+            "Only 1 usable CPU despite SLURM_CPUS_PER_TASK="
+            f"{os.environ.get('SLURM_CPUS_PER_TASK')}. Something has pinned this"
+            " process; dataloader workers will inherit it and the GPUs will starve."
+        )
+
     if is_distributed:
         # It seems gloo breaks on multi-node
         torch.distributed.init_process_group(
