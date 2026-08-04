@@ -138,13 +138,11 @@ fi
 container_env OMP_NUM_THREADS "${_omp_threads}"
 container_env OMP_SCHEDULE    "${OMP_SCHEDULE:-STATIC}"
 
-# OMP_PROC_BIND is deliberately NOT defaulted. It used to be set to CLOSE, which
-# looks harmless but is not: with libgomp and no OMP_PLACES, `close` binds the
-# OpenMP master thread -- i.e. the Python main thread -- to a SINGLE place. From
-# that moment sched_getaffinity() returns 1 CPU, and since DataLoader workers are
-# forked from that thread they inherit the one-core mask. Measured on MN5 with
-# 80 CPUs allocated: affinity 80 before `import torch`, 1 after, 1 in forked
-# children. The whole data pipeline ran on one core.
+# OMP_PROC_BIND is deliberately NOT defaulted. With libgomp and no OMP_PLACES,
+# `close` binds the OpenMP master thread -- i.e. the Python main thread -- to a
+# SINGLE place, after which sched_getaffinity() returns 1 CPU and DataLoader
+# workers forked from that thread inherit the one-core mask. The collapse
+# happens at `import torch`, so it is invisible to any shell-level check.
 # Set it explicitly on the host if you want binding, and set OMP_PLACES with it.
 [[ -n "${OMP_PROC_BIND:-}" ]] && container_env OMP_PROC_BIND "${OMP_PROC_BIND}"
 
