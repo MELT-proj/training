@@ -5,7 +5,7 @@ Purpose
 
 Contents (high-level)
 - `rsync_*` and `sync_*` scripts: rsync helpers for remote storage (MN5, Leonardo, local mirrors).
-- `Singularity.def` and `run_train_singularity.sbatch`: container and SLURM launch helpers.
+- `Singularity.def`: container image definition. `runners/`: per-site submit wrappers (`submit-native.sh` / `submit-container.sh`) around the training launchers in `bash/`. See `docs/run_training.md`.
 
 Notes
 - Many scripts assume environment variables (e.g., `VENV_PATH`, `OUTPUT_DIR`, `LOCAL_DATASETS_DIR`).

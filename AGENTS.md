@@ -63,9 +63,10 @@ pytest tests/test_peoples_speech_lhotse.py
 
 ## Key Components
 
-### Training launch scripts (`bash/`)
-- `run_train.sh`: Activates venv and launches `accelerate` + `src/train.py`
-- `run_train_singularity.sbatch`: SLURM + Singularity/Apptainer wrapper (bind-mounts datasets/cache/outputs)
+### Training launch scripts
+- `bash/run_train.sh`: THE launcher for all contexts (local / SLURM native / container); activates the venv and runs `accelerate launch python -m melt.training.train`.
+- `bash/run_train_singularity.sbatch`: thin SLURM + Singularity/Apptainer shim that runs `run_train.sh` inside the image (bind-mounts datasets/cache/outputs).
+- `infra/runners/`: per-site submit wrappers — `submit-native.sh` / `submit-container.sh <site> ...` sourcing `sites/<site>.sh`. See `docs/run_training.md`.
 
 ## Environment Variables
 

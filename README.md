@@ -12,6 +12,7 @@ MELT is a training and modeling stack built on Hugging Face components with Lhot
 ## Getting Started
 For setup and usage details, see the folder-specific guides:
 - docs/run_training.md – end-to-end training and launch details
+- docs/hpc_runbook.md – operating runs on MN5 (air-gapped): code sync, image build, submit
 - docs/lhotse_dataloading.md – data preparation and Shar/Lhotse notes
 - config/README.md – configuration structure and examples
 - infra/README.md – environment, runners, and container notes
