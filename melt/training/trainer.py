@@ -84,8 +84,8 @@ class MELTTrainer(Trainer):
         self.config = config
         self.processor = processor
 
-        # Set seed
-        # set_seed(config.trainer.seed)
+        # Seeding happens in train.py, before the model is built -- HF's
+        # Trainer.__init__ seeds too, but by then our model already exists.
 
         # Always use ddp.py for distributed information
         self._global_rank = ddp.get_global_rank()

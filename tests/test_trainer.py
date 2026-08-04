@@ -161,6 +161,52 @@ def test_eval_dataloader_not_cached_without_persistent_workers():
     assert trainer.get_eval_dataloader() is not trainer.get_eval_dataloader()
 
 
+# ---------------------------------------------------------------------------
+# Reproducible model initialisation
+# ---------------------------------------------------------------------------
+
+
+def _adapter_state(model):
+    return {k: v.clone() for k, v in model.audio_stack.adapter.state_dict().items()}
+
+
+def test_model_init_is_reproducible_under_set_seed():
+    """Two models built from the same config must be identical.
+
+    The adapter is randomly initialised. HF only calls set_seed inside
+    Trainer.__init__, which runs long after train.py builds the model, so
+    reproducible init depends on train.py seeding first.
+    """
+    from transformers import set_seed
+
+    set_seed(42)
+    first = _adapter_state(_make_minimal_model())
+
+    set_seed(42)
+    second = _adapter_state(_make_minimal_model())
+
+    assert first.keys() == second.keys()
+    for key in first:
+        assert torch.equal(first[key], second[key]), f"adapter param {key} differs"
+
+        
+def test_model_init_differs_without_reseeding():
+    """Guards the test above against silently passing on a constant init.
+
+    If the adapter were initialised deterministically for some other reason,
+    the reproducibility test would pass while proving nothing.
+    """
+    from transformers import set_seed
+
+    set_seed(42)
+    first = _adapter_state(_make_minimal_model())
+    second = _adapter_state(_make_minimal_model())  # no reseed in between
+
+    assert any(
+        not torch.equal(first[key], second[key]) for key in first
+    ), "adapter init appears constant; the reproducibility test proves nothing"
+    
+    
 def test_default_eval_workers_is_nonzero():
     """The packaged default must actually use workers.
 
