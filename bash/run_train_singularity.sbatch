@@ -113,12 +113,40 @@ fi
 # NCCL heartbeat headroom for slow collectives.
 container_env TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC 1800
 
-# OpenMP (PyTorch CPU-thread guide). OMP_PROC_BIND=CLOSE binds threads within the
-# cpuset SLURM already assigned. GOMP_CPU_AFFINITY is intentionally omitted: it
-# needs exact physical CPU IDs and causes libgomp EINVAL when they don't start at 0.
-container_env OMP_NUM_THREADS "${OMP_NUM_THREADS:-${SLURM_CPUS_PER_TASK:-1}}"
+# OpenMP threads. This srun runs ONE task per node and accelerate then forks one
+# rank per GPU inside it, so SLURM_CPUS_PER_TASK is the whole node's allocation
+# and must be divided by the ranks that will share it -- otherwise every rank
+# claims all the cores and they oversubscribe by the GPU count.
+_omp_cpus="${SLURM_CPUS_PER_TASK:-1}"
+_omp_ranks="${SLURM_GPUS_ON_NODE:-1}"
+[[ "${_omp_ranks}" -gt 0 ]] || _omp_ranks=1
+_omp_default=$(( _omp_cpus / _omp_ranks ))
+[[ "${_omp_default}" -gt 0 ]] || _omp_default=1
+
+# SLURM exports OMP_NUM_THREADS=<cpus-per-task> itself, so a plain
+# "${OMP_NUM_THREADS:-default}" never falls through to the default -- it always
+# finds SLURM's node-wide value. A value equal to SLURM_CPUS_PER_TASK is
+# therefore treated as "SLURM set this", not "a human chose this"; anything else
+# is a deliberate choice and wins.
+_omp_threads="${_omp_default}"
+if [[ -n "${OMP_NUM_THREADS:-}" && "${OMP_NUM_THREADS}" != "${_omp_cpus}" ]]; then
+    _omp_threads="${OMP_NUM_THREADS}"
+    echo "[container] OMP_NUM_THREADS=${_omp_threads} (explicit)"
+else
+    echo "[container] OMP_NUM_THREADS=${_omp_threads} (${_omp_cpus} cpus / ${_omp_ranks} ranks)"
+fi
+container_env OMP_NUM_THREADS "${_omp_threads}"
 container_env OMP_SCHEDULE    "${OMP_SCHEDULE:-STATIC}"
-container_env OMP_PROC_BIND   "${OMP_PROC_BIND:-CLOSE}"
+
+# OMP_PROC_BIND is deliberately NOT defaulted. It used to be set to CLOSE, which
+# looks harmless but is not: with libgomp and no OMP_PLACES, `close` binds the
+# OpenMP master thread -- i.e. the Python main thread -- to a SINGLE place. From
+# that moment sched_getaffinity() returns 1 CPU, and since DataLoader workers are
+# forked from that thread they inherit the one-core mask. Measured on MN5 with
+# 80 CPUs allocated: affinity 80 before `import torch`, 1 after, 1 in forked
+# children. The whole data pipeline ran on one core.
+# Set it explicitly on the host if you want binding, and set OMP_PLACES with it.
+[[ -n "${OMP_PROC_BIND:-}" ]] && container_env OMP_PROC_BIND "${OMP_PROC_BIND}"
 
 # Job-level SLURM vars (set at sbatch time). Per-task vars (PROCID/NODEID/
 # LOCALID/STEP_ID) are set by srun and forwarded via --env in the exec below.
