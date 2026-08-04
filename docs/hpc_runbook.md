@@ -145,15 +145,60 @@ rsync -avh  --no-owner --no-group --partial --info=progress2 "$SHAR_SRC"/ "$SHAR
 plain `-a` spams chgrp failures. No `-z`: shar audio is already compressed. Use
 `tmux` — this is measured in TB. Check headroom with `bsc_quota` first.
 
-## A3. Pre-download HF models
+## A3. Stage the model checkpoints (encoders + text decoders)
 
-Compute nodes run with `HF_HUB_OFFLINE=1`, so anything not already in
-`$HF_HOME` fails at model load. Use `infra/setup/download_hf_models.sh`, then:
+**This is the step most likely to block an ablation.** MN5 runs with
+`HF_HUB_OFFLINE=1`, so `from_pretrained` never contacts the Hub: any checkpoint
+not already in `$HF_HOME` fails at model load, minutes into a queued job. Both
+halves of the model come from the Hub — the **audio encoder**
+(`model.encoder.name`) and the **text decoder** (`model.decoder.name`) — so
+every backbone you intend to ablate must be staged **before** you start.
+
+Download on a machine with internet, then ship the cache:
+
+```bash
+# [artemis] or [laptop] -- populates the local HF cache
+python -c 'from huggingface_hub import snapshot_download; snapshot_download("Qwen/Qwen2.5-0.5B-Instruct")'
+# (or use infra/setup/download_hf_models.sh for the standard set)
+
+# [artemis] ship the cache to MN5 via the transfer node
+rsync -avh --partial --info=progress2 \
+  $HF_HOME/hub/ mn5transfer:/gpfs/projects/epor48/melt-data/hf_cache/hub/
+```
+
+Gated repos (e.g. `meta-llama/*`) need `huggingface-cli login` on the machine
+doing the download; the token is never needed on MN5.
+
+Check what is already staged:
 
 ```bash
 # [mn5]
-ls /gpfs/projects/epor48/melt-data/hf_cache/hub
+ls /gpfs/projects/epor48/melt-data/hf_cache/hub/ | sed 's/^models--//; s/--/\//'
 ```
+
+### Currently staged
+
+| | |
+|---|---|
+| encoders | `facebook/w2v-bert-2.0` |
+| decoders | `Qwen/Qwen2.5-0.5B`, `Qwen/Qwen2.5-1.5B`, `Qwen/Qwen2.5-1.5B-Instruct`, `Qwen/Qwen3-1.7B`, `Qwen/Qwen3-2B`, `Qwen/Qwen3-4B`, `Qwen/Qwen3.5-2B`, `meta-llama/Llama-3.2-1B`, `meta-llama/Llama-3.2-1B-Instruct`, `utter-project/EuroLLM-1.7B`, `CohereLabs/tiny-aya-global` |
+
+### Gaps against the planned ablations
+
+The base-vs-instruct sweep needs both halves of each pair present. Missing today:
+
+| pair | base | instruct |
+|---|---|---|
+| Qwen2.5 0.5B | staged | **missing** (`Qwen/Qwen2.5-0.5B-Instruct`) |
+| Qwen2.5 1.5B | staged | staged |
+| EuroLLM 1.7B | staged | **missing** (`utter-project/EuroLLM-1.7B-Instruct`) |
+| Llama 3.2 1B | staged | staged |
+| Tiny Aya 3.3B | **missing** (base counterpart) | staged (`tiny-aya-global`) |
+
+The audio-stack sweep needs encoders beyond w2v-BERT — **Whisper, HuBERT /
+mHuBERT, and FastConformer (Canary) are all unstaged.** Stage them in the same
+pass; they are large, and discovering one is missing after a two-day queue wait
+is expensive.
 
 ## A4. Get the repo onto MN5
 
@@ -375,6 +420,49 @@ MA and IFT are two sequential runs; the second points at the first's output:
 ```
 
 `--model.ckpt` takes the **container** path, same rule as `output_dir`.
+
+### The planned ablation axes
+
+Four families of experiment, and what each one actually varies. In all cases the
+**backbone must already be staged** (§A3) — that is the usual reason an ablation
+job dies.
+
+**1. Base vs. instruct text decoders.** Fix the audio stack (w2v-BERT +
+conformer), ASR-only data in MA, and vary only the decoder:
+
+```bash
+--model.decoder.name Qwen/Qwen2.5-1.5B            --run.exp_name MA-qwen2.5-1.5B-base
+--model.decoder.name Qwen/Qwen2.5-1.5B-Instruct   --run.exp_name MA-qwen2.5-1.5B-inst
+```
+
+Instruct backbones bring their own chat template; `data.apply_chat_template` and
+`data.prompt_template` interact with that, so keep them fixed across a pair or
+you are ablating two things at once.
+
+**2. Audio stack.** Fix the decoder and vary the front end:
+
+| component | knob | values |
+|---|---|---|
+| encoder | `model.encoder.name` | any staged encoder checkpoint |
+| projector | `model.adapter._type` | **`conformer`**, **`mlp`**, **`qformer`** (all three are implemented) |
+| conformer depth | `model.adapter.num_adapter_layers` | e.g. 2 vs 4 |
+| conformer compression | `model.adapter.adapter_stride`, `adapter_kernel_size` | changes how hard the signal is compressed |
+
+```bash
+--model.adapter._type mlp --run.exp_name MA-proj-mlp
+--model.adapter._type conformer --model.adapter.num_adapter_layers 4 --run.exp_name MA-proj-conf4
+```
+
+**3. MA/IFT task mix** (ASR-only, ST-only, ASR+ST in MA). This is a *dataset*
+change, so it belongs in a YAML rather than on the CLI — copy a config in `runs/`
+and edit the `data.train_ds` source list. Keep the total hours fixed across
+variants, otherwise task mix and data volume are confounded.
+
+**4. Backbone prior-knowledge analysis** (task performance vs. perplexity on
+target transcripts). The perplexity side is a **separate offline evaluation of
+the text backbone**, not a training run — it needs no GPU allocation and no
+change here. Only the task-performance side comes from this pipeline; take it
+from the eval metrics in §B4.
 
 ### Keeping ablations straight
 
