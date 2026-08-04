@@ -1,56 +1,43 @@
 # HPC runbook: running MELT training on MN5
 
-Practical guide to taking over training runs on BSC MareNostrum5. For how the
-launchers themselves work, see [run_training.md](run_training.md); this document is
-the operational side — getting code and images onto an air-gapped cluster and
-submitting jobs there.
+Guide for taking over training runs on BSC MareNostrum5. For how the launchers
+work internally, see [run_training.md](run_training.md); this is the operational
+side — running experiments, monitoring them, and getting results back.
 
-Two machines are involved:
+It assumes you have accounts on **artemis** and **MN5**.
 
-| | role | why |
+**[Part A](#part-a--one-time-preparation) is one-time setup that is normally already done for you.**
+Skim it so you know what exists and why, then work from
+**[Part B](#part-b--running-an-experiment)**, which is the day-to-day loop.
+
+---
+
+## The two machines
+
+| machine | role | has internet? |
 |---|---|---|
-| **artemis** | builds the container image | has internet + apptainer; MN5 has neither |
-| **mn5** (`glogin1.bsc.es`) | runs training | the GPUs |
+| **your laptop** | edits code, pushes to MN5 and GitHub | yes |
+| **artemis** (`ssh artemis`) | builds container images; stores results pulled back from MN5 | yes |
+| **mn5** (`ssh mn5` → `glogin1.bsc.es`) | runs training on 4×H100 nodes | **no** |
+| **mn5transfer** (`transfer1.bsc.es`) | bulk data transfer endpoint for MN5 | — |
 
-**MN5 compute and login nodes have no outbound internet.** Everything — code,
-images, HF models — is pushed to it from outside. That constraint explains most
-of what follows.
+**MN5 has no outbound internet.** It cannot `git pull`, download HF models, or
+reach W&B. Everything is pushed to it from outside, and results are pulled back.
+That single constraint explains most of this document.
 
----
+Every command below is tagged with where to run it: **[laptop]**, **[artemis]**,
+or **[mn5]**.
 
-## 0. Mental model (read this first)
+### Check your access
 
-The single most useful thing to understand:
+```bash
+# [laptop]
+ssh artemis hostname     # -> artemis
+ssh mn5 hostname         # -> glogin1
+```
 
-> **The code that runs is the host checkout, not the copy inside the image.**
-
-The sbatch shim bind-mounts your repo over `/workspace/training` and sets the
-working directory there, so Python imports resolve to the bind-mounted source.
-The repo baked into the `.sif` at build time is only used to install the venv.
-
-Consequences:
-
-- **Changing training code ⇒ sync the repo. No image rebuild.**
-- **Changing dependencies** (`pyproject.toml` / `uv.lock`) **⇒ rebuild the image.**
-
-Fixed paths inside the container (host dirs are bind sources, set per site in
-`infra/runners/sites/mn5.sh`):
-
-| container | host |
-|---|---|
-| `/workspace/training` | your repo checkout (submit dir) |
-| `/workspace/shar` | `$LOCAL_DATASETS_DIR` |
-| `/workspace/outputs` | `$OUTPUT_DIR` |
-| `/workspace/hf_cache` | `$HF_HOME` |
-| `/workspace/tmp` | `$TMPDIR_HOST` |
-| `/workspace/venv` | *(in image)* |
-
----
-
-## 1. One-time setup
-
-**SSH aliases.** Everything is driven by ssh aliases so no usernames are baked
-into the repo. In `~/.ssh/config`:
+If `ssh mn5` fails, add to `~/.ssh/config` and get your public key into
+`mn5:~/.ssh/authorized_keys`:
 
 ```
 Host mn5
@@ -62,189 +49,369 @@ Host mn5transfer
     User <your-bsc-user>
 ```
 
-Get your key into `mn5:~/.ssh/authorized_keys`. Verify with `ssh mn5 hostname`
-→ `glogin1`.
+---
 
-**Clone the repo on MN5.** It has no internet, so you cannot `git clone` there.
-Push to it instead (see §2), or bootstrap once with a bundle:
+## Mental model (read this once)
 
-```bash
-git bundle create /tmp/melt.bundle <branch>          # on your laptop
-scp /tmp/melt.bundle mn5:~/                          # copy over
-ssh mn5 'git clone -b <branch> ~/melt.bundle ~/training'
-```
+The single most useful thing to know:
 
-**Check the site file** `infra/runners/sites/mn5.sh` matches your project
-paths, then run everything below **from the repo root**.
+> **The code that runs is the checkout on MN5, not the copy inside the `.sif`.**
+
+The sbatch shim bind-mounts your MN5 repo over `/workspace/training` and sets
+the working directory there, so Python imports resolve to the bind-mounted
+source. The repo baked into the image is only used to build the venv.
+
+| you changed… | what to do | cost |
+|---|---|---|
+| training code, configs | sync the repo (§B1) | seconds |
+| `pyproject.toml` / `uv.lock` | rebuild the image (§A1) | ~50 min |
+
+Fixed container paths (host dirs are bind sources, set in
+`infra/runners/sites/mn5.sh`):
+
+| inside container | host (MN5) |
+|---|---|
+| `/workspace/training` | your repo checkout |
+| `/workspace/shar` | `$LOCAL_DATASETS_DIR` |
+| `/workspace/outputs` | `$OUTPUT_DIR` |
+| `/workspace/hf_cache` | `$HF_HOME` |
+| `/workspace/tmp` | `$TMPDIR_HOST` |
 
 ---
 
-## 2. Sync code to MN5
+# Part A — one-time preparation
+
+Normally already done. Redo a step only when the reason for it changes.
+
+## A1. Build and ship the container image
+
+**When:** dependencies changed (`pyproject.toml` / `uv.lock`). **Not** for code changes.
 
 ```bash
+# [artemis] from the repo root
+source /etc/profile.d/02-lmod.sh && module load apptainer
+
+BUILD_TMPDIR=/mnt/data-artemis/$USER/tmp \
+UV_CACHE_DIR=/mnt/scratch-artemis/$USER/.cache/uv \
+  infra/setup/build_singularity.sh /mnt/scratch-artemis/$USER/melt-data/melt_cuda126.sif
+```
+
+Verify before shipping:
+
+```bash
+# [artemis]  note: singularity to RUN, apptainer to BUILD
+singularity exec /mnt/scratch-artemis/$USER/melt-data/melt_cuda126.sif bash -c \
+  'source /workspace/venv/bin/activate; nvcc --version | grep release;
+   python -c "import torch, flash_attn; print(torch.__version__, flash_attn.__version__)"'
+# expect: release 12.6 / 2.9.1+cu126 2.8.3
+```
+
+Ship it via the **transfer node**, not the login node (~7.6 GB, ~5 min):
+
+```bash
+# [artemis]
+rsync -avh --partial --info=progress2 \
+  /mnt/scratch-artemis/$USER/melt-data/melt_cuda126.sif \
+  mn5transfer:/gpfs/projects/epor48/melt-data/
+```
+
+Keep the previous image under a dated name (e.g.
+`melt_cuda126_pre-devel-20260411.sif`) until the new one has a successful run.
+
+Things that will otherwise cost you an hour:
+
+- **Build with `apptainer`, not `singularity`** — the def file's `%setup` needs
+  `APPTAINER_ROOTFS`, which SingularityCE doesn't export. The build script loads
+  the module and refuses otherwise. Conversely `apptainer exec` is broken on
+  artemis (`starter-suid` lacks the setuid bit), so *inspect* images with
+  `singularity exec`.
+- **Run from the repo root** — the def file rsyncs `.` as its build context.
+- **~50 minutes is normal.** Artemis login sessions are capped by systemd at
+  `CPUQuotaPerSecUSec=900ms` — 0.9 of one core, shared across *all* your SSH
+  sessions on that host. Nothing is broken; it's throttled.
+
+## A2. Sync SHAR datasets
+
+```bash
+# [artemis]
+SHAR_SRC=/mnt/scratch-nyx/giuseppe/melt/melt-data/shar
+SHAR_DST=mn5transfer:/gpfs/projects/epor48/melt-data/shar
+
+rsync -avhn --no-owner --no-group --info=stats2 "$SHAR_SRC"/ "$SHAR_DST"/    # dry run
+rsync -avh  --no-owner --no-group --partial --info=progress2 "$SHAR_SRC"/ "$SHAR_DST"/
+```
+
+`--no-owner --no-group` because source and BSC target have different groups and
+plain `-a` spams chgrp failures. No `-z`: shar audio is already compressed. Use
+`tmux` — this is measured in TB. Check headroom with `bsc_quota` first.
+
+## A3. Pre-download HF models
+
+Compute nodes run with `HF_HUB_OFFLINE=1`, so anything not already in
+`$HF_HOME` fails at model load. Use `infra/setup/download_hf_models.sh`, then:
+
+```bash
+# [mn5]
+ls /gpfs/projects/epor48/melt-data/hf_cache/hub
+```
+
+## A4. Get the repo onto MN5
+
+MN5 can't clone from GitHub. Bootstrap once from your laptop:
+
+```bash
+# [laptop]
+git bundle create /tmp/melt.bundle <branch>
+scp /tmp/melt.bundle mn5:~/
+ssh mn5 'git clone -b <branch> ~/melt.bundle ~/training'
+```
+
+After that, keep it current with `infra/sync_repo.sh` (§B1) — no more bundles.
+
+---
+
+# Part B — running an experiment
+
+The loop you'll actually repeat: **sync → configure → submit → monitor → retrieve.**
+
+## B1. Sync your code and configs to MN5
+
+```bash
+# [laptop] from the repo root
 infra/sync_repo.sh mn5                 # push commits (default)
 infra/sync_repo.sh mn5 --dirty         # rsync working tree, uncommitted included
 infra/sync_repo.sh mn5 --dry-run       # show what would move
 ```
 
-Git over SSH needs no internet on the far end, so MN5 is just a git remote.
-The default mode pushes commits *and* updates the remote working tree
-(`receive.denyCurrentBranch=updateInstead`), and **refuses if that tree is
-dirty** rather than clobbering it — if it complains, commit or stash on MN5.
+Git over SSH needs no internet on the far end, so MN5 is just a git remote. The
+default mode pushes commits **and** updates the remote working tree, and
+**refuses if that tree is dirty** rather than clobbering it — if it complains,
+commit or stash on MN5 first.
 
-`runs/` is gitignored but holds the configs you launch with, so it is rsynced
-in both modes. Without that, you would edit a config locally and silently run
-the old one.
+`runs/` is gitignored but holds the configs you launch with, so it is rsynced in
+both modes. Without that you'd edit a config locally and silently run the old one.
 
-Prefer the default over `--dirty` for anything whose results you'll want to
-reproduce: a run launched from an rsynced dirty tree has no commit to trace a
-checkpoint back to.
+Use the default for anything you'll want to reproduce: a run launched from a
+`--dirty` tree has no commit to trace its checkpoints back to.
 
----
+## B2. Configure the ablation
 
-## 3. Build and ship an image
+See [Configuring ablations](#configuring-ablations) below for what to change and
+where.
 
-**Only needed when dependencies change.** Code changes need §2, not this.
-
-```bash
-# On artemis, from the repo root
-source /etc/profile.d/02-lmod.sh && module load apptainer
-
-BUILD_TMPDIR=/mnt/data-artemis/$USER/tmp \
-UV_CACHE_DIR=/mnt/scratch-artemis/$USER/.cache/uv \
-  infra/setup/build_singularity.sh /path/to/melt_cuda126.sif
-```
-
-Then ship it via the transfer node (not the login node):
+## B3. Submit
 
 ```bash
-rsync -avh --partial --info=progress2 \
-  /path/to/melt_cuda126.sif mn5transfer:/gpfs/projects/epor48/melt-data/
-```
-
-Notes that will save you time:
-
-- **Build with `apptainer`, not `singularity`.** The def file's `%setup` needs
-  `APPTAINER_ROOTFS`, which SingularityCE does not export. The build script
-  loads the module and refuses otherwise.
-- On artemis, `apptainer exec` fails (`starter-suid` lacks the setuid bit) —
-  use `singularity exec` to *inspect* an image. Build with apptainer, run with
-  singularity.
-- **Expect ~50 minutes.** Artemis login sessions are capped by systemd at
-  `CPUQuotaPerSecUSec=900ms` — 0.9 of a core, shared across *all* your SSH
-  sessions on that box. Nothing is wrong; it's just slow.
-- Must be run **from the repo root** — the def file rsyncs `.` as its build
-  context.
-- Result is ~7.6 GB and contains the CUDA toolkit (`nvcc`), since the base is
-  `-devel`. No host CUDA is bind-mounted.
-
-Sanity-check a new image before trusting it:
-
-```bash
-singularity exec melt_cuda126.sif bash -c \
-  'source /workspace/venv/bin/activate; nvcc --version | grep release; \
-   python -c "import torch, flash_attn; print(torch.__version__, flash_attn.__version__)"'
-```
-
----
-
-## 4. Sync datasets
-
-Shar data lives outside the repo and is synced separately, from artemis:
-
-```bash
-SHAR_SRC=/mnt/scratch-nyx/giuseppe/melt/melt-data/shar
-SHAR_DST=mn5transfer:/gpfs/projects/epor48/melt-data/shar
-
-rsync -avhn --no-owner --no-group --info=stats2 "$SHAR_SRC"/ "$SHAR_DST"/   # dry run first
-rsync -avh  --no-owner --no-group --partial --info=progress2 "$SHAR_SRC"/ "$SHAR_DST"/
-```
-
-`--no-owner --no-group` because the source and BSC target have different
-groups; plain `-a` spams chgrp failures. No `-z`: shar audio is already
-compressed. Run long transfers inside `tmux`. Check `bsc_quota` first — this
-data is measured in TB.
-
----
-
-## 5. Submit a run
-
-```bash
-EXP=my-experiment
+# [mn5] from ~/training
+EXP=ablation-adapter-4layer
 
 infra/runners/submit-container.sh mn5 config/accelerate/fsdp2.yaml \
-  --config runs/debug_VP-only.yaml \
-  --trainer.max_steps 60 \
-  --trainer.eval_steps 30 --trainer.save_steps 30 \
+  --config runs/my_config.yaml \
+  --trainer.max_steps 2000 \
+  --trainer.eval_steps 500 --trainer.save_steps 500 \
+  --trainer.save_total_limit 3 \
   --trainer.per_device_eval_batch_size 4 \
   --trainer.report_to wandb \
   --trainer.output_dir /workspace/outputs/$EXP \
   --run.exp_name $EXP
 ```
 
-Everything after the accelerate config is an OmegaConf dot-notation override.
-
 **Three things that will bite you:**
 
 1. **`--trainer.output_dir` must be the CONTAINER path** (`/workspace/outputs/…`).
    The host `OUTPUT_DIR` is only the bind source; a host path here fails.
-2. **Pass `--trainer.per_device_eval_batch_size` explicitly.** The YAMLs set
-   `-1` ("Lhotse handles batching"), which the train path understands but the
-   eval path does not — it crashes at the first eval ([#32](https://github.com/MELT-proj/training/issues/32)).
-   `4` is known-good; `16` OOMs.
-3. **Adjust the QoS for the job.** `SBATCH_ARGS` lives in the site file:
-   `acc_debug` = 2 h cap, **1 job per user**, high priority (good for smoke
-   tests); `acc_ehpc` = 3 days, normal priority (real runs).
+2. **Always pass `--trainer.per_device_eval_batch_size` explicitly.** The YAMLs
+   set `-1` ("Lhotse handles batching"), which the train path understands but the
+   eval path does not — it crashes at the first eval
+   ([#32](https://github.com/MELT-proj/training/issues/32)). `4` is known-good;
+   `16` OOMs on 64 GB H100s.
+3. **Pick the QoS in the site file** (`SBATCH_ARGS` in `infra/runners/sites/mn5.sh`):
 
-Model weights must already be in `$HF_HOME` — compute nodes run with
-`HF_HUB_OFFLINE=1`. Pre-download with `infra/setup/download_hf_models.sh`.
+   | QoS | wall limit | jobs/user | use for |
+   |---|---|---|---|
+   | `acc_debug` | 2 h | **1** | smoke tests (high priority, short queue) |
+   | `acc_ehpc` | 3 days | many | real runs |
 
----
+   Note site files use bare `export`, so `VAR=x infra/runners/submit-container.sh …`
+   loses to the site value — edit the file to override.
 
-## 6. Monitor and verify
+**Always smoke-test a new config first:** `--trainer.max_steps 10
+--trainer.eval_on_start false` on `acc_debug`. It catches config errors in
+minutes instead of after a queue wait.
+
+## B4. Monitor
 
 ```bash
+# [mn5]
 squeue -u $USER
-tail -f logs/melt-train-container.<jobid>.out
+tail -f ~/training/logs/melt-train-container.<jobid>.out
 sacct -j <jobid> --format=JobID,State,ExitCode,Elapsed -X
 ```
 
-A healthy start looks like this — worth knowing so you can spot where it broke:
+A healthy startup looks like this — worth recognising so you can tell *where* a
+failure happened:
 
 ```
 [container] image:    .../melt_cuda126.sif
-[container] project:  <your repo> -> /workspace/training
-Cuda compilation tools, release 12.6            <- nvcc FROM THE IMAGE
+[container] project:  /gpfs/home/.../training -> /workspace/training
+Cuda compilation tools, release 12.6                  <- nvcc FROM THE IMAGE
 [run_train] starting (context: slurm, nodes=1, gpus/node=4, world_size=4)
-[run_train] inside an srun step; launching directly    <- correct, no nested srun
+[run_train] inside an srun step; launching directly   <- correct: no nested srun
 world_size: 4, ... is_distributed: True
 ```
 
-A completed run leaves, under `$OUTPUT_DIR/$EXP/`: `checkpoint-N/` dirs (with
-`pytorch_model_fsdp_0`, `optimizer_0`, `sampler`, `trainer_state.json`), the
-processor/tokenizer files, and `resolved_config.json`. Offline wandb lands in
-`$OUTPUT_DIR/wandb/`; sync later from a machine with internet (`wandb sync`).
+**Loss and metrics.** Each eval prints a metrics dict to the log — overall
+`eval_loss`, `eval_wer`, `eval_cer`, plus per-language `eval_wer_<lang>` /
+`eval_cer_<lang>`. To watch them:
 
-**GPU memory profiling:** `export GPU_MEM_MONITORING=1` before submitting to get
-`logs/gpu_mem_<jobid>_node<N>.csv`. Note it samples every 30 s, so it *aliases*
-and under-reports true peaks — treat its numbers as a lower bound.
+```bash
+# [mn5]
+grep -oE "'eval_(loss|wer|cer)': [0-9.]+" ~/training/logs/melt-train-container.<jobid>.out
+```
+
+W&B runs **offline** (no internet), writing to `$OUTPUT_DIR/wandb/`. To see them
+in the browser, sync from artemis (§B5).
+
+**GPU memory:** `export GPU_MEM_MONITORING=1` before submitting to get
+`logs/gpu_mem_<jobid>_node<N>.csv`. It samples every 30 s, so it *aliases* and
+under-reports true peaks — treat its numbers as a lower bound.
+
+## B5. Retrieve results
+
+**W&B metrics** — there's a helper that pulls offline runs to artemis and syncs
+them (edit the paths inside for your account):
+
+```bash
+# [artemis]
+bash utils/sync_wandb.sh
+```
+
+It skips runs still being written to, so it's safe to run mid-training. Manually,
+the same thing is:
+
+```bash
+# [artemis]
+rsync -avh mn5transfer:/gpfs/projects/epor48/melt-data/outputs/wandb/wandb/ \
+           /mnt/scratch-artemis/$USER/melt-data/outputs/wandb/wandb/
+wandb sync /mnt/scratch-artemis/$USER/melt-data/outputs/wandb/wandb/offline-run-*
+```
+
+**Checkpoints** — pull via the transfer node:
+
+```bash
+# [artemis]
+EXP=ablation-adapter-4layer
+rsync -avh --partial --info=progress2 \
+  mn5transfer:/gpfs/projects/epor48/melt-data/outputs/$EXP/ \
+  /mnt/scratch-artemis/$USER/melt-data/outputs/$EXP/
+```
+
+A finished run's output directory contains:
+
+| | |
+|---|---|
+| `checkpoint-<N>/` | `pytorch_model_fsdp_0/` (sharded), `optimizer_0/`, `sampler`, `scheduler.pt`, `trainer_state.json` |
+| processor files | `config.json`, `tokenizer.json`, `preprocessor_config.json`, `chat_template.jinja`, … |
+| `resolved_config.json` | **the config that actually ran**, after CLI overrides — the record of what produced these weights |
+
+If you only need the final model, the top-level processor/config files plus the
+last checkpoint are enough; skip the intermediate `checkpoint-*/` dirs with
+`--exclude 'checkpoint-*'` to save a lot of transfer.
+
+**Checkpoints are FSDP-sharded**, so merge before loading for inference:
+
+```bash
+# [artemis]
+python utils/merge_fsdp_weight.py \
+  --checkpoint_dir .../outputs/$EXP/checkpoint-2000/pytorch_model_fsdp_0 \
+  --output_path   .../outputs/$EXP/merged
+```
 
 ---
 
-## 7. Gotchas worth internalising
+## Configuring ablations
+
+Two ways to vary an experiment. Use CLI overrides for anything you'd sweep;
+edit a YAML only for structural changes.
+
+**CLI override** (dot notation, appended to the submit command). Preferred — the
+config stays fixed and the diff between runs is visible in your shell history
+and in `resolved_config.json`:
+
+```bash
+--optimization.adapter_lr 5e-4 --model.adapter.num_adapter_layers 4
+```
+
+**A new YAML in `runs/`** — for changing dataset mixes or many fields at once.
+Copy an existing one, edit, and point `--config` at it. `runs/` is gitignored but
+synced by `sync_repo.sh`, so it reaches MN5.
+
+### What the knobs do
+
+| knob | where | notes |
+|---|---|---|
+| `model.encoder.freeze` / `decoder.freeze` / `adapter.freeze` | YAML | defines the phase: **MA** freezes encoder+decoder and trains the adapter; **IFT** unfreezes the decoder |
+| `model.decoder.name` | either | the LM backbone; **must be in `$HF_HOME`** (offline) |
+| `model.adapter._type`, `num_adapter_layers`, `adapter_kernel_size`, `adapter_stride` | either | adapter architecture ablations |
+| `model.ckpt` | either | start from a previous run — **this is how IFT consumes the MA checkpoint** |
+| `data.train_ds.<...>.shar_path` | YAML | dataset mix; paths resolve under `/workspace/shar` |
+| `data.train_ds.batch_duration` | either | **seconds of audio per batch** — the real batch-size lever for training (Lhotse dynamic bucketing), not `per_device_train_batch_size` |
+| `data.train_ds.buffer_size` | either | shuffle buffer; smaller = faster startup for smoke tests |
+| `data.prompt_template` | YAML | e.g. `"{audio_token}{lang}"` |
+| `optimization.{encoder,decoder,adapter}_lr` | either | per-component LRs |
+| `trainer.max_steps`, `eval_steps`, `save_steps`, `warmup_steps` | CLI | schedule |
+
+### Running the two phases
+
+MA and IFT are two sequential runs; the second points at the first's output:
+
+```bash
+# 1) MA — adapter only
+--config runs/MA.yaml --run.exp_name MA-v1 --trainer.output_dir /workspace/outputs/MA-v1
+
+# 2) IFT — starts from the MA checkpoint
+--config runs/IFT.yaml --run.exp_name IFT-v1 --trainer.output_dir /workspace/outputs/IFT-v1 \
+  --model.ckpt /workspace/outputs/MA-v1
+```
+
+`--model.ckpt` takes the **container** path, same rule as `output_dir`.
+
+### Keeping ablations straight
+
+- Use one `EXP` name for `--run.exp_name` **and** the last element of
+  `--trainer.output_dir`, so the W&B run and the output directory match.
+- Encode the variable in the name (`MA-adapter4layer-lr5e4`), not just a version
+  number — you will not remember what `v7` changed.
+- `resolved_config.json` in each output dir is the ground truth for what ran.
+- Add `--trainer.overwrite_output_dir true` only when you intend to replace a
+  previous run of the same name.
+
+---
+
+## Gotchas worth internalising
 
 - **Eval dominates wall-clock.** In a 60-step run, three evals took ~71% of the
-  job. Budget for it, and keep `eval_steps` sane on short runs.
+  job. Budget for it; keep `eval_steps` large on short runs.
 - **Eval cuts are sorted longest-first**, so the first batches are the peak in
-  both memory and time (≈4× memory and ≈3.4× per-batch time vs the tail). A
-  spot `nvidia-smi` reading taken mid-eval samples the cheap tail and will
-  badly overstate your headroom — don't size batches from it. See
-  [#33](https://github.com/MELT-proj/training/issues/33).
+  both memory and time (≈4× memory, ≈3.4× per-batch time vs the tail). A spot
+  `nvidia-smi` mid-eval samples the cheap tail and badly overstates headroom —
+  don't size batches from it ([#33](https://github.com/MELT-proj/training/issues/33)).
 - **`logs/` must exist before `sbatch`** or SLURM kills the job silently. The
-  `submit-*.sh` runners `mkdir -p logs` for you; raw `sbatch` does not.
-- **Site files use bare `export`**, so `VAR=x infra/runners/submit-container.sh …`
-  loses to the site value. Edit the site file to override.
-- **Smoke-test first:** `--trainer.max_steps 10 --trainer.eval_on_start false`.
+  `submit-*.sh` runners create it; raw `sbatch` does not.
+- **Model weights must be pre-downloaded** — compute nodes are offline.
+
+## Troubleshooting
+
+| symptom | cause |
+|---|---|
+| `batch_size should be a positive integer, but got -1` | missing `--trainer.per_device_eval_batch_size` ([#32](https://github.com/MELT-proj/training/issues/32)) |
+| Job exits instantly, no log | `logs/` didn't exist, or a bad `--output` path |
+| `SINGULARITY_IMG not found` | image not shipped, or site-file path is stale |
+| Model load fails / tries to reach the Hub | weights not in `$HF_HOME` (§A3) |
+| `CUDA out of memory` during eval | eval batch too large — first batches are worst-case |
+| Output dir "not empty" | add `--trainer.overwrite_output_dir true`, or pick a new `EXP` |
+| Push rejected by `sync_repo.sh` | remote working tree is dirty — commit/stash on MN5 |
+| Build writes to host `/workspace` | built with `singularity` instead of `apptainer` |
 
 ## Known issues
 
