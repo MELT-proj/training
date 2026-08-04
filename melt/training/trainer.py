@@ -138,6 +138,11 @@ class MELTTrainer(Trainer):
         # Populated by prediction_step(), consumed by the compute_metrics wrapper below.
         self._eval_langs_buffer: list[str] = []
 
+        # Prepared eval dataloaders kept alive across evaluate() calls, keyed by
+        # eval-dataset name.  Only populated when persistent workers are enabled
+        # (see get_eval_dataloader).
+        self._prepared_eval_dataloaders: dict[str, tuple[Any, DataLoader]] = {}
+
         # Initialize parent (may set up distributed)
         super().__init__(model=model, args=args, eval_dataset=eval_dataset, **kwargs)
 
@@ -304,19 +309,69 @@ class MELTTrainer(Trainer):
         if self._eval_collator is None:
             raise ValueError("No eval collator configured — was __init__ called correctly?")
 
+        # `-1` is the "batching is handled elsewhere" sentinel used throughout our
+        # YAMLs (the train path honours it in get_total_train_batch_size).  Eval
+        # uses a stock DataLoader, which rejects it, so normalise here.
+        batch_size = self.args.per_device_eval_batch_size
+        if batch_size is not None and batch_size < 0:
+            batch_size = 1
+
+        # dataloader_num_workers is only read by this method — the train path takes
+        # its worker count from data.train_ds.num_workers — so it is in effect an
+        # eval-only knob and is passed through unclamped.
+        num_workers = max(int(self.args.dataloader_num_workers or 0), 0)
+
+        # prefetch_factor is per worker and MUST be None when num_workers == 0,
+        # otherwise DataLoader raises.  It only smooths jitter; it cannot lift
+        # steady-state throughput above what the workers produce.
+        prefetch_factor = None
+        persistent_workers = False
+        if num_workers > 0:
+            prefetch_factor = int(
+                getattr(self.args, "dataloader_prefetch_factor", None) or 8
+            )
+            persistent_workers = bool(
+                getattr(self.args, "dataloader_persistent_workers", False)
+            )
+
+        # evaluate() calls this on every eval, so without persistence the workers
+        # are re-forked each time.  Cache the *prepared* loader: accelerate builds
+        # a fresh DataLoader in prepare_data_loader, and re-preparing would discard
+        # the live worker pool that persistent_workers exists to keep.
+        cache_key = eval_dataset if isinstance(eval_dataset, str) else "eval"
+        if persistent_workers:
+            cached_dataset, cached_loader = self._prepared_eval_dataloaders.get(
+                cache_key, (None, None)
+            )
+            if cached_loader is not None and cached_dataset is eval_dataset:
+                return cached_loader
+
+        logger.info(
+            "Eval dataloader: batch_size=%s num_workers=%d prefetch_factor=%s "
+            "persistent_workers=%s",
+            batch_size,
+            num_workers,
+            prefetch_factor,
+            persistent_workers,
+        )
+
         dataloader = DataLoader(
             eval_dataset,
-            batch_size=self.args.per_device_eval_batch_size,
+            batch_size=batch_size,
             collate_fn=self._eval_collator,
-            num_workers=min(self.args.dataloader_num_workers, 1),
-            prefetch_factor=8,
+            num_workers=num_workers,
+            prefetch_factor=prefetch_factor,
+            persistent_workers=persistent_workers,
             pin_memory=True,
             shuffle=False,
             drop_last=False,
         )
 
         # Let Accelerator handle DistributedSampler
-        return self.accelerator.prepare_data_loader(dataloader)
+        prepared = self.accelerator.prepare_data_loader(dataloader)
+        if persistent_workers:
+            self._prepared_eval_dataloaders[cache_key] = (eval_dataset, prepared)
+        return prepared
 
     def get_total_train_batch_size(self, args):
         """
