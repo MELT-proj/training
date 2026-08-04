@@ -122,7 +122,20 @@ _omp_ranks="${SLURM_GPUS_ON_NODE:-1}"
 [[ "${_omp_ranks}" -gt 0 ]] || _omp_ranks=1
 _omp_default=$(( _omp_cpus / _omp_ranks ))
 [[ "${_omp_default}" -gt 0 ]] || _omp_default=1
-container_env OMP_NUM_THREADS "${OMP_NUM_THREADS:-${_omp_default}}"
+
+# SLURM exports OMP_NUM_THREADS=<cpus-per-task> itself, so a plain
+# "${OMP_NUM_THREADS:-default}" never falls through to the default -- it always
+# finds SLURM's node-wide value. A value equal to SLURM_CPUS_PER_TASK is
+# therefore treated as "SLURM set this", not "a human chose this"; anything else
+# is a deliberate choice and wins.
+_omp_threads="${_omp_default}"
+if [[ -n "${OMP_NUM_THREADS:-}" && "${OMP_NUM_THREADS}" != "${_omp_cpus}" ]]; then
+    _omp_threads="${OMP_NUM_THREADS}"
+    echo "[container] OMP_NUM_THREADS=${_omp_threads} (explicit)"
+else
+    echo "[container] OMP_NUM_THREADS=${_omp_threads} (${_omp_cpus} cpus / ${_omp_ranks} ranks)"
+fi
+container_env OMP_NUM_THREADS "${_omp_threads}"
 container_env OMP_SCHEDULE    "${OMP_SCHEDULE:-STATIC}"
 
 # OMP_PROC_BIND is deliberately NOT defaulted. It used to be set to CLOSE, which
