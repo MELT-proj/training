@@ -76,6 +76,8 @@ SKIP_RUN3="${SKIP_RUN3:-0}"
 # checkpoints before run2 resumes, so the histories are copied out first.
 STATE_RUN1="$OUTPUT_DIR/trainer_state_run1.json"
 STATE_RUN2="$OUTPUT_DIR/trainer_state_run2.json"
+STATE_RUN3="$OUTPUT_DIR/trainer_state_run3.json"
+rm -f "$STATE_RUN1" "$STATE_RUN2" "$STATE_RUN3"
 
 # Extra args shared by every run. SHARD_SEED, when set, overrides the config so
 # one config can be exercised under 'randomized', 'trng' and a fixed integer.
@@ -145,27 +147,30 @@ save_trainer_state() {
 # Helper: one truthful verdict line per check, then the overall result.
 # The old unconditional "PASSED" banner printed even when a comparison failed,
 # because this script deliberately does not run under `set -e`.
+SUMMARY_VERDICT="PASSED"
+
+summary_row() {
+    local label="$1" status="$2"
+    if [[ -z "$status" ]]; then
+        printf '  %-30s %s\n' "$label" "SKIPPED"
+    elif [[ "$status" -eq 0 ]]; then
+        printf '  %-30s %s\n' "$label" "PASS"
+    else
+        printf '  %-30s %s\n' "$label" "FAIL"
+        SUMMARY_VERDICT="FAILED"
+    fi
+}
+
 print_summary() {
-    local verdict="PASSED"
     echo ""
     echo "================================================================="
     echo "SAMPLER RESUME TEST (2-GPU DDP) — shard_seed=${SHARD_SEED:-<from config>}"
     echo "-----------------------------------------------------------------"
-    for check in "cut IDs after resume:STATUS_CUTIDS" \
-                 "metrics after resume:STATUS_LOSSES" \
-                 "determinism (run3 vs run1):STATUS_DETERMINISM"; do
-        local label="${check%%:*}" var="${check##*:}" status="${!var-}"
-        if [[ -z "$status" ]]; then
-            printf '  %-30s %s\n' "$label" "SKIPPED"
-        elif [[ "$status" -eq 0 ]]; then
-            printf '  %-30s %s\n' "$label" "PASS"
-        else
-            printf '  %-30s %s\n' "$label" "FAIL"
-            verdict="FAILED"
-        fi
-    done
+    summary_row "cut IDs after resume"       "${STATUS_CUTIDS-}"
+    summary_row "determinism (run3 vs run1)" "${STATUS_DETERMINISM-}"
+    summary_row "metrics after resume"       "${STATUS_LOSSES-}"
     echo "-----------------------------------------------------------------"
-    echo "  OVERALL: $verdict"
+    echo "  OVERALL: $SUMMARY_VERDICT"
     echo "================================================================="
 }
 
@@ -267,36 +272,26 @@ python "$SCRIPT_DIR/compare_cut_ids.py" \
     --grad-accum-steps "$GRAD_ACC_STEPS"
 STATUS_CUTIDS=$?
 
-# ---------------------------------------------------------------------------
-# Compare losses (did the resume land in the same model state?)
-# ---------------------------------------------------------------------------
-echo ""
-echo "--- Comparing metrics ---"
-echo "    run1 vs run2 at every logged step after $CHECKPOINT_STEP."
-echo ""
-
-STATUS_LOSSES=0
-if [[ -f "$STATE_RUN1" && -f "$STATE_RUN2" ]]; then
-    python "$SCRIPT_DIR/compare_losses.py" \
-        --run1-state "$STATE_RUN1" \
-        --run2-state "$STATE_RUN2" \
-        --checkpoint-step "$CHECKPOINT_STEP"
-    STATUS_LOSSES=$?
-else
-    echo "SKIPPED: metric histories were not captured from both runs."
-    STATUS_LOSSES=1
-fi
-
 if [[ "$SKIP_RUN3" == "1" ]]; then
     echo ""
     echo "--- RUN 3 skipped (SKIP_RUN3=1) ---"
-    print_summary
-    exit $(( STATUS_CUTIDS != 0 || STATUS_LOSSES != 0 ))
+    echo "    Without it there is no noise floor to compare the metrics against,"
+    echo "    so they are checked for exact equality."
 fi
 
 # ---------------------------------------------------------------------------
 # Run 3: fresh run from scratch — determinism check against run 1
+#
+# Run 3 does double duty. Its batches must match run 1's (the sampler is
+# deterministic), and its metrics give the run-to-run noise floor: two
+# identical from-scratch runs are observed NOT to produce bit-identical losses
+# even when their batches match exactly, so the training loop is not
+# reproducible to the last digit. Judging the resume against exact equality
+# would therefore report that nondeterminism as a resume bug; judging it
+# against run 3 asks the question that can be answered — is resuming any worse
+# than re-running?
 # ---------------------------------------------------------------------------
+if [[ "$SKIP_RUN3" != "1" ]]; then
 echo ""
 echo "--- RUN 3: Training from scratch for $MAX_STEPS steps (determinism check, 2 GPUs) ---"
 echo "    Cut IDs logged to: $CUT_IDS_RUN3"
@@ -308,11 +303,13 @@ MELT_DEBUG_CUT_IDS_EVERY=1 \
 run_trainer \
     --trainer.output_dir "$RUN3_DIR" \
     --trainer.max_steps "$MAX_STEPS" \
-    --trainer.save_strategy '"no"' \
+    --trainer.save_steps "$MAX_STEPS" \
     --trainer.overwrite_output_dir true
 
 echo ""
 echo "Run 3 complete."
+
+save_trainer_state "$RUN3_DIR" "$STATE_RUN3"
 
 # ---------------------------------------------------------------------------
 # Compare cut IDs: run 3 vs run 1 (full run, all batches must match)
@@ -329,5 +326,32 @@ python "$SCRIPT_DIR/compare_cut_ids.py" \
     --grad-accum-steps "$GRAD_ACC_STEPS"
 STATUS_DETERMINISM=$?
 
+fi  # SKIP_RUN3
+
+# ---------------------------------------------------------------------------
+# Compare metrics: did the resume land in the same model state?
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- Comparing metrics ---"
+echo "    run1 vs run2 at every logged step after $CHECKPOINT_STEP."
+echo ""
+
+BASELINE_ARGS=()
+if [[ -f "$STATE_RUN3" ]]; then
+    BASELINE_ARGS=(--baseline-state "$STATE_RUN3")
+fi
+
+if [[ -f "$STATE_RUN1" && -f "$STATE_RUN2" ]]; then
+    python "$SCRIPT_DIR/compare_losses.py" \
+        --run1-state "$STATE_RUN1" \
+        --run2-state "$STATE_RUN2" \
+        --checkpoint-step "$CHECKPOINT_STEP" \
+        "${BASELINE_ARGS[@]}"
+    STATUS_LOSSES=$?
+else
+    echo "SKIPPED: metric histories were not captured from both runs."
+    STATUS_LOSSES=1
+fi
+
 print_summary
-exit $(( STATUS_CUTIDS != 0 || STATUS_LOSSES != 0 || STATUS_DETERMINISM != 0 ))
+exit $(( STATUS_CUTIDS != 0 || STATUS_LOSSES != 0 || ${STATUS_DETERMINISM:-0} != 0 ))

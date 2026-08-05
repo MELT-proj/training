@@ -11,10 +11,23 @@ compared: `Trainer` seeds the resumed run's `log_history` with the history it
 restored from the checkpoint, so the entries at or below that step are copies,
 not independent measurements, and comparing them would always pass.
 
+Exact equality is the wrong bar. Two from-scratch runs of this pipeline, same
+seed and verifiably the same batches, are observed to disagree on the loss from
+the first logged step onward, and the gap compounds through the optimizer.
+Demanding bit-identical losses from a resume therefore measures the training
+loop's nondeterminism, not the resume.
+
+Pass --baseline-state with a third run — from scratch, same config as run 1 —
+to measure that floor instead of assuming it. The resume passes when it
+reproduces run 1 at least as closely as the replica does. Without a baseline
+the comparison falls back to exact equality, which is only meaningful for a
+fully deterministic stack.
+
 Usage:
     python compare_losses.py \
         --run1-state RUN1/checkpoint-100/trainer_state.json \
         --run2-state RUN2/checkpoint-100/trainer_state.json \
+        --baseline-state RUN3/checkpoint-100/trainer_state.json \
         --checkpoint-step 50
 """
 
@@ -50,16 +63,37 @@ def load_history(path: Path) -> dict[int, dict[str, float]]:
     return history
 
 
+def max_divergence(
+    ha: dict[int, dict[str, float]],
+    hb: dict[int, dict[str, float]],
+    steps: list[int],
+) -> dict[str, float]:
+    """Largest absolute difference per metric across *steps*."""
+    worst: dict[str, float] = {}
+    for step in steps:
+        ma, mb = ha.get(step, {}), hb.get(step, {})
+        for key in METRIC_KEYS:
+            if key in ma and key in mb:
+                diff = abs(ma[key] - mb[key])
+                worst[key] = max(worst.get(key, 0.0), diff)
+    return worst
+
+
 def compare(
     run1_state: Path,
     run2_state: Path,
     checkpoint_step: int,
     tol: float,
+    baseline_state: Path | None = None,
 ) -> bool:
     print(f"Loading run1 metrics from: {run1_state}")
     h1 = load_history(run1_state)
     print(f"Loading run2 metrics from: {run2_state}")
     h2 = load_history(run2_state)
+    h3: dict[int, dict[str, float]] | None = None
+    if baseline_state is not None:
+        print(f"Loading noise-floor baseline from: {baseline_state}")
+        h3 = load_history(baseline_state)
 
     steps1 = {s for s in h1 if s > checkpoint_step}
     steps2 = {s for s in h2 if s > checkpoint_step}
@@ -82,30 +116,64 @@ def compare(
               "Did both runs reach max_steps, and is logging_steps small enough?")
         return False
 
-    for step in shared:
-        m1, m2 = h1[step], h2[step]
-        keys = [k for k in METRIC_KEYS if k in m1 or k in m2]
-        parts = []
-        step_ok = True
-        for key in keys:
-            if key not in m1 or key not in m2:
-                parts.append(f"{key}: MISSING in {'run2' if key in m1 else 'run1'}")
-                step_ok = False
-                continue
-            v1, v2 = m1[key], m2[key]
-            diff = abs(v1 - v2)
-            if diff > tol:
-                parts.append(f"{key}: {v1} vs {v2} (diff {diff:.3e})  <-- MISMATCH")
-                step_ok = False
-            else:
-                parts.append(f"{key}: {v1}")
-        marker = "  " if step_ok else "X "
-        print(f"{marker}step {step:>5}: " + ", ".join(parts))
-        if not step_ok:
-            all_ok = False
+    # Per-step detail. `resume` is |run1 - run2|; `replica` is |run1 - run3|,
+    # i.e. what an identical from-scratch re-run costs.
+    header = f"\n  {'step':>6}  {'metric':<14} {'run1':>14} {'run2':>14} {'|resume|':>10}"
+    if h3 is not None:
+        header += f" {'|replica|':>10}"
+    print(header)
 
-    # The final step is the one that matters most: it is the only point where
-    # every optimizer update since the checkpoint has been folded in.
+    for step in shared:
+        for key in METRIC_KEYS:
+            if key not in h1[step] or key not in h2[step]:
+                if key in h1[step] or key in h2[step]:
+                    print(f"  {step:>6}  {key:<14} MISSING in "
+                          f"{'run2' if key in h1[step] else 'run1'}")
+                    all_ok = False
+                continue
+            v1, v2 = h1[step][key], h2[step][key]
+            line = f"  {step:>6}  {key:<14} {v1:>14.6g} {v2:>14.6g} {abs(v1 - v2):>10.3e}"
+            if h3 is not None and key in h3.get(step, {}):
+                line += f" {abs(v1 - h3[step][key]):>10.3e}"
+            print(line)
+
+    if h3 is None:
+        # No measured floor: fall back to exact equality.
+        worst_resume = max_divergence(h1, h2, shared)
+        print(f"\n  No baseline given — requiring exact agreement (tol={tol}).")
+        for key, diff in sorted(worst_resume.items()):
+            if diff > tol:
+                print(f"  FAILED: {key} differs by up to {diff:.3e}.")
+                all_ok = False
+        if all_ok:
+            print("  OK: every compared metric matches exactly.")
+        return all_ok
+
+    baseline_steps = [s for s in shared if s in h3]
+    if not baseline_steps:
+        print("\n  FAILED: the baseline run logged none of the compared steps.")
+        return False
+
+    worst_resume = max_divergence(h1, h2, baseline_steps)
+    worst_replica = max_divergence(h1, h3, baseline_steps)
+
+    print(f"\n  Worst-case divergence from run1 over steps {baseline_steps}:")
+    print(f"  {'metric':<14} {'resume':>12} {'replica':>12}   verdict")
+    for key in METRIC_KEYS:
+        if key not in worst_resume or key not in worst_replica:
+            continue
+        resume_d, replica_d = worst_resume[key], worst_replica[key]
+        if resume_d <= max(replica_d, tol):
+            verdict = "within noise floor"
+        else:
+            verdict = "EXCEEDS noise floor"
+            all_ok = False
+        print(f"  {key:<14} {resume_d:>12.3e} {replica_d:>12.3e}   {verdict}")
+
+    print("\n  'replica' is two identical from-scratch runs disagreeing with each"
+          "\n  other, so it is the smallest difference this stack can distinguish"
+          "\n  from zero. A resume at or below it is as faithful as re-running.")
+
     final = shared[-1]
     if "eval_loss" not in h1.get(final, {}):
         print(f"\n  NOTE: no eval_loss logged at the final step ({final}). "
@@ -123,22 +191,32 @@ def main() -> None:
                         help="trainer_state.json from the uninterrupted run.")
     parser.add_argument("--run2-state", required=True, type=Path,
                         help="trainer_state.json from the resumed run.")
+    parser.add_argument("--baseline-state", type=Path, default=None,
+                        help=(
+                            "trainer_state.json from a from-scratch replica of run 1. "
+                            "Supplies the measured run-to-run noise floor; without it the "
+                            "comparison demands exact equality."
+                        ))
     parser.add_argument("--checkpoint-step", type=int, default=50,
                         help="Step the resume started from; only later steps are compared (default: 50).")
     parser.add_argument("--tol", type=float, default=0.0,
                         help=(
-                            "Maximum tolerated absolute difference (default: 0.0, exact). "
-                            "Trainer rounds logged losses to 4 decimals, so exact equality "
-                            "is the expected outcome for a correct resume."
+                            "Absolute difference always tolerated (default: 0.0). With a "
+                            "baseline, a metric passes if it is within max(tol, replica "
+                            "divergence), so this only matters when the replica agrees exactly."
                         ))
     args = parser.parse_args()
 
-    for path in (args.run1_state, args.run2_state):
+    paths = [args.run1_state, args.run2_state]
+    if args.baseline_state is not None:
+        paths.append(args.baseline_state)
+    for path in paths:
         if not path.is_file():
             print(f"ERROR: trainer_state.json not found: {path}")
             sys.exit(2)
 
-    ok = compare(args.run1_state, args.run2_state, args.checkpoint_step, args.tol)
+    ok = compare(args.run1_state, args.run2_state, args.checkpoint_step,
+                 args.tol, args.baseline_state)
 
     if ok:
         print("\nRESULT: PASS — the resumed run reproduces the reference metrics.")
