@@ -5,8 +5,9 @@
 # and cross-worker data-sharding invariants verified by compare_cut_ids.py.
 #
 # Key choices that affect reproducibility:
-#   - shard_seed: 42       (fixed so shard order is deterministic across runs)
-#   - seed: 42             (sampler / shuffle seed)
+#   - shard_seed: randomized  (resolves per rank+worker, deterministically)
+#   - seed: 42             (base that make_worker_init_fn turns into each
+#                           worker's LHOTSE_PROCESS_SEED)
 #   - num_workers: 1       (one forked worker per rank)
 #   - prefetch_factor: 2   (worker keeps 2 batches prefetched ahead)
 #   - gradient_accumulation_steps: 1  (1 microbatch == 1 optimizer step)
@@ -63,7 +64,7 @@ data:
     shuffle: true
     drop_last: false
     seed: 42
-    shard_seed: randomized             # fixed: essential for cross-run reproducibility
+    shard_seed: randomized     # per rank+worker, but deterministic: survives resume
 
     min_duration: 0.5
     max_duration: 30.0

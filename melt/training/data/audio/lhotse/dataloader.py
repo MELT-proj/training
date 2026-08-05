@@ -341,6 +341,7 @@ def read_cutset_from_config(config: DictConfig, repeat: bool = True) -> tuple[Cu
     use_iterable = False
 
     seed = config.seed
+    shard_seed = _get_config_value(config, "shard_seed", seed)
     shuffle = config.shuffle
 
     # Data uniqueness across DDP ranks / DataLoader workers is achieved via
@@ -349,6 +350,16 @@ def read_cutset_from_config(config: DictConfig, repeat: bool = True) -> tuple[Cu
     # iterates them in a different random order, so at any given batch index
     # different workers see different cuts.  This matches NeMo's approach and
     # avoids fragmentation issues when datasets have few shards.
+    #
+    # For that to hold, shard traversal must be seeded with `shard_seed` (which
+    # resolves per rank and worker when set to 'randomized') and NOT with
+    # `seed`, which is one fixed integer shared by every process.  Seeding
+    # traversal from `seed` makes all workers walk the shards in the same order,
+    # so their shuffle buffers are filled from the same region of the corpus and
+    # the streams overlap well above chance even when the sampler shuffles
+    # differently.  `seed` keeps its own role: it is the base that
+    # make_worker_init_fn turns into each worker's LHOTSE_PROCESS_SEED, which is
+    # what 'randomized' resolves against.
 
     for source_cfg in input_cfg:
         source_type = _get_config_value(source_cfg, "type", "lhotse_shar")
@@ -364,15 +375,18 @@ def read_cutset_from_config(config: DictConfig, repeat: bool = True) -> tuple[Cu
             if not Path(shar_path).exists():
                 raise FileNotFoundError(f"Shar path not found: {shar_path}")
 
-            logger.info(f"Loading CutSet from shar: {shar_path} (seed: {seed})")
+            logger.info(f"Loading CutSet from shar: {shar_path} (shard_seed: {shard_seed})")
 
             # split_for_dataloading=False: every worker loads all shards.
             # Uniqueness comes from per-worker shuffle seeds set by
             # make_worker_init_fn, not from shard-level partitioning.
+            # (Lhotse forbids split_for_dataloading=True together with a
+            # per-worker seed: it shuffles before slicing by worker index, so
+            # each worker would slice a different permutation.)
             cuts = CutSet.from_shar(
                 in_dir=shar_path,
                 shuffle_shards=shuffle,
-                seed=seed,
+                seed=shard_seed,
                 stateful_shuffle=shuffle,
                 split_for_dataloading=False,
             )
@@ -445,7 +459,7 @@ def read_cutset_from_config(config: DictConfig, repeat: bool = True) -> tuple[Cu
             f"Weights: {[f'{w:.0f}' for w in weights]}"
         )
 
-        combined = CutSet.mux(*cutsets, weights=weights, seed=config.shard_seed)
+        combined = CutSet.mux(*cutsets, weights=weights, seed=shard_seed)
 
     # With split_for_dataloading=False every worker sees all shards.
     # Repeating guarantees infinite data; uniqueness across workers/ranks
@@ -484,6 +498,19 @@ def get_lhotse_sampler_from_config(
     Returns:
         Tuple of (CutSampler, use_iterable_dataset).
     """
+    # Validate shard_seed before anything consumes it: it now also seeds shard
+    # traversal inside read_cutset_from_config, so an unsupported value would
+    # otherwise surface as a lhotse error from deep inside the reader.
+    #
+    # Important: do NOT resolve shard_seed='randomized' in the main process.
+    # Lhotse's resolve_seed('randomized') is designed to run in DataLoader workers after
+    # make_worker_init_fn has set LHOTSE_PROCESS_SEED.
+    # Falls back to `seed` when unset, matching read_cutset_from_config so the
+    # reader and the sampler can never end up on different seeds.
+    shard_seed = _get_config_value(config, "shard_seed", _get_config_value(config, "seed", 42))
+    if isinstance(shard_seed, str) and shard_seed not in ("trng", "randomized"):
+        raise ValueError(f"Unsupported shard_seed={shard_seed!r}. Supported values: int, 'trng', 'randomized'.")
+
     # Load cutset from config. Since we are using Shar data, this is a lazy CutSet.
     # For now, it should always be use_iterable = True.
     cuts, use_iterable = read_cutset_from_config(config, repeat=repeat)
@@ -573,13 +600,7 @@ def get_lhotse_sampler_from_config(
     shuffle = _get_config_value(config, "shuffle", True)
     drop_last = _get_config_value(config, "drop_last", False)
     buffer_size = _get_config_value(config, "buffer_size", 10000)
-    shard_seed = _get_config_value(config, "shard_seed")
-
-    # Important: do NOT resolve shard_seed='randomized' in the main process.
-    # Lhotse's resolve_seed('randomized') is designed to run in DataLoader workers after
-    # make_worker_init_fn has set LHOTSE_PROCESS_SEED.
-    if isinstance(shard_seed, str) and shard_seed not in ("trng", "randomized"):
-        raise ValueError(f"Unsupported shard_seed={shard_seed!r}. Supported values: int, 'trng', 'randomized'.")
+    # shard_seed was read and validated at the top of this function.
 
     lhotse_sampler_type = _get_config_value(config, "lhotse_sampler_type", False) 
     if lhotse_sampler_type == "dynamic_bucketing":
@@ -618,7 +639,7 @@ def get_lhotse_sampler_from_config(
             quadratic_duration=quadratic_duration,
             shuffle=shuffle,
             drop_last=drop_last,
-            seed=config.shard_seed,
+            seed=shard_seed,
             num_buckets=num_buckets,
             duration_bins=bucket_duration_bins,
             buffer_size=buffer_size,
