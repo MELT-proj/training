@@ -341,7 +341,15 @@ if [[ -f "$STATE_RUN3" ]]; then
     BASELINE_ARGS=(--baseline-state "$STATE_RUN3")
 fi
 
-if [[ -f "$STATE_RUN1" && -f "$STATE_RUN2" ]]; then
+# The noise floor is only a noise floor if run 3 saw run 1's batches. When the
+# determinism check fails, run 3 trained on different data, so |run1 - run3|
+# measures that difference rather than the stack's nondeterminism and the
+# comparison cannot separate the two. Report it as inconclusive instead of
+# passing the resume against a meaningless baseline.
+if [[ "${STATUS_DETERMINISM:-0}" -ne 0 ]]; then
+    echo "SKIPPED: run3 did not reproduce run1's batches, so it is not a valid"
+    echo "         noise-floor baseline. Fix the determinism failure first."
+elif [[ -f "$STATE_RUN1" && -f "$STATE_RUN2" ]]; then
     python "$SCRIPT_DIR/compare_losses.py" \
         --run1-state "$STATE_RUN1" \
         --run2-state "$STATE_RUN2" \

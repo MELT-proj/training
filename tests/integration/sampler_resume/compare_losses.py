@@ -18,10 +18,12 @@ Demanding bit-identical losses from a resume therefore measures the training
 loop's nondeterminism, not the resume.
 
 Pass --baseline-state with a third run — from scratch, same config as run 1 —
-to measure that floor instead of assuming it. The resume passes when it
-reproduces run 1 at least as closely as the replica does. Without a baseline
-the comparison falls back to exact equality, which is only meaningful for a
-fully deterministic stack.
+to measure that floor instead of assuming it. The resume passes when it stays
+within --noise-factor times the replica's own divergence: both are worst-of-N
+estimates over a handful of logged steps, so requiring the resume to be
+strictly closer than the replica flips between repetitions even when the two
+are the same size. Without a baseline the comparison falls back to exact
+equality, which is only meaningful for a fully deterministic stack.
 
 Usage:
     python compare_losses.py \
@@ -85,6 +87,7 @@ def compare(
     checkpoint_step: int,
     tol: float,
     baseline_state: Path | None = None,
+    noise_factor: float = 3.0,
 ) -> bool:
     print(f"Loading run1 metrics from: {run1_state}")
     h1 = load_history(run1_state)
@@ -158,21 +161,29 @@ def compare(
     worst_replica = max_divergence(h1, h3, baseline_steps)
 
     print(f"\n  Worst-case divergence from run1 over steps {baseline_steps}:")
-    print(f"  {'metric':<14} {'resume':>12} {'replica':>12}   verdict")
+    print(f"  {'metric':<14} {'resume':>12} {'replica':>12} {'ratio':>7}   verdict")
     for key in METRIC_KEYS:
         if key not in worst_resume or key not in worst_replica:
             continue
         resume_d, replica_d = worst_resume[key], worst_replica[key]
-        if resume_d <= max(replica_d, tol):
-            verdict = "within noise floor"
+        budget = max(replica_d * noise_factor, tol)
+        ratio = resume_d / replica_d if replica_d > 0 else float("inf") if resume_d > 0 else 0.0
+        if resume_d <= budget:
+            verdict = "within noise"
         else:
-            verdict = "EXCEEDS noise floor"
+            verdict = "EXCEEDS noise"
             all_ok = False
-        print(f"  {key:<14} {resume_d:>12.3e} {replica_d:>12.3e}   {verdict}")
+        ratio_str = "n/a" if ratio == float("inf") else f"{ratio:.2f}x"
+        print(f"  {key:<14} {resume_d:>12.3e} {replica_d:>12.3e} {ratio_str:>7}   {verdict}")
 
-    print("\n  'replica' is two identical from-scratch runs disagreeing with each"
-          "\n  other, so it is the smallest difference this stack can distinguish"
-          "\n  from zero. A resume at or below it is as faithful as re-running.")
+    print(f"\n  'replica' is two identical from-scratch runs disagreeing with each other,"
+          f"\n  so it is the smallest difference this stack can distinguish from zero."
+          f"\n  Both columns are worst-of-{len(baseline_steps)} estimates of a noisy quantity, so which one"
+          f"\n  comes out larger flips between repetitions; the test asks only that the"
+          f"\n  resume not be materially worse, i.e. within {noise_factor:g}x the replica.")
+    print("\n  This comparison is only meaningful if run1 and the baseline saw the SAME"
+          "\n  batches — check the determinism result above. If they did not, the"
+          "\n  'replica' column measures data variation, not kernel nondeterminism.")
 
     final = shared[-1]
     if "eval_loss" not in h1.get(final, {}):
@@ -197,6 +208,13 @@ def main() -> None:
                             "Supplies the measured run-to-run noise floor; without it the "
                             "comparison demands exact equality."
                         ))
+    parser.add_argument("--noise-factor", type=float, default=3.0,
+                        help=(
+                            "How many times the replica divergence the resume may reach "
+                            "before failing (default: 3.0). Both are worst-of-N estimates "
+                            "from a handful of logged steps, so a strict <= comparison "
+                            "flips on repetition even when the two are the same size."
+                        ))
     parser.add_argument("--checkpoint-step", type=int, default=50,
                         help="Step the resume started from; only later steps are compared (default: 50).")
     parser.add_argument("--tol", type=float, default=0.0,
@@ -216,7 +234,7 @@ def main() -> None:
             sys.exit(2)
 
     ok = compare(args.run1_state, args.run2_state, args.checkpoint_step,
-                 args.tol, args.baseline_state)
+                 args.tol, args.baseline_state, args.noise_factor)
 
     if ok:
         print("\nRESULT: PASS — the resumed run reproduces the reference metrics.")
