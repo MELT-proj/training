@@ -1,0 +1,160 @@
+# Integration test config: sampler resume correctness — 2-GPU DDP, with eval
+#
+# Identical to config_2gpu.yaml except that a validation set is attached and
+# evaluated once, at the final step. That turns "did the resume land in the
+# same place?" into a check on model state rather than only on batch identity:
+# a resumed run must report the same training loss AND the same eval loss at
+# max_steps as the uninterrupted run.
+#
+# Eval is deliberately teacher-forced only. No `evaluation:` section means
+# train.py leaves compute_metrics=None, so HF sets prediction_loss_only and
+# no WER/CER generation runs — the metric compared here is eval_loss.
+#
+# Key choices that affect reproducibility:
+#   - shard_seed: randomized  (resolves per rank+worker, deterministically)
+#   - seed: 42                (base for LHOTSE_PROCESS_SEED)
+#   - num_workers: 1          (one forked worker per rank; avoids the
+#                              rank-wide fast-forward count being applied
+#                              per worker, see issue #46)
+#   - gradient_accumulation_steps: 1  (1 microbatch == 1 optimizer step)
+
+model:
+  encoder:
+    name: facebook/w2v-bert-2.0
+    freeze: true
+
+  decoder:
+    name: Qwen/Qwen2.5-0.5B
+    attn_implementation: flash_attention_2
+    audio_bos_token: "<|audio_bos|>"
+    audio_eos_token: "<|audio_eos|>"
+    audio_token: "<|audio|>"
+    freeze: true
+
+  adapter:
+    type: mlp
+
+  ckpt: null
+
+data:
+  sample_rate: 16000
+  apply_chat_template: false
+  min_chars: 3
+
+  train_ds:
+    force_estimate: true
+    input_cfg:
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/train.100
+        tags:
+          task: asr
+          lang: en
+          text_field: custom.pnc_text
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/train.360
+        tags:
+          task: asr
+          lang: en
+          text_field: custom.pnc_text
+
+    batch_size: null
+    batch_duration: 30.0
+    quadratic_duration: null
+    max_tokens: 256
+
+    lhotse_sampler_type: dynamic_bucketing
+    num_buckets: 10
+    buffer_size: 1000
+    bucket_duration_bins: null
+
+    shuffle: true
+    drop_last: false
+    seed: 42
+    shard_seed: randomized
+
+    min_duration: 0.5
+    max_duration: 30.0
+
+    num_workers: 1
+    pin_memory: false
+    prefetch_factor: 2
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+  validation_ds:
+    force_estimate: false
+    input_cfg:
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/validation
+        tags:
+          task: asr
+          lang: en
+
+    # Eval cuts are materialised eagerly and subsampled with an explicitly
+    # seeded RNG (materialize_cuts_for_eval), so the eval set is identical in
+    # every run regardless of how much global randomness training consumed.
+    max_samples: 256
+
+    batch_size: null
+    batch_duration: 300.0
+    use_bucketing: false
+    lhotse_sampler_type: dynamic
+    shuffle: false
+    drop_last: false
+    seed: 42
+    shard_seed: 42
+
+    min_duration: 0.5
+    max_duration: 30.0
+
+    num_workers: 1
+    pin_memory: true
+    prefetch_factor: 1
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+trainer:
+  output_dir: ${OUTPUT_DIR}
+  overwrite_output_dir: true
+  seed: 42
+  do_train: true
+  do_eval: true
+
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 1
+
+  learning_rate: 2.0e-5
+  lr_scheduler_type: cosine
+  warmup_steps: 0
+
+  num_train_epochs: 3
+  max_steps: 100
+
+  logging_strategy: steps
+  logging_steps: 10
+  report_to:
+    - none
+
+  # Only at the final step: both arms then evaluate at the same point, and
+  # neither has an extra eval that would desynchronise the RNG streams.
+  eval_strategy: steps
+  eval_steps: 100
+
+  save_strategy: steps
+  save_steps: 50
+  save_total_limit: 5
+
+  bf16: true
+  group_by_length: false
+  dataloader_num_workers: 1
+  remove_unused_columns: false
+  ddp_find_unused_parameters: false
+
+optimization:
+  encoder_lr: 6.0e-6
+  decoder_lr: 2.0e-5
+  adapter_lr: 2.0e-4
+  min_lr_scale: 0.1
