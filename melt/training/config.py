@@ -129,7 +129,12 @@ data:
     shuffle: true
     drop_last: false
     seed: 42
-    shard_seed: trng
+    # 'randomized' resolves to seed + 100*worker_id + 100000*rank, so every
+    # (rank, worker) walks its own stream but does so reproducibly. 'trng'
+    # also separates the streams, but draws from the system entropy pool, and
+    # a sampler checkpoint stores the string rather than the drawn value — a
+    # resumed run therefore fast-forwards through a stream it has never seen.
+    shard_seed: randomized
     min_duration: 0.5
     max_duration: 30.0
     max_tokens: null
@@ -153,7 +158,7 @@ data:
     shuffle: false
     drop_last: false
     seed: 42
-    shard_seed: trng
+    shard_seed: randomized     # as above: same separation, but reproducible
     min_duration: 0.5
     max_duration: 30.0
     max_tokens: null
