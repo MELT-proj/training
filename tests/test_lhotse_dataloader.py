@@ -184,6 +184,179 @@ class TestSamplerAndDataloader:
         assert "input_features" in batch
 
 
+@pytest.fixture(scope="module")
+def synthetic_shar(tmp_path_factory) -> dict[str, str]:
+    """Three tiny shar sources whose cut IDs identify the source they came from.
+
+    Synthetic rather than real data so the mixture tests assert on proportions
+    without depending on LOCAL_DATASETS_DIR.
+    """
+    from lhotse import CutSet
+    from lhotse.testing.dummies import DummyManifest
+
+    root = tmp_path_factory.mktemp("group_shar")
+    out = {}
+    for name in ("a", "b", "c"):
+        cuts = DummyManifest(CutSet, begin_id=0, end_id=20, with_data=True)
+        cuts = CutSet.from_cuts(c.with_id(f"{name}{i}") for i, c in enumerate(cuts))
+        d = root / name
+        cuts.to_shar(str(d), fields={"recording": "wav"}, shard_size=10)
+        out[name] = str(d)
+    return out
+
+
+def _source_of(cut_id: str) -> str:
+    return cut_id[0]
+
+
+class TestWeightResolution:
+    """`_resolve_weights` decides one level's weights; it is all or nothing."""
+
+    def test_all_explicit_are_used_verbatim(self):
+        from melt.training.data.audio.lhotse.dataloader import _resolve_weights
+
+        assert _resolve_weights([0.7, 0.3], [100, 900], "x") == [0.7, 0.3]
+
+    def test_no_explicit_falls_back_to_cut_counts(self):
+        from melt.training.data.audio.lhotse.dataloader import _resolve_weights
+
+        assert _resolve_weights([None, None], [100, 900], "x") == [100.0, 900.0]
+
+    def test_unmeasurable_source_floors_at_one(self):
+        from melt.training.data.audio.lhotse.dataloader import _resolve_weights
+
+        assert _resolve_weights([None, None], [0, 900], "x") == [1.0, 900.0]
+
+    def test_mixing_explicit_and_automatic_raises(self):
+        from melt.training.data.audio.lhotse.dataloader import _resolve_weights
+
+        # 0.7 against a raw count of 900 would starve the weighted source, so
+        # this is rejected rather than silently normalised.
+        with pytest.raises(ValueError, match="Set it on all of them or none"):
+            _resolve_weights([0.7, None], [100, 900], "x")
+
+
+class TestNestedGroups:
+    def test_group_is_muxed_at_the_product_of_weights(self, synthetic_shar):
+        from melt.training.data.audio.lhotse.dataloader import read_cutset_from_config
+
+        # Group 1 holds a and b at 0.25/0.75; group 2 holds c alone.
+        # Both groups carry weight 0.5, so the effective shares are
+        # a=0.125, b=0.375, c=0.5.
+        config = OmegaConf.create(
+            {
+                "input_cfg": [
+                    {
+                        "type": "group",
+                        "weight": 0.5,
+                        "input_cfg": [
+                            {"type": "lhotse_shar", "shar_path": synthetic_shar["a"],
+                             "weight": 0.25},
+                            {"type": "lhotse_shar", "shar_path": synthetic_shar["b"],
+                             "weight": 0.75},
+                        ],
+                    },
+                    {
+                        "type": "group",
+                        "weight": 0.5,
+                        "input_cfg": [
+                            {"type": "lhotse_shar", "shar_path": synthetic_shar["c"],
+                             "weight": 1.0},
+                        ],
+                    },
+                ],
+                "shuffle": False,
+                "seed": 42,
+                "shard_seed": 0,
+            }
+        )
+
+        cuts, use_iterable = read_cutset_from_config(config, repeat=True)
+        assert use_iterable is True
+
+        counts = {"a": 0, "b": 0, "c": 0}
+        for i, cut in enumerate(cuts):
+            if i >= 3000:
+                break
+            counts[_source_of(cut.id)] += 1
+
+        total = sum(counts.values())
+        shares = {k: v / total for k, v in counts.items()}
+        # Loose bounds: this asserts the product is applied, not the RNG.
+        assert shares["a"] == pytest.approx(0.125, abs=0.05)
+        assert shares["b"] == pytest.approx(0.375, abs=0.06)
+        assert shares["c"] == pytest.approx(0.500, abs=0.06)
+
+    def test_group_tags_reach_every_cut_beneath(self, synthetic_shar):
+        from melt.training.data.audio.lhotse.dataloader import read_cutset_from_config
+
+        config = OmegaConf.create(
+            {
+                "input_cfg": [
+                    {
+                        "type": "group",
+                        "weight": 1.0,
+                        "tags": {"lang": "de"},
+                        "input_cfg": [
+                            {
+                                "type": "lhotse_shar",
+                                "shar_path": synthetic_shar["a"],
+                                "weight": 1.0,
+                                "tags": {"task": "asr", "region_code": "de_de"},
+                            }
+                        ],
+                    }
+                ],
+                "shuffle": False,
+                "seed": 42,
+                "shard_seed": 0,
+            }
+        )
+
+        cuts, _ = read_cutset_from_config(config, repeat=False)
+        first = next(iter(cuts))
+        # The leaf's own tags survive, and the group's tag is added on top.
+        assert first.custom.get("task") == "asr"
+        assert first.custom.get("region_code") == "de_de"
+        assert first.custom.get("lang") == "de"
+
+    def test_flat_config_still_loads(self, synthetic_shar):
+        """A config with no groups must behave exactly as before."""
+        from melt.training.data.audio.lhotse.dataloader import read_cutset_from_config
+
+        config = OmegaConf.create(
+            {
+                "input_cfg": [
+                    {"type": "lhotse_shar", "shar_path": synthetic_shar["a"]},
+                    {"type": "lhotse_shar", "shar_path": synthetic_shar["b"]},
+                ],
+                "shuffle": False,
+                "seed": 42,
+                "shard_seed": 0,
+            }
+        )
+
+        cuts, use_iterable = read_cutset_from_config(config, repeat=False)
+        assert use_iterable is True
+        seen = {_source_of(c.id) for c in cuts}
+        assert seen == {"a", "b"}
+
+    def test_empty_group_raises(self, synthetic_shar):
+        from melt.training.data.audio.lhotse.dataloader import read_cutset_from_config
+
+        config = OmegaConf.create(
+            {
+                "input_cfg": [{"type": "group", "weight": 1.0, "input_cfg": []}],
+                "shuffle": False,
+                "seed": 42,
+                "shard_seed": 0,
+            }
+        )
+
+        with pytest.raises(ValueError, match="must define a non-empty 'input_cfg'"):
+            read_cutset_from_config(config)
+
+
 class TestFallbackDataset:
     def test_fallback_returns_last_good_batch(self):
         from unittest.mock import MagicMock
