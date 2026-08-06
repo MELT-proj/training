@@ -200,6 +200,7 @@ def synthetic_shar(tmp_path_factory) -> dict[str, str]:
         cuts = DummyManifest(CutSet, begin_id=0, end_id=20, with_data=True)
         cuts = CutSet.from_cuts(c.with_id(f"{name}{i}") for i, c in enumerate(cuts))
         d = root / name
+        d.mkdir(parents=True, exist_ok=True)  # to_shar does not create it
         cuts.to_shar(str(d), fields={"recording": "wav"}, shard_size=10)
         out[name] = str(d)
     return out

@@ -375,19 +375,18 @@ def read_cutset_from_config(config: DictConfig, repeat: bool = True) -> tuple[Cu
     # make_worker_init_fn turns into each worker's LHOTSE_PROCESS_SEED, which is
     # what 'randomized' resolves against.
 
-    combined, use_iterable, _ = _combine_entries(input_cfg, shuffle, shard_seed)
-
     # With split_for_dataloading=False every worker sees all shards.
     # Repeating guarantees infinite data; uniqueness across workers/ranks
     # is provided by per-worker shuffle seeds (make_worker_init_fn).
-    if repeat:
-        combined = combined.repeat()
+    combined, use_iterable, _ = _combine_entries(
+        input_cfg, shuffle, shard_seed, repeat=repeat
+    )
 
     return combined, use_iterable
 
 
 def _combine_entries(
-    entries: list, shuffle: bool, shard_seed, _where: str = "input_cfg"
+    entries: list, shuffle: bool, shard_seed, repeat: bool, _where: str = "input_cfg"
 ) -> tuple[CutSet, bool, int]:
     """Load one level of ``input_cfg`` and mux its entries together.
 
@@ -404,6 +403,15 @@ def _combine_entries(
     Returns ``(cuts, use_iterable, n_cuts)``.  ``n_cuts`` is the total number of
     cuts underneath this level and is what auto-weighting uses one level up; it
     is 0 when the sources cannot report a length.
+
+    When ``repeat`` is set, each leaf source is made infinite *before* being
+    muxed.  This is what makes the weights mean anything: ``CutSet.mux`` draws
+    from a source until it is exhausted and then drops it, so muxing finite
+    sources and repeating the combination delivers 100% of every corpus per
+    cycle -- the resulting mixture tracks corpus size and ignores the weights
+    entirely.  Repeating each source first keeps every one of them available
+    forever, so the draw probabilities hold for the whole run.  This matches
+    what NeMo does in ``nemo/collections/common/data/lhotse/cutset.py::mux``.
     """
     cutsets: list[CutSet] = []
     explicit: list[float | None] = []
@@ -420,8 +428,10 @@ def _combine_entries(
                 raise ValueError(
                     f"{where}: a 'group' entry must define a non-empty 'input_cfg'"
                 )
+            # The group's leaves are repeated inside the recursion, so the
+            # group's own mux is already infinite.
             cuts, child_iterable, n_cuts = _combine_entries(
-                children, shuffle, shard_seed, f"{where}.input_cfg"
+                children, shuffle, shard_seed, repeat, f"{where}.input_cfg"
             )
             use_iterable = use_iterable or child_iterable
         elif source_type == "lhotse_shar":
@@ -451,7 +461,11 @@ def _combine_entries(
                 split_for_dataloading=False,
             )
             use_iterable = True  # Shar always uses iterable dataset
+            # Count before repeating: len() of a repeated CutSet is not the
+            # corpus size, and auto-weighting needs the corpus size.
             n_cuts = _count_cuts(cuts, where)
+            if repeat:
+                cuts = cuts.repeat(preserve_id=True)
         # elif source_type == "lhotse_cuts":
         #     cuts_path = _get_config_value(source_cfg, "cuts_path")
         #     if cuts_path is None:
