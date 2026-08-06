@@ -288,6 +288,41 @@ tail -f ~/training/logs/melt-train-container.<jobid>.out
 sacct -j <jobid> --format=JobID,State,ExitCode,Elapsed -X
 ```
 
+### "I don't see any log"
+
+The log is `logs/<job-name>.<jobid>.out` **relative to the directory you
+submitted from** — not to the repo root, and not to `--trainer.output_dir`.
+The job name is `melt-train-container`, so from `~/training` it is
+`~/training/logs/melt-train-container.<jobid>.out`.
+
+Don't guess the path — ask SLURM, which knows it exactly:
+
+```bash
+# [mn5] while the job is queued or running
+scontrol show job <jobid> | grep -E "StdOut|StdErr|WorkDir"
+
+# after it has finished
+sacct -j <jobid> --format=JobID,JobName,State,ExitCode,Elapsed,WorkDir%60 -X
+```
+
+If there is **no file at all** and the job went to `FAILED` within seconds, the
+cause is almost always that **`logs/` did not exist when you ran `sbatch`**.
+SLURM will not create the `--output` directory; it kills the job before anything
+runs, and because the log *is* the thing that failed, there is nowhere for it to
+tell you so.
+
+```bash
+# [mn5] from the directory you submit from
+mkdir -p logs
+```
+
+The `infra/runners/submit-*.sh` runners do this for you. Submitting
+`bash/run_train_singularity.sbatch` with a bare `sbatch` does not — that is the
+usual way to hit this. Prefer the runner (§B3).
+
+If the file exists but looks empty, give it a moment: it is written by the
+compute node and can lag the job entering `RUNNING`, especially behind a queue.
+
 A healthy startup looks like this — worth recognising so you can tell *where* a
 failure happened:
 
@@ -488,7 +523,8 @@ from the eval metrics in §B4.
 | symptom | cause |
 |---|---|
 | `batch_size should be a positive integer, but got -1` | missing `--trainer.per_device_eval_batch_size` |
-| Job exits instantly, no log | `logs/` didn't exist, or a bad `--output` path |
+| Job exits instantly, no log | `logs/` didn't exist, or a bad `--output` path — see §B4 |
+| `Lhotse sampler type `False` unknown` | config still sets the retired `use_bucketing`; use `lhotse_sampler_type: dynamic_bucketing` |
 | `SINGULARITY_IMG not found` | image not shipped, or site-file path is stale |
 | Model load fails / tries to reach the Hub | weights not in `$HF_HOME` (§A3) |
 | `CUDA out of memory` during eval | eval batch too large — first batches are worst-case |
