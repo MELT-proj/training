@@ -325,6 +325,23 @@ def estimate_steps_per_epoch(
 def read_cutset_from_config(config: DictConfig, repeat: bool = True) -> tuple[CutSet, bool]:
     """Read CutSet(s) from configuration.
 
+    ``input_cfg`` is a list of sources.  An entry may also be ``type: group``
+    with its own nested ``input_cfg``, in which case the group is muxed
+    internally and then muxed against its siblings.  A corpus's sampling
+    probability is therefore the product of the weights along its path, which
+    is how a two-tier language/corpus mixture is expressed::
+
+        input_cfg:
+          - type: group          # a language
+            weight: 0.21         # p_l
+            input_cfg:
+              - type: lhotse_shar
+                shar_path: ...
+                weight: 0.44     # p_c, so this corpus is drawn at p_l * p_c
+
+    Within a level, either every entry sets ``weight`` or none does; see
+    :func:`_resolve_weights`.
+
     Args:
         config: DictConfig with input_cfg specifying data sources.
         repeat: If True, the combined CutSet is repeated infinitely (for training).
@@ -336,9 +353,6 @@ def read_cutset_from_config(config: DictConfig, repeat: bool = True) -> tuple[Cu
     input_cfg = _get_config_value(config, "input_cfg", [])
     if not input_cfg:
         raise ValueError("No data sources specified in input_cfg")
-
-    cutsets = []
-    use_iterable = False
 
     seed = config.seed
     shard_seed = _get_config_value(config, "shard_seed", seed)
@@ -361,10 +375,66 @@ def read_cutset_from_config(config: DictConfig, repeat: bool = True) -> tuple[Cu
     # make_worker_init_fn turns into each worker's LHOTSE_PROCESS_SEED, which is
     # what 'randomized' resolves against.
 
-    for source_cfg in input_cfg:
-        source_type = _get_config_value(source_cfg, "type", "lhotse_shar")
+    # With split_for_dataloading=False every worker sees all shards.
+    # Repeating guarantees infinite data; uniqueness across workers/ranks
+    # is provided by per-worker shuffle seeds (make_worker_init_fn).
+    combined, use_iterable, _ = _combine_entries(
+        input_cfg, shuffle, shard_seed, repeat=repeat
+    )
 
-        if source_type == "lhotse_shar":
+    return combined, use_iterable
+
+
+def _combine_entries(
+    entries: list, shuffle: bool, shard_seed, repeat: bool, _where: str = "input_cfg"
+) -> tuple[CutSet, bool, int]:
+    """Load one level of ``input_cfg`` and mux its entries together.
+
+    An entry is either a leaf source or a ``type: group`` that carries its own
+    nested ``input_cfg``.  Groups may nest arbitrarily deep; each level is muxed
+    among its own children only, so the sampling probability of a corpus is the
+    product of the weights along its path from the root.
+
+    That product is what makes a two-tier language/corpus mixture expressible:
+    put p_l on the language group and p_c on each corpus inside it, and the
+    effective per-corpus probability is p_l * p_c.  It is also the schema NeMo
+    Speech uses, so one weights file can drive both.
+
+    Returns ``(cuts, use_iterable, n_cuts)``.  ``n_cuts`` is the total number of
+    cuts underneath this level and is what auto-weighting uses one level up; it
+    is 0 when the sources cannot report a length.
+
+    When ``repeat`` is set, each leaf source is made infinite *before* being
+    muxed.  This is what makes the weights mean anything: ``CutSet.mux`` draws
+    from a source until it is exhausted and then drops it, so muxing finite
+    sources and repeating the combination delivers 100% of every corpus per
+    cycle -- the resulting mixture tracks corpus size and ignores the weights
+    entirely.  Repeating each source first keeps every one of them available
+    forever, so the draw probabilities hold for the whole run.  This matches
+    what NeMo does in ``nemo/collections/common/data/lhotse/cutset.py::mux``.
+    """
+    cutsets: list[CutSet] = []
+    explicit: list[float | None] = []
+    sizes: list[int] = []
+    use_iterable = False
+
+    for idx, source_cfg in enumerate(entries):
+        source_type = _get_config_value(source_cfg, "type", "lhotse_shar")
+        where = f"{_where}[{idx}]"
+
+        if source_type == "group":
+            children = _get_config_value(source_cfg, "input_cfg", None)
+            if not children:
+                raise ValueError(
+                    f"{where}: a 'group' entry must define a non-empty 'input_cfg'"
+                )
+            # The group's leaves are repeated inside the recursion, so the
+            # group's own mux is already infinite.
+            cuts, child_iterable, n_cuts = _combine_entries(
+                children, shuffle, shard_seed, repeat, f"{where}.input_cfg"
+            )
+            use_iterable = use_iterable or child_iterable
+        elif source_type == "lhotse_shar":
             shar_path = _get_config_value(source_cfg, "shar_path")
             if shar_path is None:
                 raise ValueError("shar_path must be specified for lhotse_shar type")
@@ -391,6 +461,11 @@ def read_cutset_from_config(config: DictConfig, repeat: bool = True) -> tuple[Cu
                 split_for_dataloading=False,
             )
             use_iterable = True  # Shar always uses iterable dataset
+            # Count before repeating: len() of a repeated CutSet is not the
+            # corpus size, and auto-weighting needs the corpus size.
+            n_cuts = _count_cuts(cuts, where)
+            if repeat:
+                cuts = cuts.repeat(preserve_id=True)
         # elif source_type == "lhotse_cuts":
         #     cuts_path = _get_config_value(source_cfg, "cuts_path")
         #     if cuts_path is None:
@@ -406,68 +481,84 @@ def read_cutset_from_config(config: DictConfig, repeat: bool = True) -> tuple[Cu
         else:
             raise ValueError(f"Unknown data source type: {source_type}")
 
-        # Add tags to cuts if specified
+        # Add tags to cuts if specified.  On a group this applies to every cut
+        # underneath it, and runs after the children have been tagged, so a
+        # group tag overwrites a child's value for the same key.  Put on a group
+        # only what is genuinely constant across it.
         tags = _get_config_value(source_cfg, "tags", {})
         if tags:
             tag_dict = dict(tags) if not isinstance(tags, dict) else tags
             cuts = cuts.map(partial(_add_tags_to_cut, tags=tag_dict), apply_fn=None)
 
         cutsets.append(cuts)
+        explicit.append(_explicit_weight(source_cfg))
+        sizes.append(n_cuts)
 
-    # Combine multiple cutsets
+    total_cuts = sum(sizes)
     if len(cutsets) == 1:
-        combined = cutsets[0]
-    else:
-        # Compute per-dataset weights proportional to cut count so that a cut
-        # from a large dataset and a cut from a small dataset are sampled at
-        # the same per-cut rate.  If a source config sets an explicit ``weight``
-        # key, that value is used instead of the auto-computed length.
-        weights: list[float] = []
-        for idx, (source_cfg, cs) in enumerate(zip(input_cfg, cutsets)):
-            has_explicit = (
-                "weight" in source_cfg
-                if isinstance(source_cfg, (dict, DictConfig))
-                else False
-            )
-            if has_explicit:
-                weight = float(_get_config_value(source_cfg, "weight", 1.0))
-                weights.append(weight)
-                logger.info(
-                    f"  Dataset {idx}: explicit weight={weight:.1f}"
-                )
-            else:
-                # Auto-weight by number of cuts in the dataset (NeMo convention).
-                # SHAR CutSets are lazy — len(cs) only counts manifest lines,
-                # it does not load audio.
-                try:
-                    n_cuts = len(cs)
-                    # Floor at 1 to avoid zero-weight for empty datasets.
-                    w = max(1, n_cuts)
-                    weights.append(float(w))
-                    logger.info(
-                        f"  Dataset {idx}: auto-weight={w} ({n_cuts} cuts)"
-                    )
-                except (TypeError, ValueError) as exc:
-                    logger.warning(
-                        f"  Dataset {idx}: len() not supported ({exc}), "
-                        f"falling back to weight=1.0"
-                    )
-                    weights.append(1.0)
+        return cutsets[0], use_iterable, total_cuts
 
-        logger.info(
-            f"Mux-ing {len(cutsets)} data sources.  "
-            f"Weights: {[f'{w:.0f}' for w in weights]}"
+    weights = _resolve_weights(explicit, sizes, _where)
+    logger.info(
+        f"Mux-ing {len(cutsets)} sources at {_where}.  "
+        f"Weights: {[f'{w:.4g}' for w in weights]}"
+    )
+    return CutSet.mux(*cutsets, weights=weights, seed=shard_seed), use_iterable, total_cuts
+
+
+def _count_cuts(cuts: CutSet, where: str) -> int:
+    """Number of cuts in a source, or 0 when it cannot report one.
+
+    SHAR CutSets are lazy: len() only counts manifest lines, it does not load
+    audio.
+    """
+    try:
+        return len(cuts)
+    except (TypeError, ValueError) as exc:
+        logger.warning(f"  {where}: len() not supported ({exc}); counts as 0 cuts")
+        return 0
+
+
+def _explicit_weight(source_cfg) -> float | None:
+    """The entry's ``weight`` if it sets one, else None."""
+    has_explicit = (
+        "weight" in source_cfg
+        if isinstance(source_cfg, (dict, DictConfig))
+        else False
+    )
+    if not has_explicit:
+        return None
+    return float(_get_config_value(source_cfg, "weight", 1.0))
+
+
+def _resolve_weights(
+    explicit: list[float | None], sizes: list[int], where: str
+) -> list[float]:
+    """Pick the mux weights for one level, either all explicit or all automatic.
+
+    Mixing the two within a level is rejected rather than silently accepted: an
+    explicit weight is a share of the level (values around 1), while an
+    automatic one is a raw cut count (values in the millions).  Muxing them
+    together normalises both onto the same scale, which starves every explicitly
+    weighted source to approximately zero.
+    """
+    n_explicit = sum(w is not None for w in explicit)
+    if n_explicit == 0:
+        # Auto-weight by cut count so a cut from a large dataset and a cut from
+        # a small one are sampled at the same per-cut rate.  Floor at 1 so an
+        # empty or unmeasurable source is not weighted to zero.
+        weights = [float(max(1, n)) for n in sizes]
+        logger.info(f"  {where}: auto-weighting by cut count {sizes}")
+        return weights
+    if n_explicit != len(explicit):
+        missing = [i for i, w in enumerate(explicit) if w is None]
+        raise ValueError(
+            f"{where}: {n_explicit} of {len(explicit)} entries set 'weight'. "
+            f"Set it on all of them or none — entries at {missing} are missing "
+            f"it. Mixing explicit weights with automatic cut counts would "
+            f"reduce the explicitly weighted sources to near-zero probability."
         )
-
-        combined = CutSet.mux(*cutsets, weights=weights, seed=shard_seed)
-
-    # With split_for_dataloading=False every worker sees all shards.
-    # Repeating guarantees infinite data; uniqueness across workers/ranks
-    # is provided by per-worker shuffle seeds (make_worker_init_fn).
-    if repeat:
-        combined = combined.repeat()
-
-    return combined, use_iterable
+    return [float(w) for w in explicit]
 
 
 def _add_tags_to_cut(cut: Cut, tags: dict[str, str]) -> Cut:
