@@ -184,6 +184,21 @@ class TestSamplerAndDataloader:
         assert "input_features" in batch
 
 
+def _shar_writable(cut):
+    """Strip the in-memory extras `DummyManifest(with_data=True)` attaches.
+
+    Alongside the recording, it hangs `features` and four `custom_*` arrays off
+    each cut, all backed by raw bytes in memory. `to_shar` exports only the
+    fields it is given, and leaves the rest on the cut to be written into
+    `cuts.*.jsonl.gz` — where the bytes are not JSON serializable and the whole
+    write dies. Dropping them keeps the audio, which is the only part these
+    tests want, and the shar dirs still come out shaped like real ones.
+    """
+    cut.features = None
+    cut.custom = None
+    return cut
+
+
 @pytest.fixture(scope="module")
 def synthetic_shar(tmp_path_factory) -> dict[str, str]:
     """Three tiny shar sources whose cut IDs identify the source they came from.
@@ -197,8 +212,10 @@ def synthetic_shar(tmp_path_factory) -> dict[str, str]:
     root = tmp_path_factory.mktemp("group_shar")
     out = {}
     for name in ("a", "b", "c"):
-        cuts = DummyManifest(CutSet, begin_id=0, end_id=20, with_data=True)
-        cuts = CutSet.from_cuts(c.with_id(f"{name}{i}") for i, c in enumerate(cuts))
+        cuts = CutSet.from_cuts(
+            _shar_writable(c.with_id(f"{name}{i}"))
+            for i, c in enumerate(DummyManifest(CutSet, begin_id=0, end_id=20, with_data=True))
+        )
         d = root / name
         d.mkdir(parents=True, exist_ok=True)  # to_shar does not create it
         cuts.to_shar(str(d), fields={"recording": "wav"}, shard_size=10)
