@@ -260,22 +260,6 @@ def main(cfg: DictConfig) -> None:
         slurm_job_id = os.environ.get("SLURM_JOB_ID", "NOSLURM")
         wandb.config.update({"slurm_job_id": slurm_job_id}, allow_val_change=True)
 
-        # Upload the fully-resolved config (after env-var expansion and CLI
-        # overrides) as a wandb artifact for reproducibility.  Write the
-        # file into the output directory so it is easy to inspect locally.
-        output_dir = cfg.trainer.output_dir
-        os.makedirs(output_dir, exist_ok=True)
-        config_path = os.path.join(output_dir, "resolved_config.json")
-        with open(config_path, "w") as f:
-            json.dump(dict_cfg, f, indent=2, default=str)
-        config_artifact = wandb.Artifact(
-            name=f"config-{wandb.run.id}",
-            type="config",
-            description="Resolved training configuration after env var expansion and CLI overrides",
-        )
-        config_artifact.add_file(config_path)
-        wandb.log_artifact(config_artifact)
-
     # Create training arguments
     targs = TrainingArguments(**trainer_args_dict(cfg))
 
@@ -289,6 +273,31 @@ def main(cfg: DictConfig) -> None:
     ##########################
     model, last_checkpoint, config, processor = prepare_model(cfg, targs, processor)
     logger.info("Model prepared!")
+
+    # Upload the fully-resolved config (after env-var expansion and CLI
+    # overrides) as a wandb artifact for reproducibility. Write the file into
+    # the output directory so it is easy to inspect locally.
+    #
+    # This runs AFTER prepare_model on purpose. prepare_model refuses to start
+    # into an output directory that already holds something, and it runs on
+    # every rank -- so writing this file beforehand made the global master
+    # populate the directory that all four ranks were about to inspect, and a
+    # fresh run with wandb enabled and overwrite_output_dir=false failed every
+    # time. The check is about output from a *previous* run, so nothing of ours
+    # may land in that directory until it has passed.
+    if "wandb" in cfg.trainer.report_to and is_global_master:
+        output_dir = cfg.trainer.output_dir
+        os.makedirs(output_dir, exist_ok=True)
+        config_path = os.path.join(output_dir, "resolved_config.json")
+        with open(config_path, "w") as f:
+            json.dump(dict_cfg, f, indent=2, default=str)
+        config_artifact = wandb.Artifact(
+            name=f"config-{wandb.run.id}",
+            type="config",
+            description="Resolved training configuration after env var expansion and CLI overrides",
+        )
+        config_artifact.add_file(config_path)
+        wandb.log_artifact(config_artifact)
 
     ##########################
     ## TRAINING
