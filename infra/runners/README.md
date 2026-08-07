@@ -17,6 +17,19 @@ A **site file** (`sites/<name>.sh`) holds only `export`s (host storage paths, th
 `.sif` path, the venv path) and one `SBATCH_ARGS` array (partition/QoS/account/time).
 It contains no logic and no experiment arguments.
 
+The storage paths are written `"${VAR:-default}"`, so a value exported by the
+caller wins over the site default:
+
+```bash
+OUTPUT_DIR=/gpfs/projects/epor48/melt-data/$USER/outputs \
+TMPDIR_HOST=/gpfs/projects/epor48/melt-data/$USER/tmp \
+infra/runners/submit-container.sh mn5 config/accelerate/fsdp2.yaml …
+```
+
+That is how each account on a shared cluster gets a writable output and tmp
+directory without editing the file. `SBATCH_ARGS` is an array, not an env var —
+change the QoS or wall time by editing the site file.
+
 **Experiment args live on the CLI** (and model/data config in `config/train/*.yaml`) —
 never in runners. That keeps a runner reusable across every experiment.
 

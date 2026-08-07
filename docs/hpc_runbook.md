@@ -272,12 +272,80 @@ infra/runners/submit-container.sh mn5 config/accelerate/fsdp2.yaml \
    | `acc_debug` | 2 h | **1** | smoke tests (high priority, short queue) |
    | `acc_ehpc` | 3 days | many | real runs |
 
-   Note site files use bare `export`, so `VAR=x infra/runners/submit-container.sh …`
-   loses to the site value — edit the file to override.
+   `SBATCH_ARGS` is an array, not an env var, so it can only be changed by
+   editing the file. The **storage paths** in the same file are overridable from
+   the command line — see the next section.
 
 **Always smoke-test a new config first:** `--trainer.max_steps 10
 --trainer.eval_on_start false` on `acc_debug`. It catches config errors in
 minutes instead of after a queue wait.
+
+### Point the run at your own output directory
+
+`/gpfs/projects/epor48` is shared by several accounts, and a directory under it
+belongs to whoever created it — with a default umask that means group-readable
+but **owner-writable only**. So the site defaults `OUTPUT_DIR` and `TMPDIR_HOST`
+work for the account that made them and fail for everyone else:
+
+```
+PermissionError: [Errno 13] Permission denied: '/workspace/outputs/<EXP>'
+```
+
+That path is inside the container; the directory it actually failed on is the
+bind *source*, `$OUTPUT_DIR` from `infra/runners/sites/mn5.sh`. Give yourself
+your own, once:
+
+```bash
+# [mn5]
+mkdir -p /gpfs/projects/epor48/melt-data/$USER/{outputs,tmp}
+```
+
+`melt-data/` itself is group-writable by `epor48`, so this works without anyone
+granting you anything. Then export both on every submit:
+
+```bash
+# [mn5] from ~/training
+EXP=ablation-adapter-4layer
+MY=/gpfs/projects/epor48/melt-data/$USER
+
+OUTPUT_DIR=$MY/outputs TMPDIR_HOST=$MY/tmp \
+infra/runners/submit-container.sh mn5 config/accelerate/fsdp2.yaml \
+  --config runs/my_config.yaml \
+  ... \
+  --trainer.output_dir /workspace/outputs/$EXP \
+  --run.exp_name $EXP
+```
+
+Put that `OUTPUT_DIR=… TMPDIR_HOST=…` prefix in a shell alias or a two-line
+submit wrapper of your own — it is the same on every run. Don't edit
+`sites/mn5.sh` to hardcode your paths: `sync_repo.sh` refuses to push onto a
+dirty remote tree, so a locally edited site file blocks your next code sync.
+
+Notes on the four paths:
+
+| var | container path | who writes it | shared? |
+|---|---|---|---|
+| `OUTPUT_DIR` | `/workspace/outputs` | the run (checkpoints, wandb) | **no — set your own** |
+| `TMPDIR_HOST` | `/workspace/tmp` | the run (triton/lhotse caches) | **no — set your own** |
+| `LOCAL_DATASETS_DIR` | `/workspace/shar` | nobody, read-only | yes, leave it |
+| `HF_HOME` | `/workspace/hf_cache` | nobody (`HF_HUB_OFFLINE=1`) | yes, leave it |
+
+`--trainer.output_dir` stays `/workspace/outputs/$EXP` regardless of where
+`OUTPUT_DIR` points — the container path is fixed, only the bind source moves.
+Your results then land in `$OUTPUT_DIR/$EXP` on the host, which is what §B5
+copies back.
+
+Alternatively the owner can open a directory up to the whole project:
+
+```bash
+# [mn5] as the owner of the directory
+chgrp -R epor48 <dir> && chmod -R g+w <dir> && chmod g+s <dir>
+```
+
+The `g+s` matters: without it, subdirectories created inside keep inheriting the
+creator's primary group and the problem comes back. Per-user directories are
+still the better default — two people writing the same `$EXP` name into one
+`outputs/` will overwrite each other's checkpoints.
 
 ## B4. Monitor
 
@@ -287,6 +355,41 @@ squeue -u $USER
 tail -f ~/training/logs/melt-train-container.<jobid>.out
 sacct -j <jobid> --format=JobID,State,ExitCode,Elapsed -X
 ```
+
+### "I don't see any log"
+
+The log is `logs/<job-name>.<jobid>.out` **relative to the directory you
+submitted from** — not to the repo root, and not to `--trainer.output_dir`.
+The job name is `melt-train-container`, so from `~/training` it is
+`~/training/logs/melt-train-container.<jobid>.out`.
+
+Don't guess the path — ask SLURM, which knows it exactly:
+
+```bash
+# [mn5] while the job is queued or running
+scontrol show job <jobid> | grep -E "StdOut|StdErr|WorkDir"
+
+# after it has finished
+sacct -j <jobid> --format=JobID,JobName,State,ExitCode,Elapsed,WorkDir%60 -X
+```
+
+If there is **no file at all** and the job went to `FAILED` within seconds, the
+cause is almost always that **`logs/` did not exist when you ran `sbatch`**.
+SLURM will not create the `--output` directory; it kills the job before anything
+runs, and because the log *is* the thing that failed, there is nowhere for it to
+tell you so.
+
+```bash
+# [mn5] from the directory you submit from
+mkdir -p logs
+```
+
+The `infra/runners/submit-*.sh` runners do this for you. Submitting
+`bash/run_train_singularity.sbatch` with a bare `sbatch` does not — that is the
+usual way to hit this. Prefer the runner (§B3).
+
+If the file exists but looks empty, give it a moment: it is written by the
+compute node and can lag the job entering `RUNNING`, especially behind a queue.
 
 A healthy startup looks like this — worth recognising so you can tell *where* a
 failure happened:
@@ -482,13 +585,19 @@ from the eval metrics in §B4.
 - **`logs/` must exist before `sbatch`** or SLURM kills the job silently. The
   `submit-*.sh` runners create it; raw `sbatch` does not.
 - **Model weights must be pre-downloaded** — compute nodes are offline.
+- **A shared project directory is not a writable one.** Being in `epor48` gets
+  you read access; the directories under it are owner-writable. Run with your
+  own `OUTPUT_DIR` and `TMPDIR_HOST` (§B3).
 
 ## Troubleshooting
 
 | symptom | cause |
 |---|---|
 | `batch_size should be a positive integer, but got -1` | missing `--trainer.per_device_eval_batch_size` |
-| Job exits instantly, no log | `logs/` didn't exist, or a bad `--output` path |
+| Job exits instantly, no log | `logs/` didn't exist, or a bad `--output` path — see §B4 |
+| `Lhotse sampler type `False` unknown` | config still sets the retired `use_bucketing`; use `lhotse_sampler_type: dynamic_bucketing` |
+| `PermissionError: … '/workspace/outputs/<EXP>'` | shared `OUTPUT_DIR` owned by someone else — set your own (§B3) |
+| Permission denied under `/workspace/tmp` | same cause, `TMPDIR_HOST` — set your own (§B3) |
 | `SINGULARITY_IMG not found` | image not shipped, or site-file path is stale |
 | Model load fails / tries to reach the Hub | weights not in `$HF_HOME` (§A3) |
 | `CUDA out of memory` during eval | eval batch too large — first batches are worst-case |
