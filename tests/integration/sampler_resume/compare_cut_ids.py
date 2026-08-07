@@ -1,21 +1,31 @@
-"""Compare cut ID logs from two training runs to verify sampler resumption.
+"""Compare cut ID logs from two training runs to verify dataloader resumption.
 
-After a full run (run1, steps 0..99) and a resumed run (run2, steps 50..99),
-the batches yielded after the checkpoint should be identical:
+After a full run (run1) and a run resumed from its checkpoint (run2), the
+batches yielded after that checkpoint should be identical. Comparison is per
+**(rank, worker)** stream, and exact: same IDs, same order, same position within
+the batch.
 
-    run1_batches[checkpoint_step * grad_accum : ]
-    ==
-    run2_batches[: ]
+    run1_batches[checkpoint_step * grad_accum // workers_per_rank : ]
+    starts with
+    run2_batches[:]
 
-Each batch is a list of cut IDs (strings).  The comparison is exact:
-same IDs, same order, same position within the batch.
+Two details that the per-rank version of this script got wrong, both invisible
+until num_workers > 1:
+
+  - Each worker numbers its batches from 0. Merging a rank's workers and
+    de-duplicating on batch_idx therefore discards all but one worker's stream.
+  - PyTorch hands batches to workers round-robin, so a worker consumes only its
+    1/num_workers share of the rank's micro-batches. The split index has to be
+    divided by the worker count; using the rank-wide count overshoots by exactly
+    num_workers — the same off-by-num_workers that issue #46 describes in the
+    sampler itself.
+
+Run2 is checked as a *prefix* of run1's post-checkpoint stream rather than for
+equal length: workers prefetch, so each run logs however many batches its workers
+ran ahead to produce, and a shorter resumed run logs fewer.
 
 Files have the naming pattern:
     cut_ids.rank{rank:05d}-ws{world_size:05d}.worker{worker_id:02d}.pid{pid}.jsonl
-
-With num_workers=0 and a single GPU there is exactly one file per run.
-With multiple ranks there is one file per rank, and each rank is compared
-independently.
 
 Additionally, the script verifies that no cut ID is shared between any two
 (rank, worker) pairs within a run — i.e. data-parallel sharding and intra-rank
@@ -45,11 +55,6 @@ def _parse_path(path: Path) -> tuple[int, int] | None:
     return (int(m.group("rank")), int(m.group("worker_id"))) if m else None
 
 
-def _rank_from_path(path: Path) -> int | None:
-    parsed = _parse_path(path)
-    return parsed[0] if parsed is not None else None
-
-
 def _read_jsonl(
     path: Path,
 ) -> list[tuple[int, list[str]]]:
@@ -67,42 +72,6 @@ def _read_jsonl(
                 continue
             records.append((record["batch_idx"], record["cut_ids"]))
     return records
-
-
-def load_batches(directory: Path) -> dict[int, list[list[str]]]:
-    """Return {rank: [cut_id_list, ...]} sorted by batch_idx.
-
-    Multiple JSONL files for the same rank (e.g. from restarted workers) are
-    merged and sorted so that the result is a single ordered sequence.
-    """
-    by_rank: dict[int, list[tuple[int, list[str]]]] = defaultdict(list)
-
-    jsonl_files = list(directory.glob("*.jsonl"))
-    if not jsonl_files:
-        raise FileNotFoundError(f"No JSONL files found in {directory}")
-
-    for path in jsonl_files:
-        rank = _rank_from_path(path)
-        if rank is None:
-            print(f"  WARNING: could not parse rank from {path.name}, skipping")
-            continue
-        by_rank[rank].extend(_read_jsonl(path))
-
-    result: dict[int, list[list[str]]] = {}
-    for rank, entries in by_rank.items():
-        entries.sort(key=lambda x: x[0])
-        # Detect and warn about duplicate batch_idx values
-        seen: set[int] = set()
-        deduped: list[list[str]] = []
-        for idx, cut_ids in entries:
-            if idx in seen:
-                print(f"  WARNING: rank {rank} has duplicate batch_idx={idx}, keeping first occurrence")
-            else:
-                seen.add(idx)
-                deduped.append(cut_ids)
-        result[rank] = deduped
-
-    return result
 
 
 def load_batches_by_worker(
@@ -210,40 +179,58 @@ def compare(
 
     Returns True if all checks pass, False otherwise.
     """
+    # Compare per (rank, worker), not per rank. Two reasons, both of which made
+    # the per-rank comparison structurally wrong once num_workers > 1:
+    #
+    #   - each worker numbers its batches from 0, so merging a rank's workers and
+    #     de-duplicating on batch_idx silently discards all but one worker's
+    #     stream;
+    #   - PyTorch hands batches to the workers round-robin, so a worker consumes
+    #     only its 1/num_workers share of the rank's micro-batches. Skipping the
+    #     rank-wide count in a per-worker stream overshoots by num_workers -- the
+    #     same off-by-num_workers that issue #46 describes in the sampler itself.
     print(f"Loading run1 batches from: {run1_dir}")
-    run1 = load_batches(run1_dir)
-    print(f"  Found ranks: {sorted(run1)}")
-    for rank, batches in run1.items():
-        print(f"  rank {rank}: {len(batches)} batches logged")
+    run1 = load_batches_by_worker(run1_dir)
+    for key, batches in sorted(run1.items()):
+        print(f"  rank {key[0]} worker {key[1]}: {len(batches)} batches logged")
 
     print(f"\nLoading run2 batches from: {run2_dir}")
-    run2 = load_batches(run2_dir)
-    print(f"  Found ranks: {sorted(run2)}")
-    for rank, batches in run2.items():
-        print(f"  rank {rank}: {len(batches)} batches logged")
+    run2 = load_batches_by_worker(run2_dir)
+    for key, batches in sorted(run2.items()):
+        print(f"  rank {key[0]} worker {key[1]}: {len(batches)} batches logged")
 
     if set(run1.keys()) != set(run2.keys()):
         print(
-            f"\nERROR: Rank mismatch between runs.\n"
-            f"  run1 ranks: {sorted(run1)}\n"
-            f"  run2 ranks: {sorted(run2)}"
+            f"\nERROR: (rank, worker) mismatch between runs.\n"
+            f"  run1: {sorted(run1)}\n"
+            f"  run2: {sorted(run2)}"
         )
         return False
 
-    # Number of microbatches consumed before the checkpoint
-    split_idx = checkpoint_step * grad_accum_steps
-    print(f"\nSplit index into run1: {split_idx}  "
-          f"(checkpoint_step={checkpoint_step} × grad_accum={grad_accum_steps})")
+    workers_per_rank = len({w for _, w in run1}) or 1
+    total_microbatches = checkpoint_step * grad_accum_steps
+    split_idx, remainder = divmod(total_microbatches, workers_per_rank)
+    print(
+        f"\nSplit index into each worker's stream: {split_idx}  "
+        f"(checkpoint_step={checkpoint_step} × grad_accum={grad_accum_steps} "
+        f"÷ {workers_per_rank} worker(s) per rank)"
+    )
+    if remainder:
+        print(
+            f"  NOTE: {total_microbatches} micro-batches do not divide evenly across "
+            f"{workers_per_rank} workers; workers 0..{remainder - 1} consumed one more. "
+            "Comparing on the floor, so the first batch of some streams may be skipped."
+        )
 
     all_ok = True
 
-    for rank in sorted(run1.keys()):
-        print(f"\n--- Rank {rank} ---")
-        r1_all = run1[rank]
-        r2_all = run2[rank]
+    for key in sorted(run1.keys()):
+        rank, worker = key
+        print(f"\n--- Rank {rank}, worker {worker} ---")
+        r1_all = run1[key]
+        r2_all = run2[key]
 
         r1_post = r1_all[split_idx:]
-        r2_post = r2_all          # run2 starts logging from batch_idx=0 at step 51
 
         print(f"  run1 total batches : {len(r1_all)}")
         print(f"  run1 post-ckpt     : {len(r1_post)}  (indices {split_idx}..{len(r1_all)-1})")
@@ -257,32 +244,26 @@ def compare(
             all_ok = False
             continue
 
-        if len(r1_post) != len(r2_all):
-            print(
-                f"  MISMATCH: run1 post-checkpoint has {len(r1_post)} batches "
-                f"but run2 has {len(r2_all)} batches."
-            )
-            all_ok = False
-
-        # Compare batch by batch
+        # Lengths need not match: workers prefetch, so each run logs however many
+        # batches its workers produced before the run ended, which differs between
+        # a full run and a shorter resumed one. What must hold is that run2 is a
+        # prefix of run1's post-checkpoint stream.
         n_compare = min(len(r1_post), len(r2_all))
         mismatches = 0
         for i in range(n_compare):
             if r1_post[i] != r2_all[i]:
                 mismatches += 1
-                r1_ids = r1_post[i]
-                r2_ids = r2_all[i]
                 print(
                     f"  MISMATCH at position {i} (run1 batch {split_idx + i}):\n"
-                    f"    run1: {r1_ids}\n"
-                    f"    run2: {r2_ids}"
+                    f"    run1: {r1_post[i]}\n"
+                    f"    run2: {r2_all[i]}"
                 )
                 if mismatches >= 5:
                     print("  (stopping after 5 mismatches)")
                     break
 
-        if mismatches == 0 and len(r1_post) == len(r2_all):
-            print(f"  OK: all {n_compare} batches match exactly.")
+        if mismatches == 0:
+            print(f"  OK: all {n_compare} compared batches match exactly.")
         else:
             print(
                 f"  FAILED: {mismatches} mismatch(es) out of {n_compare} compared batches."
