@@ -1,10 +1,15 @@
 # BSC MareNostrum5 (acc partition). Air-gapped compute nodes: run offline.
 
 # --- storage (host paths) -------------------------------------------------
-export HF_HOME=/gpfs/projects/epor48/melt-data/hf_cache
-export OUTPUT_DIR=/gpfs/projects/epor48/melt-data/outputs
-export LOCAL_DATASETS_DIR=/gpfs/projects/epor48/melt-data/shar
-export TMPDIR_HOST=/gpfs/projects/epor48/melt-data/tmp
+# `:-` so an exported value wins: `OUTPUT_DIR=/gpfs/... infra/runners/submit-*.sh mn5 …`.
+# The project is shared by several accounts, and a directory here belongs to
+# whoever created it — the defaults below are readable by the group but writable
+# only by their owner. Set your own OUTPUT_DIR and TMPDIR_HOST (both get written
+# to); HF_HOME and LOCAL_DATASETS_DIR are read-only in a run and can stay shared.
+export HF_HOME="${HF_HOME:-/gpfs/projects/epor48/melt-data/hf_cache}"
+export OUTPUT_DIR="${OUTPUT_DIR:-/gpfs/projects/epor48/melt-data/outputs}"
+export LOCAL_DATASETS_DIR="${LOCAL_DATASETS_DIR:-/gpfs/projects/epor48/melt-data/shar}"
+export TMPDIR_HOST="${TMPDIR_HOST:-/gpfs/projects/epor48/melt-data/tmp}"
 
 # --- container mode -------------------------------------------------------
 export SINGULARITY_IMG=/gpfs/projects/epor48/melt-data/melt_cuda126.sif
