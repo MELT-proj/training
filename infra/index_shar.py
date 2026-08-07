@@ -24,12 +24,20 @@ for indexing keep working on a migrated source, and ``from_shar``'s default
 
 Cost, measured on artemis against scratch-nyx:
 
-  * gunzip expansion is 4.4x-11.2x depending on corpus, ~6.3x weighted overall;
+  * gunzip expansion is 4.1x-11.0x depending on corpus, 6.85x weighted overall;
     the cuts manifests are a rounding error next to the audio either way.
   * indexing is I/O bound, not CPU bound -- 3.3 s of CPU per 2 GB tar, against
-    ~90 s to read that tar cold. Wall time is therefore (total audio bytes) /
-    (aggregate read bandwidth), which plateaued around 100 MB/s at 8-16 parallel
-    readers. Hence --jobs defaults to 8.
+    ~90 s to read that tar cold over NFS. Wall time is therefore (total audio
+    bytes) / (aggregate read bandwidth), and the right --jobs depends entirely
+    on where you run it:
+
+      artemis, over NFS : 31 MB/s single-stream, ~100 MB/s plateau at 8-16 jobs
+      nyx, local RAID   : 340 MB/s single-stream, ~520 MB/s peak at 2 jobs,
+                          falling to 126 MB/s at 8 -- it is HDD-backed, so
+                          concurrency destroys sequential locality
+
+    Run it on nyx with --jobs 2. The default of 4 is a compromise for an unknown
+    filesystem; measure before trusting it.
 
 Usage:
     python infra/index_shar.py --config config/train/SFT-v1.3.0.yaml --jobs 8
@@ -111,7 +119,9 @@ def migrate_one(
 
     gz_files = sorted(p for p in d.iterdir() if CUTS_GZ.match(p.name))
     if dry_run:
-        added = sum(p.stat().st_size for p in gz_files) * 6  # ~6.3x weighted
+        # 6.85x is the measured whole-collection weighted mean; per corpus it
+        # ranges 4.1x-11.0x, so treat a single source's figure as indicative.
+        added = int(sum(p.stat().st_size for p in gz_files) * 6.85)
         return (str(d), f"would-convert {len(gz_files)} shards", 0.0, added)
 
     added = 0
@@ -161,8 +171,9 @@ def main() -> int:
     src.add_argument("--root", type=Path, help="migrate every Shar source found under this directory")
     ap.add_argument("--data-root", type=Path, default=os.environ.get("LOCAL_DATASETS_DIR"),
                     help="prefix for the relative paths in --config (default: $LOCAL_DATASETS_DIR)")
-    ap.add_argument("--jobs", type=int, default=8,
-                    help="sources converted in parallel; read bandwidth plateaus around 8-16 (default: 8)")
+    ap.add_argument("--jobs", type=int, default=4,
+                    help="sources converted in parallel; optimum is filesystem-dependent "
+                         "(2 on nyx's local RAID, 8-16 over NFS) -- see module docstring")
     ap.add_argument("--keep-gz", action="store_true",
                     help="leave the .gz manifests in place (peak usage is then plain + gz)")
     ap.add_argument("--indexes-root", type=Path, default=None,
