@@ -36,8 +36,15 @@ Cost, measured on artemis against scratch-nyx:
                           falling to 126 MB/s at 8 -- it is HDD-backed, so
                           concurrency destroys sequential locality
 
-    Run it on nyx with --jobs 2. The default of 4 is a compromise for an unknown
-    filesystem; measure before trusting it.
+    Run it on nyx with --jobs 2. Measured end-to-end on the real workload there:
+    226 MB/s at --jobs 2 versus 42 MB/s at --jobs 8, a 5x loss.
+
+    Do not read spare CPU as headroom. At --jobs 2 each worker sits around 43%
+    CPU on a machine reporting 95% idle, which looks like room for more workers;
+    it is not. That 43% is the gunzip/tar-scan phase of a pipeline whose I/O
+    phase is already at the disk's sequential limit, and adding workers only
+    interleaves more read streams. Measure throughput on the real workload, not
+    sequential `dd`, and not CPU utilisation.
 
 Usage:
     python infra/index_shar.py --config config/train/SFT-v1.3.0.yaml --jobs 8
@@ -171,9 +178,9 @@ def main() -> int:
     src.add_argument("--root", type=Path, help="migrate every Shar source found under this directory")
     ap.add_argument("--data-root", type=Path, default=os.environ.get("LOCAL_DATASETS_DIR"),
                     help="prefix for the relative paths in --config (default: $LOCAL_DATASETS_DIR)")
-    ap.add_argument("--jobs", type=int, default=4,
-                    help="sources converted in parallel; optimum is filesystem-dependent "
-                         "(2 on nyx's local RAID, 8-16 over NFS) -- see module docstring")
+    ap.add_argument("--jobs", type=int, default=2,
+                    help="sources converted in parallel; more is often much worse on "
+                         "spinning disks (2 on nyx, 8-16 over NFS) -- see module docstring")
     ap.add_argument("--keep-gz", action="store_true",
                     help="leave the .gz manifests in place (peak usage is then plain + gz)")
     ap.add_argument("--indexes-root", type=Path, default=None,
