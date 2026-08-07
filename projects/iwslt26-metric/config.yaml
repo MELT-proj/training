@@ -213,7 +213,7 @@ data:
     quadratic_duration: 25 # see https://lhotse.readthedocs.io/en/latest/datasets.html#lhotse.dataset.sampling.TimeConstraint
 
     # Bucketing for efficient batching
-    use_bucketing: true
+    lhotse_sampler_type: dynamic_bucketing
     num_buckets: 30
     bucket_buffer_size: 10000
     # bucket_duration_bins: [4.08, 4.95, 5.65, 6.33, 6.85, 7.36, 7.94, 8.46, 9.22, 10.26, 11.76, 13.51, 16.58, 21.43, 23.92, 26.24, 29.63, 31.67, 33.32, 35.22, 37.43, 39.2, 40.19, 42.1, 42.97, 43.93, 45.33, 46.72, 48.19]
@@ -269,7 +269,7 @@ data:
       
     batch_size: null
     batch_duration: 180.0
-    use_bucketing: true
+    lhotse_sampler_type: dynamic_bucketing
     num_buckets: 30
     bucket_buffer_size: 5000
     # bucket_duration_bins: [2.72, 3.6, 4.24, 4.8, 5.2, 5.6, 5.76, 6.08, 6.4, 6.72, 7.11, 7.52, 7.76, 8.08, 8.4, 8.8, 9.04, 9.44, 9.92, 10.32, 10.72, 11.1, 11.68, 12.4, 12.96, 14.0, 14.8, 17.6, 20.8]

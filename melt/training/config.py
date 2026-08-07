@@ -122,7 +122,7 @@ data:
     batch_size: null
     batch_duration: 120.0
     quadratic_duration: null
-    use_bucketing: true
+    lhotse_sampler_type: dynamic_bucketing  # One among: dynamic_bucketing, dynamic, bucketing
     num_buckets: 30
     buffer_size: 10000
     bucket_duration_bins: null
@@ -153,7 +153,7 @@ data:
     force_estimate: null
     batch_size: 8
     batch_duration: null
-    use_bucketing: false
+    lhotse_sampler_type: dynamic
     num_buckets: 30
     shuffle: false
     drop_last: false

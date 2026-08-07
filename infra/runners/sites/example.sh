@@ -11,10 +11,14 @@
 # (setting all of them is fine; each mode ignores what it doesn't use.)
 
 # --- storage (host paths) -------------------------------------------------
-export HF_HOME=/path/to/melt-data/hf_cache            # HF cache; bind-mounted to /workspace/hf_cache in container
-export OUTPUT_DIR=/path/to/melt-data/outputs          # checkpoints/logs; train YAMLs read ${oc.env:OUTPUT_DIR}
-export LOCAL_DATASETS_DIR=/path/to/melt-data/shar     # SHAR datasets; train YAMLs read ${oc.env:LOCAL_DATASETS_DIR}
-export TMPDIR_HOST=/tmp                               # host tmp; bind-mounted to /workspace/tmp (container mode)
+# Write these as "${VAR:-default}" so a value exported by the caller wins:
+#   OUTPUT_DIR=/my/outputs infra/runners/submit-container.sh <site> …
+# On a cluster shared by several accounts that is how each person gets their own
+# writable OUTPUT_DIR and TMPDIR_HOST without editing (and desyncing) this file.
+export HF_HOME="${HF_HOME:-/path/to/melt-data/hf_cache}"                    # HF cache; bind-mounted to /workspace/hf_cache in container
+export OUTPUT_DIR="${OUTPUT_DIR:-/path/to/melt-data/outputs}"               # checkpoints/logs; train YAMLs read ${oc.env:OUTPUT_DIR}
+export LOCAL_DATASETS_DIR="${LOCAL_DATASETS_DIR:-/path/to/melt-data/shar}"  # SHAR datasets; train YAMLs read ${oc.env:LOCAL_DATASETS_DIR}
+export TMPDIR_HOST="${TMPDIR_HOST:-/tmp}"                                   # host tmp; bind-mounted to /workspace/tmp (container mode)
 
 # --- container mode -------------------------------------------------------
 export SINGULARITY_IMG=/path/to/melt-data/melt_cuda126.sif

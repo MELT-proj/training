@@ -1,0 +1,253 @@
+# MELT Training Configuration — modality alignment (MA) on VoxPopuli only
+#
+# Stage 1 of two. Only the adapter trains: the encoder and the decoder are both
+# frozen. The IFT stage afterwards starts from this run's checkpoint by setting
+# `model.ckpt` to this run's output directory.
+#
+# Derived from the known-good VP-only MA run `debug_VP-only-v1.13`, with the
+# decoder moved to Qwen3-1.7B and paths made portable via LOCAL_DATASETS_DIR.
+# All four VoxPopuli splits are present and complete on MN5.
+#
+# Usage:
+#   EXP=MA-VP-only-v1.0
+#   infra/runners/submit-container.sh mn5 config/accelerate/fsdp2.yaml \
+#     --config config/train/MA-VP-only-v1.0.yaml \
+#     --trainer.max_steps 2000 \
+#     --trainer.eval_steps 500 --trainer.save_steps 500 \
+#     --trainer.save_total_limit 3 \
+#     --trainer.per_device_eval_batch_size 4 \
+#     --trainer.report_to wandb \
+#     --trainer.output_dir /workspace/outputs/$EXP \
+#     --run.exp_name $EXP
+#
+# Smoke-test a change first with `--trainer.max_steps 10
+# --trainer.eval_on_start false` on the acc_debug QoS.
+
+# =============================================================================
+# Run Configuration (non-TrainingArguments settings)
+# =============================================================================
+run:
+  exp_name: MA-VP-only-v1.0
+  dry_run: false
+
+# =============================================================================
+# Model Configuration
+# =============================================================================
+model:
+  encoder:
+    name: facebook/w2v-bert-2.0
+    freeze: true
+    max_audio_seq_len: 1500 # for frames of 20ms, this is 30s
+
+  decoder:
+    name: Qwen/Qwen3-1.7B
+    attn_implementation: flash_attention_2
+    freeze: true  # MA: the decoder stays fixed
+    bos_token: <|startoftext|>
+    eos_token: <|endoftext|>
+    pad_token: <|text_pad|> # used if not specified in tokenizer
+    audio_token: <|audio|>
+    audio_bos_token: <|audio_bos|>
+    audio_eos_token: <|audio_eos|>
+
+  adapter:
+    _type: conformer
+    freeze: false  # MA: the adapter is the only thing that trains
+    num_adapter_layers: 2
+    adapter_kernel_size: 3
+    adapter_stride: 2
+
+  ckpt: null  # MA starts from scratch; the IFT stage points this at the MA output
+
+# =============================================================================
+# Data Configuration
+# =============================================================================
+data:
+  sample_rate: 16000
+  apply_chat_template: true
+  min_chars: 3
+
+  train_ds:
+    # Data sources - VoxPopuli only
+    input_cfg:
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/de/train
+        tags:
+          task: asr
+          lang: de
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/en/train
+        tags:
+          task: asr
+          lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/es/train
+        tags:
+          task: asr
+          lang: es
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/fr/train
+        tags:
+          task: asr
+          lang: fr
+
+    # Stats - measured over the four splits above, not estimated
+    total_hours: 1144.84
+    total_cuts: 415438
+    force_estimate: false
+
+    # Duration filtering
+    min_duration: 0.5
+    max_duration: 90.0
+
+    # Batch settings
+    batch_size: 32       # cap on cuts per batch, applied alongside batch_duration
+    batch_duration: 160  # seconds of audio per batch
+    quadratic_duration: 35
+    max_tokens: 256
+    max_tps: null
+
+    # Bucketing for efficient batching. Bins are left null so the sampler
+    # estimates them from this data; a copied-over list would describe a
+    # different duration distribution.
+    lhotse_sampler_type: dynamic_bucketing  # One among: dynamic_bucketing, dynamic, bucketing
+    num_buckets: 30
+    buffer_size: 300000
+    bucket_duration_bins: null
+
+    # Sampling
+    shuffle: true
+    drop_last: false
+    seed: 42
+    # A scalar here is one value shared by every process, so every DDP rank
+    # resolves the same RNG and yields the same batch sequence. 'randomized'
+    # resolves per rank and worker while staying reproducible across runs.
+    shard_seed: randomized
+
+    # DataLoader settings
+    num_workers: 1
+    pin_memory: true
+    prefetch_factor: 32
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+  validation_ds:
+    input_cfg:
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/en/validation
+        tags:
+          task: asr
+          lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/de/validation
+        tags:
+          task: asr
+          lang: de
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/es/validation
+        tags:
+          task: asr
+          lang: es
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/fr/validation
+        tags:
+          task: asr
+          lang: fr
+
+    # Statistics
+    total_hours: null
+    total_cuts: null
+    force_estimate: true
+
+    # Batch composition
+    batch_size: null
+    batch_duration: 200.0
+    quadratic_duration: 30
+    max_tokens: 256
+    max_tps: null
+
+    lhotse_sampler_type: dynamic_bucketing
+    num_buckets: 30
+    bucket_duration_bins: null
+    buffer_size: 20000
+
+    shuffle: false
+    drop_last: false
+    seed: 42
+    shard_seed: 42  # inert while shuffle is false; fixed so eval order is stable
+
+    min_duration: 0.5
+    max_duration: 90.0
+    num_workers: 1
+    pin_memory: true
+    prefetch_factor: 1
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+# =============================================================================
+# Trainer Configuration
+# =============================================================================
+trainer:
+  output_dir: ${oc.env:OUTPUT_DIR}
+  overwrite_output_dir: false
+  resume_from_checkpoint: null
+  seed: 42
+  do_train: true
+  do_eval: true
+  eval_on_start: true
+  average_tokens_across_devices: true
+
+  # Batch and accumulation
+  per_device_train_batch_size: -1  # Handled by Lhotse
+  # NOTE: pass --trainer.per_device_eval_batch_size 4 on the command line.
+  # The eval path does not understand -1 and crashes at the first eval.
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 4
+
+  # LR schedule
+  lr_scheduler_type: cosine
+  warmup_steps: 10
+
+  # Duration
+  num_train_epochs: 3
+  max_steps: -1
+
+  # Logging
+  logging_strategy: steps
+  logging_steps: 2
+  report_to: wandb
+
+  # Evaluation
+  eval_strategy: steps
+  eval_steps: 500
+  batch_eval_metrics: true
+
+  # Checkpointing
+  save_strategy: steps
+  save_steps: 500
+  save_total_limit: 3
+
+  # Performance
+  bf16: true
+  group_by_length: false  # Handled by Lhotse bucketing
+  dataloader_num_workers: 0  # Eval-only knob (train workers come from data.train_ds.num_workers)
+  remove_unused_columns: false
+  ddp_find_unused_parameters: false
+
+  max_grad_norm: 1.0
+
+evaluation:
+  compute_metrics: true
+  enable_whisper_normalization: true
+
+optimization:
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+
+  # Only adapter_lr is in play: encoder and decoder are frozen for MA.
+  encoder_lr: 6e-6
+  decoder_lr: 2e-5
+  adapter_lr: 2e-4
+  min_lr_scale: 0.1

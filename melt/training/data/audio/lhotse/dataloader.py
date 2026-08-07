@@ -693,7 +693,18 @@ def get_lhotse_sampler_from_config(
     buffer_size = _get_config_value(config, "buffer_size", 10000)
     # shard_seed was read and validated at the top of this function.
 
-    lhotse_sampler_type = _get_config_value(config, "lhotse_sampler_type", False) 
+    # `use_bucketing` was retired in favour of naming the sampler outright. Now
+    # that `lhotse_sampler_type` has a default, an unmigrated config would no
+    # longer fail — it would quietly run a sampler its author never asked for
+    # (notably `use_bucketing: false` getting bucketed). So say so instead.
+    if _get_config_value(config, "use_bucketing", None) is not None:
+        raise ValueError(
+            "`use_bucketing` is retired. Replace it with `lhotse_sampler_type: "
+            "dynamic_bucketing` (where it was true) or `lhotse_sampler_type: "
+            "dynamic` (where it was false)."
+        )
+
+    lhotse_sampler_type = _get_config_value(config, "lhotse_sampler_type", None)
     if lhotse_sampler_type == "dynamic_bucketing":
         num_buckets = _get_config_value(config, "num_buckets", None)
         if num_buckets is None:
@@ -780,7 +791,10 @@ def get_lhotse_sampler_from_config(
             rank=sampler_rank,
         )
     else:
-        raise ValueError(f"Lhotse sampler type `{lhotse_sampler_type}` unknown.")
+        raise ValueError(
+            f"Lhotse sampler type `{lhotse_sampler_type}` unknown; expected one "
+            "of: dynamic_bucketing, dynamic, bucketing."
+        )
 
     return sampler, use_iterable
 

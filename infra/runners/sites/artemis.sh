@@ -1,10 +1,11 @@
 # Artemis cluster (a6000 / h100 partitions).
 
 # --- storage (host paths) -------------------------------------------------
-export HF_HOME=/mnt/scratch-artemis/giuseppe/melt-data/hf_cache
-export OUTPUT_DIR=/mnt/scratch-artemis/giuseppe/melt-data/outputs
-export LOCAL_DATASETS_DIR=/mnt/scratch-nyx/giuseppe/melt/melt-data/shar
-export TMPDIR_HOST=/tmp
+# `:-` so an exported value wins: `OUTPUT_DIR=/mnt/... infra/runners/submit-*.sh artemis …`.
+export HF_HOME="${HF_HOME:-/mnt/scratch-artemis/giuseppe/melt-data/hf_cache}"
+export OUTPUT_DIR="${OUTPUT_DIR:-/mnt/scratch-artemis/giuseppe/melt-data/outputs}"
+export LOCAL_DATASETS_DIR="${LOCAL_DATASETS_DIR:-/mnt/scratch-nyx/giuseppe/melt/melt-data/shar}"
+export TMPDIR_HOST="${TMPDIR_HOST:-/tmp}"
 
 # --- container mode -------------------------------------------------------
 export SINGULARITY_IMG=/mnt/scratch-artemis/giuseppe/melt-data/melt_cuda126.sif
