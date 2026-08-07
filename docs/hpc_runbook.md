@@ -595,7 +595,7 @@ from the eval metrics in §B4.
 |---|---|
 | `batch_size should be a positive integer, but got -1` | missing `--trainer.per_device_eval_batch_size` |
 | Job exits instantly, no log | `logs/` didn't exist, or a bad `--output` path — see §B4 |
-| `Lhotse sampler type `False` unknown` | config still sets the retired `use_bucketing`; use `lhotse_sampler_type: dynamic_bucketing` |
+| `` `use_bucketing` is retired `` | config predates `lhotse_sampler_type`; swap it as the message says |
 | `PermissionError: … '/workspace/outputs/<EXP>'` | shared `OUTPUT_DIR` owned by someone else — set your own (§B3) |
 | Permission denied under `/workspace/tmp` | same cause, `TMPDIR_HOST` — set your own (§B3) |
 | `SINGULARITY_IMG not found` | image not shipped, or site-file path is stale |

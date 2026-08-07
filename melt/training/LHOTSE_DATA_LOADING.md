@@ -98,7 +98,7 @@ data:
         shar_path: /path/to/train/shar
     batch_duration: 60.0     # Max seconds per batch
     batch_size: 8            # Max cuts per batch
-    use_bucketing: true      # Enable DynamicBucketingSampler
+    lhotse_sampler_type: dynamic_bucketing   # DynamicBucketingSampler
     num_buckets: 30          # Number of duration buckets
     shuffle: true
     num_workers: 4
