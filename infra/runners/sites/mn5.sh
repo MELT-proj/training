@@ -38,4 +38,16 @@ export HF_HUB_OFFLINE=1
 export MASTER_PORT=60001
 
 # --- scheduler ------------------------------------------------------------
-SBATCH_ARGS=(--time=01:00:00 --nodes=1 --gpus-per-node=4 --account=epor48 --qos=acc_ehpc --cpus-per-task=80)
+# MELT_TIME and MELT_QOS are overridable because SLURM bills the wall clock you
+# *ask* for, times the GPUs, whether or not the job uses it. A ten-step smoke
+# test left at the 1h default costs 4 GPUh of the monthly quota for a few
+# minutes of work, so ask for what the run needs:
+#   MELT_TIME=00:20:00 MELT_QOS=acc_debug infra/runners/submit-container.sh mn5 …
+SBATCH_ARGS=(
+    --time="${MELT_TIME:-01:00:00}"
+    --nodes=1
+    --gpus-per-node=4
+    --account=epor48
+    --qos="${MELT_QOS:-acc_ehpc}"
+    --cpus-per-task=80
+)
