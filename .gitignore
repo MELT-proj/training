@@ -179,3 +179,8 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Session notes written for restoring context in a later Claude Code session.
+# Kept local on purpose: they describe work in progress and reasoning, not the
+# state of the code, so they go stale the moment the branch moves on.
+history/
