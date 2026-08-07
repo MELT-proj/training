@@ -17,6 +17,23 @@ For setup and usage details, see the folder-specific guides:
 - config/README.md – configuration structure and examples
 - infra/README.md – environment, runners, and container notes
 
+## Running the tests
+
+```bash
+pytest tests/                      # unit tests
+LOCAL_DATASETS_DIR=/path/to/shar pytest tests/   # also runs the 5 that need real Shar data
+```
+
+CI does **not** re-run on every push to a pull request. It runs once when the PR
+opens; after that, ask for it:
+
+- comment **`/test`** on the pull request, or
+- `gh workflow run ci.yml --ref <branch>`
+
+A `/test` run is not attached to the PR's head commit, so it appears under the
+[Actions tab](https://github.com/MELT-proj/training/actions) rather than as a
+check on the PR; the comment gets a 👀 reaction when it starts.
+
 ## Main Components
 - Training orchestrator: custom MELT Trainer built on HF Trainer
 - Modeling choices: Hugging Face encoder/decoder classes with adapter support
