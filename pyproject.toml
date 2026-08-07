@@ -23,7 +23,11 @@ dependencies = [
     "sentencepiece>=0.2",
     "accelerate>=1.0",
     "deepspeed>=0.18",
-    "lhotse>=1.32",
+    # 2.0.0a3 is the first release carrying indexed Shar manifests (.idx
+    # sidecars), which partition by sample index instead of by shard -- see
+    # https://github.com/MELT-proj/training/issues/52. It is a pre-release, so
+    # installers need `--pre` (uv: `--prerelease=allow`) to resolve it.
+    "lhotse==2.0.0a3",
     "pyyaml>=6.0",
     "webdataset>=1.0",
     "scipy>=1.15",
