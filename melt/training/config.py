@@ -134,7 +134,16 @@ data:
     # also separates the streams, but draws from the system entropy pool, and
     # a sampler checkpoint stores the string rather than the drawn value — a
     # resumed run therefore fast-forwards through a stream it has never seen.
+    # Ignored once the sources are indexed: partitioning already separates the
+    # streams, so shard order should be identical everywhere, and the loader
+    # falls back to `seed` (with a warning) if this is still 'randomized'.
     shard_seed: randomized
+    # How Shar sources are read. null auto-detects per source: indexed when the
+    # .idx sidecars are present, streaming otherwise. true demands indexed and
+    # fails on a source that is not; false forces streaming. Indexed reading
+    # partitions by sample index across the (rank x worker) pool, making an
+    # epoch exactly 100% of the data -- see issue #52.
+    indexed: null
     min_duration: 0.5
     max_duration: 30.0
     max_tokens: null

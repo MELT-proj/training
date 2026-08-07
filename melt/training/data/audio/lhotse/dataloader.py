@@ -313,17 +313,17 @@ def estimate_steps_per_epoch(
         return -1, 0.0, 0, 0, 0
 
     # NOTE: this divisor is not currently justified, and is kept only because
-    # changing it moves reported epoch length for every run.
+    # changing it moves reported epoch length -- and therefore the LR schedule --
+    # for every run. Deliberately left alone here; see #52 step 5.
     #
-    # It used to be explained by `split_for_dataloading=True`, which we do not
-    # pass -- `read_cutset_from_config` loads every source with it False, so no
-    # partitioning happens at all today and each (rank, worker) walks the whole
-    # corpus in its own shuffled order. Even once partitioning is real (see #52),
-    # dividing by `num_workers` on top of `world_size` looks wrong: a rank's
-    # workers feed one interleaved stream for that rank, so the rank still
+    # It used to be explained by `split_for_dataloading=True`, which was never
+    # passed. Now that indexed sources really are partitioned, the `world_size`
+    # part is finally correct. The extra `num_workers` factor still looks wrong:
+    # a rank's workers feed one interleaved stream for that rank, so the rank
     # consumes `batches_per_epoch / world_size` batches however many workers
-    # produce them. That extra factor of `num_workers` is the same factor as the
-    # resume over-skip in #46 and should be settled there rather than here.
+    # produce them, and dividing again under-reports epoch length by num_workers.
+    # It is the same factor as the resume over-skip in #46 (superseded by #55),
+    # so settle both together rather than changing this in isolation.
     batches_per_worker = batches_per_epoch / (world_size * num_workers) if num_workers > 0 else batches_per_epoch / world_size
 
     # The number of update steps is rescaled by gradient accumulation steps
@@ -367,36 +367,78 @@ def read_cutset_from_config(config: DictConfig, repeat: bool = True) -> tuple[Cu
     seed = config.seed
     shard_seed = _get_config_value(config, "shard_seed", seed)
     shuffle = config.shuffle
+    indexed = _get_config_value(config, "indexed", None)
 
-    # Data uniqueness across DDP ranks / DataLoader workers is achieved via
-    # per-worker seed differentiation (make_worker_init_fn) rather than shard
-    # partitioning (split_for_dataloading).  Every worker sees every shard but
-    # iterates them in a different random order, so at any given batch index
-    # different workers see different cuts.  This matches NeMo's approach and
-    # avoids fragmentation issues when datasets have few shards.
+    # How ranks and workers end up with different data depends on which reader
+    # backs the sources, so resolve that first.
     #
-    # For that to hold, shard traversal must be seeded with `shard_seed` (which
-    # resolves per rank and worker when set to 'randomized') and NOT with
-    # `seed`, which is one fixed integer shared by every process.  Seeding
-    # traversal from `seed` makes all workers walk the shards in the same order,
-    # so their shuffle buffers are filled from the same region of the corpus and
-    # the streams overlap well above chance even when the sampler shuffles
-    # differently.  `seed` keeps its own role: it is the base that
-    # make_worker_init_fn turns into each worker's LHOTSE_PROCESS_SEED, which is
-    # what 'randomized' resolves against.
+    # Streaming (no .idx): nothing partitions the corpus, so every rank and
+    # worker walks all of it. Separation is statistical, and comes from each
+    # process traversing the shards in its own order -- which is why traversal
+    # must be seeded from `shard_seed` ('randomized' resolves per rank+worker)
+    # and not from `seed`, one integer shared by every process.
+    #
+    # Indexed (.idx present): lhotse partitions by sample index across the whole
+    # (rank x worker) pool, so separation is exact and no longer needs a
+    # per-process seed. There, `shard_seed` only sets shard *shuffle order*,
+    # which should be the SAME everywhere -- and lhotse rejects
+    # seed='randomized' outright once a multiplexer sits over partitioned
+    # indexed sources, because each shard would draw a different permutation.
+    using_indexed = _sources_are_indexed(input_cfg) if indexed is None else bool(indexed)
+    if using_indexed and shard_seed == "randomized":
+        logger.warning(
+            "shard_seed='randomized' is incompatible with indexed Shar sources: "
+            "partitioning already gives each rank and worker a disjoint slice, and "
+            "lhotse refuses a randomized seed under a multiplexer over indexed "
+            "sources. Falling back to shard_seed=%s (the config's `seed`). Set "
+            "`shard_seed` to an integer explicitly to silence this.",
+            seed,
+        )
+        shard_seed = seed
 
-    # With split_for_dataloading=False every worker sees all shards.
-    # Repeating guarantees infinite data; uniqueness across workers/ranks
-    # is provided by per-worker shuffle seeds (make_worker_init_fn).
     combined, use_iterable, _ = _combine_entries(
-        input_cfg, shuffle, shard_seed, repeat=repeat
+        input_cfg, shuffle, shard_seed, repeat=repeat, indexed=indexed
     )
 
     return combined, use_iterable
 
 
+def _iter_shar_paths(entries: list) -> list[str]:
+    """Every `shar_path` under `input_cfg`, descending through `type: group`."""
+    out: list[str] = []
+    for entry in entries or []:
+        if _get_config_value(entry, "type", None) == "group":
+            out.extend(_iter_shar_paths(_get_config_value(entry, "input_cfg", [])))
+        else:
+            path = _get_config_value(entry, "shar_path", None)
+            if path is not None:
+                out.append(os.path.expandvars(str(path)))
+    return out
+
+
+def _sources_are_indexed(entries: list) -> bool:
+    """Would lhotse read these sources through the indexed reader?
+
+    Asks lhotse rather than looking for ``.idx`` ourselves, so this agrees with
+    whatever ``from_shar(indexed=None)`` is about to decide. A collection part
+    way through migration answers False, which is the safe reading: the mixed
+    case behaves like streaming, and `shard_seed` should stay per-process.
+    """
+    paths = _iter_shar_paths(entries)
+    if not paths:
+        return False
+    try:
+        from lhotse.shar.readers.indexed import LazyIndexedSharIterator
+    except ImportError:  # lhotse < 2.0 has no indexed reader at all
+        return False
+    return all(
+        LazyIndexedSharIterator.supports_configuration(in_dir=p) for p in paths
+    )
+
+
 def _combine_entries(
-    entries: list, shuffle: bool, shard_seed, repeat: bool, _where: str = "input_cfg"
+    entries: list, shuffle: bool, shard_seed, repeat: bool, indexed: bool | None = None,
+    _where: str = "input_cfg"
 ) -> tuple[CutSet, bool, int]:
     """Load one level of ``input_cfg`` and mux its entries together.
 
@@ -441,7 +483,7 @@ def _combine_entries(
             # The group's leaves are repeated inside the recursion, so the
             # group's own mux is already infinite.
             cuts, child_iterable, n_cuts = _combine_entries(
-                children, shuffle, shard_seed, repeat, f"{where}.input_cfg"
+                children, shuffle, shard_seed, repeat, indexed, f"{where}.input_cfg"
             )
             use_iterable = use_iterable or child_iterable
         elif source_type == "lhotse_shar":
@@ -457,18 +499,26 @@ def _combine_entries(
 
             logger.info(f"Loading CutSet from shar: {shar_path} (shard_seed: {shard_seed})")
 
-            # split_for_dataloading=False: every worker loads all shards.
-            # Uniqueness comes from per-worker shuffle seeds set by
-            # make_worker_init_fn, not from shard-level partitioning.
-            # (Lhotse forbids split_for_dataloading=True together with a
-            # per-worker seed: it shuffles before slicing by worker index, so
-            # each worker would slice a different permutation.)
+            # `indexed` selects how the corpus is divided across the
+            # (DP rank x DataLoader worker) pool:
+            #
+            #   True  -- .idx sidecars exist; lhotse partitions by SAMPLE index,
+            #            so every cut is produced exactly once across the pool
+            #            and a nominal epoch is 100% of the data.
+            #   False -- streaming; every rank and worker walks the whole corpus
+            #            in its own shuffled order, so streams overlap and an
+            #            epoch is ~63.2% of the data with the rest repeats.
+            #   None  -- auto-detect per source, which is lhotse's default.
+            #
+            # `split_for_dataloading` is deliberately not passed: it partitioned
+            # by SHARD, which never worked here (median source has 6 shards
+            # against 128+ ranks), and lhotse 2.0 accepts-but-ignores it.
             cuts = CutSet.from_shar(
                 in_dir=shar_path,
                 shuffle_shards=shuffle,
                 seed=shard_seed,
                 stateful_shuffle=shuffle,
-                split_for_dataloading=False,
+                indexed=indexed,
             )
             use_iterable = True  # Shar always uses iterable dataset
             # Count before repeating: len() of a repeated CutSet is not the
@@ -873,6 +923,25 @@ def get_lhotse_dataloader_from_config(
     # Create dataloader
     num_workers = _get_config_value(config, "num_workers", 0)
     pin_memory = _get_config_value(config, "pin_memory", True)
+
+    # Indexed partitioning is armed by `make_worker_init_fn`, which sets
+    # LHOTSE_USE_WORKER_PARTITION -- and that only ever runs inside a DataLoader
+    # worker subprocess. At num_workers=0 there is no subprocess, the partition
+    # collapses to (0, 1), and every rank silently reads the entire corpus. That
+    # is the exact duplication indexing was adopted to remove, so refuse it
+    # rather than let a run look correct and train on world_size copies.
+    if (
+        repeat
+        and use_iterable
+        and world_size > 1
+        and num_workers == 0
+        and _sources_are_indexed(_get_config_value(config, "input_cfg", []))
+    ):
+        raise ValueError(
+            f"num_workers=0 with world_size={world_size} and indexed Shar sources: "
+            "cross-rank partitioning would not activate and every rank would read "
+            "the whole corpus. Set num_workers >= 1."
+        )
 
     # For eval (repeat=False), cap num_workers to 1.
     # With split_for_dataloading=False (needed for even rank distribution), multiple
