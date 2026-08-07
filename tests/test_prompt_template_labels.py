@@ -605,3 +605,55 @@ class TestSTLanguagePlaceholders:
         assert "bonjour" in decoded
         assert "English" not in decoded  # src_lang should be masked
         assert "French" not in decoded   # tgt_lang should be masked
+
+
+# ---------------------------------------------------------------------------
+# Template-selection strategies
+# ---------------------------------------------------------------------------
+
+
+class TestTemplateSelectionStrategies:
+    """Exercise every ``prompt_template_selection`` branch, not just 'custom'.
+
+    'random' is the default and 'with_language' is the other multi-template
+    strategy; both pick with ``random.choice``. Only 'custom' was covered before,
+    which is the one branch that never touches ``random`` -- so a missing
+    ``import random`` in the modules holding these branches survived the suite
+    and only surfaced in a distributed run, inside a dataloader worker.
+    """
+
+    @pytest.fixture(scope="class")
+    def processor(self):
+        return _build_processor()
+
+    def _dataset(self, processor, selection: str):
+        from melt.training.data.audio.lhotse.dataset import SpeechToTextDataset
+
+        config = OmegaConf.create({
+            "apply_chat_template": True,
+            "prompt_template_selection": selection,
+            "sample_rate": 16000,
+        })
+        return SpeechToTextDataset(
+            processor=processor,
+            config=config,
+            is_train=False,
+            return_labels=True,
+            return_langs=False,
+        )
+
+    @pytest.mark.parametrize("selection", ["random", "with_language"])
+    def test_selection_strategy_produces_a_batch(self, processor, selection):
+        cut = _make_cut("en-1", "hello world", "en", task="asr")
+        cuts = CutSet.from_cuts([cut])
+        batch = self._dataset(processor, selection)[cuts]
+        assert batch is not None
+        assert "input_features" in batch
+
+    def test_modules_that_choose_templates_can_reach_random(self):
+        """Both modules call random.choice; both must import it."""
+        import melt.training.data.audio.lhotse.dataset as ds
+        import melt.training.data.audio.lhotse.helpers as helpers
+
+        for mod in (ds, helpers):
+            assert hasattr(mod, "random"), f"{mod.__name__} calls random.choice but never imports random"
