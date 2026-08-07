@@ -312,8 +312,18 @@ def estimate_steps_per_epoch(
         logger.warning("Neither batch_size nor batch_duration is set; cannot estimate steps per epoch")
         return -1, 0.0, 0, 0, 0
 
-    # We use data parallelism by setting split_for_loading=True in CutSet.from_shar()
-    # The shard are hence divided to world_size * num_workers processes.
+    # NOTE: this divisor is not currently justified, and is kept only because
+    # changing it moves reported epoch length for every run.
+    #
+    # It used to be explained by `split_for_dataloading=True`, which we do not
+    # pass -- `read_cutset_from_config` loads every source with it False, so no
+    # partitioning happens at all today and each (rank, worker) walks the whole
+    # corpus in its own shuffled order. Even once partitioning is real (see #52),
+    # dividing by `num_workers` on top of `world_size` looks wrong: a rank's
+    # workers feed one interleaved stream for that rank, so the rank still
+    # consumes `batches_per_epoch / world_size` batches however many workers
+    # produce them. That extra factor of `num_workers` is the same factor as the
+    # resume over-skip in #46 and should be settled there rather than here.
     batches_per_worker = batches_per_epoch / (world_size * num_workers) if num_workers > 0 else batches_per_epoch / world_size
 
     # The number of update steps is rescaled by gradient accumulation steps
