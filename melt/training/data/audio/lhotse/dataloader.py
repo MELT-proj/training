@@ -14,6 +14,7 @@ import gzip
 import json
 import math
 import os
+import random
 import warnings
 from functools import partial
 from glob import glob
@@ -45,6 +46,49 @@ from .....logging_utils import get_logger
 
 
 logger = get_logger(__name__)
+
+
+def _harden_rng_setstate() -> None:
+    """Let ``random.setstate`` accept an RNG state whose tuples were flattened.
+
+    ``random.getstate()`` returns a tuple of tuples and ``setstate`` rejects
+    anything else with "state vector must be a tuple". Lhotse checkpoints several
+    RNGs this way, and the state dict that comes back through the dataloader's
+    worker transport in a multi-rank run has those tuples flattened to lists, so
+    every worker died on the first batch after a resume.
+
+    Patching ``setstate`` rather than each caller is deliberate. Lhotse restores
+    RNG state at seven sites; two of them already route through its own
+    ``_rng_state_from_json`` helper -- which does exactly this coercion, so
+    upstream knows the state can arrive as lists -- and five do not. Fixing them
+    one at a time is whack-a-mole: hardening the bucket sampler's restore simply
+    moved the failure to the multiplexer's. This is the one point they all share.
+
+    Normalising in the training process instead does not work: the restore runs
+    inside a worker subprocess and the transport re-flattens the state after any
+    earlier fix. Hence the patch is also re-applied in ``worker_init_fn``, for a
+    spawned worker that re-imports rather than inheriting the patched class.
+
+    The behaviour change is confined to input that would otherwise raise: a
+    well-formed state is passed through untouched. Report upstream.
+    """
+    original = random.Random.setstate
+    if getattr(original, "_melt_coerces_tuples", False):
+        return
+
+    def setstate(self, state):
+        # random.getstate() -> (version, internalstate, gauss_next)
+        if isinstance(state, (list, tuple)) and len(state) == 3:
+            version, internalstate, gauss_next = state
+            if isinstance(internalstate, list):
+                state = (version, tuple(internalstate), gauss_next)
+        return original(self, state)
+
+    setstate._melt_coerces_tuples = True
+    random.Random.setstate = setstate
+
+
+_harden_rng_setstate()
 
 
 def _maybe_attach_set_epoch(dataloader: torch.utils.data.DataLoader, sampler: CutSampler) -> None:
@@ -982,16 +1026,25 @@ def get_lhotse_dataloader_from_config(
         # indexed partitioning (issue #52). Without it every rank reads the whole
         # corpus. It used to be wrapped so a saved sampler state could be
         # fast-forwarded here; StatefulDataLoader restores each worker from its
-        # own snapshot instead, so the wrapper is gone.
+        # own snapshot instead, so that part is gone.
         lhotse_worker_init = make_worker_init_fn(
             rank=global_rank,
             world_size=world_size,
             seed=config.seed,
             set_different_node_and_worker_seeds=True,
         )
+
+        def _worker_init(worker_id: int) -> None:
+            # Re-apply inside the worker. The module-level call already covers a
+            # forked worker, which inherits the patched class, but a spawned one
+            # re-imports and would not -- and the restore that needs it happens
+            # here, in the worker, not in the training process.
+            _harden_rng_setstate()
+            lhotse_worker_init(worker_id)
+
         dloader_kwargs = {
             "dataset": wrapped_dataset,
-            "worker_init_fn": lhotse_worker_init,
+            "worker_init_fn": _worker_init,
             "persistent_workers": num_workers > 0 and repeat,  # Only persistent for training
         }
     else:

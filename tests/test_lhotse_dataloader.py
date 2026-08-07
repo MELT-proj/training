@@ -539,3 +539,82 @@ class TestStatefulDataLoader:
             "resumed stream diverged from the uninterrupted one: "
             f"{resumed[:2]} vs {tail[:2]}"
         )
+
+
+class TestRngSetstateHardening:
+    """RNG state must survive a state dict whose tuples were flattened to lists.
+
+    `random.getstate()` returns tuples and `random.setstate()` rejects anything
+    else. Lhotse checkpoints several RNGs this way, and the state dict that
+    returns through the dataloader's worker transport in a multi-rank run has
+    those tuples flattened, which killed every worker on the first batch after a
+    resume.
+
+    The hardening patches `setstate` rather than individual lhotse call sites:
+    lhotse restores RNG state at seven places and only two route through its own
+    coercion helper. Patching one at a time just moves the failure to the next --
+    which is exactly what happened before this landed.
+    """
+
+    @staticmethod
+    def _flatten(state):
+        return [state[0], list(state[1]), state[2]]
+
+    def test_flattened_state_is_accepted_and_resumes_identically(self):
+        import random
+
+        import melt.training.data.audio.lhotse.dataloader  # noqa: F401  (applies the patch)
+
+        reference = random.Random(1234)
+        good = reference.getstate()
+        expected = [reference.random() for _ in range(5)]
+
+        target = random.Random()
+        target.setstate(self._flatten(good))
+        assert [target.random() for _ in range(5)] == expected
+
+    def test_well_formed_state_is_untouched(self):
+        import random
+
+        import melt.training.data.audio.lhotse.dataloader  # noqa: F401
+
+        reference = random.Random(7)
+        good = reference.getstate()
+        target = random.Random()
+        target.setstate(good)
+        assert target.random() == reference.random()
+
+    def test_genuinely_invalid_state_still_raises(self):
+        """The patch must not turn a real error into silent corruption."""
+        import random
+
+        import melt.training.data.audio.lhotse.dataloader  # noqa: F401
+
+        with pytest.raises((TypeError, ValueError)):
+            random.Random().setstate(["not", "an", "rng"])
+        with pytest.raises((TypeError, ValueError)):
+            random.Random().setstate("nonsense")
+
+    def test_patch_is_idempotent(self):
+        import random
+
+        import melt.training.data.audio.lhotse.dataloader as dl
+
+        before = random.Random.setstate
+        dl._harden_rng_setstate()
+        assert random.Random.setstate is before
+
+    def test_every_rng_in_a_nested_state_survives(self):
+        """Lhotse stores RNG state under several names; all of them must work."""
+        import random
+
+        import melt.training.data.audio.lhotse.dataloader  # noqa: F401
+
+        names = ["_bucket_rng", "rng_state", "bucket_rng_state", "_rng_state"]
+        refs = {n: random.Random(i) for i, n in enumerate(names)}
+        flat = {n: self._flatten(r.getstate()) for n, r in refs.items()}
+
+        for n in names:
+            target = random.Random()
+            target.setstate(flat[n])
+            assert target.random() == refs[n].random(), f"{n} did not resume"
