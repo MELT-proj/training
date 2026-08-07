@@ -144,6 +144,11 @@ data:
     # partitions by sample index across the (rank x worker) pool, making an
     # epoch exactly 100% of the data -- see issue #52.
     indexed: null
+    # How often each dataloader worker records its position, in batches. The
+    # snapshot is an iterator position rather than data, so 1 is cheap and means
+    # a resumed run picks up at the exact batch instead of the last multiple.
+    # Training only -- eval has no position worth resuming.
+    snapshot_every_n_steps: 1
     min_duration: 0.5
     max_duration: 30.0
     max_tokens: null

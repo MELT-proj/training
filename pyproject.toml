@@ -28,6 +28,10 @@ dependencies = [
     # https://github.com/MELT-proj/training/issues/52. It is a pre-release, so
     # installers need `--pre` (uv: `--prerelease=allow`) to resolve it.
     "lhotse==2.0.0a3",
+    # StatefulDataLoader snapshots each worker's position from inside the worker,
+    # which is the only place a lhotse sampler's position exists once
+    # num_workers > 0 -- see https://github.com/MELT-proj/training/issues/55.
+    "torchdata>=0.11",
     "pyyaml>=6.0",
     "webdataset>=1.0",
     "scipy>=1.15",

@@ -15,7 +15,6 @@ import json
 import math
 import os
 import warnings
-from copy import deepcopy
 from functools import partial
 from glob import glob
 from pathlib import Path
@@ -39,6 +38,7 @@ from lhotse.dataset.sampling.base import CutSampler
 from lhotse.utils import fix_random_seed
 from omegaconf import DictConfig
 from functools import partial
+from torchdata.stateful_dataloader import StatefulDataLoader
 
 
 from .....logging_utils import get_logger
@@ -115,10 +115,6 @@ class InfiniteIterableDatasetWrapper(IterableDatasetWrapper):
     ):
         super().__init__(dataset=dataset, sampler=sampler, **kwargs)
         self._estimated_batches = estimated_batches_per_epoch
-        # Holds a sampler state_dict to be applied lazily inside the worker process
-        # (after make_worker_init_fn has set LHOTSE_PROCESS_SEED). Set by
-        # MeltTrainer._restore_sampler_state when num_workers > 0.
-        self._pending_lhotse_state: dict | None = None
 
     def __len__(self) -> int:
         """Return estimated number of batches per epoch for progress bars."""
@@ -859,31 +855,6 @@ def get_lhotse_sampler_from_config(
     return sampler, use_iterable
 
 
-def _make_lhotse_worker_init_fn(lhotse_init_fn):
-    """Wraps lhotse's worker_init_fn to also apply any deferred sampler state.
-
-    With num_workers > 0, _fast_forward() must run inside the worker AFTER
-    make_worker_init_fn has set LHOTSE_PROCESS_SEED (which determines shard
-    assignment for split_for_dataloading=True).  We store the state dict on
-    the dataset and apply it here, in the worker, at the right moment.
-    """
-    def _init(worker_id: int) -> None:
-        lhotse_init_fn(worker_id)  # sets LHOTSE_PROCESS_SEED first
-        worker_info = torch.utils.data.get_worker_info()
-        if worker_info is None:
-            return
-        dataset = worker_info.dataset
-        pending = getattr(dataset, "_pending_lhotse_state", None)
-        if pending is not None:
-            sampler = getattr(dataset, "sampler", None)
-            if sampler is not None:
-                sampler.load_state_dict(deepcopy(pending))
-                dataset._pending_lhotse_state = None
-                logger.info(f"[Worker {worker_id}] Lhotse sampler state restored (fast-forward complete).")
-
-    return _init
-
-
 def get_lhotse_dataloader_from_config(
     config: DictConfig,
     global_rank: int,
@@ -1006,6 +977,12 @@ def get_lhotse_dataloader_from_config(
                 estimated_batches_per_epoch=batches_per_worker_int,
             )
 
+        # This runs in every worker subprocess and is where LHOTSE_PROCESS_SEED
+        # and LHOTSE_USE_WORKER_PARTITION get set -- the latter is what arms
+        # indexed partitioning (issue #52). Without it every rank reads the whole
+        # corpus. It used to be wrapped so a saved sampler state could be
+        # fast-forwarded here; StatefulDataLoader restores each worker from its
+        # own snapshot instead, so the wrapper is gone.
         lhotse_worker_init = make_worker_init_fn(
             rank=global_rank,
             world_size=world_size,
@@ -1014,7 +991,7 @@ def get_lhotse_dataloader_from_config(
         )
         dloader_kwargs = {
             "dataset": wrapped_dataset,
-            "worker_init_fn": _make_lhotse_worker_init_fn(lhotse_worker_init),
+            "worker_init_fn": lhotse_worker_init,
             "persistent_workers": num_workers > 0 and repeat,  # Only persistent for training
         }
     else:
@@ -1025,6 +1002,25 @@ def get_lhotse_dataloader_from_config(
             "sampler": sampler,
         }
 
+    # Training uses StatefulDataLoader so the run can resume exactly where it
+    # stopped. It snapshots each worker's position inside that worker, which is
+    # the only place the position exists once num_workers > 0 -- the
+    # main-process sampler is never iterated, so reading its state there yields
+    # nothing to restore from (issues #46, #55).
+    #
+    # Eval stays on a plain DataLoader: it has no position worth resuming, and
+    # the map-style branch is handed to accelerate's prepare_data_loader, which
+    # builds its own loader anyway.
+    loader_cls = StatefulDataLoader if (repeat and use_iterable) else torch.utils.data.DataLoader
+    extra_kwargs = {}
+    if loader_cls is StatefulDataLoader:
+        # How often workers checkpoint their position. 1 means every batch: the
+        # snapshot is small (an iterator position, not data) and anything coarser
+        # would resume at the last multiple instead of the actual step.
+        extra_kwargs["snapshot_every_n_steps"] = int(
+            _get_config_value(config, "snapshot_every_n_steps", 1)
+        )
+
     # Suppress PyTorch's warning about iterable dataset length mismatch.
     # This warning is expected for dynamic batching: actual batch count varies due to
     # duration-based/count-based batching and shuffling, not due to misconfiguration.
@@ -1034,8 +1030,9 @@ def get_lhotse_dataloader_from_config(
             message="Length of IterableDataset .* was reported to be .* but .* samples have been fetched",
             category=UserWarning,
         )
-        dataloader = torch.utils.data.DataLoader(
+        dataloader = loader_cls(
             **dloader_kwargs,
+            **extra_kwargs,
             batch_size=None,  # Batching handled by sampler
             num_workers=num_workers,
             pin_memory=pin_memory,

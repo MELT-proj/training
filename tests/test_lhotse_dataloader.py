@@ -388,3 +388,154 @@ class TestFallbackDataset:
         fallback = FallbackDataset(inner_dataset)
         assert fallback[None] == good_batch
         assert fallback[None] == good_batch
+
+
+@pytest.fixture(scope="module")
+def indexed_synthetic_shar(tmp_path_factory) -> str:
+    """A tiny shar source converted to the indexed layout.
+
+    `to_shar` writes gzipped cut manifests, and the indexer skips those outright
+    because an .idx is a table of byte offsets into a plain file. So this does
+    what infra/index_shar.py does to a real source: gunzip the manifests, then
+    write the sidecars.
+    """
+    import gzip
+    import shutil
+
+    from lhotse import CutSet
+    from lhotse.testing.dummies import DummyManifest
+
+    pytest.importorskip("lhotse.indexing")
+    from lhotse.indexing import create_shar_index
+
+    d = tmp_path_factory.mktemp("indexed_shar") / "src"
+    d.mkdir(parents=True, exist_ok=True)
+    cuts = CutSet.from_cuts(
+        _shar_writable(c.with_id(f"cut{i:04d}"))
+        for i, c in enumerate(DummyManifest(CutSet, begin_id=0, end_id=40, with_data=True))
+    )
+    cuts.to_shar(str(d), fields={"recording": "wav"}, shard_size=10)
+
+    for gz in sorted(d.glob("cuts.*.jsonl.gz")):
+        plain = gz.with_suffix("")  # drop .gz
+        with gzip.open(gz, "rb") as fin, open(plain, "wb") as fout:
+            shutil.copyfileobj(fin, fout)
+        gz.unlink()
+    create_shar_index(d)
+    return str(d)
+
+
+def _loader_config(shar_path: str, **overrides):
+    config = {
+        "input_cfg": [
+            {"type": "lhotse_shar", "shar_path": shar_path,
+             "tags": {"task": "asr", "lang": "en"}},
+        ],
+        "batch_duration": 10.0,
+        "lhotse_sampler_type": "dynamic",
+        "shuffle": False,
+        "min_duration": 0.0,
+        "max_duration": 100.0,
+        "num_workers": 2,
+        "seed": 42,
+        "shard_seed": 0,
+        "prefetch_factor": 2,
+    }
+    config.update(overrides)
+    return OmegaConf.create(config)
+
+
+class _IdDataset(torch.utils.data.Dataset):
+    """Returns the cut IDs of each batch, so batches can be compared by identity."""
+
+    def __getitem__(self, cuts):
+        return {"cut_ids": [c.id for c in cuts]}
+
+
+class TestIndexedSharDetection:
+    def test_indexed_source_is_detected(self, indexed_synthetic_shar: str):
+        from melt.training.data.audio.lhotse.dataloader import _sources_are_indexed
+
+        entries = [{"type": "lhotse_shar", "shar_path": indexed_synthetic_shar}]
+        assert _sources_are_indexed(entries) is True
+
+    def test_plain_source_is_not_detected(self, synthetic_shar: dict[str, str]):
+        from melt.training.data.audio.lhotse.dataloader import _sources_are_indexed
+
+        entries = [{"type": "lhotse_shar", "shar_path": synthetic_shar["a"]}]
+        assert _sources_are_indexed(entries) is False
+
+
+class TestStatefulDataLoader:
+    """Training resumes from a per-worker snapshot rather than a replayed count.
+
+    The bug this guards against (#46) is invisible at num_workers <= 1, where the
+    rank-wide count and the per-worker count coincide, so everything here runs at
+    num_workers=2.
+    """
+
+    def test_train_loader_is_stateful(self, indexed_synthetic_shar: str):
+        from torchdata.stateful_dataloader import StatefulDataLoader
+
+        from melt.training.data.audio.lhotse.dataloader import (
+            get_lhotse_dataloader_from_config,
+        )
+
+        dl = get_lhotse_dataloader_from_config(
+            config=_loader_config(indexed_synthetic_shar),
+            global_rank=0,
+            world_size=1,
+            dataset=_IdDataset(),
+            repeat=True,
+        )
+        assert isinstance(dl, StatefulDataLoader)
+
+    def test_eval_loader_is_not_stateful(self, indexed_synthetic_shar: str):
+        """Eval has no position worth resuming, and is handed to accelerate."""
+        from torchdata.stateful_dataloader import StatefulDataLoader
+
+        from melt.training.data.audio.lhotse.dataloader import (
+            get_lhotse_dataloader_from_config,
+        )
+
+        dl = get_lhotse_dataloader_from_config(
+            config=_loader_config(indexed_synthetic_shar),
+            global_rank=0,
+            world_size=1,
+            dataset=_IdDataset(),
+            repeat=False,
+        )
+        assert not isinstance(dl, StatefulDataLoader)
+
+    def test_state_resumes_at_the_cut_point(self, indexed_synthetic_shar: str):
+        from melt.training.data.audio.lhotse.dataloader import (
+            get_lhotse_dataloader_from_config,
+        )
+
+        def build():
+            return get_lhotse_dataloader_from_config(
+                config=_loader_config(indexed_synthetic_shar),
+                global_rank=0,
+                world_size=1,
+                dataset=_IdDataset(),
+                repeat=True,
+            )
+
+        dl = build()
+        it = iter(dl)
+        consumed = [next(it)["cut_ids"] for _ in range(4)]
+        state = dl.state_dict()
+        tail = [next(it)["cut_ids"] for _ in range(6)]
+
+        # The training CutSet is .repeat()ed, so this stream never ends: take a
+        # fixed number of batches rather than materialising it.
+        resumed_dl = build()
+        resumed_dl.load_state_dict(state)
+        resumed_it = iter(resumed_dl)
+        resumed = [next(resumed_it)["cut_ids"] for _ in range(6)]
+
+        assert consumed, "loader produced nothing to snapshot"
+        assert resumed == tail, (
+            "resumed stream diverged from the uninterrupted one: "
+            f"{resumed[:2]} vs {tail[:2]}"
+        )

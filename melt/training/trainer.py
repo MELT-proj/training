@@ -13,7 +13,6 @@ Key features:
 import math
 import os
 import sys
-from copy import deepcopy
 from typing import Any, Optional, Union
 
 import torch
@@ -542,172 +541,108 @@ class MELTTrainer(Trainer):
         )
 
     # ------------------------------------------------------------------
-    # Lhotse sampler state: save / restore helpers
+    # Lhotse dataloader state: save / restore helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _get_sampler_from_dataloader(dataloader: DataLoader):
-        """Extract the lhotse CutSampler from a DataLoader.
-
-        The sampler lives on ``dataloader.dataset.sampler`` when using
-        :class:`InfiniteIterableDatasetWrapper`.
-        """
-        dataset = getattr(dataloader, "dataset", None)
-        return getattr(dataset, "sampler", None)
-
     def _save_sampler_state(self, output_dir: str) -> None:
-        """Save the lhotse sampler state dict into *output_dir*/sampler/.
+        """Save the training dataloader state into *output_dir*/sampler/.
 
         Each rank saves its own file so that restoration is rank-aware.
+
+        The payload is ``StatefulDataLoader.state_dict()``: a per-worker snapshot
+        of where each worker's iterator actually is. It is collected from inside
+        the workers, which is the only place that position exists once
+        ``num_workers > 0``.
         """
         dataloader = self._train_dataloader_ref
         if dataloader is None:
-            logger.warning("No training dataloader reference — skipping sampler state save.")
+            logger.warning("No training dataloader reference — skipping dataloader state save.")
             return
 
-        sampler = self._get_sampler_from_dataloader(dataloader)
-        if sampler is None:
-            logger.warning("No sampler found on the training dataloader — skipping sampler state save.")
+        if not hasattr(dataloader, "state_dict"):
+            # Map-style/eval-shaped loaders have no resumable position.
+            logger.warning(
+                f"Training dataloader is a {type(dataloader).__name__}, which has no "
+                "state_dict() — skipping dataloader state save. Resume will restart "
+                "the data stream."
+            )
             return
 
         sampler_dir = os.path.join(output_dir, "sampler")
         os.makedirs(sampler_dir, exist_ok=True)
 
-        # --- Build the payload ---------------------------------------------------
-        state: dict[str, Any] = {}
-
-        # 1) Native sampler state_dict (accurate when num_workers == 0).
-        try:
-            sampler_sd = sampler.state_dict()
-        except Exception as exc:
-            logger.warning(f"sampler.state_dict() failed ({exc}); saving training-progress only.")
-            sampler_sd = None
-
-        # 2) When dataloader workers > 0, the main-process sampler is never
-        #    iterated, so its diagnostics are empty.  We patch them with values
-        #    derived from the training progress so that ``_fast_forward`` on
-        #    restore replays the right number of batches.
-        if sampler_sd is not None:
-            diag = sampler_sd.get("diagnostics", {})
-            stats = diag.get("stats_per_epoch", {})
-            epoch = sampler_sd.get("epoch", 0)
-
-            has_real_stats = any(
-                s.get("kept_batches", 0) + s.get("discarded_batches", 0) > 0
-                for s in stats.values()
-            )
-
-            if not has_real_stats:
-                # Compute the number of micro-batches consumed in the current epoch.
-                total_microbatches = (
-                    self.state.global_step * self.args.gradient_accumulation_steps
-                )
-                batches_per_epoch = (
-                    len(dataloader)
-                    if hasattr(dataloader, "__len__")
-                    else total_microbatches
-                )
-                batches_in_epoch = (
-                    total_microbatches % batches_per_epoch
-                    if batches_per_epoch > 0
-                    else 0
-                )
-                sampler_sd["diagnostics"] = {
-                    "current_epoch": epoch,
-                    "stats_per_epoch": {
-                        epoch: {
-                            "epoch": epoch,
-                            "kept_batches": batches_in_epoch,
-                            "kept_cuts": 0,
-                            "discarded_batches": 0,
-                            "discarded_cuts": 0,
-                        }
-                    },
-                }
-                logger.info(
-                    f"Augmented sampler diagnostics for epoch {epoch}: "
-                    f"{batches_in_epoch} micro-batches (num_workers > 0 detected)."
-                )
-
-            state["sampler_state_dict"] = sampler_sd
-
-        # 3) Always include training-progress metadata for safety / debugging.
-        state["global_step"] = self.state.global_step
-        state["gradient_accumulation_steps"] = self.args.gradient_accumulation_steps
+        state: dict[str, Any] = {
+            "dataloader_state_dict": dataloader.state_dict(),
+            # Kept for debugging and for spotting a checkpoint written by a run
+            # with a different parallelism layout.
+            "global_step": self.state.global_step,
+            "gradient_accumulation_steps": self.args.gradient_accumulation_steps,
+            "num_workers": getattr(dataloader, "num_workers", 0),
+            "world_size": self._world_size,
+        }
 
         save_path = os.path.join(
             sampler_dir, f"sampler_state_rank{self._global_rank}.pt"
         )
         torch.save(state, save_path)
-        logger.info(f"Saved lhotse sampler state to {save_path}")
+        logger.info(f"Saved lhotse dataloader state to {save_path}")
 
     def _restore_sampler_state(self, dataloader: DataLoader) -> None:
-        """Load a previously saved sampler state into *dataloader*'s sampler."""
+        """Load a previously saved dataloader state into *dataloader*."""
         sampler_file = self._lhotse_resume_from
         self._lhotse_resume_from = None  # consumed
 
-        sampler = self._get_sampler_from_dataloader(dataloader)
-        if sampler is None:
+        if not hasattr(dataloader, "load_state_dict"):
             logger.warning(
-                "Could not locate sampler on the dataloader — "
-                "sampler state will NOT be restored."
+                f"Training dataloader is a {type(dataloader).__name__}, which has no "
+                "load_state_dict() — dataloader state will NOT be restored."
             )
             return
 
-        logger.info(f"Loading lhotse sampler state from {sampler_file}")
+        logger.info(f"Loading lhotse dataloader state from {sampler_file}")
         state = torch.load(sampler_file, map_location="cpu", weights_only=False)
 
-        sampler_sd = state.get("sampler_state_dict")
-        if sampler_sd is None:
+        dl_sd = state.get("dataloader_state_dict")
+        if dl_sd is None:
             logger.warning(
-                "Checkpoint does not contain 'sampler_state_dict' — "
-                "sampler state will NOT be restored."
+                "Checkpoint does not contain 'dataloader_state_dict' — it predates "
+                "the StatefulDataLoader migration (issue #55). Dataloader state will "
+                "NOT be restored; the data stream restarts from the beginning."
             )
             return
 
-        num_workers = getattr(dataloader, "num_workers", 0)
-        if num_workers > 0:
-            # With num_workers > 0, the sampler runs exclusively in worker processes.
-            # _fast_forward() inside load_state_dict() must execute AFTER
-            # make_worker_init_fn sets LHOTSE_PROCESS_SEED, otherwise the
-            # CutSet shard assignment (split_for_dataloading=True) differs from
-            # the original run and all resumed batches are wrong.
-            # We defer the restore: store the state dict on the dataset wrapper;
-            # _make_lhotse_worker_init_fn picks it up and calls load_state_dict()
-            # in the worker after LHOTSE_PROCESS_SEED is set.
-            dataset = dataloader.dataset
-            if hasattr(dataset, "_pending_lhotse_state"):
-                dataset._pending_lhotse_state = sampler_sd
-                logger.info(
-                    f"Deferred lhotse sampler restoration to worker process "
-                    f"(num_workers={num_workers}); _fast_forward will run after "
-                    "LHOTSE_PROCESS_SEED is set by make_worker_init_fn."
-                )
-            else:
-                logger.warning(
-                    "DataLoader has num_workers > 0 but dataset does not support "
-                    "deferred sampler state. Falling back to main-process restore — "
-                    "shard assignment may not match the original run."
-                )
-                logger.info(
-                    "Restoring lhotse sampler state (this may take a while "
-                    "as the sampler fast-forwards through already-seen data)…"
-                )
-                sampler.load_state_dict(deepcopy(sampler_sd))
-                logger.info("Lhotse sampler state restored successfully.")
-        else:
-            logger.info(
-                "Restoring lhotse sampler state (this may take a while "
-                "as the sampler fast-forwards through already-seen data)…"
+        # A worker's snapshot only means anything to the worker that wrote it, so
+        # a changed layout silently maps state onto the wrong stream. Refuse
+        # rather than resume against a corpus slice the checkpoint never saw.
+        saved_workers = state.get("num_workers")
+        saved_world = state.get("world_size")
+        now_workers = getattr(dataloader, "num_workers", 0)
+        if saved_workers is not None and saved_workers != now_workers:
+            raise ValueError(
+                f"Checkpoint was written with num_workers={saved_workers} but this run "
+                f"has num_workers={now_workers}. Per-worker dataloader state cannot be "
+                "remapped across a different worker count — resume with the original "
+                "value, or delete the sampler state to restart the data stream."
             )
-            sampler.load_state_dict(deepcopy(sampler_sd))
-            logger.info("Lhotse sampler state restored successfully.")
+        if saved_world is not None and saved_world != self._world_size:
+            raise ValueError(
+                f"Checkpoint was written with world_size={saved_world} but this run has "
+                f"world_size={self._world_size}. Indexed partitioning assigns each rank a "
+                "different slice at a different world size, so the saved position refers "
+                "to data this rank no longer reads."
+            )
 
-        # The sampler now handles data positioning internally, so we
+        dataloader.load_state_dict(dl_sd)
+        logger.info(
+            f"Restored dataloader state (num_workers={now_workers}, "
+            f"world_size={self._world_size}) — each worker resumes at its own position."
+        )
+
+        # The dataloader now handles data positioning internally, so we
         # disable HF Trainer's own batch-skipping to avoid double-skipping.
         self.args.ignore_data_skip = True
         logger.info(
-            "Set ignore_data_skip=True — the lhotse sampler handles "
+            "Set ignore_data_skip=True — the lhotse dataloader handles "
             "data resumption natively."
         )
 
