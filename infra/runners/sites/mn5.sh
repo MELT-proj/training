@@ -6,13 +6,20 @@
 # whoever created it — the defaults below are readable by the group but writable
 # only by their owner. Set your own OUTPUT_DIR and TMPDIR_HOST (both get written
 # to); HF_HOME and LOCAL_DATASETS_DIR are read-only in a run and can stay shared.
-export HF_HOME="${HF_HOME:-/gpfs/projects/epor48/melt-data/hf_cache}"
-export OUTPUT_DIR="${OUTPUT_DIR:-/gpfs/projects/epor48/melt-data/outputs}"
+# 2026-08-07: hf_cache, outputs and the .sif images moved off gpfs_projects to
+# gpfs_scratch, which was filling up (projects was at 35.7 TB of a 48.8 TB group
+# quota). `shar` and `tmp` stayed behind, so only some of these paths changed --
+# check where a thing actually is before assuming this file is right.
+export HF_HOME="${HF_HOME:-/gpfs/scratch/epor48/hf_cache}"
+export OUTPUT_DIR="${OUTPUT_DIR:-/gpfs/scratch/epor48/outputs}"
 export LOCAL_DATASETS_DIR="${LOCAL_DATASETS_DIR:-/gpfs/projects/epor48/melt-data/shar}"
 export TMPDIR_HOST="${TMPDIR_HOST:-/gpfs/projects/epor48/melt-data/tmp}"
 
 # --- container mode -------------------------------------------------------
-export SINGULARITY_IMG=/gpfs/projects/epor48/melt-data/melt_cuda126.sif
+# Overridable like the storage paths above, so a trial image can be pointed at
+# without editing this file: SINGULARITY_IMG=/path/to/other.sif submit-container.sh …
+# Moved to gpfs_scratch on 2026-08-07 along with hf_cache and outputs.
+export SINGULARITY_IMG="${SINGULARITY_IMG:-/gpfs/scratch/epor48/melt_cuda126.sif}"
 export SINGULARITY_BIN=singularity
 
 # --- code sync (infra/sync_repo.sh) ---------------------------------------
