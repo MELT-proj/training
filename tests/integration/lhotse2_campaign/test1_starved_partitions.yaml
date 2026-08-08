@@ -1,0 +1,172 @@
+# Test 1 — a mixture source with fewer cuts than there are partitions.
+#
+# Indexed Shar partitions by SAMPLE index, not by shard: each (rank, worker)
+# slice walks `shard_id + pos * num_shards` over the source's cut range, where
+# num_shards = world_size * num_workers. A source with fewer cuts than that has
+# no cut to give the higher-numbered partitions.
+#
+# At 1 node x 4 GPUs x num_workers 2 there are 8 partitions. `voxpopuli/lt/
+# validation` holds 3 cuts, so 5 of the 8 can receive none of it; `voxpopuli/lt/
+# test` holds 42, so every partition gets ~5 cuts and repeats them.
+#
+# A CPU repro of the same shape showed no hang, no crash and no loss of
+# disjointness — the starved source is simply absent from the partitions it
+# cannot reach, which silently scales its effective mixture weight by
+# min(cuts, partitions) / partitions. This run checks that prediction against
+# the real loader stack (worker_init, FSDP2, container) at real scale.
+#
+# Usage — 1 node, 4 GPUs, ~20 min of work:
+#   MELT_QOS=acc_debug MELT_TIME=01:00:00 \
+#   LOCAL_DATASETS_DIR=/gpfs/projects/epor48/melt-data/shar-indexed \
+#   OUTPUT_DIR=... MELT_DEBUG_CUT_IDS_DIR=... \
+#   infra/runners/submit-container.sh mn5 config/accelerate/fsdp2.yaml \
+#     --config tests/integration/lhotse2_campaign/test1_starved_partitions.yaml
+
+run:
+  exp_name: lhotse2-test1-starved-partitions
+  dry_run: false
+
+model:
+  encoder:
+    name: facebook/w2v-bert-2.0
+    freeze: true
+    max_audio_seq_len: 1500
+
+  decoder:
+    name: Qwen/Qwen3-1.7B
+    attn_implementation: flash_attention_2
+    freeze: true
+    bos_token: <|startoftext|>
+    eos_token: <|endoftext|>
+    pad_token: <|text_pad|>
+    audio_token: <|audio|>
+    audio_bos_token: <|audio_bos|>
+    audio_eos_token: <|audio_eos|>
+
+  adapter:
+    _type: conformer
+    freeze: false
+    num_adapter_layers: 2
+    adapter_kernel_size: 3
+    adapter_stride: 2
+
+  ckpt: null
+
+data:
+  sample_rate: 16000
+  apply_chat_template: true
+  min_chars: 3
+
+  train_ds:
+    # Weights must be explicit here. Automatic weighting is cut-proportional,
+    # so a 3-cut source among 160k would essentially never be drawn and the
+    # test would prove nothing. The loader requires weights on all leaves or
+    # none, so the two bulk sources carry them too.
+    input_cfg:
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/de/train
+        weight: 0.35
+        tags:
+          task: asr
+          lang: de
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/es/train
+        weight: 0.30
+        tags:
+          task: asr
+          lang: es
+      # 3 cuts < 8 partitions: the starved case.
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/lt/validation
+        weight: 0.20
+        tags:
+          task: asr
+          lang: lt
+      # 42 cuts > 8 partitions: no starvation, but ~5 cuts per partition, so
+      # the repeat wrapper cycles a very short list.
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/lt/test
+        weight: 0.15
+        tags:
+          task: asr
+          lang: lt
+
+    total_hours: null
+    total_cuts: null
+    force_estimate: true
+
+    min_duration: 0.5
+    max_duration: 90.0
+
+    batch_size: 32
+    batch_duration: 160
+    quadratic_duration: 35
+    max_tokens: 256
+    max_tps: null
+
+    lhotse_sampler_type: dynamic_bucketing
+    num_buckets: 30
+    buffer_size: 300000
+    bucket_duration_bins: null
+
+    shuffle: true
+    drop_last: false
+    seed: 42
+    shard_seed: randomized
+
+    # 4 GPUs x 2 workers = 8 partitions. This is the number the tiny sources
+    # are measured against.
+    num_workers: 2
+    pin_memory: true
+    prefetch_factor: 8
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+  # No validation_ds: this test reads cut IDs, not loss.
+
+trainer:
+  output_dir: ${oc.env:OUTPUT_DIR}
+  overwrite_output_dir: false
+  resume_from_checkpoint: null
+  seed: 42
+  do_train: true
+  do_eval: false
+  eval_strategy: "no"
+  eval_on_start: false
+  average_tokens_across_devices: true
+
+  per_device_train_batch_size: -1
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 4
+
+  lr_scheduler_type: cosine
+  warmup_steps: 10
+
+  num_train_epochs: 1
+  max_steps: 20
+
+  logging_strategy: steps
+  logging_steps: 1
+  report_to: none
+
+  save_strategy: "no"
+
+  bf16: true
+  group_by_length: false
+  dataloader_num_workers: 0
+  remove_unused_columns: false
+  ddp_find_unused_parameters: false
+
+  max_grad_norm: 1.0
+
+# No `evaluation:` section — its mere presence is what enables compute_metrics,
+# and this test does not evaluate.
+
+optimization:
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  encoder_lr: 6e-6
+  decoder_lr: 2e-5
+  adapter_lr: 2e-4
+  min_lr_scale: 0.1

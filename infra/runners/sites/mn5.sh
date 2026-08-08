@@ -43,9 +43,11 @@ export MASTER_PORT=60001
 # test left at the 1h default costs 4 GPUh of the monthly quota for a few
 # minutes of work, so ask for what the run needs:
 #   MELT_TIME=00:20:00 MELT_QOS=acc_debug infra/runners/submit-container.sh mn5 …
+# MELT_NODES scales out; bash/run_train.sh derives world_size from SLURM, so no
+# other change is needed to go multi-node.
 SBATCH_ARGS=(
     --time="${MELT_TIME:-01:00:00}"
-    --nodes=1
+    --nodes="${MELT_NODES:-1}"
     --gpus-per-node=4
     --account=epor48
     --qos="${MELT_QOS:-acc_ehpc}"
