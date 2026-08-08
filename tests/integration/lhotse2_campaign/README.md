@@ -58,8 +58,10 @@ than 8 partitions has its effective mixture weight silently scaled by
 ## Test 2 — two-node resume (2 nodes × 4 GPUs, ~16 GPUh)
 
 ```bash
-sbatch --qos=acc_debug --time=02:00:00 \
-    tests/integration/lhotse2_campaign/run_test2_2node_mn5.sbatch
+tests/integration/lhotse2_campaign/run_test2_mn5.sh run1     # wait for it
+tests/integration/lhotse2_campaign/run_test2_mn5.sh prune
+tests/integration/lhotse2_campaign/run_test2_mn5.sh run2     # wait for it
+tests/integration/lhotse2_campaign/run_test2_mn5.sh compare
 ```
 
 8 ranks × `num_workers: 2` = **16 streams**. `world_size` has never varied in
