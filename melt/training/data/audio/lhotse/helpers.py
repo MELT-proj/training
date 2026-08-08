@@ -5,6 +5,8 @@ These are used by both the batch-oriented :class:`SpeechToTextDataset`
 and the map-style :class:`MELTMapDataset`.
 """
 
+import random
+
 from lhotse.cut import Cut
 
 from .....logging_utils import get_logger
