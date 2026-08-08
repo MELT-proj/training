@@ -10,6 +10,7 @@ Key functions:
 - compute_dataset_duration: Computes total dataset duration for epoch estimation
 """
 
+import copy
 import gzip
 import json
 import math
@@ -37,7 +38,7 @@ from lhotse.dataset import (
 from lhotse.dataset.dataloading import resolve_seed
 from lhotse.dataset.sampling.base import CutSampler
 from lhotse.utils import fix_random_seed
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 from functools import partial
 from torchdata.stateful_dataloader import StatefulDataLoader
 
@@ -1164,6 +1165,66 @@ def _maybe_set_cuda_expandable_segments(enabled: bool = True) -> None:
             logger.debug("Enabled CUDA expandable segments")
     except RuntimeError:
         logger.debug("Could not enable CUDA expandable segments")
+
+
+def split_eval_config_by_name(config: DictConfig) -> dict[str, DictConfig] | None:
+    """Split a ``validation_ds`` config into one sub-config per named eval set.
+
+    Each ``input_cfg`` entry may carry an optional ``name``.  Sources sharing a
+    name are evaluated together and reported under that name, which is how
+    per-language / per-task validation loss is obtained: HF's Trainer loops over
+    a dict of eval datasets and prefixes every metric with the key, giving
+    ``eval_<name>_loss``.
+
+    Naming is all-or-none, mirroring the mixture-weight rule in
+    :func:`_resolve_weights`: a config where only some sources are named is
+    almost certainly a mistake, and silently lumping the rest together would
+    hide it.
+
+    Args:
+        config: A ``validation_ds`` DictConfig.
+
+    Returns:
+        A mapping of name -> sub-config (each a copy of ``config`` carrying only
+        that name's sources), preserving first-appearance order.  ``None`` when
+        no source is named, meaning the caller should build a single eval
+        dataset exactly as before.
+
+    Raises:
+        ValueError: if some but not all sources declare a ``name``.
+    """
+    input_cfg = _get_config_value(config, "input_cfg", [])
+    if not input_cfg:
+        return None
+
+    names = [_get_config_value(s, "name", None) for s in input_cfg]
+    named = [n for n in names if n]
+    if not named:
+        return None
+    if len(named) != len(names):
+        missing = [
+            str(_get_config_value(s, "shar_path", "<no shar_path>"))
+            for s, n in zip(input_cfg, names)
+            if not n
+        ]
+        raise ValueError(
+            "validation_ds.input_cfg mixes named and unnamed sources. Either "
+            "name every source (to report per-set metrics as eval_<name>_loss) "
+            f"or none of them. Unnamed: {missing}"
+        )
+
+    grouped: dict[str, list] = {}
+    for source_cfg, name in zip(input_cfg, names):
+        grouped.setdefault(str(name), []).append(source_cfg)
+
+    sub_configs: dict[str, DictConfig] = {}
+    for name, sources in grouped.items():
+        sub = copy.deepcopy(config)
+        # OmegaConf containers reject plain assignment of a foreign node list in
+        # struct mode, so go through OmegaConf.update on the copy.
+        OmegaConf.update(sub, "input_cfg", sources, force_add=True)
+        sub_configs[name] = sub
+    return sub_configs
 
 
 def materialize_cuts_for_eval(config: DictConfig) -> list[Cut]:

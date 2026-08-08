@@ -618,3 +618,85 @@ class TestRngSetstateHardening:
             target = random.Random()
             target.setstate(flat[n])
             assert target.random() == refs[n].random(), f"{n} did not resume"
+
+
+class TestNamedEvalSets:
+    """`name` on a validation source splits eval into separately reported sets.
+
+    HF's Trainer loops over a dict of eval datasets and prefixes every metric
+    with the key, so named sets are what produce per-language / per-task
+    `eval_<name>_loss` without any change to the metric plumbing.
+    """
+
+    @staticmethod
+    def _cfg(entries):
+        from omegaconf import OmegaConf
+
+        return OmegaConf.create({"input_cfg": entries, "max_samples": 8})
+
+    def test_unnamed_sources_keep_the_single_set_behaviour(self):
+        from melt.training.data.audio.lhotse.dataloader import (
+            split_eval_config_by_name,
+        )
+
+        cfg = self._cfg([{"shar_path": "/a"}, {"shar_path": "/b"}])
+        assert split_eval_config_by_name(cfg) is None
+
+    def test_empty_input_cfg_is_not_an_error(self):
+        from melt.training.data.audio.lhotse.dataloader import (
+            split_eval_config_by_name,
+        )
+
+        assert split_eval_config_by_name(self._cfg([])) is None
+
+    def test_sources_sharing_a_name_are_grouped(self):
+        from melt.training.data.audio.lhotse.dataloader import (
+            split_eval_config_by_name,
+        )
+
+        cfg = self._cfg(
+            [
+                {"shar_path": "/de1", "name": "asr_de"},
+                {"shar_path": "/nl", "name": "asr_nl"},
+                {"shar_path": "/de2", "name": "asr_de"},
+            ]
+        )
+        groups = split_eval_config_by_name(cfg)
+
+        assert list(groups) == ["asr_de", "asr_nl"]  # first-appearance order
+        assert [s.shar_path for s in groups["asr_de"].input_cfg] == ["/de1", "/de2"]
+        assert [s.shar_path for s in groups["asr_nl"].input_cfg] == ["/nl"]
+
+    def test_sibling_keys_are_carried_into_every_sub_config(self):
+        """Filters like max_samples must apply per set, not once globally."""
+        from melt.training.data.audio.lhotse.dataloader import (
+            split_eval_config_by_name,
+        )
+
+        cfg = self._cfg(
+            [{"shar_path": "/a", "name": "x"}, {"shar_path": "/b", "name": "y"}]
+        )
+        groups = split_eval_config_by_name(cfg)
+
+        assert all(sub.max_samples == 8 for sub in groups.values())
+
+    def test_sub_configs_do_not_alias_the_original(self):
+        from melt.training.data.audio.lhotse.dataloader import (
+            split_eval_config_by_name,
+        )
+
+        cfg = self._cfg([{"shar_path": "/a", "name": "x"}])
+        groups = split_eval_config_by_name(cfg)
+        groups["x"].max_samples = 999
+
+        assert cfg.max_samples == 8
+
+    def test_partially_named_sources_raise(self):
+        """Naming only some sources is a mistake, not a request to lump the rest."""
+        from melt.training.data.audio.lhotse.dataloader import (
+            split_eval_config_by_name,
+        )
+
+        cfg = self._cfg([{"shar_path": "/a", "name": "x"}, {"shar_path": "/b"}])
+        with pytest.raises(ValueError, match="mixes named and unnamed"):
+            split_eval_config_by_name(cfg)

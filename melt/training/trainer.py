@@ -37,6 +37,7 @@ from .data.audio.lhotse import (
     estimate_steps_per_epoch,
     get_train_dataloader_from_config,
     materialize_cuts_for_eval,
+    split_eval_config_by_name,
 )
 
 logger = get_logger(__name__)
@@ -110,22 +111,35 @@ class MELTTrainer(Trainer):
             and config.data.validation_ds.input_cfg
         ):
             logger.info("Creating MELTMapDataset for evaluation...")
-            cuts = materialize_cuts_for_eval(config.data.validation_ds)
-            eval_dataset = MELTMapDataset(
-                cuts=cuts,
-                processor=processor,
-                config=config.data.validation_ds,
-                is_train=False,
-                return_langs=True,
-            )
+
+            def _build(ds_config) -> MELTMapDataset:
+                return MELTMapDataset(
+                    cuts=materialize_cuts_for_eval(ds_config),
+                    processor=processor,
+                    config=ds_config,
+                    is_train=False,
+                    return_langs=True,
+                )
+
+            # A `name` on each validation source splits eval into separately
+            # reported sets; HF prefixes each one's metrics, giving
+            # eval_<name>_loss.  Unnamed sources keep the old single-set
+            # behaviour, so existing configs are unaffected.
+            named = split_eval_config_by_name(config.data.validation_ds)
+            if named is None:
+                eval_dataset = _build(config.data.validation_ds)
+                logger.info("Eval dataset ready: %d valid cuts", len(eval_dataset))
+            else:
+                eval_dataset = {name: _build(sub) for name, sub in named.items()}
+                logger.info(
+                    "Eval datasets ready: %s",
+                    ", ".join(f"{n}={len(d)} cuts" for n, d in eval_dataset.items()),
+                )
+
             self._eval_collator = MELTDataCollator(
                 processor=processor,
                 config=config.data.validation_ds,
                 is_train=False,
-            )
-            logger.info(
-                "Eval dataset ready: %d valid cuts",
-                len(eval_dataset),
             )
 
         # Sampler state restoration flag (set in train(), consumed in get_train_dataloader())
@@ -338,6 +352,23 @@ class MELTTrainer(Trainer):
         # a fresh DataLoader in prepare_data_loader, and re-preparing would discard
         # the live worker pool that persistent_workers exists to keep.
         cache_key = eval_dataset if isinstance(eval_dataset, str) else "eval"
+
+        # With a dict of named eval sets, HF's evaluate() loop hands the *key*
+        # back here rather than the dataset, so resolve it before use.
+        if isinstance(eval_dataset, str):
+            if not isinstance(self.eval_dataset, dict):
+                raise ValueError(
+                    f"Eval dataset {eval_dataset!r} requested by name, but "
+                    "eval_dataset is not a dict of named sets."
+                )
+            try:
+                eval_dataset = self.eval_dataset[eval_dataset]
+            except KeyError:
+                raise ValueError(
+                    f"Unknown eval dataset {cache_key!r}. "
+                    f"Available: {sorted(self.eval_dataset)}"
+                ) from None
+
         if persistent_workers:
             cached_dataset, cached_loader = self._prepared_eval_dataloaders.get(
                 cache_key, (None, None)
