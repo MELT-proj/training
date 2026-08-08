@@ -464,6 +464,21 @@ class MELTTrainer(Trainer):
             world_size=self._world_size,
         )
 
+        # estimate_steps_per_epoch signals "could not estimate" with 0 (sources
+        # read but nothing measurable) or -1 (no basis to estimate from). Both
+        # are useless as a divisor below, and 0 raises ZeroDivisionError several
+        # frames away from the cause, so fail here with the reason.
+        if optimization_steps_per_epoch <= 0:
+            raise ValueError(
+                "Could not estimate optimization steps per epoch "
+                f"(got {optimization_steps_per_epoch}) from "
+                f"{self.dataset_num_cuts} cuts / {self.dataset_duration_hours:.2f} h. "
+                "Either the configured sources hold no readable cut manifests, or "
+                "neither batch_size nor batch_duration is set. Set "
+                "data.train_ds.total_hours and total_cuts explicitly to skip "
+                "estimation."
+            )
+
         if epoch_based:
             max_steps = math.ceil(args.num_train_epochs * optimization_steps_per_epoch)
 

@@ -175,6 +175,28 @@ def _get_config_value(config: Any, key: str, default: Any = None) -> Any:
     return default
 
 
+def shar_manifest_files(shar_path: str | Path) -> list[Path]:
+    """Cut manifests in a Shar directory, one per shard, either layout.
+
+    A streaming collection stores ``cuts.000000.jsonl.gz``; an indexed one
+    stores plain ``cuts.000000.jsonl`` beside a ``.idx`` of byte offsets, which
+    is why it cannot stay compressed. Globbing only the gzipped form silently
+    reports a fully indexed source as empty.
+
+    A shard present in both forms is counted once, preferring the plain file:
+    the two are the same records, and double-counting would inflate every
+    duration and cut total derived from them.
+    """
+    shar_path = Path(shar_path)
+    by_shard: dict[str, Path] = {}
+    # Plain first so it wins the setdefault against its own .gz.
+    for pattern in ("cuts.*.jsonl", "cuts.*.jsonl.gz"):
+        for path in sorted(shar_path.glob(pattern)):
+            stem = path.name[: path.name.index(".jsonl")]
+            by_shard.setdefault(stem, path)
+    return [by_shard[k] for k in sorted(by_shard)]
+
+
 def _read_shar_manifest_durations(
     shar_path: str | Path,
     min_duration: float = 0.0,
@@ -182,8 +204,10 @@ def _read_shar_manifest_durations(
 ) -> tuple[float, int]:
     """Read total duration and cut count from SHAR manifest files.
 
-    SHAR format stores cut manifests as gzipped JSONL files in the shar directory.
-    This function reads only the manifest files (not audio) to extract durations.
+    Reads only the manifest files (not audio) to extract durations. Handles
+    both Shar layouts: gzipped ``cuts.*.jsonl.gz`` and the plain
+    ``cuts.*.jsonl`` that an indexed collection uses (the .idx sidecars hold
+    byte offsets into the manifest, so it cannot be compressed).
 
     Args:
         shar_path: Path to the SHAR directory.
@@ -197,16 +221,10 @@ def _read_shar_manifest_durations(
     total_duration = 0.0
     num_cuts = 0
 
-    # Find all cuts manifest files (cuts.*.jsonl.gz pattern)
-    manifest_files = sorted(glob(str(shar_path / "cuts.*.jsonl.gz")))
-
-    if not manifest_files:
-        logger.warning(f"No manifest files found in {shar_path}")
-        return 0.0, 0
-
-    for manifest_file in manifest_files:
+    for manifest_file in shar_manifest_files(shar_path):
+        opener = gzip.open if manifest_file.suffix == ".gz" else open
         try:
-            with gzip.open(manifest_file, "rt", encoding="utf-8") as f:
+            with opener(manifest_file, "rt", encoding="utf-8") as f:
                 for line in f:
                     if line.strip():
                         cut_data = json.loads(line)
@@ -218,6 +236,9 @@ def _read_shar_manifest_durations(
         except Exception as e:
             logger.warning(f"Error reading manifest {manifest_file}: {e}")
             continue
+
+    if not num_cuts:
+        logger.warning(f"No cuts read from manifests in {shar_path}")
 
     return total_duration, num_cuts
 

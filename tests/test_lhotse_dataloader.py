@@ -700,3 +700,76 @@ class TestNamedEvalSets:
         cfg = self._cfg([{"shar_path": "/a", "name": "x"}, {"shar_path": "/b"}])
         with pytest.raises(ValueError, match="mixes named and unnamed"):
             split_eval_config_by_name(cfg)
+
+
+class TestSharManifestDiscovery:
+    """Manifests must be found in either Shar layout.
+
+    An indexed collection stores plain `cuts.*.jsonl` beside `.idx` byte
+    offsets, so it cannot stay compressed. Globbing only `cuts.*.jsonl.gz`
+    reports a fully indexed source as empty, which surfaces as a
+    ZeroDivisionError several frames away in the trainer.
+    """
+
+    @staticmethod
+    def _write(d, name, text, gzipped):
+        import gzip as _gzip
+
+        path = d / name
+        opener = _gzip.open if gzipped else open
+        with opener(path, "wt", encoding="utf-8") as fh:
+            fh.write(text)
+        return path
+
+    def _cut(self, cut_id, duration):
+        import json as _json
+
+        return _json.dumps({"id": cut_id, "duration": duration}) + "\n"
+
+    def test_plain_jsonl_manifests_are_found(self, tmp_path):
+        from melt.training.data.audio.lhotse.dataloader import (
+            _read_shar_manifest_durations,
+        )
+
+        self._write(tmp_path, "cuts.000000.jsonl", self._cut("a", 2.0), False)
+        self._write(tmp_path, "cuts.000001.jsonl", self._cut("b", 3.0), False)
+
+        duration, n = _read_shar_manifest_durations(tmp_path)
+        assert (duration, n) == (5.0, 2)
+
+    def test_gzipped_manifests_still_work(self, tmp_path):
+        from melt.training.data.audio.lhotse.dataloader import (
+            _read_shar_manifest_durations,
+        )
+
+        self._write(tmp_path, "cuts.000000.jsonl.gz", self._cut("a", 4.0), True)
+
+        assert _read_shar_manifest_durations(tmp_path) == (4.0, 1)
+
+    def test_a_shard_in_both_forms_is_counted_once(self, tmp_path):
+        """A half-migrated source must not double its measured duration."""
+        from melt.training.data.audio.lhotse.dataloader import (
+            _read_shar_manifest_durations,
+        )
+
+        self._write(tmp_path, "cuts.000000.jsonl", self._cut("a", 7.0), False)
+        self._write(tmp_path, "cuts.000000.jsonl.gz", self._cut("a", 7.0), True)
+
+        assert _read_shar_manifest_durations(tmp_path) == (7.0, 1)
+
+    def test_empty_directory_reports_nothing(self, tmp_path):
+        from melt.training.data.audio.lhotse.dataloader import (
+            _read_shar_manifest_durations,
+        )
+
+        assert _read_shar_manifest_durations(tmp_path) == (0.0, 0)
+
+    def test_discovery_orders_shards_and_prefers_plain(self, tmp_path):
+        from melt.training.data.audio.lhotse.dataloader import shar_manifest_files
+
+        self._write(tmp_path, "cuts.000001.jsonl.gz", "", True)
+        self._write(tmp_path, "cuts.000000.jsonl.gz", "", True)
+        self._write(tmp_path, "cuts.000000.jsonl", "", False)
+
+        names = [p.name for p in shar_manifest_files(tmp_path)]
+        assert names == ["cuts.000000.jsonl", "cuts.000001.jsonl.gz"]
