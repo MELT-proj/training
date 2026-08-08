@@ -46,7 +46,9 @@ smoke)
              --trainer.report_to none)
     # Cut-id logging on for the smoke only: it confirms 16 disjoint streams
     # before the long legs, and costs nothing at 30 steps.
-    export MELT_DEBUG_CUT_IDS_DIR="${OUTPUT_DIR}/${EXP}/debug_cut_ids"
+    # NOT under output_dir: HF refuses a non-empty output_dir, and this has to
+    # exist before submit.
+    export MELT_DEBUG_CUT_IDS_DIR="${OUTPUT_DIR}/${EXP}-cut_ids"
     export MELT_DEBUG_CUT_IDS_MAX_BATCHES=200
     export MELT_DEBUG_CUT_IDS_EVERY=1
     mkdir -p "$MELT_DEBUG_CUT_IDS_DIR"

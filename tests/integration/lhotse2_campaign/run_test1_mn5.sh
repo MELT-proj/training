@@ -22,10 +22,11 @@ export OUTPUT_DIR="${OUTPUT_DIR:-/gpfs/scratch/epor48/outputs}"
 
 # acc_debug: 2h cap but priority 10000 vs 100, so it schedules almost at once.
 export MELT_QOS="${MELT_QOS:-acc_debug}"
-export MELT_TIME="${MELT_TIME:-01:00:00}"
+export MELT_TIME="${MELT_TIME:-00:30:00}"
 
-# Host path; the container sees it under /workspace/outputs.
-export MELT_DEBUG_CUT_IDS_DIR="${OUTPUT_DIR}/${EXP}/debug_cut_ids"
+# NOT under the trainer's output_dir: HF refuses to start when that directory
+# already exists and is non-empty, and this has to be created before submit.
+export MELT_DEBUG_CUT_IDS_DIR="${OUTPUT_DIR}/${EXP}-cut_ids"
 export MELT_DEBUG_CUT_IDS_MAX_BATCHES=400
 export MELT_DEBUG_CUT_IDS_EVERY=1
 mkdir -p "$MELT_DEBUG_CUT_IDS_DIR"
