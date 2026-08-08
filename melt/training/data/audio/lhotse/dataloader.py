@@ -752,21 +752,41 @@ def get_lhotse_sampler_from_config(
             filter_parts.append(f"max_tps={_max_tps}")
         logger.info(f"Applied token filter: {', '.join(filter_parts)}")
 
+        # One line per cut lacking num_tokens is unusable: a source without the
+        # field warns on every cut it yields, and because the train stream is
+        # `.repeat()`ed it warns again on every pass. A small source can emit
+        # the same warning millions of times in a long run and starve the
+        # sampler on log I/O alone. Warn once, then count.
+        missing_num_tokens = {"n": 0}
+
+        def _warn_missing_once(cut_id: str) -> None:
+            missing_num_tokens["n"] += 1
+            if missing_num_tokens["n"] == 1:
+                logger.warning(
+                    f"Cut {cut_id} has no custom.num_tokens; the max_tokens/max_tps "
+                    "filters cannot apply to it and it is kept. Further occurrences "
+                    "are counted, not logged."
+                )
+            elif missing_num_tokens["n"] % 100_000 == 0:
+                logger.warning(
+                    f"{missing_num_tokens['n']:,} cuts so far had no "
+                    "custom.num_tokens (repeats included)."
+                )
+
         def _token_filter(c: Cut, max_tokens: int | None, max_tps: float | None) -> bool:
             custom = getattr(c, "custom", None) or {}
             num_tokens = custom.get("num_tokens") if isinstance(custom, dict) else None
 
-            if max_tokens is not None:
-                if num_tokens is None:
-                    logger.warning(f"Cut {c.id} has no custom.num_tokens; skipping max_tokens filter for this cut.")
-                elif num_tokens > max_tokens:
-                    return False
+            if num_tokens is None:
+                if max_tokens is not None or max_tps is not None:
+                    _warn_missing_once(c.id)
+                return True
 
-            if max_tps is not None:
-                if num_tokens is None:
-                    logger.warning(f"Cut {c.id} has no custom.num_tokens; skipping max_tps filter for this cut.")
-                elif c.duration > 0 and (num_tokens / c.duration) > max_tps:
-                    return False
+            if max_tokens is not None and num_tokens > max_tokens:
+                return False
+
+            if max_tps is not None and c.duration > 0 and (num_tokens / c.duration) > max_tps:
+                return False
 
             return True
 

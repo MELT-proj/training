@@ -26,14 +26,19 @@ export MELT_TIME="${MELT_TIME:-00:30:00}"
 
 # NOT under the trainer's output_dir: HF refuses to start when that directory
 # already exists and is non-empty, and this has to be created before submit.
-export MELT_DEBUG_CUT_IDS_DIR="${OUTPUT_DIR}/${EXP}-cut_ids"
+#
+# The directory is created on the HOST but the variable must carry the
+# CONTAINER path -- it is forwarded verbatim through SINGULARITYENV_*, and only
+# OUTPUT_DIR is bound (to /workspace/outputs).
+CUT_IDS_HOST="${OUTPUT_DIR}/${EXP}-cut_ids"
+mkdir -p "$CUT_IDS_HOST"
+export MELT_DEBUG_CUT_IDS_DIR="/workspace/outputs/${EXP}-cut_ids"
 export MELT_DEBUG_CUT_IDS_MAX_BATCHES=400
 export MELT_DEBUG_CUT_IDS_EVERY=1
-mkdir -p "$MELT_DEBUG_CUT_IDS_DIR"
 
 echo "[test1] exp=$EXP"
 echo "[test1] data=$LOCAL_DATASETS_DIR"
-echo "[test1] cut ids -> $MELT_DEBUG_CUT_IDS_DIR"
+echo "[test1] cut ids -> $CUT_IDS_HOST (container: $MELT_DEBUG_CUT_IDS_DIR)"
 
 infra/runners/submit-container.sh mn5 config/accelerate/fsdp2.yaml \
     --config tests/integration/lhotse2_campaign/test1_starved_partitions.yaml \
@@ -43,5 +48,5 @@ infra/runners/submit-container.sh mn5 config/accelerate/fsdp2.yaml \
 echo
 echo "[test1] when it finishes:"
 echo "  python tests/integration/lhotse2_campaign/check_test1.py \\"
-echo "      --cut-ids-dir $MELT_DEBUG_CUT_IDS_DIR \\"
+echo "      --cut-ids-dir $CUT_IDS_HOST \\"
 echo "      --shar-root $LOCAL_DATASETS_DIR"

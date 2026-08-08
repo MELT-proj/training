@@ -106,7 +106,10 @@ data:
 
     lhotse_sampler_type: dynamic_bucketing
     num_buckets: 30
-    buffer_size: 300000
+    # Small on purpose. The sampler fills this buffer before emitting the
+    # first batch, and a production-sized 300k buffer would consume the
+    # whole allocation of a 20-step test before training starts.
+    buffer_size: 2000
     bucket_duration_bins: null
 
     shuffle: true
