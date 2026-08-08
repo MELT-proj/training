@@ -38,12 +38,16 @@ smoke)
     export MELT_QOS="${MELT_QOS:-acc_debug}"
     export MELT_TIME="${MELT_TIME:-00:40:00}"
     # Enough steps to cross one eval and one save, no more.
+    # The sampler fills buffer_size before emitting a first batch; the
+    # production 300k does not fit in a 40-minute smoke. Nothing this phase
+    # checks (eval-set wiring, ST tags, templates) depends on buffer size.
     COMMON+=(--trainer.max_steps 30
              --trainer.eval_steps 15
              --trainer.save_steps 15
              --trainer.save_total_limit 1
              --trainer.logging_steps 1
-             --trainer.report_to none)
+             --trainer.report_to none
+             --data.train_ds.buffer_size 20000)
     # Cut-id logging on for the smoke only: it confirms 16 disjoint streams
     # before the long legs, and costs nothing at 30 steps.
     # Created on the HOST, but the variable must carry the CONTAINER path:
