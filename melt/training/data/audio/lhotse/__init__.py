@@ -49,6 +49,7 @@ from .dataloader import (
     get_train_dataloader_from_config,
     materialize_cuts_for_eval,
     read_cutset_from_config,
+    resolve_eval_data_config,
     split_eval_config_by_name,
 )
 from .dataset import FallbackDataset, SpeechTextQEDataset, SpeechToTextDataset
@@ -74,6 +75,7 @@ __all__ = [
     "get_finite_dataloader_from_config",
     "FiniteIterableDatasetWrapper",
     "materialize_cuts_for_eval",
+    "resolve_eval_data_config",
     "split_eval_config_by_name",
     "create_eval_dataloader",
     # Epoch estimation utilities

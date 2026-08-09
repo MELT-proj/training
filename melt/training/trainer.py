@@ -37,6 +37,7 @@ from .data.audio.lhotse import (
     estimate_steps_per_epoch,
     get_train_dataloader_from_config,
     materialize_cuts_for_eval,
+    resolve_eval_data_config,
     split_eval_config_by_name,
 )
 
@@ -112,6 +113,11 @@ class MELTTrainer(Trainer):
         ):
             logger.info("Creating MELTMapDataset for evaluation...")
 
+            # The formatting keys live at `data.`, not under `validation_ds`, so
+            # eval has to inherit them or it scores a different sequence format
+            # than training produced (issue #58).
+            eval_data_config = resolve_eval_data_config(config.data)
+
             def _build(ds_config) -> MELTMapDataset:
                 return MELTMapDataset(
                     cuts=materialize_cuts_for_eval(ds_config),
@@ -125,9 +131,9 @@ class MELTTrainer(Trainer):
             # reported sets; HF prefixes each one's metrics, giving
             # eval_<name>_loss.  Unnamed sources keep the old single-set
             # behaviour, so existing configs are unaffected.
-            named = split_eval_config_by_name(config.data.validation_ds)
+            named = split_eval_config_by_name(eval_data_config)
             if named is None:
-                eval_dataset = _build(config.data.validation_ds)
+                eval_dataset = _build(eval_data_config)
                 logger.info("Eval dataset ready: %d valid cuts", len(eval_dataset))
             else:
                 eval_dataset = {name: _build(sub) for name, sub in named.items()}
@@ -138,7 +144,7 @@ class MELTTrainer(Trainer):
 
             self._eval_collator = MELTDataCollator(
                 processor=processor,
-                config=config.data.validation_ds,
+                config=eval_data_config,
                 is_train=False,
             )
 

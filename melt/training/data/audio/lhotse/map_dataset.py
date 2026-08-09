@@ -60,14 +60,16 @@ class MELTMapDataset(torch.utils.data.Dataset):
             _get_config_value(config, "apply_chat_template", False)
         )
 
-        # Resolve the text_field from config (train_ds / validation_ds)
+        # Resolve the text_field. Every caller hands this the ds-level config
+        # (``data.validation_ds``, or one per-name split of it), where the key
+        # actually lives; the nested lookup is kept for a caller that passes the
+        # whole ``data`` block instead. Looking only one level down meant a
+        # `text_field` set in validation_ds was silently ignored and eval always
+        # read plain `text`.
         ds_key = "train_ds" if is_train else "validation_ds"
         ds_config = _get_config_value(config, ds_key, None)
-        self._text_field = str(
-            _get_config_value(ds_config, "text_field", "text")
-            if ds_config
-            else "text"
-        )
+        source = ds_config if ds_config is not None else config
+        self._text_field = str(_get_config_value(source, "text_field", "text"))
 
         # Build a *valid-indices* list once (cuts with missing text are skipped).
         # This is computed at construction time and reused across all eval calls.
