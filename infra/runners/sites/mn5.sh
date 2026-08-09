@@ -38,10 +38,11 @@ export HF_HUB_OFFLINE=1
 export MASTER_PORT=60001
 
 # --- scheduler ------------------------------------------------------------
-# MELT_TIME and MELT_QOS are overridable because SLURM bills the wall clock you
-# *ask* for, times the GPUs, whether or not the job uses it. A ten-step smoke
-# test left at the 1h default costs 4 GPUh of the monthly quota for a few
-# minutes of work, so ask for what the run needs:
+# MELT_TIME and MELT_QOS are overridable mainly to pick the right QoS: acc_debug
+# caps at 2h but runs at priority 10000 against acc_ehpc's 100, so short jobs
+# schedule immediately. Accounting follows ELAPSED time (sacct CPUTimeRAW ==
+# Elapsed x AllocCPUS), so a generous wall is not itself a cost -- but the node
+# is allocated whole, all 80 CPUs and 4 GPUs, however few you use:
 #   MELT_TIME=00:20:00 MELT_QOS=acc_debug infra/runners/submit-container.sh mn5 …
 # MELT_NODES scales out; bash/run_train.sh derives world_size from SLURM, so no
 # other change is needed to go multi-node.

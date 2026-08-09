@@ -11,9 +11,12 @@ All three read the indexed collection at
 `.idx`, `.tar` hard-linked from `shar/`). The shared `shar/` tree keeps its
 `.gz` and carries no `.idx`, so lhotse 1.32 consumers are unaffected.
 
-**Budget: the campaign must not exceed 500 GPUh.** SLURM bills the wall clock
-you *request*, times the GPUs, whether the job uses it or not. Planned spend is
-~345 GPUh.
+**Budget: the campaign must not exceed 500 GPUh.** Accounting follows *elapsed*
+time, not the requested wall — `sacct` reports `CPUTimeRAW` equal to
+`Elapsed x AllocCPUS` on jobs that finished well inside their limit. What you are
+charged for regardless of use is the whole node: MN5 acc nodes allocate all 80
+CPUs and 4 GPUs, so a one-GPU job still bills four. Asking for a generous wall is
+therefore cheap; asking for more nodes is not.
 
 ## Test 0 — local pre-flight (0 GPUh)
 
