@@ -42,7 +42,6 @@
 #   MY=/gpfs/scratch/epor48/$USER
 #
 #   LOCAL_DATASETS_DIR=/gpfs/projects/epor48/melt-data/shar-indexed \
-#   SINGULARITY_IMG=/gpfs/scratch/epor48/melt_cuda126_lhotse2_td.sif \
 #   OUTPUT_DIR=$MY/outputs TMPDIR_HOST=$MY/tmp \
 #   MELT_QOS=acc_ehpc MELT_TIME=12:00:00 \
 #   infra/runners/submit-container.sh mn5 config/accelerate/fsdp2.yaml \

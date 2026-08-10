@@ -108,21 +108,46 @@ read it.
 
 ### Which container image
 
-**This is the single most likely thing to break your first run.** The site file
-still defaults `SINGULARITY_IMG` to `melt_cuda126.sif`, which was built before
-the lhotse 2 migration:
+**The default is correct — you do not need to set `SINGULARITY_IMG`.** As of
+2026-08-10, `melt_cuda126.sif` is a symlink to the lhotse 2 image:
+
+```
+melt_cuda126.sif -> melt_cuda126_lhotse2_td.sif
+```
+
+so the site-file default resolves to a stack matching `main`:
 
 | image | lhotse | torchdata | works with `main` (≥0.5.0)? |
 |---|---|---|---|
-| `melt_cuda126.sif` | 1.32.2 | **absent** | **no** |
-| `melt_cuda126_lhotse2_td.sif` | 2.0.0a3 | 0.11.0 | **yes** |
+| `melt_cuda126.sif` → `…_lhotse2_td.sif` | 2.0.0a3 | 0.11.0 | **yes — the default** |
+| `melt_cuda126_lhotse2_td.sif` | 2.0.0a3 | 0.11.0 | yes (same file) |
+| `melt_cuda126_pre-lhotse2-20260804.sif` | 1.32.2 | absent | no — kept for reference only |
+| `melt_cuda126_pre-devel-20260411.sif` | — | — | no — kept for reference only |
 
-`pyproject.toml` pins `lhotse==2.0.0a3` and `torchdata>=0.11`, so until the new
-image is promoted over the default name, **export it on every submit**:
+`pyproject.toml` pins `lhotse==2.0.0a3` and `torchdata>=0.11`, which only the
+promoted image satisfies. The pre-lhotse2 images are retained deliberately, but
+nothing on `main` runs on them.
+
+The `_lhotse2_td.sif` name still resolves — the campaign scripts under
+`tests/integration/lhotse2_campaign/` reference it directly — so both names
+work and neither costs extra disk.
+
+To pin a specific image (a trial build, or reproducing an old run) override it
+as usual, and verify what you pinned before spending an allocation on it:
 
 ```bash
-export SINGULARITY_IMG=/gpfs/scratch/epor48/melt_cuda126_lhotse2_td.sif
+# [mn5]
+module load singularity
+singularity exec --bind /gpfs:/gpfs /gpfs/scratch/epor48/melt_cuda126.sif bash -lc \
+  'source /workspace/venv/bin/activate
+   python -c "import lhotse, torch, torchdata
+print(lhotse.__version__, torch.__version__, torchdata.__version__)"'
+# expect: 2.0.0a3 2.9.1+cu126 0.11.0+cpu
 ```
+
+When you promote a future image, keep the previous one under a dated name
+(`melt_cuda126_pre-<reason>-<YYYYMMDD>.sif`) and move the symlink — never
+overwrite the file a running job is reading.
 
 ### Which Shar tree
 
@@ -177,20 +202,39 @@ singularity exec /mnt/scratch-artemis/$USER/melt-data/melt_cuda126.sif bash -c \
 # expect: release 12.6 / 2.9.1+cu126 2.8.3
 ```
 
-Ship it via the **transfer node**, not the login node (~7.6 GB, ~5 min):
+Ship it via the **transfer node**, not the login node (~7.6 GB, ~5 min), under
+a **descriptive name of its own** — never straight onto `melt_cuda126.sif`,
+which is a symlink and would be clobbered:
 
 ```bash
 # [artemis]
+NEW=melt_cuda126_<what-changed>.sif
 rsync -avh --partial --info=progress2 \
   /mnt/scratch-artemis/$USER/melt-data/melt_cuda126.sif \
-  mn5transfer:/gpfs/scratch/epor48/
+  mn5transfer:/gpfs/scratch/epor48/$NEW
 ```
-
-Keep the previous image under a dated name (e.g.
-`melt_cuda126_pre-devel-20260411.sif`) until the new one has a successful run.
 
 Images live on **`gpfs_scratch`**, not `gpfs_projects` — they moved on
 2026-08-07 and the old directory no longer exists.
+
+**Promote it only after a successful run on it.** `melt_cuda126.sif` is the
+name everything defaults to, so switching it is what puts a new image in front
+of collaborators:
+
+```bash
+# [mn5] 1. prove the new image works, by pinning it for one real run
+SINGULARITY_IMG=/gpfs/scratch/epor48/$NEW infra/runners/submit-container.sh mn5 …
+
+# [mn5] 2. only then, retire the current default and move the symlink
+cd /gpfs/scratch/epor48
+mv -n "$(readlink -f melt_cuda126.sif)" melt_cuda126_pre-<reason>-$(date +%Y%m%d).sif
+ln -sfn $NEW melt_cuda126.sif
+ls -la melt_cuda126.sif
+```
+
+Retire, don't delete: the dated images are the only way to reproduce a run made
+against them. Moving a symlink is atomic and never disturbs a job already
+running on the old image, whereas overwriting a `.sif` in place corrupts one.
 
 Things that will otherwise cost you an hour:
 
@@ -353,7 +397,6 @@ EXP=MA-VP3-smoke
 MY=/gpfs/scratch/epor48/$USER
 
 LOCAL_DATASETS_DIR=/gpfs/projects/epor48/melt-data/shar-indexed \
-SINGULARITY_IMG=/gpfs/scratch/epor48/melt_cuda126_lhotse2_td.sif \
 OUTPUT_DIR=$MY/outputs TMPDIR_HOST=$MY/tmp \
 MELT_QOS=acc_debug MELT_TIME=00:30:00 MELT_NODES=1 \
 infra/runners/submit-container.sh mn5 config/accelerate/fsdp2.yaml \
@@ -377,7 +420,6 @@ EXP=MA-VP3-de-es-fr-v1.0
 MY=/gpfs/scratch/epor48/$USER
 
 LOCAL_DATASETS_DIR=/gpfs/projects/epor48/melt-data/shar-indexed \
-SINGULARITY_IMG=/gpfs/scratch/epor48/melt_cuda126_lhotse2_td.sif \
 OUTPUT_DIR=$MY/outputs TMPDIR_HOST=$MY/tmp \
 MELT_QOS=acc_ehpc MELT_TIME=12:00:00 MELT_NODES=1 \
 infra/runners/submit-container.sh mn5 config/accelerate/fsdp2.yaml \
@@ -489,14 +531,13 @@ Notes on the five overridable variables:
 | `OUTPUT_DIR` | `/workspace/outputs` | the run (checkpoints, wandb) | **set your own** |
 | `TMPDIR_HOST` | `/workspace/tmp` | the run (triton/lhotse caches) | **set your own** |
 | `LOCAL_DATASETS_DIR` | `/workspace/shar` | nobody, read-only | **point at `shar-indexed`** |
-| `SINGULARITY_IMG` | — | nobody, read-only | **point at `…_lhotse2_td.sif`** |
+| `SINGULARITY_IMG` | — | nobody, read-only | default is correct; override only to pin |
 | `HF_HOME` | `/workspace/hf_cache` | nobody (`HF_HUB_OFFLINE=1`) | shared, leave it |
 
 Three of these need overriding on every submit, so the full prefix is:
 
 ```bash
 LOCAL_DATASETS_DIR=/gpfs/projects/epor48/melt-data/shar-indexed \
-SINGULARITY_IMG=/gpfs/scratch/epor48/melt_cuda126_lhotse2_td.sif \
 OUTPUT_DIR=$MY/outputs TMPDIR_HOST=$MY/tmp \
 ```
 
@@ -910,8 +951,9 @@ from the eval metrics in §B4.
 - **A shared project directory is not a writable one.** Being in `epor48` gets
   you read access; the directories under it are owner-writable. Run with your
   own `OUTPUT_DIR` and `TMPDIR_HOST` (§B3).
-- **The default container image is the wrong one** for `main` ≥ 0.5.0. Export
-  `SINGULARITY_IMG` to the `_lhotse2_td` image on every submit.
+- **The image and the code must agree.** The default `.sif` is a symlink to the
+  lhotse 2 image and matches `main`; if you pin an older one with
+  `SINGULARITY_IMG`, check out matching code too.
 - **A silent first 30–90 minutes is normal**, not a hang — the sampler is
   filling its shuffle buffer.
 - **The epoch counter is wrong** by a config-dependent factor (measured 3.29× on
@@ -929,7 +971,7 @@ from the eval metrics in §B4.
 | `PermissionError: … '/workspace/outputs/<EXP>'` | shared `OUTPUT_DIR` owned by someone else — set your own (§B3) |
 | Permission denied under `/workspace/tmp` | same cause, `TMPDIR_HOST` — set your own (§B3) |
 | `SINGULARITY_IMG not found` | image not shipped, or site-file path is stale |
-| `ModuleNotFoundError: torchdata`, or a lhotse API error | running the default `melt_cuda126.sif` (lhotse 1.32.2) against `main` — export the `_lhotse2_td` image |
+| `ModuleNotFoundError: torchdata`, or a lhotse API error | running `main` against a pre-lhotse2 image — unset `SINGULARITY_IMG` to get the default, or point it at `melt_cuda126_lhotse2_td.sif` |
 | Model load fails / tries to reach the Hub | weights not in `$HF_HOME` (§A3) |
 | `CUDA out of memory` during eval | eval batch too large — first batches are worst-case |
 | Output dir "not empty" | add `--trainer.overwrite_output_dir true`, or pick a new `EXP` |
