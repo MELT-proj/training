@@ -99,6 +99,9 @@ data:
   # comparable to the training loss (issue #58). The loader logs the
   # inheritance at startup; seeing that line is the confirmation it worked.
   apply_chat_template: true
+  # Qwen 3 opens the assistant turn with an empty <think> block; the plain
+  # chatml boundary would leave it inside the trainable span.
+  chat_template_config: qwen3
   min_chars: 3
 
   train_ds:

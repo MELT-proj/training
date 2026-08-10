@@ -112,7 +112,18 @@ model:
 data:
   sample_rate: 16000
   apply_chat_template: false
+  # Which assistant-span boundaries label masking looks for. Must match the
+  # decoder's tokenizer: `chatml` for Qwen 2.5 and EuroLLM, `qwen3` for Qwen 3
+  # and 3.5 (whose assistant turn opens with an empty <think> block), `llama3`
+  # for Llama 3.x. A mismatch is checked at startup and fails the run.
+  chat_template_config: chatml
   min_chars: 3
+  # When true, a configured `text_field` that resolves to nothing raises
+  # instead of silently falling back to the supervision text. Turn this on for
+  # any mix containing ST sources, whose target (`custom.translation_en`) holds
+  # different content from the supervision — the fallback turns such a sample
+  # into an ASR pair wearing an ST label.
+  strict_text_field: false
 
   train_ds:
     input_cfg: []

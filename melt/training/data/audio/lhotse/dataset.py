@@ -21,7 +21,11 @@ from omegaconf import DictConfig
 
 from .....logging_utils import get_logger
 from .....modeling import MELTProcessor
-from ....data.chat_templates import ChatTemplateConfig, get_chat_template_config
+from ....data.chat_templates import (
+    ChatTemplateConfig,
+    get_chat_template_config,
+    validate_chat_template_config,
+)
 from .helpers import (
     LANGUAGE_ISO_TO_NAME,
     TASK_TEMPLATES,
@@ -84,6 +88,10 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         self.apply_chat_template = bool(_get_config_value(config, "apply_chat_template", False))
         self.sample_rate = int(_get_config_value(config, "sample_rate", 16000))
         self.min_chars = int(_get_config_value(config, "min_chars", 0))
+        # When set, a configured text_field that resolves to nothing is an error
+        # rather than a silent fallback to the supervision text. See
+        # ``get_text_from_cut``.
+        self.strict_text_field = bool(_get_config_value(config, "strict_text_field", False))
 
         # Template selection strategy when apply_chat_template is True.
         # "random"        – randomly pick from all templates for the task (current default)
@@ -110,6 +118,7 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         if self.apply_chat_template:
             ct_name = str(_get_config_value(config, "chat_template_config", "chatml"))
             ct_cfg: ChatTemplateConfig = get_chat_template_config(ct_name)
+            validate_chat_template_config(processor.tokenizer, ct_cfg, ct_name)
             self._assistant_start_ids: list[int] = processor.tokenizer.encode(
                 ct_cfg.assistant_start, add_special_tokens=False
             )
@@ -122,6 +131,63 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         self._debug_cut_ids_every = int(os.environ.get("MELT_DEBUG_CUT_IDS_EVERY", "1") or "1")
         self._debug_cut_ids_batch_idx = 0
         self._debug_cut_ids_fh = None
+
+        # Exposure accounting. The ablation campaign's premise is that every
+        # language saw the same number of hours, but hours are enforced by
+        # sampling weights and a step budget rather than by construction, so the
+        # realized figure has to be measured rather than assumed. Aggregating
+        # in-process and flushing periodically keeps this cheap: dumping a record
+        # per cut would be unbounded log I/O on a long run.
+        self._exposure_dir = os.environ.get("MELT_EXPOSURE_DIR")
+        self._exposure_every = int(os.environ.get("MELT_EXPOSURE_FLUSH_EVERY", "200") or "200")
+        self._exposure_seconds: dict[str, float] = {}
+        self._exposure_cuts: dict[str, int] = {}
+        self._exposure_batches = 0
+        self._exposure_path = None
+
+    def _maybe_record_exposure(self, cuts: CutSet) -> None:
+        """Accumulate audio seconds per (task, language) and flush periodically."""
+        if not self._exposure_dir:
+            return
+
+        for cut in cuts:
+            task, lang, src_lang, tgt_lang = get_tags_from_cut(cut)
+            if task in ("st", "translate"):
+                key = f"st:{src_lang or '?'}-{tgt_lang or '?'}"
+            else:
+                key = f"{task or 'asr'}:{lang or '?'}"
+            duration = float(getattr(cut, "duration", 0.0) or 0.0)
+            self._exposure_seconds[key] = self._exposure_seconds.get(key, 0.0) + duration
+            self._exposure_cuts[key] = self._exposure_cuts.get(key, 0) + 1
+
+        self._exposure_batches += 1
+        if self._exposure_batches % self._exposure_every == 0:
+            self._flush_exposure()
+
+    def _flush_exposure(self) -> None:
+        """Write this worker's running totals, overwriting its own file."""
+        if not self._exposure_dir:
+            return
+        os.makedirs(self._exposure_dir, exist_ok=True)
+        if self._exposure_path is None:
+            rank = int(os.environ.get("RANK", os.environ.get("SLURM_PROCID", "0")) or "0")
+            worker_info = torch.utils.data.get_worker_info()
+            worker_id = worker_info.id if worker_info is not None else 0
+            self._exposure_path = os.path.join(
+                self._exposure_dir,
+                f"exposure.rank{rank:05d}.worker{worker_id:02d}.pid{os.getpid()}.json",
+            )
+        payload = {
+            "batches": self._exposure_batches,
+            "seconds": self._exposure_seconds,
+            "cuts": self._exposure_cuts,
+        }
+        # Rewritten in place rather than appended: the file is a running total,
+        # so a killed job still leaves a readable snapshot.
+        tmp = self._exposure_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+        os.replace(tmp, self._exposure_path)
 
     def _maybe_log_cut_ids(self, cuts: CutSet) -> None:
         if not self._debug_cut_ids_dir:
@@ -184,6 +250,7 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
             return None
 
         self._maybe_log_cut_ids(cuts)
+        self._maybe_record_exposure(cuts)
 
         # Load audio and text from cuts
         audios = []
@@ -359,7 +426,7 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
             tags = cut.custom.get("tags", {})
             if isinstance(tags, dict) and tags.get("text_field"):
                 text_field = tags["text_field"]
-        return get_text_from_cut(cut, text_field)
+        return get_text_from_cut(cut, text_field, strict=self.strict_text_field)
 
     def _get_tags(self, cut: Cut) -> tuple[str, str, str, str]:
         """Extract task and language tags from a cut (delegates to shared helper).
@@ -704,6 +771,7 @@ class SpeechTextQEDataset(SpeechToTextDataset):
             return None
 
         self._maybe_log_cut_ids(cuts)
+        self._maybe_record_exposure(cuts)
 
         audios: list[torch.Tensor] = []
         scores: list[float] = []

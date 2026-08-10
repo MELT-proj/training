@@ -48,6 +48,9 @@ model:
 data:
   sample_rate: 16000
   apply_chat_template: true
+  # Qwen 3 opens the assistant turn with an empty <think> block; the plain
+  # chatml boundary would leave it inside the trainable span.
+  chat_template_config: qwen3
 
   train_ds:
     # Data sources - list of datasets to load
@@ -280,8 +283,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Bulgarian/ast
         tags:
           task: st
-          src_lang: en
-          tgt_lang: bg
+          src_lang: bg
+          tgt_lang: en
+          text_field: custom.translation_en
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Croatian/asr_only
         tags:
@@ -291,8 +295,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Croatian/ast
         tags:
           task: st
-          src_lang: en
-          tgt_lang: hr
+          src_lang: hr
+          tgt_lang: en
+          text_field: custom.translation_en
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Czech/asr_only
         tags:
@@ -302,8 +307,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Czech/ast
         tags:
           task: st
-          src_lang: en
-          tgt_lang: cs
+          src_lang: cs
+          tgt_lang: en
+          text_field: custom.translation_en
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Danish/asr_only
         tags:
@@ -313,8 +319,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Danish/ast
         tags:
           task: st
-          src_lang: en
-          tgt_lang: da
+          src_lang: da
+          tgt_lang: en
+          text_field: custom.translation_en
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Dutch/asr_only
         tags:
@@ -324,8 +331,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Dutch/ast
         tags:
           task: st
-          src_lang: en
-          tgt_lang: nl
+          src_lang: nl
+          tgt_lang: en
+          text_field: custom.translation_en
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/English/asr_only
         tags:
@@ -340,8 +348,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Estonian/ast
         tags:
           task: st
-          src_lang: en
-          tgt_lang: et
+          src_lang: et
+          tgt_lang: en
+          text_field: custom.translation_en
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Finnish/asr_only
         tags:
@@ -351,8 +360,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Finnish/ast
         tags:
           task: st
-          src_lang: en
-          tgt_lang: fi
+          src_lang: fi
+          tgt_lang: en
+          text_field: custom.translation_en
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/French/asr_only
         tags:
@@ -362,8 +372,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/French/ast
         tags:
           task: st
-          src_lang: en
-          tgt_lang: fr
+          src_lang: fr
+          tgt_lang: en
+          text_field: custom.translation_en
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/German/asr_only
         tags:
@@ -373,8 +384,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/German/ast
         tags:
           task: st
-          src_lang: en
-          tgt_lang: de
+          src_lang: de
+          tgt_lang: en
+          text_field: custom.translation_en
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Greek/asr_only
         tags:
@@ -384,8 +396,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Greek/ast
         tags:
           task: st
-          src_lang: en
-          tgt_lang: el
+          src_lang: el
+          tgt_lang: en
+          text_field: custom.translation_en
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Hungarian/asr_only
         tags:
@@ -395,8 +408,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Hungarian/ast
         tags:
           task: st
-          src_lang: en
-          tgt_lang: hu
+          src_lang: hu
+          tgt_lang: en
+          text_field: custom.translation_en
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Italian/asr_only
         tags:
@@ -406,8 +420,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Italian/ast
         tags:
           task: st
-          src_lang: en
-          tgt_lang: it
+          src_lang: it
+          tgt_lang: en
+          text_field: custom.translation_en
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Latvian/asr_only
         tags:
@@ -417,8 +432,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Latvian/ast
         tags:
           task: st
-          src_lang: en
-          tgt_lang: lv
+          src_lang: lv
+          tgt_lang: en
+          text_field: custom.translation_en
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Lithuanian/asr_only
         tags:
@@ -428,8 +444,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Lithuanian/ast
         tags:
           task: st
-          src_lang: en
-          tgt_lang: lt
+          src_lang: lt
+          tgt_lang: en
+          text_field: custom.translation_en
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Polish/asr_only
         tags:
@@ -439,8 +456,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Polish/ast
         tags:
           task: st
-          src_lang: en
-          tgt_lang: pl
+          src_lang: pl
+          tgt_lang: en
+          text_field: custom.translation_en
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Portuguese/asr_only
         tags:
@@ -450,8 +468,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Portuguese/ast
         tags:
           task: st
-          src_lang: en
-          tgt_lang: pt
+          src_lang: pt
+          tgt_lang: en
+          text_field: custom.translation_en
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Romanian/asr_only
         tags:
@@ -461,8 +480,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Romanian/ast
         tags:
           task: st
-          src_lang: en
-          tgt_lang: ro
+          src_lang: ro
+          tgt_lang: en
+          text_field: custom.translation_en
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Russian/asr_only
         tags:
@@ -472,8 +492,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Russian/ast
         tags:
           task: st
-          src_lang: en
-          tgt_lang: ru
+          src_lang: ru
+          tgt_lang: en
+          text_field: custom.translation_en
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Slovak/asr_only
         tags:
@@ -483,8 +504,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Slovak/ast
         tags:
           task: st
-          src_lang: en
-          tgt_lang: sk
+          src_lang: sk
+          tgt_lang: en
+          text_field: custom.translation_en
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Spanish/asr_only
         tags:
@@ -494,8 +516,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Spanish/ast
         tags:
           task: st
-          src_lang: en
-          tgt_lang: es
+          src_lang: es
+          tgt_lang: en
+          text_field: custom.translation_en
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Swedish/asr_only
         tags:
@@ -505,8 +528,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Swedish/ast
         tags:
           task: st
-          src_lang: en
-          tgt_lang: sv
+          src_lang: sv
+          tgt_lang: en
+          text_field: custom.translation_en
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Ukrainian/asr_only
         tags:
@@ -516,8 +540,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Ukrainian/ast
         tags:
           task: st
-          src_lang: en
-          tgt_lang: uk
+          src_lang: uk
+          tgt_lang: en
+          text_field: custom.translation_en
 
       # CoVoST2 (speech translation, English source)
       - type: lhotse_shar
