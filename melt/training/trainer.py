@@ -51,6 +51,45 @@ def current_cpumem_usage():
     return f"{process.memory_info().rss / 1024**2:.2f}"
 
 
+def _shutdown_dataloader_workers(dataloader: DataLoader | None) -> None:
+    """Shut down *dataloader*'s worker processes and pin-memory thread now.
+
+    Called from the main thread so the teardown is ordered and observable
+    instead of being left to ``__del__`` on whichever thread the cyclic garbage
+    collector happens to run on. See ``MELTTrainer._shutdown_dataloaders`` for
+    why that matters (issue #63).
+
+    Safe to call on anything: a loader with no live iterator, a single-process
+    iterator with no workers to stop, or an already shut-down iterator (torch's
+    ``_shutdown_workers`` is idempotent).
+    """
+    if dataloader is None:
+        return
+
+    iterator = getattr(dataloader, "_iterator", None)
+    if iterator is None:
+        return
+
+    # Clear the loader's handle first, so nothing can hand this iterator out
+    # again — notably StatefulDataLoader.state_dict(), which would otherwise
+    # build a fresh iterator and start a new set of workers.
+    try:
+        dataloader._iterator = None
+    except AttributeError:  # pragma: no cover - defensive
+        pass
+
+    shutdown = getattr(iterator, "_shutdown_workers", None)
+    if shutdown is None:
+        # Single-process iterator: no workers, no pin-memory thread.
+        return
+
+    try:
+        shutdown()
+    except Exception as exc:  # pragma: no cover - defensive
+        # Teardown must never be the reason a finished run fails.
+        logger.warning(f"Ignoring error while shutting down dataloader workers: {exc}")
+
+
 class MELTTrainer(Trainer):
     """Custom Trainer for MELT models with Lhotse data loading.
 
@@ -248,12 +287,56 @@ class MELTTrainer(Trainer):
                     "sampler state will be restored when the dataloader is created."
                 )
 
-        return super().train(
-            resume_from_checkpoint=resume_from_checkpoint,
-            trial=trial,
-            ignore_keys_for_eval=ignore_keys_for_eval,
-            **kwargs,
-        )
+        try:
+            return super().train(
+                resume_from_checkpoint=resume_from_checkpoint,
+                trial=trial,
+                ignore_keys_for_eval=ignore_keys_for_eval,
+                **kwargs,
+            )
+        finally:
+            # Every checkpoint save, including the final one, happens inside
+            # super().train(), so by here the sampler state is already on disk
+            # and the workers have nothing left to report (issue #63).
+            self._shutdown_dataloaders()
+
+    # ------------------------------------------------------------------
+    # Dataloader teardown
+    # ------------------------------------------------------------------
+
+    def _shutdown_dataloaders(self) -> None:
+        """Stop dataloader workers and pin-memory threads, from this thread.
+
+        Without this the run finishes its work and then aborts at exit with
+        ``RuntimeError: cannot join current thread`` out of
+        ``_StatefulMultiProcessingDataLoaderIter.__del__``, which one rank turns
+        into ``terminate called without an active exception`` — SIGABRT, so
+        SLURM records a completed run as FAILED (issue #63).
+
+        The chain is: ``StatefulDataLoader.__iter__`` stores the iterator on the
+        loader, and the loader outlives training because both this trainer and
+        HF's ``callback_handler.train_dataloader`` hold it. The trainer is only
+        reachable through reference cycles, so the whole chain is freed by the
+        *cyclic* collector rather than by refcounting — and the cyclic collector
+        runs on whichever thread trips its allocation threshold. The pin-memory
+        thread is still alive and still pinning prefetched batches, so it is a
+        candidate; when it wins, ``__del__`` runs there and ``_shutdown_workers``
+        joins the thread it is executing on.
+
+        Dropping our own reference is not enough, because HF's is never cleared.
+        Shutting the iterator down explicitly is: it joins the pin-memory thread
+        here on the main thread and sets the iterator's ``_shutdown`` flag, so
+        any later ``__del__`` — on any thread — is a no-op.
+        """
+        _shutdown_dataloader_workers(self._train_dataloader_ref)
+        self._train_dataloader_ref = None
+
+        # Cached eval loaders are only kept when persistent workers are on, and
+        # they pin memory too, so they can strand a pin-memory thread the same
+        # way. Clearing the cache means a later evaluate() builds a fresh one.
+        for _dataset, loader in self._prepared_eval_dataloaders.values():
+            _shutdown_dataloader_workers(loader)
+        self._prepared_eval_dataloaders.clear()
 
     # ------------------------------------------------------------------
     # Dataloader creation

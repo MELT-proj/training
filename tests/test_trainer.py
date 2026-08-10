@@ -217,3 +217,102 @@ def test_default_eval_workers_is_nonzero():
     from melt.training.config import get_default_config
 
     assert get_default_config().trainer.dataloader_num_workers >= 1
+
+
+# ---------------------------------------------------------------------------
+# Dataloader teardown (issue #63)
+# ---------------------------------------------------------------------------
+
+
+class _Countdown(torch.utils.data.IterableDataset):
+    """Endless trivial source — stands in for the repeating Lhotse train stream."""
+
+    def __iter__(self):
+        i = 0
+        while True:
+            yield i
+            i += 1
+
+
+def _make_teardown_trainer(train_loader=None):
+    with patch.object(MELTTrainer, "__init__", lambda self, **kwargs: None):
+        trainer = MELTTrainer.__new__(MELTTrainer)
+    trainer._global_rank = 0
+    trainer._lhotse_resume_from = None
+    trainer._train_dataloader_ref = train_loader
+    trainer._prepared_eval_dataloaders = {}
+    return trainer
+
+
+def test_shutdown_dataloaders_stops_stateful_workers():
+    """A finished run must leave no dataloader worker or pin-memory thread alive.
+
+    Leaving the iterator for __del__ is what makes the interpreter abort at exit
+    with "cannot join current thread" and turns a completed run into a FAILED
+    SLURM job (issue #63).
+    """
+    from torchdata.stateful_dataloader import StatefulDataLoader
+
+    loader = StatefulDataLoader(
+        _Countdown(),
+        batch_size=None,
+        num_workers=1,
+        persistent_workers=True,
+    )
+    it = iter(loader)
+    next(it)
+    del it
+
+    assert loader._iterator is not None, "loader should be holding a live iterator"
+    workers = list(loader._iterator._workers)
+    assert any(w.is_alive() for w in workers)
+
+    trainer = _make_teardown_trainer(loader)
+    trainer._shutdown_dataloaders()
+
+    assert loader._iterator is None
+    assert trainer._train_dataloader_ref is None
+    for w in workers:
+        w.join(timeout=10)
+        assert not w.is_alive(), "worker survived the explicit shutdown"
+
+
+def test_shutdown_dataloaders_is_safe_on_idle_and_repeated_calls():
+    """Must not resurrect workers or raise when there is nothing to shut down."""
+    from torchdata.stateful_dataloader import StatefulDataLoader
+
+    loader = StatefulDataLoader(_Countdown(), batch_size=None, num_workers=0)
+    trainer = _make_teardown_trainer(loader)
+
+    trainer._shutdown_dataloaders()  # never iterated
+    assert loader._iterator is None
+
+    trainer._train_dataloader_ref = loader
+    trainer._shutdown_dataloaders()  # again, still fine
+    assert trainer._train_dataloader_ref is None
+
+
+def test_shutdown_dataloaders_clears_cached_eval_loaders():
+    """Cached eval loaders pin memory too, so they can strand a pin thread."""
+    trainer = _make_teardown_trainer()
+    eval_loader = torch.utils.data.DataLoader(_TinyEvalDataset(), batch_size=2)
+    trainer._prepared_eval_dataloaders = {"eval": (object(), eval_loader)}
+
+    trainer._shutdown_dataloaders()
+
+    assert trainer._prepared_eval_dataloaders == {}
+
+
+def test_train_shuts_dataloaders_down_even_when_training_raises():
+    """The teardown is in a finally: a crashing run must not also strand workers."""
+    from transformers import Trainer
+
+    trainer = _make_teardown_trainer(train_loader=None)
+    calls = []
+    trainer._shutdown_dataloaders = lambda: calls.append(True)
+
+    with patch.object(Trainer, "train", side_effect=RuntimeError("boom")):
+        with pytest.raises(RuntimeError, match="boom"):
+            trainer.train()
+
+    assert calls == [True], "train() must shut the dataloaders down on the error path"
