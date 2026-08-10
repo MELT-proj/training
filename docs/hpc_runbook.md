@@ -18,8 +18,13 @@ Skim it so you know what exists and why, then work from
 |---|---|---|
 | **your laptop** | edits code, pushes to MN5 and GitHub | yes |
 | **artemis** (`ssh artemis`) | builds container images; stores results pulled back from MN5 | yes |
-| **mn5** (`ssh mn5` → `glogin1.bsc.es`) | runs training on 4×H100 nodes | **no** |
+| **mn5** (`ssh mn5` → `alogin1.bsc.es`) | runs training on 4×H100 nodes | **no** |
 | **mn5transfer** (`transfer1.bsc.es`) | bulk data transfer endpoint for MN5 | — |
+
+Use the **`alogin`** nodes, not `glogin`. MN5 has two login pools — `glogin*`
+for the general-purpose partition and `alogin*` for the accelerated (GPU)
+partition. Everything in this document targets the `acc_*` QoS, so submit from
+`alogin1`.
 
 **MN5 has no outbound internet.** It cannot `git pull`, download HF models, or
 reach W&B. Everything is pushed to it from outside, and results are pulled back.
@@ -33,7 +38,7 @@ or **[mn5]**.
 ```bash
 # [laptop]
 ssh artemis hostname     # -> artemis
-ssh mn5 hostname         # -> glogin1
+ssh mn5 hostname         # -> alogin1
 ```
 
 If `ssh mn5` fails, add to `~/.ssh/config` and get your public key into
@@ -41,7 +46,7 @@ If `ssh mn5` fails, add to `~/.ssh/config` and get your public key into
 
 ```
 Host mn5
-    HostName glogin1.bsc.es
+    HostName alogin1.bsc.es
     User <your-bsc-user>
 
 Host mn5transfer
@@ -76,6 +81,63 @@ Fixed container paths (host dirs are bind sources, set in
 | `/workspace/outputs` | `$OUTPUT_DIR` |
 | `/workspace/hf_cache` | `$HF_HOME` |
 | `/workspace/tmp` | `$TMPDIR_HOST` |
+
+### Where things actually live on MN5
+
+The project spans **two filesystems**, and things moved between them on
+2026-08-07 when `gpfs_projects` began to fill up. Check where something is
+before assuming; the group quotas are very different:
+
+| filesystem | epor48 usage | headroom |
+|---|---|---|
+| `gpfs_projects` | 18.19 TB / 19.53 TB | **93% full — do not write new results here** |
+| `gpfs_scratch` | 1.14 TB / 19.53 TB | plenty |
+
+| what | path | notes |
+|---|---|---|
+| container images | `/gpfs/scratch/epor48/*.sif` | moved off projects |
+| HF cache (`HF_HOME`) | `/gpfs/scratch/epor48/hf_cache` | moved off projects |
+| outputs (`OUTPUT_DIR`) | `/gpfs/scratch/epor48/<user>/outputs` | **write your own — see §B3** |
+| scratch dir (`TMPDIR_HOST`) | `/gpfs/scratch/epor48/<user>/tmp` | **write your own — see §B3** |
+| Shar data, streaming | `/gpfs/projects/epor48/melt-data/shar` | read-only, stayed on projects |
+| Shar data, **indexed** | `/gpfs/projects/epor48/melt-data/shar-indexed` | read-only, **use this one** |
+
+Never delete anything under either Shar tree. The plain `shar/` tree must stay
+free of `.idx` sidecars — lhotse 1.32 consumers and the Smurf collaborators
+read it.
+
+### Which container image
+
+**This is the single most likely thing to break your first run.** The site file
+still defaults `SINGULARITY_IMG` to `melt_cuda126.sif`, which was built before
+the lhotse 2 migration:
+
+| image | lhotse | torchdata | works with `main` (≥0.5.0)? |
+|---|---|---|---|
+| `melt_cuda126.sif` | 1.32.2 | **absent** | **no** |
+| `melt_cuda126_lhotse2_td.sif` | 2.0.0a3 | 0.11.0 | **yes** |
+
+`pyproject.toml` pins `lhotse==2.0.0a3` and `torchdata>=0.11`, so until the new
+image is promoted over the default name, **export it on every submit**:
+
+```bash
+export SINGULARITY_IMG=/gpfs/scratch/epor48/melt_cuda126_lhotse2_td.sif
+```
+
+### Which Shar tree
+
+Point `LOCAL_DATASETS_DIR` at **`shar-indexed`**. The indexed tree carries
+`.idx` sidecars, which let the loader partition by sample index across the
+(rank × worker) pool: an epoch is then exactly 100% of the data, and the
+sampler position survives a resume. The plain tree streams, and does neither.
+
+```bash
+export LOCAL_DATASETS_DIR=/gpfs/projects/epor48/melt-data/shar-indexed
+```
+
+Set `data.train_ds.indexed: true` in the config as well. The default (`null`)
+auto-detects and will quietly fall back to streaming if `LOCAL_DATASETS_DIR`
+points at the wrong tree; `true` fails loudly instead.
 
 ---
 
@@ -121,11 +183,14 @@ Ship it via the **transfer node**, not the login node (~7.6 GB, ~5 min):
 # [artemis]
 rsync -avh --partial --info=progress2 \
   /mnt/scratch-artemis/$USER/melt-data/melt_cuda126.sif \
-  mn5transfer:/gpfs/projects/epor48/melt-data/
+  mn5transfer:/gpfs/scratch/epor48/
 ```
 
 Keep the previous image under a dated name (e.g.
 `melt_cuda126_pre-devel-20260411.sif`) until the new one has a successful run.
+
+Images live on **`gpfs_scratch`**, not `gpfs_projects` — they moved on
+2026-08-07 and the old directory no longer exists.
 
 Things that will otherwise cost you an hour:
 
@@ -172,7 +237,7 @@ python -c 'from huggingface_hub import snapshot_download; snapshot_download("<or
 
 # [artemis] ship the cache to MN5 via the transfer node
 rsync -avh --partial --info=progress2 \
-  $HF_HOME/hub/ mn5transfer:/gpfs/projects/epor48/melt-data/hf_cache/hub/
+  $HF_HOME/hub/ mn5transfer:/gpfs/scratch/epor48/hf_cache/hub/
 ```
 
 Gated repos (e.g. `meta-llama/*`) need `huggingface-cli login` on the machine
@@ -182,8 +247,18 @@ doing the download; the token is never needed on MN5.
 of truth for what will load offline:
 
 ```bash
-# [mn5]
-ls $HF_HOME/hub/ | sed 's/^models--//; s/--/\//'
+# [mn5]  (HF_HOME is exported by the site file, not by your login shell)
+ls /gpfs/scratch/epor48/hf_cache/hub/ | sed 's/^models--//; s/--/\//'
+```
+
+Staged as of 2026-08-10 — encoders and decoders together:
+
+```
+Qwen/Qwen2.5-0.5B          Qwen/Qwen3-1.7B     meta-llama/Llama-3.2-1B
+Qwen/Qwen2.5-1.5B          Qwen/Qwen3-2B       meta-llama/Llama-3.2-1B-Instruct
+Qwen/Qwen2.5-1.5B-Instruct Qwen/Qwen3-4B       utter-project/EuroLLM-1.7B
+Qwen/Qwen3.5-2B            facebook/w2v-bert-2.0
+CohereLabs/tiny-aya-global Skywork/Skywork-Reward-V2-Qwen3-1.7B
 ```
 
 Two things worth checking deliberately, because both fail the same way and only
@@ -235,6 +310,22 @@ both modes. Without that you'd edit a config locally and silently run the old on
 Use the default for anything you'll want to reproduce: a run launched from a
 `--dirty` tree has no commit to trace its checkpoints back to.
 
+If the push is rejected because the MN5 tree is dirty and you are certain the
+uncommitted changes there are disposable:
+
+```bash
+# [mn5] in ~/training — DISCARDS local changes, check `git status` first
+git -C ~/training status
+git -C ~/training checkout -- . && git -C ~/training clean -fd
+```
+
+Then re-run `infra/sync_repo.sh mn5` from your laptop and confirm the branch:
+
+```bash
+# [mn5]
+git -C ~/training log --oneline -1
+```
+
 ## B2. Configure the ablation
 
 See [Configuring ablations](#configuring-ablations) below for what to change and
@@ -242,12 +333,55 @@ where.
 
 ## B3. Submit
 
+### Worked example: MA on three VoxPopuli languages
+
+Copy-pasteable and complete. This is the shape every submit takes.
+
+**Once per account** — give yourself somewhere to write:
+
+```bash
+# [mn5]
+mkdir -p /gpfs/scratch/epor48/$USER/{outputs,tmp}
+```
+
+**Smoke test first** — 10 steps on `acc_debug`, catches config errors in
+minutes rather than after a queue wait:
+
 ```bash
 # [mn5] from ~/training
-EXP=ablation-adapter-4layer
+EXP=MA-VP3-smoke
+MY=/gpfs/scratch/epor48/$USER
 
+LOCAL_DATASETS_DIR=/gpfs/projects/epor48/melt-data/shar-indexed \
+SINGULARITY_IMG=/gpfs/scratch/epor48/melt_cuda126_lhotse2_td.sif \
+OUTPUT_DIR=$MY/outputs TMPDIR_HOST=$MY/tmp \
+MELT_QOS=acc_debug MELT_TIME=00:30:00 MELT_NODES=1 \
 infra/runners/submit-container.sh mn5 config/accelerate/fsdp2.yaml \
-  --config runs/my_config.yaml \
+  --config config/train/MA-VP3-v1.0.yaml \
+  --trainer.max_steps 10 \
+  --trainer.eval_on_start false \
+  --trainer.eval_steps 5 --trainer.save_steps 10 \
+  --data.train_ds.buffer_size 2000 \
+  --trainer.output_dir /workspace/outputs/$EXP \
+  --run.exp_name $EXP
+```
+
+The `buffer_size` override matters: the config's 50k would spend most of a
+30-minute debug allocation just filling the buffer.
+
+**The real run** — 2000 steps (~2.3 epochs of this mix) on `acc_ehpc`:
+
+```bash
+# [mn5] from ~/training
+EXP=MA-VP3-de-es-fr-v1.0
+MY=/gpfs/scratch/epor48/$USER
+
+LOCAL_DATASETS_DIR=/gpfs/projects/epor48/melt-data/shar-indexed \
+SINGULARITY_IMG=/gpfs/scratch/epor48/melt_cuda126_lhotse2_td.sif \
+OUTPUT_DIR=$MY/outputs TMPDIR_HOST=$MY/tmp \
+MELT_QOS=acc_ehpc MELT_TIME=12:00:00 MELT_NODES=1 \
+infra/runners/submit-container.sh mn5 config/accelerate/fsdp2.yaml \
+  --config config/train/MA-VP3-v1.0.yaml \
   --trainer.max_steps 2000 \
   --trainer.eval_steps 500 --trainer.save_steps 500 \
   --trainer.save_total_limit 3 \
@@ -257,24 +391,46 @@ infra/runners/submit-container.sh mn5 config/accelerate/fsdp2.yaml \
   --run.exp_name $EXP
 ```
 
+Results land in `$MY/outputs/$EXP` on the host. Cost at 1 node is 4 GPUh per
+wall hour, so a 12 h allocation is at most 48 GPUh — and you are charged only
+for elapsed time.
+
 **Three things that will bite you:**
 
 1. **`--trainer.output_dir` must be the CONTAINER path** (`/workspace/outputs/…`).
    The host `OUTPUT_DIR` is only the bind source; a host path here fails.
-2. **Always pass `--trainer.per_device_eval_batch_size` explicitly.** The YAMLs
-   set `-1` ("Lhotse handles batching"), which the train path understands but the
-   eval path does not — it crashes at the first eval. `4` is known-good; `16`
-   OOMs on 64 GB H100s.
-3. **Pick the QoS in the site file** (`SBATCH_ARGS` in `infra/runners/sites/mn5.sh`):
+2. **Check `--trainer.per_device_eval_batch_size` is a positive number.**
+   `per_device_train_batch_size` is `-1` ("Lhotse handles batching"), which the
+   train path understands but the eval path does not — it crashes at the first
+   eval. The shipped configs now set the *eval* one to `4` explicitly, so you
+   only need to pass it if you write a config from scratch or override the
+   train value by mistake. `4` is known-good; `16` OOMs on 64 GB H100s.
+3. **Pick the QoS, wall time and node count with environment variables.**
+   Do *not* edit the site file for these:
 
-   | QoS | wall limit | jobs/user | use for |
+   | var | default | what it does |
+   |---|---|---|
+   | `MELT_QOS` | `acc_ehpc` | which QoS to charge |
+   | `MELT_TIME` | `01:00:00` | wall limit, `HH:MM:SS` |
+   | `MELT_NODES` | `1` | nodes; `bash/run_train.sh` derives world_size from SLURM |
+
+   | QoS | wall limit | priority | use for |
    |---|---|---|---|
-   | `acc_debug` | 2 h | **1** | smoke tests (high priority, short queue) |
-   | `acc_ehpc` | 3 days | many | real runs |
+   | `acc_debug` | 2 h | 10000 | smoke tests — schedules almost immediately |
+   | `acc_ehpc` | 3 days | 100 | real runs |
 
-   `SBATCH_ARGS` is an array, not an env var, so it can only be changed by
-   editing the file. The **storage paths** in the same file are overridable from
-   the command line — see the next section.
+   ```bash
+   MELT_QOS=acc_debug MELT_TIME=00:20:00 infra/runners/submit-container.sh mn5 …
+   ```
+
+   `SBATCH_ARGS` is a bash array rather than an env var, but its *entries* read
+   these `MELT_*` variables, so everything you normally vary is settable from
+   the command line. The **storage paths** in the same file are overridable the
+   same way — see the next section.
+
+   Accounting follows **elapsed** time, not requested wall time, so a generous
+   `MELT_TIME` costs nothing by itself. The node is allocated whole, though —
+   all 80 cores and 4 GPUs — however few you use.
 
 **Always smoke-test a new config first:** `--trainer.max_steps 10
 --trainer.eval_on_start false` on `acc_debug`. It catches config errors in
@@ -282,10 +438,11 @@ minutes instead of after a queue wait.
 
 ### Point the run at your own output directory
 
-`/gpfs/projects/epor48` is shared by several accounts, and a directory under it
+The project space is shared by several accounts, and a directory under it
 belongs to whoever created it — with a default umask that means group-readable
-but **owner-writable only**. So the site defaults `OUTPUT_DIR` and `TMPDIR_HOST`
-work for the account that made them and fail for everyone else:
+but **owner-writable only**. The site default `OUTPUT_DIR`
+(`/gpfs/scratch/epor48/outputs`) is owned by one account and is *not* group
+writable, so it works for its owner and fails for everyone else:
 
 ```
 PermissionError: [Errno 13] Permission denied: '/workspace/outputs/<EXP>'
@@ -297,20 +454,24 @@ your own, once:
 
 ```bash
 # [mn5]
-mkdir -p /gpfs/projects/epor48/melt-data/$USER/{outputs,tmp}
+mkdir -p /gpfs/scratch/epor48/$USER/{outputs,tmp}
 ```
 
-`melt-data/` itself is group-writable by `epor48`, so this works without anyone
-granting you anything. Then export both on every submit:
+`/gpfs/scratch/epor48` is `drwxrws---` owned by group `epor48`, so any member
+can create a directory there without anyone granting them anything — and the
+setgid bit means everything you create inside inherits the `epor48` group
+automatically. Use **scratch**, not projects: the projects quota is 93% full.
+
+Then export both on every submit:
 
 ```bash
 # [mn5] from ~/training
 EXP=ablation-adapter-4layer
-MY=/gpfs/projects/epor48/melt-data/$USER
+MY=/gpfs/scratch/epor48/$USER
 
 OUTPUT_DIR=$MY/outputs TMPDIR_HOST=$MY/tmp \
 infra/runners/submit-container.sh mn5 config/accelerate/fsdp2.yaml \
-  --config runs/my_config.yaml \
+  --config config/train/my_config.yaml \
   ... \
   --trainer.output_dir /workspace/outputs/$EXP \
   --run.exp_name $EXP
@@ -321,14 +482,23 @@ submit wrapper of your own — it is the same on every run. Don't edit
 `sites/mn5.sh` to hardcode your paths: `sync_repo.sh` refuses to push onto a
 dirty remote tree, so a locally edited site file blocks your next code sync.
 
-Notes on the four paths:
+Notes on the five overridable variables:
 
-| var | container path | who writes it | shared? |
+| var | container path | who writes it | what to do |
 |---|---|---|---|
-| `OUTPUT_DIR` | `/workspace/outputs` | the run (checkpoints, wandb) | **no — set your own** |
-| `TMPDIR_HOST` | `/workspace/tmp` | the run (triton/lhotse caches) | **no — set your own** |
-| `LOCAL_DATASETS_DIR` | `/workspace/shar` | nobody, read-only | yes, leave it |
-| `HF_HOME` | `/workspace/hf_cache` | nobody (`HF_HUB_OFFLINE=1`) | yes, leave it |
+| `OUTPUT_DIR` | `/workspace/outputs` | the run (checkpoints, wandb) | **set your own** |
+| `TMPDIR_HOST` | `/workspace/tmp` | the run (triton/lhotse caches) | **set your own** |
+| `LOCAL_DATASETS_DIR` | `/workspace/shar` | nobody, read-only | **point at `shar-indexed`** |
+| `SINGULARITY_IMG` | — | nobody, read-only | **point at `…_lhotse2_td.sif`** |
+| `HF_HOME` | `/workspace/hf_cache` | nobody (`HF_HUB_OFFLINE=1`) | shared, leave it |
+
+Three of these need overriding on every submit, so the full prefix is:
+
+```bash
+LOCAL_DATASETS_DIR=/gpfs/projects/epor48/melt-data/shar-indexed \
+SINGULARITY_IMG=/gpfs/scratch/epor48/melt_cuda126_lhotse2_td.sif \
+OUTPUT_DIR=$MY/outputs TMPDIR_HOST=$MY/tmp \
+```
 
 `--trainer.output_dir` stays `/workspace/outputs/$EXP` regardless of where
 `OUTPUT_DIR` points — the container path is fixed, only the bind source moves.
@@ -355,6 +525,22 @@ squeue -u $USER
 tail -f ~/training/logs/melt-train-container.<jobid>.out
 sacct -j <jobid> --format=JobID,State,ExitCode,Elapsed -X
 ```
+
+### Expect a long silent start — it is not a hang
+
+The sampler fills `data.train_ds.buffer_size` cuts **before it emits a first
+batch**. On the campaign runs, with `buffer_size: 300000`, that took **35
+minutes** from scratch and **91 minutes** on a resume. Throughout, the GPUs sit
+at 0% while the CPUs saturate. That is the expected shape of a startup, not a
+stall.
+
+Two consequences:
+
+- Don't diagnose by staring at the log. Check `nvidia-smi` and `ps` on the
+  allocated node (`squeue -u $USER -o "%N"` gives you the node name).
+- Size the buffer to the mix. A buffer larger than the dataset is pure waste —
+  for a few-hundred-thousand-cut mix, 50k shuffles perfectly well and starts in
+  a fraction of the time. Drop it further for smoke tests.
 
 ### "I don't see any log"
 
@@ -419,6 +605,42 @@ in the browser, sync from artemis (§B5).
 `logs/gpu_mem_<jobid>_node<N>.csv`. It samples every 30 s, so it *aliases* and
 under-reports true peaks — treat its numbers as a lower bound.
 
+## B4b. Resume a run
+
+`acc_ehpc` caps at 3 days, so any long training is a chain of jobs. Point the
+next one at the previous run's output directory and HF picks the highest
+checkpoint in it:
+
+```bash
+# [mn5] from ~/training
+--trainer.resume_from_checkpoint /workspace/outputs/$PREV_EXP
+```
+
+Container path, same rule as `--trainer.output_dir`.
+
+Three constraints, all of which bite:
+
+1. **The layout must be identical.** The sampler refuses to restore its state
+   under a changed `(world_size, num_workers)` — so `MELT_NODES` × GPUs/node ×
+   `data.train_ds.num_workers` must match the original job exactly. Changing
+   any one of them silently costs you the data position.
+2. **HF refuses a non-empty `output_dir`,** so the resumed leg needs its *own*
+   `--trainer.output_dir` and `--run.exp_name`. Name them so the chain is
+   obvious (`MA-VP3-legA`, `MA-VP3-legB`).
+3. **Resume startup is slower than a cold start** — buffer fill plus
+   fast-forward. Budget ~1.5× (see the previous section).
+
+A healthy resume says so in the log:
+
+```
+Continuing training from global step 2500
+```
+
+and the progress bar opens at 2501 rather than 0. Verify both before walking
+away. A clean seam shows the loss continuing the previous curve to within a few
+hundredths, with any small offset decaying over ~100 steps as the optimiser
+re-warms its momentum — that is normal, not a broken restore.
+
 ## B5. Retrieve results
 
 **W&B metrics** — there's a helper that pulls offline runs to artemis and syncs
@@ -434,10 +656,26 @@ the same thing is:
 
 ```bash
 # [artemis]
-rsync -avh mn5transfer:/gpfs/projects/epor48/melt-data/outputs/wandb/wandb/ \
+rsync -avh mn5transfer:/gpfs/scratch/epor48/$USER/outputs/wandb/wandb/ \
            /mnt/scratch-artemis/$USER/melt-data/outputs/wandb/wandb/
 wandb sync /mnt/scratch-artemis/$USER/melt-data/outputs/wandb/wandb/offline-run-*
 ```
+
+To push **one** run rather than every offline run sitting in that directory:
+
+```bash
+# [artemis]
+RUN=offline-run-<timestamp>-<id>
+rsync -ravh --append-verify --exclude='.synced' \
+  "mn5:/gpfs/scratch/epor48/$USER/outputs/wandb/wandb/$RUN/" \
+  "/mnt/scratch-artemis/$USER/melt-data/outputs/wandb/wandb/$RUN/"
+wandb sync ".../wandb/$RUN" --include-offline --append
+```
+
+Two harmless artefacts you will see: a `FileNotFoundError` uploading a stale
+artifact staging file, and W&B reporting a run as `finished` while it is
+plainly still training. Neither affects the metrics; a later manual sync marks
+the run caught-up.
 
 **Checkpoints** — pull via the transfer node:
 
@@ -445,7 +683,7 @@ wandb sync /mnt/scratch-artemis/$USER/melt-data/outputs/wandb/wandb/offline-run-
 # [artemis]
 EXP=ablation-adapter-4layer
 rsync -avh --partial --info=progress2 \
-  mn5transfer:/gpfs/projects/epor48/melt-data/outputs/$EXP/ \
+  mn5transfer:/gpfs/scratch/epor48/$USER/outputs/$EXP/ \
   /mnt/scratch-artemis/$USER/melt-data/outputs/$EXP/
 ```
 
@@ -472,6 +710,42 @@ python utils/merge_fsdp_weight.py \
 
 ---
 
+## Budget: know what a job costs before you submit it
+
+The GPU-hour grant is shared, finite, and **expires 2026-08-31**. Check the
+balance before planning a sweep.
+
+```bash
+# [mn5] official, but lags reality by up to a day
+bsc_acct          # look for project epor48
+
+# [mn5] current, per job
+sacct -j <jobid> --format=JobID,Elapsed,AllocCPUS,CPUTimeRAW -X
+```
+
+**Get the divisor right — it is easy to be wrong by 2×.** An MN5 ACC node is 80
+physical cores and 4 GPUs, so:
+
+> **1 GPUh = 20 physical core-hours.**
+
+`bsc_acct` reports khours of *physical* core-hours, so `1752 khours` of grant is
+**87,600 GPUh**. But `sacct`'s `AllocCPUS` reports **160 per node** — it counts
+SMT threads — so from `sacct` the conversion is:
+
+```
+GPUh = CPUTimeRAW / 3600 / 40
+```
+
+Sanity-check any formula you write against a job you know: a 20 h job on 8 GPUs
+must come to 160 GPUh.
+
+Rules of thumb: a 1-node job burns **4 GPUh per wall hour**, a 2-node job 8.
+Accounting follows elapsed time, so a job that finishes early is only charged
+for what it used — but a job that sits in a 20 h allocation doing nothing after
+crashing at step 3 is charged for all of it. Check on long runs.
+
+---
+
 ## Configuring ablations
 
 Two ways to vary an experiment. Use CLI overrides for anything you'd sweep;
@@ -485,9 +759,23 @@ and in `resolved_config.json`:
 --optimization.adapter_lr 5e-4 --model.adapter.num_adapter_layers 4
 ```
 
-**A new YAML in `runs/`** — for changing dataset mixes or many fields at once.
-Copy an existing one, edit, and point `--config` at it. `runs/` is gitignored but
-synced by `sync_repo.sh`, so it reaches MN5.
+**A new YAML** — for changing dataset mixes or many fields at once. Copy an
+existing one, edit, and point `--config` at it. Two places to put it, and the
+choice matters:
+
+| location | tracked by git? | use for |
+|---|---|---|
+| `config/train/` | **yes** | anything a collaborator should be able to run, review, or reproduce |
+| `runs/` | no (gitignored, but rsynced by `sync_repo.sh`) | throwaway local variants |
+
+Prefer `config/train/`. A config that only ever exists in `runs/` cannot be
+shared, reviewed, or recovered — and since `runs/` reaches MN5 by rsync rather
+than by commit, a run launched from one has no commit to trace its checkpoints
+back to.
+
+Existing configs to copy from: `MA-VP-only-v1.0.yaml` (4 VoxPopuli languages),
+`MA-VP3-v1.0.yaml` (3 languages, indexed tree), `MA-v1.2.yaml`,
+`SFT-v1.3.0.yaml`.
 
 ### What the knobs do
 
@@ -498,11 +786,45 @@ synced by `sync_repo.sh`, so it reaches MN5.
 | `model.adapter._type`, `num_adapter_layers`, `adapter_kernel_size`, `adapter_stride` | either | adapter architecture ablations |
 | `model.ckpt` | either | start from a previous run — **this is how IFT consumes the MA checkpoint** |
 | `data.train_ds.<...>.shar_path` | YAML | dataset mix; paths resolve under `/workspace/shar` |
+| `data.train_ds.indexed` | YAML | `true` to require `.idx` sidecars (exact epochs, resumable). Set it with `LOCAL_DATASETS_DIR` pointing at `shar-indexed` |
 | `data.train_ds.batch_duration` | either | **seconds of audio per batch** — the real batch-size lever for training (Lhotse dynamic bucketing), not `per_device_train_batch_size` |
-| `data.train_ds.buffer_size` | either | shuffle buffer; smaller = faster startup for smoke tests |
+| `data.train_ds.buffer_size` | either | shuffle buffer; smaller = faster startup for smoke tests. Never set it larger than the mix |
+| `data.train_ds.max_tokens` / `max_tps` | either | **silently inert on any source without `custom.num_tokens`** — see the data note below |
+| `data.train_ds.num_workers` | YAML | must stay fixed across a resume chain (§B4b) |
+| `data.apply_chat_template` | YAML | declared at `data.`; since 0.5.1 `validation_ds` inherits it, so train and eval format text the same way |
 | `data.prompt_template` | YAML | e.g. `"{audio_token}{lang}"` |
 | `optimization.{encoder,decoder,adapter}_lr` | either | per-component LRs |
 | `trainer.max_steps`, `eval_steps`, `save_steps`, `warmup_steps` | CLI | schedule |
+
+### Know your data before you put it in a mix
+
+Not every Shar source is equally healthy, and the defects are invisible until
+they show up as bad metrics.
+
+**VoxPopuli, specifically.** Only five of the sixteen languages — **de, en, es,
+fr, it** — went through the dedicated `voxpopuli.py` converter. The other eleven
+(`cs et fi hr hu lt nl pl ro sk sl`) went through the generic HF→Shar batch
+converter and have **no `custom` block**, which means:
+
+- no `num_tokens`, so `max_tokens` / `max_tps` are silently inert on them;
+- positional fallback IDs (`chunk{N}_item{M}`) that **collide across corpora**;
+- unfiltered empty transcripts — `hr` is **~47% textless** in every split.
+
+Prefer the healthy five. If you need one of the others, know what you are
+accepting.
+
+**Across the whole tree** (793 leaves, 99.9M cuts): durations are 100% clean,
+and genuinely textless cuts are only 8,598 (0.01%), almost all VoxPopuli. But
+text can also be stored under a non-default key — `cv22_sidon` keeps it at
+`custom.metadata.sentence`, not `text` — so a "missing text" report is often a
+`text_field` misconfiguration rather than a data problem. Check before believing
+it.
+
+**`num_tokens` coverage is thin overall**: only 109 of 793 leaves carry it. By
+cut count it looks fine (92%) because `yodas-granary` dominates, so the gap is a
+long tail of small sources. Note that the VoxPopuli *validation* and *test*
+splits carry no `num_tokens` at all, in any language — `max_tokens` in a
+`validation_ds` is inert today.
 
 ### Running the two phases
 
@@ -510,10 +832,10 @@ MA and IFT are two sequential runs; the second points at the first's output:
 
 ```bash
 # 1) MA — adapter only
---config runs/MA.yaml --run.exp_name MA-v1 --trainer.output_dir /workspace/outputs/MA-v1
+--config config/train/MA.yaml --run.exp_name MA-v1 --trainer.output_dir /workspace/outputs/MA-v1
 
 # 2) IFT — starts from the MA checkpoint
---config runs/IFT.yaml --run.exp_name IFT-v1 --trainer.output_dir /workspace/outputs/IFT-v1 \
+--config config/train/IFT.yaml --run.exp_name IFT-v1 --trainer.output_dir /workspace/outputs/IFT-v1 \
   --model.ckpt /workspace/outputs/MA-v1
 ```
 
@@ -552,9 +874,9 @@ you are ablating two things at once.
 ```
 
 **3. MA/IFT task mix** (ASR-only, ST-only, ASR+ST in MA). This is a *dataset*
-change, so it belongs in a YAML rather than on the CLI — copy a config in `runs/`
-and edit the `data.train_ds` source list. Keep the total hours fixed across
-variants, otherwise task mix and data volume are confounded.
+change, so it belongs in a YAML rather than on the CLI — copy a config in
+`config/train/` and edit the `data.train_ds` source list. Keep the total hours
+fixed across variants, otherwise task mix and data volume are confounded.
 
 **4. Backbone prior-knowledge analysis** (task performance vs. perplexity on
 target transcripts). The perplexity side is a **separate offline evaluation of
@@ -588,6 +910,14 @@ from the eval metrics in §B4.
 - **A shared project directory is not a writable one.** Being in `epor48` gets
   you read access; the directories under it are owner-writable. Run with your
   own `OUTPUT_DIR` and `TMPDIR_HOST` (§B3).
+- **The default container image is the wrong one** for `main` ≥ 0.5.0. Export
+  `SINGULARITY_IMG` to the `_lhotse2_td` image on every submit.
+- **A silent first 30–90 minutes is normal**, not a hang — the sampler is
+  filling its shuffle buffer.
+- **The epoch counter is wrong** by a config-dependent factor (measured 3.29× on
+  one config). Harmless while `max_steps` governs the run, but it makes
+  epoch-axis comparisons across configs meaningless. Govern with `max_steps`.
+- **`gpfs_projects` is 93% full.** Write results to `gpfs_scratch`.
 
 ## Troubleshooting
 
@@ -599,11 +929,16 @@ from the eval metrics in §B4.
 | `PermissionError: … '/workspace/outputs/<EXP>'` | shared `OUTPUT_DIR` owned by someone else — set your own (§B3) |
 | Permission denied under `/workspace/tmp` | same cause, `TMPDIR_HOST` — set your own (§B3) |
 | `SINGULARITY_IMG not found` | image not shipped, or site-file path is stale |
+| `ModuleNotFoundError: torchdata`, or a lhotse API error | running the default `melt_cuda126.sif` (lhotse 1.32.2) against `main` — export the `_lhotse2_td` image |
 | Model load fails / tries to reach the Hub | weights not in `$HF_HOME` (§A3) |
 | `CUDA out of memory` during eval | eval batch too large — first batches are worst-case |
 | Output dir "not empty" | add `--trainer.overwrite_output_dir true`, or pick a new `EXP` |
 | Push rejected by `sync_repo.sh` | remote working tree is dirty — commit/stash on MN5 |
 | Build writes to host `/workspace` | built with `singularity` instead of `apptainer` |
+| No output for 30–90 min, GPUs at 0% | normal: shuffle buffer filling (§B4). Confirm with `nvidia-smi` on the node |
+| Job dies at a `--qos` / `--partition` error | submitted from a `glogin` node; use `alogin1` |
+| Sampler state not restored on resume | `(nodes × GPUs × num_workers)` changed since the original run (§B4b) |
+| `max_tokens` appears to do nothing | the source has no `custom.num_tokens` — inert by design, see the data note |
 
 If something here does not match what you observe, check the repository's open
 issues before debugging from scratch — known rough edges are tracked there.
