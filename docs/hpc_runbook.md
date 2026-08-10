@@ -1099,6 +1099,7 @@ from the eval metrics in §B4.
 | symptom | cause |
 |---|---|
 | `batch_size should be a positive integer, but got -1` | missing `--trainer.per_device_eval_batch_size` |
+| `False is not a valid SaveStrategy` (or `…EvalStrategy`) | you passed `--trainer.save_strategy no`. Overrides are parsed as YAML, so `no`/`off` become `false` and `yes`/`on` become `true`. Quote it: `--trainer.save_strategy "'no'"` |
 | Job exits instantly, no log | `logs/` didn't exist, or a bad `--output` path — see §B4 |
 | `` `use_bucketing` is retired `` | config predates `lhotse_sampler_type`; swap it as the message says |
 | `PermissionError: … '/workspace/outputs/<EXP>'` | shared `OUTPUT_DIR` owned by someone else — set your own (§B3) |
