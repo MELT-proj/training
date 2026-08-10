@@ -211,15 +211,31 @@ def report_locale_folding(sources: list[dict]) -> None:
 # Duration measurement
 # ---------------------------------------------------------------------------
 
+def shar_manifest_files(shar_path: Path) -> list[Path]:
+    """Cut manifests in a Shar dir, one per shard, gzipped or plain.
+
+    An indexed collection stores plain ``cuts.*.jsonl`` (the .idx sidecars hold
+    byte offsets into it, so it cannot stay compressed). Globbing only the .gz
+    form reports a fully indexed source as 0 h, which here would silently skew
+    every mixture weight rather than fail.
+    """
+    by_shard: dict[str, Path] = {}
+    for pattern in ("cuts.*.jsonl", "cuts.*.jsonl.gz"):
+        for path in sorted(shar_path.glob(pattern)):
+            by_shard.setdefault(path.name[: path.name.index(".jsonl")], path)
+    return [by_shard[k] for k in sorted(by_shard)]
+
+
 def shard_seconds(shard: str) -> float:
-    """Sum top-level cut durations in one gzipped JSONL manifest.
+    """Sum top-level cut durations in one JSONL manifest, gzipped or plain.
 
     Only the top-level ``duration`` is counted. A regex over the raw text would
     be faster but would also pick up ``duration`` inside each supervision and
     silently double-count.
     """
     total = 0.0
-    with gzip.open(shard, "rt", encoding="utf-8") as fh:
+    opener = gzip.open if str(shard).endswith(".gz") else open
+    with opener(shard, "rt", encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
             if not line:
@@ -241,7 +257,7 @@ def write_cache(cache: dict, path: Path) -> None:
 
 def plan_source(path: str, sample: int | None) -> tuple[list[str], int]:
     """Return (shards to read, total shard count) for one source."""
-    shards = sorted(Path(path).glob("cuts.*.jsonl.gz"))
+    shards = shar_manifest_files(Path(path))
     chosen = shards if not sample else shards[:sample]
     return [str(s) for s in chosen], len(shards)
 
@@ -541,7 +557,7 @@ def main() -> None:
 
     missing = [s["path"] for s in sources if s["shards"] == 0]
     if missing:
-        print(f"\nWARNING: {len(missing)} sources had no cuts.*.jsonl.gz and count as 0 h:")
+        print(f"\nWARNING: {len(missing)} sources had no cut manifests and count as 0 h:")
         for m in missing[:10]:
             print(f"    {m}")
 

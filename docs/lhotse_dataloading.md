@@ -202,6 +202,46 @@ class DatasetConfig:
 
 ---
 
+## Indexed Shar: how ranks and workers get different data
+
+A Shar source can be read two ways, chosen by `indexed` in the dataset config.
+
+**Streaming** (no `.idx` sidecars). Nothing partitions the corpus, so every DP rank
+and every DataLoader worker iterates *all* of it. Separation is statistical: each
+process walks the shards in its own random order. Because independent streams sample
+the same corpus with replacement, one nominal epoch covers about `1 - e⁻¹` ≈ **63.2%**
+of the data, the rest being repeats.
+
+**Indexed** (`.idx` sidecars present). Lhotse partitions by *sample index* across the
+whole `rank × worker` pool, so every cut is produced **exactly once** and an epoch is
+100% of the data. Measured on `cv22_sidon/it/train` (172,828 cuts) at `world_size=4`:
+
+| | per rank | coverage | cross-rank duplicates |
+|---|---|---|---|
+| indexed | 4 × 43,207 | 172,828 / 172,828 | **0** |
+| streaming | 4 × 172,828 | 172,828 / 172,828 | 518,484 |
+
+```yaml
+train_ds:
+  indexed: null   # null = auto-detect per source; true = require; false = force streaming
+```
+
+Two consequences worth knowing:
+
+- **`shard_seed: randomized` does not apply to indexed sources.** Partitioning already
+  separates the streams, so shard order should be identical everywhere — and lhotse
+  refuses a randomized seed under a multiplexer over indexed sources. The loader falls
+  back to `seed` and logs a warning. Set `shard_seed` to an integer to silence it.
+- **`num_workers` must be ≥ 1.** Partitioning is armed by `make_worker_init_fn`, which
+  only runs inside a DataLoader worker subprocess. At `num_workers: 0` the partition
+  collapses and every rank reads everything; the loader raises rather than allow it.
+
+To convert a collection, see `infra/index_shar.py`. The `.gz` manifests are replaced by
+plain `.jsonl` permanently — the index stores byte offsets into them — so the migration
+is not reversible by re-compressing.
+
+---
+
 ## Why This Design?
 
 1. **Memory efficiency**: Only metadata in RAM, audio stays on disk until needed

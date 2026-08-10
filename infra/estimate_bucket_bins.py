@@ -200,7 +200,7 @@ def _process_manifest_file(
     """Process a single manifest file and return durations, a sample record, and word counts.
 
     Args:
-        manifest_file: Path to the gzipped JSONL manifest.
+        manifest_file: Path to the JSONL manifest, gzipped or plain.
         min_duration: Minimum cut duration to include.
         max_duration: Maximum cut duration to include.
         is_first: If True, capture and return the first JSON record as a sample.
@@ -216,7 +216,8 @@ def _process_manifest_file(
     cuts_with_text = 0
     word_counts: list[int] = []
     try:
-        with gzip.open(manifest_file, "rt", encoding="utf-8") as f:
+        opener = gzip.open if manifest_file.endswith(".gz") else open
+        with opener(manifest_file, "rt", encoding="utf-8") as f:
             for line in f:
                 if line.strip():
                     cut_data = json.loads(line)
@@ -261,7 +262,13 @@ def get_durations_from_shar(
     """
     shar_path = Path(shar_path)
 
-    manifest_files = sorted(glob(str(shar_path / "cuts.*.jsonl.gz")))
+    # Both layouts: an indexed collection stores plain cuts.*.jsonl beside
+    # .idx byte offsets, so globbing only .gz would report it as empty.
+    by_shard: dict[str, Path] = {}
+    for pattern in ("cuts.*.jsonl", "cuts.*.jsonl.gz"):
+        for mf in sorted(shar_path.glob(pattern)):
+            by_shard.setdefault(mf.name[: mf.name.index(".jsonl")], mf)
+    manifest_files = [str(by_shard[k]) for k in sorted(by_shard)]
 
     if not manifest_files:
         print(f"  Warning: No manifest files found in {shar_path}")

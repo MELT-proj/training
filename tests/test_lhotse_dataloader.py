@@ -388,3 +388,388 @@ class TestFallbackDataset:
         fallback = FallbackDataset(inner_dataset)
         assert fallback[None] == good_batch
         assert fallback[None] == good_batch
+
+
+@pytest.fixture(scope="module")
+def indexed_synthetic_shar(tmp_path_factory) -> str:
+    """A tiny shar source converted to the indexed layout.
+
+    `to_shar` writes gzipped cut manifests, and the indexer skips those outright
+    because an .idx is a table of byte offsets into a plain file. So this does
+    what infra/index_shar.py does to a real source: gunzip the manifests, then
+    write the sidecars.
+    """
+    import gzip
+    import shutil
+
+    from lhotse import CutSet
+    from lhotse.testing.dummies import DummyManifest
+
+    pytest.importorskip("lhotse.indexing")
+    from lhotse.indexing import create_shar_index
+
+    d = tmp_path_factory.mktemp("indexed_shar") / "src"
+    d.mkdir(parents=True, exist_ok=True)
+    cuts = CutSet.from_cuts(
+        _shar_writable(c.with_id(f"cut{i:04d}"))
+        for i, c in enumerate(DummyManifest(CutSet, begin_id=0, end_id=40, with_data=True))
+    )
+    cuts.to_shar(str(d), fields={"recording": "wav"}, shard_size=10)
+
+    for gz in sorted(d.glob("cuts.*.jsonl.gz")):
+        plain = gz.with_suffix("")  # drop .gz
+        with gzip.open(gz, "rb") as fin, open(plain, "wb") as fout:
+            shutil.copyfileobj(fin, fout)
+        gz.unlink()
+    create_shar_index(d)
+    return str(d)
+
+
+def _loader_config(shar_path: str, **overrides):
+    config = {
+        "input_cfg": [
+            {"type": "lhotse_shar", "shar_path": shar_path,
+             "tags": {"task": "asr", "lang": "en"}},
+        ],
+        "batch_duration": 10.0,
+        "lhotse_sampler_type": "dynamic",
+        "shuffle": False,
+        "min_duration": 0.0,
+        "max_duration": 100.0,
+        "num_workers": 2,
+        "seed": 42,
+        "shard_seed": 0,
+        "prefetch_factor": 2,
+    }
+    config.update(overrides)
+    return OmegaConf.create(config)
+
+
+class _IdDataset(torch.utils.data.Dataset):
+    """Returns the cut IDs of each batch, so batches can be compared by identity."""
+
+    def __getitem__(self, cuts):
+        return {"cut_ids": [c.id for c in cuts]}
+
+
+class TestIndexedSharDetection:
+    def test_indexed_source_is_detected(self, indexed_synthetic_shar: str):
+        from melt.training.data.audio.lhotse.dataloader import _sources_are_indexed
+
+        entries = [{"type": "lhotse_shar", "shar_path": indexed_synthetic_shar}]
+        assert _sources_are_indexed(entries) is True
+
+    def test_plain_source_is_not_detected(self, synthetic_shar: dict[str, str]):
+        from melt.training.data.audio.lhotse.dataloader import _sources_are_indexed
+
+        entries = [{"type": "lhotse_shar", "shar_path": synthetic_shar["a"]}]
+        assert _sources_are_indexed(entries) is False
+
+
+class TestStatefulDataLoader:
+    """Training resumes from a per-worker snapshot rather than a replayed count.
+
+    The bug this guards against (#46) is invisible at num_workers <= 1, where the
+    rank-wide count and the per-worker count coincide, so everything here runs at
+    num_workers=2.
+    """
+
+    def test_train_loader_is_stateful(self, indexed_synthetic_shar: str):
+        from torchdata.stateful_dataloader import StatefulDataLoader
+
+        from melt.training.data.audio.lhotse.dataloader import (
+            get_lhotse_dataloader_from_config,
+        )
+
+        dl = get_lhotse_dataloader_from_config(
+            config=_loader_config(indexed_synthetic_shar),
+            global_rank=0,
+            world_size=1,
+            dataset=_IdDataset(),
+            repeat=True,
+        )
+        assert isinstance(dl, StatefulDataLoader)
+
+    def test_eval_loader_is_not_stateful(self, indexed_synthetic_shar: str):
+        """Eval has no position worth resuming, and is handed to accelerate."""
+        from torchdata.stateful_dataloader import StatefulDataLoader
+
+        from melt.training.data.audio.lhotse.dataloader import (
+            get_lhotse_dataloader_from_config,
+        )
+
+        dl = get_lhotse_dataloader_from_config(
+            config=_loader_config(indexed_synthetic_shar),
+            global_rank=0,
+            world_size=1,
+            dataset=_IdDataset(),
+            repeat=False,
+        )
+        assert not isinstance(dl, StatefulDataLoader)
+
+    def test_state_resumes_at_the_cut_point(self, indexed_synthetic_shar: str):
+        from melt.training.data.audio.lhotse.dataloader import (
+            get_lhotse_dataloader_from_config,
+        )
+
+        def build():
+            return get_lhotse_dataloader_from_config(
+                config=_loader_config(indexed_synthetic_shar),
+                global_rank=0,
+                world_size=1,
+                dataset=_IdDataset(),
+                repeat=True,
+            )
+
+        dl = build()
+        it = iter(dl)
+        consumed = [next(it)["cut_ids"] for _ in range(4)]
+        state = dl.state_dict()
+        tail = [next(it)["cut_ids"] for _ in range(6)]
+
+        # The training CutSet is .repeat()ed, so this stream never ends: take a
+        # fixed number of batches rather than materialising it.
+        resumed_dl = build()
+        resumed_dl.load_state_dict(state)
+        resumed_it = iter(resumed_dl)
+        resumed = [next(resumed_it)["cut_ids"] for _ in range(6)]
+
+        assert consumed, "loader produced nothing to snapshot"
+        assert resumed == tail, (
+            "resumed stream diverged from the uninterrupted one: "
+            f"{resumed[:2]} vs {tail[:2]}"
+        )
+
+
+class TestRngSetstateHardening:
+    """RNG state must survive a state dict whose tuples were flattened to lists.
+
+    `random.getstate()` returns tuples and `random.setstate()` rejects anything
+    else. Lhotse checkpoints several RNGs this way, and the state dict that
+    returns through the dataloader's worker transport in a multi-rank run has
+    those tuples flattened, which killed every worker on the first batch after a
+    resume.
+
+    The hardening patches `setstate` rather than individual lhotse call sites:
+    lhotse restores RNG state at seven places and only two route through its own
+    coercion helper. Patching one at a time just moves the failure to the next --
+    which is exactly what happened before this landed.
+    """
+
+    @staticmethod
+    def _flatten(state):
+        return [state[0], list(state[1]), state[2]]
+
+    def test_flattened_state_is_accepted_and_resumes_identically(self):
+        import random
+
+        import melt.training.data.audio.lhotse.dataloader  # noqa: F401  (applies the patch)
+
+        reference = random.Random(1234)
+        good = reference.getstate()
+        expected = [reference.random() for _ in range(5)]
+
+        target = random.Random()
+        target.setstate(self._flatten(good))
+        assert [target.random() for _ in range(5)] == expected
+
+    def test_well_formed_state_is_untouched(self):
+        import random
+
+        import melt.training.data.audio.lhotse.dataloader  # noqa: F401
+
+        reference = random.Random(7)
+        good = reference.getstate()
+        target = random.Random()
+        target.setstate(good)
+        assert target.random() == reference.random()
+
+    def test_genuinely_invalid_state_still_raises(self):
+        """The patch must not turn a real error into silent corruption."""
+        import random
+
+        import melt.training.data.audio.lhotse.dataloader  # noqa: F401
+
+        with pytest.raises((TypeError, ValueError)):
+            random.Random().setstate(["not", "an", "rng"])
+        with pytest.raises((TypeError, ValueError)):
+            random.Random().setstate("nonsense")
+
+    def test_patch_is_idempotent(self):
+        import random
+
+        import melt.training.data.audio.lhotse.dataloader as dl
+
+        before = random.Random.setstate
+        dl._harden_rng_setstate()
+        assert random.Random.setstate is before
+
+    def test_every_rng_in_a_nested_state_survives(self):
+        """Lhotse stores RNG state under several names; all of them must work."""
+        import random
+
+        import melt.training.data.audio.lhotse.dataloader  # noqa: F401
+
+        names = ["_bucket_rng", "rng_state", "bucket_rng_state", "_rng_state"]
+        refs = {n: random.Random(i) for i, n in enumerate(names)}
+        flat = {n: self._flatten(r.getstate()) for n, r in refs.items()}
+
+        for n in names:
+            target = random.Random()
+            target.setstate(flat[n])
+            assert target.random() == refs[n].random(), f"{n} did not resume"
+
+
+class TestNamedEvalSets:
+    """`name` on a validation source splits eval into separately reported sets.
+
+    HF's Trainer loops over a dict of eval datasets and prefixes every metric
+    with the key, so named sets are what produce per-language / per-task
+    `eval_<name>_loss` without any change to the metric plumbing.
+    """
+
+    @staticmethod
+    def _cfg(entries):
+        from omegaconf import OmegaConf
+
+        return OmegaConf.create({"input_cfg": entries, "max_samples": 8})
+
+    def test_unnamed_sources_keep_the_single_set_behaviour(self):
+        from melt.training.data.audio.lhotse.dataloader import (
+            split_eval_config_by_name,
+        )
+
+        cfg = self._cfg([{"shar_path": "/a"}, {"shar_path": "/b"}])
+        assert split_eval_config_by_name(cfg) is None
+
+    def test_empty_input_cfg_is_not_an_error(self):
+        from melt.training.data.audio.lhotse.dataloader import (
+            split_eval_config_by_name,
+        )
+
+        assert split_eval_config_by_name(self._cfg([])) is None
+
+    def test_sources_sharing_a_name_are_grouped(self):
+        from melt.training.data.audio.lhotse.dataloader import (
+            split_eval_config_by_name,
+        )
+
+        cfg = self._cfg(
+            [
+                {"shar_path": "/de1", "name": "asr_de"},
+                {"shar_path": "/nl", "name": "asr_nl"},
+                {"shar_path": "/de2", "name": "asr_de"},
+            ]
+        )
+        groups = split_eval_config_by_name(cfg)
+
+        assert list(groups) == ["asr_de", "asr_nl"]  # first-appearance order
+        assert [s.shar_path for s in groups["asr_de"].input_cfg] == ["/de1", "/de2"]
+        assert [s.shar_path for s in groups["asr_nl"].input_cfg] == ["/nl"]
+
+    def test_sibling_keys_are_carried_into_every_sub_config(self):
+        """Filters like max_samples must apply per set, not once globally."""
+        from melt.training.data.audio.lhotse.dataloader import (
+            split_eval_config_by_name,
+        )
+
+        cfg = self._cfg(
+            [{"shar_path": "/a", "name": "x"}, {"shar_path": "/b", "name": "y"}]
+        )
+        groups = split_eval_config_by_name(cfg)
+
+        assert all(sub.max_samples == 8 for sub in groups.values())
+
+    def test_sub_configs_do_not_alias_the_original(self):
+        from melt.training.data.audio.lhotse.dataloader import (
+            split_eval_config_by_name,
+        )
+
+        cfg = self._cfg([{"shar_path": "/a", "name": "x"}])
+        groups = split_eval_config_by_name(cfg)
+        groups["x"].max_samples = 999
+
+        assert cfg.max_samples == 8
+
+    def test_partially_named_sources_raise(self):
+        """Naming only some sources is a mistake, not a request to lump the rest."""
+        from melt.training.data.audio.lhotse.dataloader import (
+            split_eval_config_by_name,
+        )
+
+        cfg = self._cfg([{"shar_path": "/a", "name": "x"}, {"shar_path": "/b"}])
+        with pytest.raises(ValueError, match="mixes named and unnamed"):
+            split_eval_config_by_name(cfg)
+
+
+class TestSharManifestDiscovery:
+    """Manifests must be found in either Shar layout.
+
+    An indexed collection stores plain `cuts.*.jsonl` beside `.idx` byte
+    offsets, so it cannot stay compressed. Globbing only `cuts.*.jsonl.gz`
+    reports a fully indexed source as empty, which surfaces as a
+    ZeroDivisionError several frames away in the trainer.
+    """
+
+    @staticmethod
+    def _write(d, name, text, gzipped):
+        import gzip as _gzip
+
+        path = d / name
+        opener = _gzip.open if gzipped else open
+        with opener(path, "wt", encoding="utf-8") as fh:
+            fh.write(text)
+        return path
+
+    def _cut(self, cut_id, duration):
+        import json as _json
+
+        return _json.dumps({"id": cut_id, "duration": duration}) + "\n"
+
+    def test_plain_jsonl_manifests_are_found(self, tmp_path):
+        from melt.training.data.audio.lhotse.dataloader import (
+            _read_shar_manifest_durations,
+        )
+
+        self._write(tmp_path, "cuts.000000.jsonl", self._cut("a", 2.0), False)
+        self._write(tmp_path, "cuts.000001.jsonl", self._cut("b", 3.0), False)
+
+        duration, n = _read_shar_manifest_durations(tmp_path)
+        assert (duration, n) == (5.0, 2)
+
+    def test_gzipped_manifests_still_work(self, tmp_path):
+        from melt.training.data.audio.lhotse.dataloader import (
+            _read_shar_manifest_durations,
+        )
+
+        self._write(tmp_path, "cuts.000000.jsonl.gz", self._cut("a", 4.0), True)
+
+        assert _read_shar_manifest_durations(tmp_path) == (4.0, 1)
+
+    def test_a_shard_in_both_forms_is_counted_once(self, tmp_path):
+        """A half-migrated source must not double its measured duration."""
+        from melt.training.data.audio.lhotse.dataloader import (
+            _read_shar_manifest_durations,
+        )
+
+        self._write(tmp_path, "cuts.000000.jsonl", self._cut("a", 7.0), False)
+        self._write(tmp_path, "cuts.000000.jsonl.gz", self._cut("a", 7.0), True)
+
+        assert _read_shar_manifest_durations(tmp_path) == (7.0, 1)
+
+    def test_empty_directory_reports_nothing(self, tmp_path):
+        from melt.training.data.audio.lhotse.dataloader import (
+            _read_shar_manifest_durations,
+        )
+
+        assert _read_shar_manifest_durations(tmp_path) == (0.0, 0)
+
+    def test_discovery_orders_shards_and_prefers_plain(self, tmp_path):
+        from melt.training.data.audio.lhotse.dataloader import shar_manifest_files
+
+        self._write(tmp_path, "cuts.000001.jsonl.gz", "", True)
+        self._write(tmp_path, "cuts.000000.jsonl.gz", "", True)
+        self._write(tmp_path, "cuts.000000.jsonl", "", False)
+
+        names = [p.name for p in shar_manifest_files(tmp_path)]
+        assert names == ["cuts.000000.jsonl", "cuts.000001.jsonl.gz"]

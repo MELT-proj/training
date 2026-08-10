@@ -1,0 +1,275 @@
+# Test 3 — long mixed-task soak, with validation loss reported per language
+# and per task.
+#
+# Everything before this has been <= 20 steps on a single-task ASR mixture.
+# This runs for ~40 h across two resumed legs on 2 nodes x 4 GPUs, mixing ASR
+# and speech translation, and reports one validation loss per named eval set.
+#
+# Mixture design: `nl` appears under BOTH tasks (voxpopuli/nl ASR and
+# covost2/nl_en ST), which is the sharpest available check that task tagging
+# and prompt selection actually separate the two — same input language, two
+# different targets. `it` and `pt` are ST-only.
+#
+# CoVoST2 puts the TRANSLATION in supervisions[0].text (the source-language
+# transcript lives in custom.sentence), so the default `text_field: text` is
+# already the right field for ST. Verified on a real covost2 manifest record.
+#
+# The flat input_cfg form is deliberate: group tags are applied after the
+# children's and REPLACE cut.tags wholesale, so a group carrying `task: st`
+# would clobber each leaf's src_lang/tgt_lang. Every tag goes on the leaf.
+#
+# Model, optimizer and schedule are MA-VP-only-v1.0's, unchanged — that config
+# has already run on MN5, so the data mixture is the only variable. With the
+# decoder frozen, ST loss will improve only modestly; the pass criterion is
+# that all six curves move down and the resume seam shows no discontinuity,
+# not absolute translation quality.
+
+run:
+  exp_name: lhotse2-test3-mixed-task-soak
+  dry_run: false
+
+model:
+  encoder:
+    name: facebook/w2v-bert-2.0
+    freeze: true
+    max_audio_seq_len: 1500
+
+  decoder:
+    name: Qwen/Qwen3-1.7B
+    attn_implementation: flash_attention_2
+    freeze: true
+    bos_token: <|startoftext|>
+    eos_token: <|endoftext|>
+    pad_token: <|text_pad|>
+    audio_token: <|audio|>
+    audio_bos_token: <|audio_bos|>
+    audio_eos_token: <|audio_eos|>
+
+  adapter:
+    _type: conformer
+    freeze: false
+    num_adapter_layers: 2
+    adapter_kernel_size: 3
+    adapter_stride: 2
+
+  ckpt: null
+
+data:
+  sample_rate: 16000
+  apply_chat_template: true
+  min_chars: 3
+
+  train_ds:
+    input_cfg:
+      # --- ASR (VoxPopuli), 0.60 of the mix ---
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/de/train
+        weight: 0.25
+        tags:
+          task: asr
+          lang: de
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/es/train
+        weight: 0.20
+        tags:
+          task: asr
+          lang: es
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/nl/train
+        weight: 0.15
+        tags:
+          task: asr
+          lang: nl
+
+      # --- ST (CoVoST2, X -> en), 0.40 of the mix ---
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/nl_en/train
+        weight: 0.15
+        tags:
+          task: st
+          src_lang: nl
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/it_en/train
+        weight: 0.15
+        tags:
+          task: st
+          src_lang: it
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/pt_en/train
+        weight: 0.10
+        tags:
+          task: st
+          src_lang: pt
+          tgt_lang: en
+
+    total_hours: null
+    total_cuts: null
+    force_estimate: true
+
+    min_duration: 0.5
+    max_duration: 90.0
+
+    batch_size: 32
+    batch_duration: 160
+    quadratic_duration: 35
+    max_tokens: 256
+    max_tps: null
+
+    lhotse_sampler_type: dynamic_bucketing
+    num_buckets: 30
+    buffer_size: 300000
+    bucket_duration_bins: null
+
+    shuffle: true
+    drop_last: false
+    seed: 42
+    shard_seed: randomized
+
+    num_workers: 2
+    pin_memory: true
+    prefetch_factor: 8
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+  validation_ds:
+    # `name` groups sources into separately reported eval sets, giving
+    # eval_<name>_loss per language and per task. Per-task figures are the
+    # mean over the asr_* and st_* sets.
+    input_cfg:
+      - type: lhotse_shar
+        name: asr_de
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/de/validation
+        tags:
+          task: asr
+          lang: de
+      - type: lhotse_shar
+        name: asr_es
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/es/validation
+        tags:
+          task: asr
+          lang: es
+      - type: lhotse_shar
+        name: asr_nl
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/nl/validation
+        tags:
+          task: asr
+          lang: nl
+      - type: lhotse_shar
+        name: st_nl_en
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/nl_en/dev
+        tags:
+          task: st
+          src_lang: nl
+          tgt_lang: en
+      - type: lhotse_shar
+        name: st_it_en
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/it_en/dev
+        tags:
+          task: st
+          src_lang: it
+          tgt_lang: en
+      - type: lhotse_shar
+        name: st_pt_en
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/pt_en/dev
+        tags:
+          task: st
+          src_lang: pt
+          tgt_lang: en
+
+    # The eval collator resolves apply_chat_template / prompt_template_selection
+    # / chat_template_config from THIS config, not from `data`. Left unset they
+    # default to False/"random"/"chatml", which would format eval text as bare
+    # "{audio_token}{t}" while training uses the chat template — a validation
+    # loss computed over a different sequence format than the training loss is
+    # not comparable to it. Set them here so the two match.
+    apply_chat_template: true
+    prompt_template_selection: random
+    chat_template_config: chatml
+
+    # Applied per named set, not once across the concatenation.
+    max_samples: 1000
+
+    total_hours: null
+    total_cuts: null
+    force_estimate: true
+
+    batch_size: null
+    batch_duration: 200.0
+    quadratic_duration: 30
+    max_tokens: 256
+    max_tps: null
+
+    lhotse_sampler_type: dynamic_bucketing
+    num_buckets: 30
+    bucket_duration_bins: null
+    buffer_size: 20000
+
+    shuffle: false
+    drop_last: false
+    seed: 42
+    shard_seed: 42
+
+    min_duration: 0.5
+    max_duration: 90.0
+    num_workers: 1
+    pin_memory: true
+    prefetch_factor: 1
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+trainer:
+  output_dir: ${oc.env:OUTPUT_DIR}
+  overwrite_output_dir: false
+  resume_from_checkpoint: null
+  seed: 42
+  do_train: true
+  do_eval: true
+  eval_on_start: true   # baseline row for the report
+  average_tokens_across_devices: true
+
+  per_device_train_batch_size: -1
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 4
+
+  lr_scheduler_type: cosine
+  warmup_steps: 100
+
+  num_train_epochs: 1
+  max_steps: 20000   # leg A stops on wall clock; leg B resumes and continues
+
+  logging_strategy: steps
+  logging_steps: 20
+  report_to: wandb
+
+  eval_strategy: steps
+  eval_steps: 2000
+  # batch_eval_metrics only matters with compute_metrics, which is off here.
+
+  save_strategy: steps
+  save_steps: 500
+  save_total_limit: 3
+
+  bf16: true
+  group_by_length: false
+  dataloader_num_workers: 0
+  remove_unused_columns: false
+  ddp_find_unused_parameters: false
+
+  max_grad_norm: 1.0
+
+# No `evaluation:` section. Its presence is what enables compute_metrics, and
+# WER is meaningless on ST; the per-language WER split is also mis-attributed
+# under DDP because the langs buffer is rank-local. eval_<name>_loss is the
+# metric this test reports.
+
+optimization:
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  encoder_lr: 6e-6
+  decoder_lr: 2e-5
+  adapter_lr: 2e-4
+  min_lr_scale: 0.1

@@ -1,0 +1,154 @@
+# Test 2 — resume across two nodes.
+#
+# Every resume proof so far has been single-node, so world_size has never
+# varied in `shard_id = rank * num_workers + worker_id` /
+# `num_shards = world_size * num_workers`. At 2 nodes x 4 GPUs x 2 workers
+# there are 16 streams, and PartitionedIndexedIterator refuses to restore under
+# a changed topology — this run checks that it restores correctly under an
+# unchanged one.
+#
+# The mixture is the VoxPopuli four that already passed at 1 node, so node
+# count is the only variable.
+#
+# Driven by run_test2_2node_mn5.sbatch, which runs run1 -> prune -> run2 ->
+# compare_cut_ids.py in a single allocation.
+
+run:
+  exp_name: lhotse2-test2-2node-resume
+  dry_run: false
+
+model:
+  encoder:
+    name: facebook/w2v-bert-2.0
+    freeze: true
+    max_audio_seq_len: 1500
+
+  decoder:
+    name: Qwen/Qwen3-1.7B
+    attn_implementation: flash_attention_2
+    freeze: true
+    bos_token: <|startoftext|>
+    eos_token: <|endoftext|>
+    pad_token: <|text_pad|>
+    audio_token: <|audio|>
+    audio_bos_token: <|audio_bos|>
+    audio_eos_token: <|audio_eos|>
+
+  adapter:
+    _type: conformer
+    freeze: false
+    num_adapter_layers: 2
+    adapter_kernel_size: 3
+    adapter_stride: 2
+
+  ckpt: null
+
+data:
+  sample_rate: 16000
+  apply_chat_template: true
+  min_chars: 3
+
+  train_ds:
+    input_cfg:
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/de/train
+        tags:
+          task: asr
+          lang: de
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/en/train
+        tags:
+          task: asr
+          lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/es/train
+        tags:
+          task: asr
+          lang: es
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/fr/train
+        tags:
+          task: asr
+          lang: fr
+
+    total_hours: 1144.84
+    total_cuts: 415438
+    force_estimate: false
+
+    min_duration: 0.5
+    max_duration: 90.0
+
+    batch_size: 32
+    batch_duration: 160
+    quadratic_duration: 35
+    max_tokens: 256
+    max_tps: null
+
+    lhotse_sampler_type: dynamic_bucketing
+    num_buckets: 30
+    # Small on purpose. The sampler fills this buffer before emitting the
+    # first batch, and a production-sized 300k buffer would consume the
+    # whole allocation of a 10-step test before training starts.
+    buffer_size: 2000
+    bucket_duration_bins: null
+
+    shuffle: true
+    drop_last: false
+    seed: 42
+    shard_seed: randomized
+
+    # 8 ranks x 2 workers = 16 streams. Must be identical across ranks:
+    # compare_cut_ids.py infers workers_per_rank from the dump.
+    num_workers: 2
+    pin_memory: true
+    prefetch_factor: 8
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+  # No validation_ds: this test compares cut IDs, not loss.
+
+trainer:
+  output_dir: ${oc.env:OUTPUT_DIR}
+  overwrite_output_dir: false
+  resume_from_checkpoint: null
+  seed: 42
+  do_train: true
+  do_eval: false
+  eval_strategy: "no"
+  eval_on_start: false
+  average_tokens_across_devices: true
+
+  per_device_train_batch_size: -1
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 4
+
+  lr_scheduler_type: cosine
+  warmup_steps: 5
+
+  num_train_epochs: 1
+  max_steps: 10
+
+  logging_strategy: steps
+  logging_steps: 1
+  report_to: none
+
+  # save_steps / save_total_limit are set on the command line by the driver so
+  # the checkpoint step stays in one place.
+  save_strategy: steps
+
+  bf16: true
+  group_by_length: false
+  dataloader_num_workers: 0
+  remove_unused_columns: false
+  ddp_find_unused_parameters: false
+
+  max_grad_norm: 1.0
+
+optimization:
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  encoder_lr: 6e-6
+  decoder_lr: 2e-5
+  adapter_lr: 2e-4
+  min_lr_scale: 0.1

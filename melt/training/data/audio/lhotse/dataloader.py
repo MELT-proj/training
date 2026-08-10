@@ -10,12 +10,13 @@ Key functions:
 - compute_dataset_duration: Computes total dataset duration for epoch estimation
 """
 
+import copy
 import gzip
 import json
 import math
 import os
+import random
 import warnings
-from copy import deepcopy
 from functools import partial
 from glob import glob
 from pathlib import Path
@@ -37,14 +38,58 @@ from lhotse.dataset import (
 from lhotse.dataset.dataloading import resolve_seed
 from lhotse.dataset.sampling.base import CutSampler
 from lhotse.utils import fix_random_seed
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 from functools import partial
+from torchdata.stateful_dataloader import StatefulDataLoader
 
 
 from .....logging_utils import get_logger
 
 
 logger = get_logger(__name__)
+
+
+def _harden_rng_setstate() -> None:
+    """Let ``random.setstate`` accept an RNG state whose tuples were flattened.
+
+    ``random.getstate()`` returns a tuple of tuples and ``setstate`` rejects
+    anything else with "state vector must be a tuple". Lhotse checkpoints several
+    RNGs this way, and the state dict that comes back through the dataloader's
+    worker transport in a multi-rank run has those tuples flattened to lists, so
+    every worker died on the first batch after a resume.
+
+    Patching ``setstate`` rather than each caller is deliberate. Lhotse restores
+    RNG state at seven sites; two of them already route through its own
+    ``_rng_state_from_json`` helper -- which does exactly this coercion, so
+    upstream knows the state can arrive as lists -- and five do not. Fixing them
+    one at a time is whack-a-mole: hardening the bucket sampler's restore simply
+    moved the failure to the multiplexer's. This is the one point they all share.
+
+    Normalising in the training process instead does not work: the restore runs
+    inside a worker subprocess and the transport re-flattens the state after any
+    earlier fix. Hence the patch is also re-applied in ``worker_init_fn``, for a
+    spawned worker that re-imports rather than inheriting the patched class.
+
+    The behaviour change is confined to input that would otherwise raise: a
+    well-formed state is passed through untouched. Report upstream.
+    """
+    original = random.Random.setstate
+    if getattr(original, "_melt_coerces_tuples", False):
+        return
+
+    def setstate(self, state):
+        # random.getstate() -> (version, internalstate, gauss_next)
+        if isinstance(state, (list, tuple)) and len(state) == 3:
+            version, internalstate, gauss_next = state
+            if isinstance(internalstate, list):
+                state = (version, tuple(internalstate), gauss_next)
+        return original(self, state)
+
+    setstate._melt_coerces_tuples = True
+    random.Random.setstate = setstate
+
+
+_harden_rng_setstate()
 
 
 def _maybe_attach_set_epoch(dataloader: torch.utils.data.DataLoader, sampler: CutSampler) -> None:
@@ -115,10 +160,6 @@ class InfiniteIterableDatasetWrapper(IterableDatasetWrapper):
     ):
         super().__init__(dataset=dataset, sampler=sampler, **kwargs)
         self._estimated_batches = estimated_batches_per_epoch
-        # Holds a sampler state_dict to be applied lazily inside the worker process
-        # (after make_worker_init_fn has set LHOTSE_PROCESS_SEED). Set by
-        # MeltTrainer._restore_sampler_state when num_workers > 0.
-        self._pending_lhotse_state: dict | None = None
 
     def __len__(self) -> int:
         """Return estimated number of batches per epoch for progress bars."""
@@ -134,6 +175,28 @@ def _get_config_value(config: Any, key: str, default: Any = None) -> Any:
     return default
 
 
+def shar_manifest_files(shar_path: str | Path) -> list[Path]:
+    """Cut manifests in a Shar directory, one per shard, either layout.
+
+    A streaming collection stores ``cuts.000000.jsonl.gz``; an indexed one
+    stores plain ``cuts.000000.jsonl`` beside a ``.idx`` of byte offsets, which
+    is why it cannot stay compressed. Globbing only the gzipped form silently
+    reports a fully indexed source as empty.
+
+    A shard present in both forms is counted once, preferring the plain file:
+    the two are the same records, and double-counting would inflate every
+    duration and cut total derived from them.
+    """
+    shar_path = Path(shar_path)
+    by_shard: dict[str, Path] = {}
+    # Plain first so it wins the setdefault against its own .gz.
+    for pattern in ("cuts.*.jsonl", "cuts.*.jsonl.gz"):
+        for path in sorted(shar_path.glob(pattern)):
+            stem = path.name[: path.name.index(".jsonl")]
+            by_shard.setdefault(stem, path)
+    return [by_shard[k] for k in sorted(by_shard)]
+
+
 def _read_shar_manifest_durations(
     shar_path: str | Path,
     min_duration: float = 0.0,
@@ -141,8 +204,10 @@ def _read_shar_manifest_durations(
 ) -> tuple[float, int]:
     """Read total duration and cut count from SHAR manifest files.
 
-    SHAR format stores cut manifests as gzipped JSONL files in the shar directory.
-    This function reads only the manifest files (not audio) to extract durations.
+    Reads only the manifest files (not audio) to extract durations. Handles
+    both Shar layouts: gzipped ``cuts.*.jsonl.gz`` and the plain
+    ``cuts.*.jsonl`` that an indexed collection uses (the .idx sidecars hold
+    byte offsets into the manifest, so it cannot be compressed).
 
     Args:
         shar_path: Path to the SHAR directory.
@@ -156,16 +221,10 @@ def _read_shar_manifest_durations(
     total_duration = 0.0
     num_cuts = 0
 
-    # Find all cuts manifest files (cuts.*.jsonl.gz pattern)
-    manifest_files = sorted(glob(str(shar_path / "cuts.*.jsonl.gz")))
-
-    if not manifest_files:
-        logger.warning(f"No manifest files found in {shar_path}")
-        return 0.0, 0
-
-    for manifest_file in manifest_files:
+    for manifest_file in shar_manifest_files(shar_path):
+        opener = gzip.open if manifest_file.suffix == ".gz" else open
         try:
-            with gzip.open(manifest_file, "rt", encoding="utf-8") as f:
+            with opener(manifest_file, "rt", encoding="utf-8") as f:
                 for line in f:
                     if line.strip():
                         cut_data = json.loads(line)
@@ -177,6 +236,9 @@ def _read_shar_manifest_durations(
         except Exception as e:
             logger.warning(f"Error reading manifest {manifest_file}: {e}")
             continue
+
+    if not num_cuts:
+        logger.warning(f"No cuts read from manifests in {shar_path}")
 
     return total_duration, num_cuts
 
@@ -312,8 +374,18 @@ def estimate_steps_per_epoch(
         logger.warning("Neither batch_size nor batch_duration is set; cannot estimate steps per epoch")
         return -1, 0.0, 0, 0, 0
 
-    # We use data parallelism by setting split_for_loading=True in CutSet.from_shar()
-    # The shard are hence divided to world_size * num_workers processes.
+    # NOTE: this divisor is not currently justified, and is kept only because
+    # changing it moves reported epoch length -- and therefore the LR schedule --
+    # for every run. Deliberately left alone here; see #52 step 5.
+    #
+    # It used to be explained by `split_for_dataloading=True`, which was never
+    # passed. Now that indexed sources really are partitioned, the `world_size`
+    # part is finally correct. The extra `num_workers` factor still looks wrong:
+    # a rank's workers feed one interleaved stream for that rank, so the rank
+    # consumes `batches_per_epoch / world_size` batches however many workers
+    # produce them, and dividing again under-reports epoch length by num_workers.
+    # It is the same factor as the resume over-skip in #46 (superseded by #55),
+    # so settle both together rather than changing this in isolation.
     batches_per_worker = batches_per_epoch / (world_size * num_workers) if num_workers > 0 else batches_per_epoch / world_size
 
     # The number of update steps is rescaled by gradient accumulation steps
@@ -357,36 +429,78 @@ def read_cutset_from_config(config: DictConfig, repeat: bool = True) -> tuple[Cu
     seed = config.seed
     shard_seed = _get_config_value(config, "shard_seed", seed)
     shuffle = config.shuffle
+    indexed = _get_config_value(config, "indexed", None)
 
-    # Data uniqueness across DDP ranks / DataLoader workers is achieved via
-    # per-worker seed differentiation (make_worker_init_fn) rather than shard
-    # partitioning (split_for_dataloading).  Every worker sees every shard but
-    # iterates them in a different random order, so at any given batch index
-    # different workers see different cuts.  This matches NeMo's approach and
-    # avoids fragmentation issues when datasets have few shards.
+    # How ranks and workers end up with different data depends on which reader
+    # backs the sources, so resolve that first.
     #
-    # For that to hold, shard traversal must be seeded with `shard_seed` (which
-    # resolves per rank and worker when set to 'randomized') and NOT with
-    # `seed`, which is one fixed integer shared by every process.  Seeding
-    # traversal from `seed` makes all workers walk the shards in the same order,
-    # so their shuffle buffers are filled from the same region of the corpus and
-    # the streams overlap well above chance even when the sampler shuffles
-    # differently.  `seed` keeps its own role: it is the base that
-    # make_worker_init_fn turns into each worker's LHOTSE_PROCESS_SEED, which is
-    # what 'randomized' resolves against.
+    # Streaming (no .idx): nothing partitions the corpus, so every rank and
+    # worker walks all of it. Separation is statistical, and comes from each
+    # process traversing the shards in its own order -- which is why traversal
+    # must be seeded from `shard_seed` ('randomized' resolves per rank+worker)
+    # and not from `seed`, one integer shared by every process.
+    #
+    # Indexed (.idx present): lhotse partitions by sample index across the whole
+    # (rank x worker) pool, so separation is exact and no longer needs a
+    # per-process seed. There, `shard_seed` only sets shard *shuffle order*,
+    # which should be the SAME everywhere -- and lhotse rejects
+    # seed='randomized' outright once a multiplexer sits over partitioned
+    # indexed sources, because each shard would draw a different permutation.
+    using_indexed = _sources_are_indexed(input_cfg) if indexed is None else bool(indexed)
+    if using_indexed and shard_seed == "randomized":
+        logger.warning(
+            "shard_seed='randomized' is incompatible with indexed Shar sources: "
+            "partitioning already gives each rank and worker a disjoint slice, and "
+            "lhotse refuses a randomized seed under a multiplexer over indexed "
+            "sources. Falling back to shard_seed=%s (the config's `seed`). Set "
+            "`shard_seed` to an integer explicitly to silence this.",
+            seed,
+        )
+        shard_seed = seed
 
-    # With split_for_dataloading=False every worker sees all shards.
-    # Repeating guarantees infinite data; uniqueness across workers/ranks
-    # is provided by per-worker shuffle seeds (make_worker_init_fn).
     combined, use_iterable, _ = _combine_entries(
-        input_cfg, shuffle, shard_seed, repeat=repeat
+        input_cfg, shuffle, shard_seed, repeat=repeat, indexed=indexed
     )
 
     return combined, use_iterable
 
 
+def _iter_shar_paths(entries: list) -> list[str]:
+    """Every `shar_path` under `input_cfg`, descending through `type: group`."""
+    out: list[str] = []
+    for entry in entries or []:
+        if _get_config_value(entry, "type", None) == "group":
+            out.extend(_iter_shar_paths(_get_config_value(entry, "input_cfg", [])))
+        else:
+            path = _get_config_value(entry, "shar_path", None)
+            if path is not None:
+                out.append(os.path.expandvars(str(path)))
+    return out
+
+
+def _sources_are_indexed(entries: list) -> bool:
+    """Would lhotse read these sources through the indexed reader?
+
+    Asks lhotse rather than looking for ``.idx`` ourselves, so this agrees with
+    whatever ``from_shar(indexed=None)`` is about to decide. A collection part
+    way through migration answers False, which is the safe reading: the mixed
+    case behaves like streaming, and `shard_seed` should stay per-process.
+    """
+    paths = _iter_shar_paths(entries)
+    if not paths:
+        return False
+    try:
+        from lhotse.shar.readers.indexed import LazyIndexedSharIterator
+    except ImportError:  # lhotse < 2.0 has no indexed reader at all
+        return False
+    return all(
+        LazyIndexedSharIterator.supports_configuration(in_dir=p) for p in paths
+    )
+
+
 def _combine_entries(
-    entries: list, shuffle: bool, shard_seed, repeat: bool, _where: str = "input_cfg"
+    entries: list, shuffle: bool, shard_seed, repeat: bool, indexed: bool | None = None,
+    _where: str = "input_cfg"
 ) -> tuple[CutSet, bool, int]:
     """Load one level of ``input_cfg`` and mux its entries together.
 
@@ -431,7 +545,7 @@ def _combine_entries(
             # The group's leaves are repeated inside the recursion, so the
             # group's own mux is already infinite.
             cuts, child_iterable, n_cuts = _combine_entries(
-                children, shuffle, shard_seed, repeat, f"{where}.input_cfg"
+                children, shuffle, shard_seed, repeat, indexed, f"{where}.input_cfg"
             )
             use_iterable = use_iterable or child_iterable
         elif source_type == "lhotse_shar":
@@ -447,18 +561,26 @@ def _combine_entries(
 
             logger.info(f"Loading CutSet from shar: {shar_path} (shard_seed: {shard_seed})")
 
-            # split_for_dataloading=False: every worker loads all shards.
-            # Uniqueness comes from per-worker shuffle seeds set by
-            # make_worker_init_fn, not from shard-level partitioning.
-            # (Lhotse forbids split_for_dataloading=True together with a
-            # per-worker seed: it shuffles before slicing by worker index, so
-            # each worker would slice a different permutation.)
+            # `indexed` selects how the corpus is divided across the
+            # (DP rank x DataLoader worker) pool:
+            #
+            #   True  -- .idx sidecars exist; lhotse partitions by SAMPLE index,
+            #            so every cut is produced exactly once across the pool
+            #            and a nominal epoch is 100% of the data.
+            #   False -- streaming; every rank and worker walks the whole corpus
+            #            in its own shuffled order, so streams overlap and an
+            #            epoch is ~63.2% of the data with the rest repeats.
+            #   None  -- auto-detect per source, which is lhotse's default.
+            #
+            # `split_for_dataloading` is deliberately not passed: it partitioned
+            # by SHARD, which never worked here (median source has 6 shards
+            # against 128+ ranks), and lhotse 2.0 accepts-but-ignores it.
             cuts = CutSet.from_shar(
                 in_dir=shar_path,
                 shuffle_shards=shuffle,
                 seed=shard_seed,
                 stateful_shuffle=shuffle,
-                split_for_dataloading=False,
+                indexed=indexed,
             )
             use_iterable = True  # Shar always uses iterable dataset
             # Count before repeating: len() of a repeated CutSet is not the
@@ -630,21 +752,41 @@ def get_lhotse_sampler_from_config(
             filter_parts.append(f"max_tps={_max_tps}")
         logger.info(f"Applied token filter: {', '.join(filter_parts)}")
 
+        # One line per cut lacking num_tokens is unusable: a source without the
+        # field warns on every cut it yields, and because the train stream is
+        # `.repeat()`ed it warns again on every pass. A small source can emit
+        # the same warning millions of times in a long run and starve the
+        # sampler on log I/O alone. Warn once, then count.
+        missing_num_tokens = {"n": 0}
+
+        def _warn_missing_once(cut_id: str) -> None:
+            missing_num_tokens["n"] += 1
+            if missing_num_tokens["n"] == 1:
+                logger.warning(
+                    f"Cut {cut_id} has no custom.num_tokens; the max_tokens/max_tps "
+                    "filters cannot apply to it and it is kept. Further occurrences "
+                    "are counted, not logged."
+                )
+            elif missing_num_tokens["n"] % 100_000 == 0:
+                logger.warning(
+                    f"{missing_num_tokens['n']:,} cuts so far had no "
+                    "custom.num_tokens (repeats included)."
+                )
+
         def _token_filter(c: Cut, max_tokens: int | None, max_tps: float | None) -> bool:
             custom = getattr(c, "custom", None) or {}
             num_tokens = custom.get("num_tokens") if isinstance(custom, dict) else None
 
-            if max_tokens is not None:
-                if num_tokens is None:
-                    logger.warning(f"Cut {c.id} has no custom.num_tokens; skipping max_tokens filter for this cut.")
-                elif num_tokens > max_tokens:
-                    return False
+            if num_tokens is None:
+                if max_tokens is not None or max_tps is not None:
+                    _warn_missing_once(c.id)
+                return True
 
-            if max_tps is not None:
-                if num_tokens is None:
-                    logger.warning(f"Cut {c.id} has no custom.num_tokens; skipping max_tps filter for this cut.")
-                elif c.duration > 0 and (num_tokens / c.duration) > max_tps:
-                    return False
+            if max_tokens is not None and num_tokens > max_tokens:
+                return False
+
+            if max_tps is not None and c.duration > 0 and (num_tokens / c.duration) > max_tps:
+                return False
 
             return True
 
@@ -799,31 +941,6 @@ def get_lhotse_sampler_from_config(
     return sampler, use_iterable
 
 
-def _make_lhotse_worker_init_fn(lhotse_init_fn):
-    """Wraps lhotse's worker_init_fn to also apply any deferred sampler state.
-
-    With num_workers > 0, _fast_forward() must run inside the worker AFTER
-    make_worker_init_fn has set LHOTSE_PROCESS_SEED (which determines shard
-    assignment for split_for_dataloading=True).  We store the state dict on
-    the dataset and apply it here, in the worker, at the right moment.
-    """
-    def _init(worker_id: int) -> None:
-        lhotse_init_fn(worker_id)  # sets LHOTSE_PROCESS_SEED first
-        worker_info = torch.utils.data.get_worker_info()
-        if worker_info is None:
-            return
-        dataset = worker_info.dataset
-        pending = getattr(dataset, "_pending_lhotse_state", None)
-        if pending is not None:
-            sampler = getattr(dataset, "sampler", None)
-            if sampler is not None:
-                sampler.load_state_dict(deepcopy(pending))
-                dataset._pending_lhotse_state = None
-                logger.info(f"[Worker {worker_id}] Lhotse sampler state restored (fast-forward complete).")
-
-    return _init
-
-
 def get_lhotse_dataloader_from_config(
     config: DictConfig,
     global_rank: int,
@@ -863,6 +980,25 @@ def get_lhotse_dataloader_from_config(
     # Create dataloader
     num_workers = _get_config_value(config, "num_workers", 0)
     pin_memory = _get_config_value(config, "pin_memory", True)
+
+    # Indexed partitioning is armed by `make_worker_init_fn`, which sets
+    # LHOTSE_USE_WORKER_PARTITION -- and that only ever runs inside a DataLoader
+    # worker subprocess. At num_workers=0 there is no subprocess, the partition
+    # collapses to (0, 1), and every rank silently reads the entire corpus. That
+    # is the exact duplication indexing was adopted to remove, so refuse it
+    # rather than let a run look correct and train on world_size copies.
+    if (
+        repeat
+        and use_iterable
+        and world_size > 1
+        and num_workers == 0
+        and _sources_are_indexed(_get_config_value(config, "input_cfg", []))
+    ):
+        raise ValueError(
+            f"num_workers=0 with world_size={world_size} and indexed Shar sources: "
+            "cross-rank partitioning would not activate and every rank would read "
+            "the whole corpus. Set num_workers >= 1."
+        )
 
     # For eval (repeat=False), cap num_workers to 1.
     # With split_for_dataloading=False (needed for even rank distribution), multiple
@@ -927,15 +1063,30 @@ def get_lhotse_dataloader_from_config(
                 estimated_batches_per_epoch=batches_per_worker_int,
             )
 
+        # This runs in every worker subprocess and is where LHOTSE_PROCESS_SEED
+        # and LHOTSE_USE_WORKER_PARTITION get set -- the latter is what arms
+        # indexed partitioning (issue #52). Without it every rank reads the whole
+        # corpus. It used to be wrapped so a saved sampler state could be
+        # fast-forwarded here; StatefulDataLoader restores each worker from its
+        # own snapshot instead, so that part is gone.
         lhotse_worker_init = make_worker_init_fn(
             rank=global_rank,
             world_size=world_size,
             seed=config.seed,
             set_different_node_and_worker_seeds=True,
         )
+
+        def _worker_init(worker_id: int) -> None:
+            # Re-apply inside the worker. The module-level call already covers a
+            # forked worker, which inherits the patched class, but a spawned one
+            # re-imports and would not -- and the restore that needs it happens
+            # here, in the worker, not in the training process.
+            _harden_rng_setstate()
+            lhotse_worker_init(worker_id)
+
         dloader_kwargs = {
             "dataset": wrapped_dataset,
-            "worker_init_fn": _make_lhotse_worker_init_fn(lhotse_worker_init),
+            "worker_init_fn": _worker_init,
             "persistent_workers": num_workers > 0 and repeat,  # Only persistent for training
         }
     else:
@@ -946,6 +1097,25 @@ def get_lhotse_dataloader_from_config(
             "sampler": sampler,
         }
 
+    # Training uses StatefulDataLoader so the run can resume exactly where it
+    # stopped. It snapshots each worker's position inside that worker, which is
+    # the only place the position exists once num_workers > 0 -- the
+    # main-process sampler is never iterated, so reading its state there yields
+    # nothing to restore from (issues #46, #55).
+    #
+    # Eval stays on a plain DataLoader: it has no position worth resuming, and
+    # the map-style branch is handed to accelerate's prepare_data_loader, which
+    # builds its own loader anyway.
+    loader_cls = StatefulDataLoader if (repeat and use_iterable) else torch.utils.data.DataLoader
+    extra_kwargs = {}
+    if loader_cls is StatefulDataLoader:
+        # How often workers checkpoint their position. 1 means every batch: the
+        # snapshot is small (an iterator position, not data) and anything coarser
+        # would resume at the last multiple instead of the actual step.
+        extra_kwargs["snapshot_every_n_steps"] = int(
+            _get_config_value(config, "snapshot_every_n_steps", 1)
+        )
+
     # Suppress PyTorch's warning about iterable dataset length mismatch.
     # This warning is expected for dynamic batching: actual batch count varies due to
     # duration-based/count-based batching and shuffling, not due to misconfiguration.
@@ -955,8 +1125,9 @@ def get_lhotse_dataloader_from_config(
             message="Length of IterableDataset .* was reported to be .* but .* samples have been fetched",
             category=UserWarning,
         )
-        dataloader = torch.utils.data.DataLoader(
+        dataloader = loader_cls(
             **dloader_kwargs,
+            **extra_kwargs,
             batch_size=None,  # Batching handled by sampler
             num_workers=num_workers,
             pin_memory=pin_memory,
@@ -1035,6 +1206,66 @@ def _maybe_set_cuda_expandable_segments(enabled: bool = True) -> None:
             logger.debug("Enabled CUDA expandable segments")
     except RuntimeError:
         logger.debug("Could not enable CUDA expandable segments")
+
+
+def split_eval_config_by_name(config: DictConfig) -> dict[str, DictConfig] | None:
+    """Split a ``validation_ds`` config into one sub-config per named eval set.
+
+    Each ``input_cfg`` entry may carry an optional ``name``.  Sources sharing a
+    name are evaluated together and reported under that name, which is how
+    per-language / per-task validation loss is obtained: HF's Trainer loops over
+    a dict of eval datasets and prefixes every metric with the key, giving
+    ``eval_<name>_loss``.
+
+    Naming is all-or-none, mirroring the mixture-weight rule in
+    :func:`_resolve_weights`: a config where only some sources are named is
+    almost certainly a mistake, and silently lumping the rest together would
+    hide it.
+
+    Args:
+        config: A ``validation_ds`` DictConfig.
+
+    Returns:
+        A mapping of name -> sub-config (each a copy of ``config`` carrying only
+        that name's sources), preserving first-appearance order.  ``None`` when
+        no source is named, meaning the caller should build a single eval
+        dataset exactly as before.
+
+    Raises:
+        ValueError: if some but not all sources declare a ``name``.
+    """
+    input_cfg = _get_config_value(config, "input_cfg", [])
+    if not input_cfg:
+        return None
+
+    names = [_get_config_value(s, "name", None) for s in input_cfg]
+    named = [n for n in names if n]
+    if not named:
+        return None
+    if len(named) != len(names):
+        missing = [
+            str(_get_config_value(s, "shar_path", "<no shar_path>"))
+            for s, n in zip(input_cfg, names)
+            if not n
+        ]
+        raise ValueError(
+            "validation_ds.input_cfg mixes named and unnamed sources. Either "
+            "name every source (to report per-set metrics as eval_<name>_loss) "
+            f"or none of them. Unnamed: {missing}"
+        )
+
+    grouped: dict[str, list] = {}
+    for source_cfg, name in zip(input_cfg, names):
+        grouped.setdefault(str(name), []).append(source_cfg)
+
+    sub_configs: dict[str, DictConfig] = {}
+    for name, sources in grouped.items():
+        sub = copy.deepcopy(config)
+        # OmegaConf containers reject plain assignment of a foreign node list in
+        # struct mode, so go through OmegaConf.update on the copy.
+        OmegaConf.update(sub, "input_cfg", sources, force_add=True)
+        sub_configs[name] = sub
+    return sub_configs
 
 
 def materialize_cuts_for_eval(config: DictConfig) -> list[Cut]:
