@@ -1189,6 +1189,18 @@ class MELTTrainer(Trainer):
             torch.cuda.memory._record_memory_history(None)
             self._memory_profiling = False
 
+    def evaluation_loop(self, *args, **kwargs):
+        """Start every evaluation pass with an empty language buffer.
+
+        The compute_metrics wrapper clears the buffer on its final call, but it
+        only runs when there are metrics to compute.  A loop with
+        ``prediction_loss_only`` — or one aborted part-way — would otherwise
+        leave stale codes behind for the next pass to misalign against.  With a
+        dict of named eval sets this also keeps each set's codes separate.
+        """
+        self._eval_langs_buffer = []
+        return super().evaluation_loop(*args, **kwargs)
+
     def prediction_step(
         self,
         model: torch.nn.Module,
@@ -1201,12 +1213,23 @@ class MELTTrainer(Trainer):
         Language codes are buffered on the trainer so that the
         ``compute_metrics`` wrapper can attach them to the
         :class:`EvalPrediction` later.
+
+        The codes must make the same trip across ranks as the tensors they
+        describe: ``Trainer.evaluation_loop`` hands ``compute_metrics`` logits
+        and labels that have already been through ``gather_function``, so a
+        buffer holding only this rank's codes would be ``world_size`` times too
+        short and would line each prediction up with the wrong language.
+        ``gather_for_metrics`` also trims the duplicate samples accelerate pads
+        the final batch with, exactly as it does for the logits.
         """
         langs = inputs.pop("langs", None)
         if langs is not None:
-            # Buffer is initialised in __init__ and cleared by the
-            # compute_metrics wrapper on the final call.
-            self._eval_langs_buffer.extend(langs)
+            # Buffer is initialised in __init__, reset at the top of every
+            # evaluation_loop, and cleared by the compute_metrics wrapper on the
+            # final call.
+            self._eval_langs_buffer.extend(
+                self.accelerator.gather_for_metrics(list(langs), use_gather_object=True)
+            )
         return super().prediction_step(
             model, inputs, prediction_loss_only, ignore_keys=ignore_keys,
         )
