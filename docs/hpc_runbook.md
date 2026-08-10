@@ -684,51 +684,166 @@ re-warms its momentum — that is normal, not a broken restore.
 
 ## B5. Retrieve results
 
-**W&B metrics** — there's a helper that pulls offline runs to artemis and syncs
-them. Point it at your own remote outputs; nothing is hardcoded:
+### W&B metrics — `utils/sync_wandb.sh`
+
+MN5 compute nodes have no internet, so W&B runs offline: training writes run
+data to `$OUTPUT_DIR/wandb/wandb/` on MN5 and uploads nothing. Getting metrics
+into the browser is a **two-step** job that has to happen from a machine with
+network access — artemis:
+
+1. copy the offline run directories from MN5 to artemis, then
+2. `wandb sync` them up to wandb.ai.
+
+`utils/sync_wandb.sh` does both, and handles the case that matters most in
+practice: a run that is **still training**. Nothing in it is hardcoded to one
+account.
+
+#### Running it from artemis
+
+```bash
+# [artemis] from the repo root
+utils/sync_wandb.sh \
+  --remote-path /gpfs/scratch/epor48/<your-mn5-user>/outputs/wandb/wandb \
+  --entity <the-shared-team> \
+  --venv /mnt/scratch-artemis/$USER/venvs/<your-venv>/bin/activate
+```
+
+Three things to fill in:
+
+- **`--remote-path`** is where *your* runs are on MN5. Your BSC username is
+  usually not your local one: `ssh mn5 'echo $USER'`. It is required, on
+  purpose — outputs are per-account, so any default would be wrong for
+  everyone but one person.
+- **`--entity`** decides which W&B account the runs land in. Read the next
+  section before you pick it.
+- **`--venv`** is only needed if `wandb` is not already on your `PATH`. It is
+  the **activate script**, not the venv directory — the same convention as
+  `VENV_PATH` everywhere else in this repo.
+
+Preview first; it changes nothing and shows exactly what would transfer and how
+each run would be classified:
 
 ```bash
 # [artemis]
-utils/sync_wandb.sh -r /gpfs/scratch/epor48/<your-mn5-user>/outputs/wandb/wandb
+utils/sync_wandb.sh -r /gpfs/scratch/epor48/<your-mn5-user>/outputs/wandb/wandb --dry-run
 ```
 
-Your MN5 username is usually not your local one — `ssh mn5 'echo $USER'`.
+Every option, with the environment variable that sets the same thing (the flag
+wins):
 
 | flag | env | default |
 |---|---|---|
 | `-r, --remote-path` | `WANDB_REMOTE_PATH` | **required** |
 | `-l, --local-path` | `WANDB_LOCAL_PATH` | `/mnt/scratch-artemis/$USER/melt-data/outputs/wandb/wandb` |
 | `-H, --host` | `WANDB_REMOTE_HOST` | `mn5` |
+| `-e, --entity` | `WANDB_ENTITY` | none — **warns**, see below |
+| `-p, --project` | `WANDB_PROJECT` | whatever the run recorded (`melt`) |
 | `-v, --venv` | `VENV_PATH` | none — uses the current environment |
 | `-t, --threshold` | `ACTIVE_THRESHOLD_MINUTES` | `10` |
 | `-n, --dry-run` | — | off |
 
-Export `WANDB_REMOTE_PATH` in your shell profile and the bare command works
-thereafter. `--dry-run` previews what would transfer and how each run would be
-classified, without uploading anything.
-
-A run whose `.wandb` file was touched in the last `--threshold` minutes counts
-as still training: it is appended to and left unmarked, so a later invocation
-picks up the rest. Finished runs get a `.synced` marker and are skipped from
-then on. That makes the script safe to run mid-training. Manually, the same
-thing is:
+Put the ones that never change in your shell profile and the command shortens
+to `utils/sync_wandb.sh`:
 
 ```bash
-# [artemis]
-rsync -avh mn5transfer:/gpfs/scratch/epor48/$USER/outputs/wandb/wandb/ \
-           /mnt/scratch-artemis/$USER/melt-data/outputs/wandb/wandb/
-wandb sync /mnt/scratch-artemis/$USER/melt-data/outputs/wandb/wandb/offline-run-*
+# [artemis] ~/.bashrc or ~/.zshrc
+export WANDB_REMOTE_PATH=/gpfs/scratch/epor48/<your-mn5-user>/outputs/wandb/wandb
+export WANDB_ENTITY=<the-shared-team>
 ```
 
-To push **one** run rather than every offline run sitting in that directory:
+#### It is safe to run mid-training
+
+A run whose `.wandb` file was touched within `--threshold` minutes (default 10)
+is treated as **still training**: it is uploaded with `--append` and left
+unmarked, so a later invocation picks up the rest of it. A run that has gone
+quiet is treated as **finished**: it is finalised and gets a `.synced` marker,
+and every later invocation skips it. So running it repeatedly during a long job
+is not just safe, it is the intended use — each pass tops up the live run and
+costs nothing for the ones already done.
+
+A typical summary looks like:
+
+```
+  - Skipped (already synced): 73
+  - Active runs synced: 1
+  - Finished runs synced: 6
+  - Failed: 0
+```
+
+#### Which W&B account do the runs land in?
+
+**This is the part to agree on as a group, because the default is per-person
+and silently splits the project's results across accounts.**
+
+The training code never sets an entity — it calls `wandb.init(project=...)`
+and nothing more. The entity is therefore decided at **sync time**, by whoever
+runs `sync_wandb.sh`: without `--entity`, runs go to the personal account that
+person happens to be logged in as, where nobody else can see them. The script
+prints a warning when that is about to happen.
+
+> **Current state:** there is no shared MELT team yet. Runs so far live under
+> the personal entity `g8a9`, in project `melt`. The decision for now is to
+> keep it that way.
+
+Be aware of what that costs, because it is the reason to revisit it:
+
+- A personal W&B entity has **no members**. A collaborator cannot sync into
+  `g8a9` unless that project is opened up for it (W&B project visibility —
+  check the project's settings), so by default *their* runs land under *their*
+  own account.
+- Results are then spread over several accounts and cannot be put on one chart,
+  which is the main thing a shared tracker is for.
+
+**When you want everyone's runs in one place**, the fix is a W&B *team*:
+create one, invite the collaborators, and have everyone set
+
+```bash
+export WANDB_ENTITY=<team>
+```
+
+Nothing in the code has to change — see the note on tracker portability below.
+Runs already uploaded elsewhere can be moved from the W&B UI.
+
+#### Tracker portability
+
+Nothing about the launcher is W&B-specific, so replacing it later (trackio,
+MLflow, …) does not mean editing the training code:
+
+- `train.py` only touches W&B inside an `if "wandb" in cfg.trainer.report_to`
+  branch, and passes no entity — each library reads its own environment.
+- `bash/run_train_singularity.sbatch` forwards tracker settings into the
+  container **by prefix** (`WANDB_`, `MLFLOW_`, `TRACKIO_`, `COMET_`,
+  `NEPTUNE_`, `TENSORBOARD_`), not by listing individual variable names. A new
+  setting for the current tracker needs no change; a new tracker needs only its
+  prefix added to that list.
+- `bash/run_train.sh` logs whichever of those are set at startup (with anything
+  that looks like a key or token filtered out), so the log answers "where did
+  this run go".
+
+Switching tracker is then: change `trainer.report_to`, and export that
+tracker's own variables. `sync_wandb.sh` is W&B-specific by nature — offline
+sync is a W&B concept — and would be replaced by whatever the new tracker uses.
+
+Manually, what the script does is:
+
+```bash
+# [artemis]  (MN5 user, not local user, in the remote path)
+rsync -avh mn5transfer:/gpfs/scratch/epor48/<your-mn5-user>/outputs/wandb/wandb/ \
+           /mnt/scratch-artemis/$USER/melt-data/outputs/wandb/wandb/
+wandb sync --entity <the-shared-team> \
+           /mnt/scratch-artemis/$USER/melt-data/outputs/wandb/wandb/offline-run-*
+```
+
+To push **one** run rather than every offline run sitting in that directory —
+useful when the directory holds many and you only want the live one:
 
 ```bash
 # [artemis]
 RUN=offline-run-<timestamp>-<id>
 rsync -ravh --append-verify --exclude='.synced' \
-  "mn5:/gpfs/scratch/epor48/$USER/outputs/wandb/wandb/$RUN/" \
+  "mn5:/gpfs/scratch/epor48/<your-mn5-user>/outputs/wandb/wandb/$RUN/" \
   "/mnt/scratch-artemis/$USER/melt-data/outputs/wandb/wandb/$RUN/"
-wandb sync ".../wandb/$RUN" --include-offline --append
+wandb sync ".../wandb/$RUN" --entity <the-shared-team> --include-offline --append
 ```
 
 Two harmless artefacts you will see: a `FileNotFoundError` uploading a stale

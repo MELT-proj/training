@@ -165,9 +165,24 @@ container_env MASTER_PORT "${MASTER_PORT}"
 
 # Forward optional host-set vars only when present. WANDB_PROJECT/WANDB_MODE
 # defaults are applied inside run_train.sh, so they are not duplicated here.
-for var in WANDB_PROJECT WANDB_MODE HF_HUB_OFFLINE GPU_MEM_MONITORING \
+for var in HF_HUB_OFFLINE GPU_MEM_MONITORING \
            MELT_DEBUG_CUT_IDS_DIR MELT_DEBUG_CUT_IDS_MAX_BATCHES MELT_DEBUG_CUT_IDS_EVERY; do
     [[ -n "${!var:-}" ]] && container_env "$var" "${!var}"
+done
+
+# Experiment-tracker settings are forwarded by PREFIX rather than by name.
+# Every tracker configures itself from its own env vars (WANDB_ENTITY,
+# MLFLOW_TRACKING_URI, ...), so matching the namespace means switching tracker
+# — or adding a setting to the current one — needs no change here and no
+# tracker-specific code in train.py. Add a prefix to the list to support one.
+#
+# WANDB_DIR is set above to a fixed container path and must not be overridden
+# from the host, where it would point outside the container.
+for prefix in WANDB_ MLFLOW_ TRACKIO_ COMET_ NEPTUNE_ TENSORBOARD_; do
+    while IFS='=' read -r var _; do
+        [[ "$var" == "WANDB_DIR" ]] && continue
+        [[ -n "${!var:-}" ]] && container_env "$var" "${!var}"
+    done < <(env | grep "^${prefix}" || true)
 done
 
 # Bind mounts (host:container[:mode]).

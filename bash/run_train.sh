@@ -127,11 +127,18 @@ log_master "[run_train] starting (context: $CONTEXT, nodes=$NUM_NODES, gpus/node
 log_master "[run_train] accelerate config: $ACCELERATE_CONFIG | grad_accum: $GRAD_ACC_STEPS | master: $MASTER_ADDR:$MASTER_PORT"
 if is_master_node; then
     echo "[run_train] environment:"
-    for v in VENV_PATH WANDB_PROJECT WANDB_MODE HF_HOME HF_HUB_OFFLINE LOCAL_DATASETS_DIR \
+    for v in VENV_PATH HF_HOME HF_HUB_OFFLINE LOCAL_DATASETS_DIR \
              TMPDIR ACCELERATE_LOG_LEVEL TRANSFORMERS_VERBOSITY TORCHDYNAMO_VERBOSE \
              TORCH_NCCL_ASYNC_ERROR_HANDLING HF_HUB_ENABLE_HF_TRANSFER; do
         echo "  $v=${!v:-}"
     done
+    # Whatever experiment tracker is configured, print its settings: they
+    # decide where the run ends up, which is the first thing you want from the
+    # log when a run does not appear where you expected.
+    echo "[run_train] experiment tracking:"
+    env | grep -E '^(WANDB_|MLFLOW_|TRACKIO_|COMET_|NEPTUNE_|TENSORBOARD_)' \
+        | grep -viE 'key|token|secret|password' | sort | sed 's/^/  /' \
+        || echo "  (none configured)"
     echo "[run_train] cached models under ${HF_HOME}/hub:"
     ls -1 "${HF_HOME}/hub" 2>/dev/null || echo "  (none cached yet)"
 

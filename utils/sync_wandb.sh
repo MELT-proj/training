@@ -18,6 +18,11 @@
 #   -l, --local-path PATH    $WANDB_LOCAL_PATH    where to mirror it locally.
 #                                                 default: /mnt/scratch-artemis/$USER/melt-data/outputs/wandb/wandb
 #   -H, --host HOST          $WANDB_REMOTE_HOST   ssh alias of the cluster. default: mn5
+#   -e, --entity NAME        $WANDB_ENTITY        W&B team the runs belong to. STRONGLY
+#                                                 RECOMMENDED: without it every run lands in
+#                                                 the personal account of whoever ran the sync,
+#                                                 where collaborators cannot see it.
+#   -p, --project NAME       $WANDB_PROJECT       W&B project. default: whatever the run recorded
 #   -v, --venv PATH          $VENV_PATH           virtualenv *activate script* to source.
 #                                                 default: none (use the current environment)
 #   -t, --threshold MINUTES  $ACTIVE_THRESHOLD_MINUTES
@@ -51,6 +56,8 @@ usage() { awk 'NR<3 {next} /^#/ {sub(/^# ?/, ""); print; next} {exit}' "$0"; }
 REMOTE_HOST="${WANDB_REMOTE_HOST:-${REMOTE_HOST:-mn5}}"
 REMOTE_PATH="${WANDB_REMOTE_PATH:-}"
 LOCAL_PATH="${WANDB_LOCAL_PATH:-/mnt/scratch-artemis/$USER/melt-data/outputs/wandb/wandb}"
+WANDB_ENTITY="${WANDB_ENTITY:-}"
+WANDB_PROJECT="${WANDB_PROJECT:-}"
 VENV_PATH="${VENV_PATH:-}"
 ACTIVE_THRESHOLD_MINUTES="${ACTIVE_THRESHOLD_MINUTES:-10}"
 DRY_RUN=0
@@ -60,6 +67,8 @@ while [[ $# -gt 0 ]]; do
         -r|--remote-path) REMOTE_PATH="${2:?--remote-path needs a value}"; shift 2 ;;
         -l|--local-path)  LOCAL_PATH="${2:?--local-path needs a value}";   shift 2 ;;
         -H|--host)        REMOTE_HOST="${2:?--host needs a value}";        shift 2 ;;
+        -e|--entity)      WANDB_ENTITY="${2:?--entity needs a value}";     shift 2 ;;
+        -p|--project)     WANDB_PROJECT="${2:?--project needs a value}";   shift 2 ;;
         -v|--venv)        VENV_PATH="${2:?--venv needs a value}";          shift 2 ;;
         -t|--threshold)   ACTIVE_THRESHOLD_MINUTES="${2:?--threshold needs a value}"; shift 2 ;;
         -n|--dry-run)     DRY_RUN=1; shift ;;
@@ -84,11 +93,32 @@ fi
 REMOTE_PATH="${REMOTE_PATH%/}"
 LOCAL_PATH="${LOCAL_PATH%/}"
 
+# Only pass -e/-p through when set, so an unset value leaves whatever the run
+# recorded at training time intact rather than overriding it with a guess.
+WANDB_TARGET=()
+[[ -n "$WANDB_ENTITY" ]]  && WANDB_TARGET+=(--entity "$WANDB_ENTITY")
+[[ -n "$WANDB_PROJECT" ]] && WANDB_TARGET+=(--project "$WANDB_PROJECT")
+
 echo "remote:    $REMOTE_HOST:$REMOTE_PATH"
 echo "local:     $LOCAL_PATH"
+echo "entity:    ${WANDB_ENTITY:-<personal account of whoever runs this>}"
+echo "project:   ${WANDB_PROJECT:-<as recorded in the run>}"
 echo "active if touched within: ${ACTIVE_THRESHOLD_MINUTES}m"
 [[ $DRY_RUN -eq 1 ]] && echo "mode:      DRY RUN (nothing will be written or uploaded)"
 echo
+
+if [[ -z "$WANDB_ENTITY" ]]; then
+    cat >&2 <<'WARN'
+WARNING: no --entity given.
+
+  These runs will be uploaded to the personal W&B account you are logged in as,
+  where the rest of the project cannot see them. Shared work belongs in the
+  shared team, so that everyone's runs sit in one place and are comparable.
+
+  Pass --entity <team>, or export WANDB_ENTITY=<team> in your shell profile.
+
+WARN
+fi
 
 ssh "$REMOTE_HOST" "[ -d '$REMOTE_PATH' ]" \
     || die "remote directory not found: $REMOTE_HOST:$REMOTE_PATH
@@ -173,7 +203,7 @@ for run_dir in "$LOCAL_PATH"/offline-run-*/; do
         else
             echo ">> Syncing ACTIVE run (appending): $run_name"
             # Don't let wandb sync failure stop the script
-            if wandb sync "$run_dir" --include-offline --append; then
+            if wandb sync "$run_dir" "${WANDB_TARGET[@]}" --include-offline --append; then
                 ((ACTIVE_SYNCED++)) || true
             else
                 echo "WARNING: Failed to sync $run_name"
@@ -187,7 +217,7 @@ for run_dir in "$LOCAL_PATH"/offline-run-*/; do
         else
             echo ">> Syncing FINISHED run (finalizing): $run_name"
             # Don't let wandb sync failure stop the script
-            if wandb sync "$run_dir" --include-offline --mark-synced; then
+            if wandb sync "$run_dir" "${WANDB_TARGET[@]}" --include-offline --mark-synced; then
                 # Create .synced marker file to prevent re-syncing
                 touch "$run_dir/.synced"
                 ((FINISHED_SYNCED++)) || true
