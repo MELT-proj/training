@@ -10,11 +10,14 @@ rather than instruction tuning. Decide deliberately which format each arm uses,
 and record the decision.
 
 **A boundary mismatch.** Label masking locates ``assistant_start`` /
-``assistant_end`` as literal strings, so a config that does not match the
-tokenizer trains on the wrong tokens without raising. Qwen 3 and 3.5 are the
-live trap: they open the assistant turn with an empty ``<think>`` block, and
-``enable_thinking=False`` does not remove it, so the plain ``chatml`` boundary
-leaves that block inside the trainable span.
+``assistant_end`` as literal strings. When they are absent — a Llama tokenizer
+under the ``chatml`` config — the span is never found and *every* token ends up
+masked, so the run trains on nothing without raising.
+
+Separately, note that Qwen 3 and 3.5 inject an empty ``<think>`` block after the
+assistant header, and ``enable_thinking=False`` does not remove it. Masking is
+inclusive of the boundaries, so that block is part of the training target no
+matter which config is chosen; it is reported here as a warning, not an error.
 
     python3 infra/check_chat_templates.py \\
         Qwen/Qwen3.5-2B-Base Qwen/Qwen3.5-2B utter-project/EuroLLM-1.7B

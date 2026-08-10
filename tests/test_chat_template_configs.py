@@ -39,13 +39,9 @@ class _FakeTokenizer:
 
 class TestRegisteredConfigs:
     def test_the_campaign_backbones_are_all_covered(self):
-        # Qwen 2.5 and EuroLLM are plain ChatML; Qwen 3/3.5 and Llama 3 are not.
-        assert {"chatml", "qwen3", "llama3"} <= set(CHAT_TEMPLATE_CONFIGS)
-
-    def test_qwen3_boundary_absorbs_the_empty_think_block(self):
-        cfg = get_chat_template_config("qwen3")
-
-        assert cfg.assistant_start.endswith("<think>\n\n</think>\n\n")
+        # Qwen 2.5, Qwen 3/3.5 and EuroLLM all render ChatML boundaries;
+        # Llama 3 does not.
+        assert {"chatml", "llama3"} <= set(CHAT_TEMPLATE_CONFIGS)
 
     def test_llama3_uses_header_boundaries_not_chatml(self):
         cfg = get_chat_template_config("llama3")
@@ -65,26 +61,22 @@ class TestValidation:
         with pytest.raises(ValueError, match="does not match this tokenizer"):
             validate_chat_template_config(tok, get_chat_template_config("chatml"), "chatml")
 
-    def test_text_between_boundary_and_content_raises(self):
-        # Qwen 3 under plain chatml: both boundaries are present, so a
-        # substring check passes, yet the think block would be trained on.
+    def test_injected_text_warns_but_does_not_raise(self, caplog):
+        # Qwen 3 under chatml. The think block does land inside the loss, but no
+        # boundary string can exclude it, so raising here would reject a config
+        # that behaves identically to every alternative.
         tok = _FakeTokenizer(
             "<|im_start|>user\n__melt_probe_user__<|im_end|>\n"
             "<|im_start|>assistant\n<think>\n\n</think>\n\n"
             "__melt_probe_assistant__<|im_end|>\n"
         )
 
-        with pytest.raises(ValueError, match="between the assistant boundary"):
-            validate_chat_template_config(tok, get_chat_template_config("chatml"), "chatml")
+        with caplog.at_level("WARNING"):
+            validate_chat_template_config(
+                tok, get_chat_template_config("chatml"), "chatml"
+            )
 
-    def test_matching_config_passes(self):
-        tok = _FakeTokenizer(
-            "<|im_start|>user\n__melt_probe_user__<|im_end|>\n"
-            "<|im_start|>assistant\n<think>\n\n</think>\n\n"
-            "__melt_probe_assistant__<|im_end|>\n"
-        )
-
-        validate_chat_template_config(tok, get_chat_template_config("qwen3"), "qwen3")
+        assert "think" in caplog.text
 
     def test_tokenizer_without_a_template_is_skipped(self):
         tok = _FakeTokenizer("irrelevant", chat_template=None)
@@ -96,11 +88,38 @@ class TestValidation:
 # the boundary strings themselves are right, so run against the cache when it is
 # populated and skip cleanly when it is not.
 REAL_CASES = [
-    ("Qwen/Qwen3.5-9B", "qwen3"),
+    ("Qwen/Qwen3.5-9B", "chatml"),
     ("Qwen/Qwen2.5-1.5B", "chatml"),
     ("utter-project/EuroLLM-9B-Instruct", "chatml"),
     ("meta-llama/Llama-3.1-8B-Instruct", "llama3"),
 ]
+
+
+def test_masking_is_inclusive_of_the_boundaries():
+    """Pin the semantics, because they are easy to describe wrongly.
+
+    `mask_non_assistant_tokens` keeps the boundary tokens themselves, so the
+    training target includes the assistant header — and, for Qwen 3, the empty
+    `<think>` block the template injects after it. No choice of boundary string
+    changes that: a longer `assistant_start` still begins the kept span at the
+    same index. Excluding the header would require changing the masking, not the
+    config, so this test exists to stop a future reader assuming otherwise.
+    """
+    torch = pytest.importorskip("torch")
+
+    from melt.training.data.audio.lhotse.helpers import mask_non_assistant_tokens
+
+    # start=[1,2], content=[3], end=[4]
+    labels = torch.tensor([[9, 1, 2, 3, 4, 9]])
+    masked = mask_non_assistant_tokens(labels.clone(), [1, 2], [4])
+
+    kept = [t for t in masked[0].tolist() if t != -100]
+
+    assert kept == [1, 2, 3, 4], (
+        "masking is expected to keep the boundaries inclusively; if this "
+        "changed, the chat-template configs and their documentation need "
+        "revisiting"
+    )
 
 
 @pytest.mark.parametrize("model_id,config_name", REAL_CASES)

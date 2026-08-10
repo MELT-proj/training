@@ -65,9 +65,6 @@ model:
 data:
   sample_rate: 16000
   apply_chat_template: true
-  # Qwen 3 opens the assistant turn with an empty <think> block; the plain
-  # chatml boundary would leave it inside the trainable span.
-  chat_template_config: qwen3
   min_chars: 3
 
   train_ds:

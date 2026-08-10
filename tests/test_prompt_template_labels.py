@@ -361,7 +361,6 @@ class TestPerTaskChatTemplateLabels:
 
         config = OmegaConf.create({
             "apply_chat_template": True,
-            "chat_template_config": "qwen3",
             "prompt_template_selection": "custom",
             "prompt_template": {
                 "asr": "{audio_token} Transcribe this {lang} audio.",
@@ -474,7 +473,6 @@ class TestPromptTemplateBackwardCompat:
 
         config = OmegaConf.create({
             "apply_chat_template": True,
-            "chat_template_config": "qwen3",
             "prompt_template_selection": "custom",
             "prompt_template": "{audio_token} Listen and transcribe in {lang}.",
             "sample_rate": 16000,
@@ -633,7 +631,6 @@ class TestTemplateSelectionStrategies:
 
         config = OmegaConf.create({
             "apply_chat_template": True,
-            "chat_template_config": "qwen3",
             "prompt_template_selection": selection,
             "sample_rate": 16000,
         })

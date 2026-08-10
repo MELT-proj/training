@@ -113,9 +113,9 @@ data:
   sample_rate: 16000
   apply_chat_template: false
   # Which assistant-span boundaries label masking looks for. Must match the
-  # decoder's tokenizer: `chatml` for Qwen 2.5 and EuroLLM, `qwen3` for Qwen 3
-  # and 3.5 (whose assistant turn opens with an empty <think> block), `llama3`
-  # for Llama 3.x. A mismatch is checked at startup and fails the run.
+  # decoder's tokenizer: `chatml` for Qwen (2.5, 3, 3.5) and EuroLLM, `llama3`
+  # for Llama 3.x, whose header format is not ChatML and would otherwise be
+  # unfindable — leaving every token masked. Checked at startup.
   chat_template_config: chatml
   min_chars: 3
   # When true, a configured `text_field` that resolves to nothing raises
