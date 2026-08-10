@@ -109,6 +109,16 @@ class TrainingEvaluator:
             # With no codes at all the single bucket just restates the overall
             # numbers, so skip it.
             if list(lang_to_preds) != ["unknown"]:
+                # Log the split's sizes, not just its scores: they are what you
+                # check against the manifest to know the breakdown is counting
+                # the samples you think it is.
+                logger.info(
+                    "Per-language eval samples: %s",
+                    ", ".join(
+                        f"{lang}={len(lang_to_preds[lang])}"
+                        for lang in sorted(lang_to_preds)
+                    ),
+                )
                 for lang in sorted(lang_to_preds):
                     lp = lang_to_preds[lang]
                     lr = lang_to_refs[lang]
