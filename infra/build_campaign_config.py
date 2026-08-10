@@ -21,8 +21,12 @@ Hours are **not** enforced by subsetting manifests. A Shar source pairs
 ``cuts.NNNNNN.jsonl`` positionally with ``recording.NNNNNN.tar``, so a filtered
 manifest no longer lines up with its audio, and rewriting the tars would mean
 copying audio the disk budget cannot hold. Hours are therefore enforced the way
-the trainer already works — sampling weights plus a step budget — and *verified*
-after the fact by the exposure audit, which reports realized hours per language.
+the trainer already works: sampling weights plus a step budget.
+
+For that to hold, the sources have to be measurable in the first place — the
+length filters read ``custom.num_tokens``, which many sources do not carry (see
+``infra/audit_num_tokens.py``). Audit the collection before relying on a mixture
+built here.
 
 Usage::
 
@@ -372,7 +376,8 @@ def main() -> int:
         "\nHours are enforced by weights plus a step budget, not by subsetting.\n"
         "Set trainer.max_steps so the run consumes the intended audio:\n"
         "  max_steps = total_hours * 3600 / (batch_duration * world_size * grad_accum)\n"
-        "and confirm the realized figure with the exposure audit afterwards."
+        "and check `infra/audit_num_tokens.py` first — the length filters are\n"
+        "inert on any source lacking custom.num_tokens."
     )
     return 0
 
