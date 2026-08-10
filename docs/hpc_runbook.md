@@ -685,15 +685,33 @@ re-warms its momentum — that is normal, not a broken restore.
 ## B5. Retrieve results
 
 **W&B metrics** — there's a helper that pulls offline runs to artemis and syncs
-them (edit the paths inside for your account):
+them. Point it at your own remote outputs; nothing is hardcoded:
 
 ```bash
 # [artemis]
-bash utils/sync_wandb.sh
+utils/sync_wandb.sh -r /gpfs/scratch/epor48/<your-mn5-user>/outputs/wandb/wandb
 ```
 
-It skips runs still being written to, so it's safe to run mid-training. Manually,
-the same thing is:
+Your MN5 username is usually not your local one — `ssh mn5 'echo $USER'`.
+
+| flag | env | default |
+|---|---|---|
+| `-r, --remote-path` | `WANDB_REMOTE_PATH` | **required** |
+| `-l, --local-path` | `WANDB_LOCAL_PATH` | `/mnt/scratch-artemis/$USER/melt-data/outputs/wandb/wandb` |
+| `-H, --host` | `WANDB_REMOTE_HOST` | `mn5` |
+| `-v, --venv` | `VENV_PATH` | none — uses the current environment |
+| `-t, --threshold` | `ACTIVE_THRESHOLD_MINUTES` | `10` |
+| `-n, --dry-run` | — | off |
+
+Export `WANDB_REMOTE_PATH` in your shell profile and the bare command works
+thereafter. `--dry-run` previews what would transfer and how each run would be
+classified, without uploading anything.
+
+A run whose `.wandb` file was touched in the last `--threshold` minutes counts
+as still training: it is appended to and left unmarked, so a later invocation
+picks up the rest. Finished runs get a `.synced` marker and are skipped from
+then on. That makes the script safe to run mid-training. Manually, the same
+thing is:
 
 ```bash
 # [artemis]
