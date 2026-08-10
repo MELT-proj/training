@@ -1208,6 +1208,96 @@ def _maybe_set_cuda_expandable_segments(enabled: bool = True) -> None:
         logger.debug("Could not enable CUDA expandable segments")
 
 
+# Keys declared at the ``data.`` level that decide the *sequence format* a batch
+# is tokenised into.  The training path is handed the whole ``data`` block and so
+# reads them; the eval path is handed ``data.validation_ds``, one level down, and
+# before this resolver saw their defaults instead — formatting eval as a bare
+# f"{audio_token}{text}" while training formatted a chat turn.  See issue #58.
+_EVAL_FORMAT_KEYS = (
+    "apply_chat_template",
+    "prompt_template",
+    "prompt_template_selection",
+    "chat_template_config",
+)
+
+
+def _config_has_key(config, key: str) -> bool:
+    """Whether ``config`` sets ``key``, as opposed to falling back to a default.
+
+    Distinct from :func:`_get_config_value`, which cannot tell an explicit value
+    from an absent one.  Inheritance has to know the difference: a
+    ``validation_ds`` that names a key is overriding the parent deliberately.
+    """
+    if config is None:
+        return False
+    if isinstance(config, (dict, DictConfig)):
+        return key in config
+    return hasattr(config, key)
+
+
+def _config_set(config, key: str, value) -> None:
+    """Assign ``key`` on a config of any of the shapes ``_get_config_value`` reads."""
+    if isinstance(config, DictConfig):
+        # Struct mode rejects plain assignment of an undeclared key.
+        OmegaConf.update(config, key, value, force_add=True)
+    elif isinstance(config, dict):
+        config[key] = value
+    else:
+        setattr(config, key, value)
+
+
+def resolve_eval_data_config(data_config: DictConfig):
+    """Return ``validation_ds`` with the parent's formatting keys inherited.
+
+    ``apply_chat_template`` and its companions are declared at ``data.``, which
+    the training path receives whole.  Eval is built from ``data.validation_ds``,
+    so it never saw them and silently used the defaults — a validation loss over
+    a different sequence format than the training loss, and not comparable to it
+    (issue #58).
+
+    Inheritance is one-directional and ``validation_ds`` wins: a key set there is
+    left alone, which keeps the documented workaround of setting these keys
+    inside ``validation_ds`` working exactly as before.
+
+    Args:
+        data_config: The whole ``data`` config block.
+
+    Returns:
+        The ``validation_ds`` config, copied and extended when anything was
+        inherited, or the original object when there was nothing to inherit.
+        ``None`` if ``data_config`` has no ``validation_ds``.
+    """
+    validation_ds = _get_config_value(data_config, "validation_ds")
+    if validation_ds is None:
+        return None
+
+    inherited = {
+        key: _get_config_value(data_config, key)
+        for key in _EVAL_FORMAT_KEYS
+        if _config_has_key(data_config, key)
+        and not _config_has_key(validation_ds, key)
+    }
+    if not inherited:
+        return validation_ds
+
+    resolved = copy.deepcopy(validation_ds)
+    for key, value in inherited.items():
+        _config_set(resolved, key, value)
+
+    logger.info(
+        "Eval formatting inherited from data.: %s",
+        ", ".join(f"{k}={v!r}" for k, v in inherited.items()),
+    )
+    if inherited.get("apply_chat_template"):
+        logger.warning(
+            "Eval now applies the chat template, matching training (issue #58). "
+            "Before this fix eval formatted text without it, so eval_loss here "
+            "is not comparable to eval_loss from earlier runs of this config. "
+            "Set apply_chat_template inside validation_ds to pin the old behaviour."
+        )
+    return resolved
+
+
 def split_eval_config_by_name(config: DictConfig) -> dict[str, DictConfig] | None:
     """Split a ``validation_ds`` config into one sub-config per named eval set.
 
@@ -1402,7 +1492,7 @@ def create_eval_dataloader(
     from .collator import MELTDataCollator
     from .map_dataset import MELTMapDataset
 
-    validation_ds = _get_config_value(data_config, "validation_ds")
+    validation_ds = resolve_eval_data_config(data_config)
 
     # 1. Materialize cuts
     cuts = materialize_cuts_for_eval(validation_ds)

@@ -702,6 +702,181 @@ class TestNamedEvalSets:
             split_eval_config_by_name(cfg)
 
 
+class TestEvalFormatInheritance:
+    """Eval must score the sequence format training produced.
+
+    `apply_chat_template` and its companions are declared at `data.`, which the
+    training path receives whole. Eval is built from `data.validation_ds`, one
+    level down, so it read their defaults instead — training formatted a chat
+    turn and masked everything outside the assistant span, while eval formatted
+    a bare `{audio_token}{text}`. The two losses were computed over different
+    formats and were never comparable. See issue #58.
+    """
+
+    @staticmethod
+    def _data(parent: dict, validation: dict | None = None):
+        from omegaconf import OmegaConf
+
+        return OmegaConf.create(
+            {**parent, "validation_ds": {"input_cfg": [], **(validation or {})}}
+        )
+
+    def test_apply_chat_template_is_inherited(self):
+        from melt.training.data.audio.lhotse.dataloader import (
+            resolve_eval_data_config,
+        )
+
+        resolved = resolve_eval_data_config(self._data({"apply_chat_template": True}))
+
+        assert resolved.apply_chat_template is True
+
+    def test_all_formatting_keys_are_inherited(self):
+        from melt.training.data.audio.lhotse.dataloader import (
+            resolve_eval_data_config,
+        )
+
+        resolved = resolve_eval_data_config(
+            self._data(
+                {
+                    "apply_chat_template": True,
+                    "prompt_template": "{audio_token}{t}",
+                    "prompt_template_selection": "with_language",
+                    "chat_template_config": "chatml",
+                }
+            )
+        )
+
+        assert resolved.prompt_template == "{audio_token}{t}"
+        assert resolved.prompt_template_selection == "with_language"
+        assert resolved.chat_template_config == "chatml"
+
+    def test_validation_ds_overrides_the_parent(self):
+        """The documented workaround must keep working, or configs relying on it move."""
+        from melt.training.data.audio.lhotse.dataloader import (
+            resolve_eval_data_config,
+        )
+
+        resolved = resolve_eval_data_config(
+            self._data(
+                {"apply_chat_template": True, "prompt_template_selection": "random"},
+                {"apply_chat_template": False, "prompt_template_selection": "custom"},
+            )
+        )
+
+        assert resolved.apply_chat_template is False
+        assert resolved.prompt_template_selection == "custom"
+
+    def test_a_false_parent_is_still_inherited_rather_than_defaulted(self):
+        """`False` is a value, not an absence — inheriting it must not be skipped."""
+        from melt.training.data.audio.lhotse.dataloader import (
+            resolve_eval_data_config,
+        )
+
+        resolved = resolve_eval_data_config(self._data({"apply_chat_template": False}))
+
+        assert resolved.apply_chat_template is False
+
+    def test_nothing_declared_leaves_the_config_untouched(self):
+        from melt.training.data.audio.lhotse.dataloader import (
+            resolve_eval_data_config,
+        )
+
+        data = self._data({})
+        assert resolve_eval_data_config(data) is data.validation_ds
+
+    def test_the_original_config_is_not_mutated(self):
+        from melt.training.data.audio.lhotse.dataloader import (
+            resolve_eval_data_config,
+        )
+
+        data = self._data({"apply_chat_template": True})
+        resolve_eval_data_config(data)
+
+        assert "apply_chat_template" not in data.validation_ds
+
+    def test_missing_validation_ds_is_not_an_error(self):
+        from omegaconf import OmegaConf
+
+        from melt.training.data.audio.lhotse.dataloader import (
+            resolve_eval_data_config,
+        )
+
+        assert resolve_eval_data_config(OmegaConf.create({})) is None
+
+    def test_resolved_config_drives_the_eval_collator(self):
+        """The wiring, not just the dict: the collator must come out chat-formatting."""
+        from melt.training.data.audio.lhotse.collator import MELTDataCollator
+        from melt.training.data.audio.lhotse.dataloader import (
+            resolve_eval_data_config,
+        )
+
+        class _FakeTokenizer:
+            def encode(self, text, add_special_tokens=False):
+                return [1, 2, 3]
+
+        class _FakeProcessor:
+            tokenizer = _FakeTokenizer()
+            audio_token = "<|audio|>"
+
+        resolved = resolve_eval_data_config(
+            self._data(
+                {
+                    "apply_chat_template": True,
+                    "prompt_template_selection": "with_language",
+                }
+            )
+        )
+        collator = MELTDataCollator(
+            processor=_FakeProcessor(), config=resolved, is_train=False
+        )
+
+        assert collator.apply_chat_template is True
+        assert collator.prompt_template_selection == "with_language"
+
+
+class TestEvalTextFieldResolution:
+    """`text_field` set on validation_ds must reach the eval dataset.
+
+    `MELTMapDataset` looked the key up one level down (`config.validation_ds
+    .text_field`) while every caller already hands it the ds-level config, so
+    the lookup always missed and eval silently read plain `text`. Invisible in
+    the shipped configs, which all set `text_field: text` anyway, but it would
+    make eval score the wrong field the moment one of them didn't.
+    """
+
+    def test_ds_level_text_field_is_read(self):
+        from omegaconf import OmegaConf
+
+        from melt.training.data.audio.lhotse.map_dataset import MELTMapDataset
+
+        cfg = OmegaConf.create({"input_cfg": [], "text_field": "custom.pnc_text"})
+        ds = MELTMapDataset(cuts=[], processor=None, config=cfg, is_train=False)
+
+        assert ds._text_field == "custom.pnc_text"
+
+    def test_whole_data_block_still_resolves_through_the_nested_key(self):
+        from omegaconf import OmegaConf
+
+        from melt.training.data.audio.lhotse.map_dataset import MELTMapDataset
+
+        cfg = OmegaConf.create(
+            {"validation_ds": {"text_field": "custom.metadata.sentence"}}
+        )
+        ds = MELTMapDataset(cuts=[], processor=None, config=cfg, is_train=False)
+
+        assert ds._text_field == "custom.metadata.sentence"
+
+    def test_absent_text_field_still_defaults_to_text(self):
+        from omegaconf import OmegaConf
+
+        from melt.training.data.audio.lhotse.map_dataset import MELTMapDataset
+
+        cfg = OmegaConf.create({"input_cfg": []})
+        ds = MELTMapDataset(cuts=[], processor=None, config=cfg, is_train=False)
+
+        assert ds._text_field == "text"
+
+
 class TestSharManifestDiscovery:
     """Manifests must be found in either Shar layout.
 
