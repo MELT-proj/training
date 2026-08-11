@@ -48,6 +48,7 @@ model:
 data:
   sample_rate: 16000
   apply_chat_template: true
+  strict_text_field: true
 
   train_ds:
     # Data sources - list of datasets to load
