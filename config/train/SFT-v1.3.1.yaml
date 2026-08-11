@@ -10,7 +10,7 @@
 # Run Configuration (non-TrainingArguments settings)
 # =============================================================================
 run:
-  exp_name: SFT-v1.3.0
+  exp_name: SFT-v1.3.1
   dry_run: false
 
 # =============================================================================
@@ -165,10 +165,11 @@ data:
             weight: 1.00000000
             tags:
               task: st
-              src_lang: en
-              tgt_lang: es
-              src_region_code: en
-              tgt_region_code: es
+              src_lang: es
+              tgt_lang: en
+              src_region_code: es
+              tgt_region_code: en
+              text_field: custom.translation_en
       # en-ru: 18,394.2 h across 1 corpora
       - type: group
         weight: 0.07627121
@@ -182,10 +183,11 @@ data:
             weight: 1.00000000
             tags:
               task: st
-              src_lang: en
-              tgt_lang: ru
-              src_region_code: en
-              tgt_region_code: ru
+              src_lang: ru
+              tgt_lang: en
+              src_region_code: ru
+              tgt_region_code: en
+              text_field: custom.translation_en
       # en-fr: 11,511.7 h across 1 corpora
       - type: group
         weight: 0.06033797
@@ -199,10 +201,11 @@ data:
             weight: 1.00000000
             tags:
               task: st
-              src_lang: en
-              tgt_lang: fr
-              src_region_code: en
-              tgt_region_code: fr
+              src_lang: fr
+              tgt_lang: en
+              src_region_code: fr
+              tgt_region_code: en
+              text_field: custom.translation_en
       # en-de: 7,859.0 h across 2 corpora
       - type: group
         weight: 0.04985442
@@ -216,10 +219,11 @@ data:
             weight: 0.80609993
             tags:
               task: st
-              src_lang: en
-              tgt_lang: de
-              src_region_code: en
-              tgt_region_code: de
+              src_lang: de
+              tgt_lang: en
+              src_region_code: de
+              tgt_region_code: en
+              text_field: custom.translation_en
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_de/train
             weight: 0.19390007
@@ -242,10 +246,11 @@ data:
             weight: 1.00000000
             tags:
               task: st
-              src_lang: en
-              tgt_lang: it
-              src_region_code: en
-              tgt_region_code: it
+              src_lang: it
+              tgt_lang: en
+              src_region_code: it
+              tgt_region_code: en
+              text_field: custom.translation_en
       # de: 3,708.0 h across 5 corpora
       - type: group
         weight: 0.03424461
@@ -408,10 +413,11 @@ data:
             weight: 1.00000000
             tags:
               task: st
-              src_lang: en
-              tgt_lang: pt
-              src_region_code: en
-              tgt_region_code: pt
+              src_lang: pt
+              tgt_lang: en
+              src_region_code: pt
+              tgt_region_code: en
+              text_field: custom.translation_en
       # nl: 1,592.0 h across 2 corpora
       - type: group
         weight: 0.02243836
@@ -447,10 +453,11 @@ data:
             weight: 1.00000000
             tags:
               task: st
-              src_lang: en
-              tgt_lang: nl
-              src_region_code: en
-              tgt_region_code: nl
+              src_lang: nl
+              tgt_lang: en
+              src_region_code: nl
+              tgt_region_code: en
+              text_field: custom.translation_en
       # it: 709.3 h across 5 corpora
       - type: group
         weight: 0.01497767
@@ -509,10 +516,11 @@ data:
             weight: 1.00000000
             tags:
               task: st
-              src_lang: en
-              tgt_lang: pl
-              src_region_code: en
-              tgt_region_code: pl
+              src_lang: pl
+              tgt_lang: en
+              src_region_code: pl
+              tgt_region_code: en
+              text_field: custom.translation_en
       # en-uk: 596.1 h across 1 corpora
       - type: group
         weight: 0.01373010
@@ -526,10 +534,11 @@ data:
             weight: 1.00000000
             tags:
               task: st
-              src_lang: en
-              tgt_lang: uk
-              src_region_code: en
-              tgt_region_code: uk
+              src_lang: uk
+              tgt_lang: en
+              src_region_code: uk
+              tgt_region_code: en
+              text_field: custom.translation_en
       # en-sv: 520.6 h across 2 corpora
       - type: group
         weight: 0.01283077
@@ -552,10 +561,11 @@ data:
             weight: 0.31504210
             tags:
               task: st
-              src_lang: en
-              tgt_lang: sv
-              src_region_code: en
-              tgt_region_code: sv
+              src_lang: sv
+              tgt_lang: en
+              src_region_code: sv
+              tgt_region_code: en
+              text_field: custom.translation_en
       # pt: 459.6 h across 4 corpora
       - type: group
         weight: 0.01205653
@@ -616,10 +626,11 @@ data:
             weight: 0.11915465
             tags:
               task: st
-              src_lang: en
-              tgt_lang: et
-              src_region_code: en
-              tgt_region_code: et
+              src_lang: et
+              tgt_lang: en
+              src_region_code: et
+              tgt_region_code: en
+              text_field: custom.translation_en
       # en-lv: 430.7 h across 2 corpora
       - type: group
         weight: 0.01167064
@@ -642,10 +653,11 @@ data:
             weight: 0.03533886
             tags:
               task: st
-              src_lang: en
-              tgt_lang: lv
-              src_region_code: en
-              tgt_region_code: lv
+              src_lang: lv
+              tgt_lang: en
+              src_region_code: lv
+              tgt_region_code: en
+              text_field: custom.translation_en
       # en-sl: 430.1 h across 1 corpora
       - type: group
         weight: 0.01166298
@@ -812,10 +824,11 @@ data:
             weight: 1.00000000
             tags:
               task: st
-              src_lang: en
-              tgt_lang: fi
-              src_region_code: en
-              tgt_region_code: fi
+              src_lang: fi
+              tgt_lang: en
+              src_region_code: fi
+              tgt_region_code: en
+              text_field: custom.translation_en
       # en-hu: 145.3 h across 1 corpora
       - type: group
         weight: 0.00677940
@@ -829,10 +842,11 @@ data:
             weight: 1.00000000
             tags:
               task: st
-              src_lang: en
-              tgt_lang: hu
-              src_region_code: en
-              tgt_region_code: hu
+              src_lang: hu
+              tgt_lang: en
+              src_region_code: hu
+              tgt_region_code: en
+              text_field: custom.translation_en
       # ca-en: 135.8 h across 1 corpora
       - type: group
         weight: 0.00655275
@@ -902,10 +916,11 @@ data:
             weight: 1.00000000
             tags:
               task: st
-              src_lang: en
-              tgt_lang: cs
-              src_region_code: en
-              tgt_region_code: cs
+              src_lang: cs
+              tgt_lang: en
+              src_region_code: cs
+              tgt_region_code: en
+              text_field: custom.translation_en
       # zh: 58.7 h across 3 corpora
       - type: group
         weight: 0.00430924
@@ -989,10 +1004,11 @@ data:
             weight: 1.00000000
             tags:
               task: st
-              src_lang: en
-              tgt_lang: ro
-              src_region_code: en
-              tgt_region_code: ro
+              src_lang: ro
+              tgt_lang: en
+              src_region_code: ro
+              tgt_region_code: en
+              text_field: custom.translation_en
       # ja: 20.0 h across 1 corpora
       - type: group
         weight: 0.00251457
@@ -1038,10 +1054,11 @@ data:
             weight: 1.00000000
             tags:
               task: st
-              src_lang: en
-              tgt_lang: bg
-              src_region_code: en
-              tgt_region_code: bg
+              src_lang: bg
+              tgt_lang: en
+              src_region_code: bg
+              tgt_region_code: en
+              text_field: custom.translation_en
       # en-da: 16.7 h across 1 corpora
       - type: group
         weight: 0.00229683
@@ -1055,10 +1072,11 @@ data:
             weight: 1.00000000
             tags:
               task: st
-              src_lang: en
-              tgt_lang: da
-              src_region_code: en
-              tgt_region_code: da
+              src_lang: da
+              tgt_lang: en
+              src_region_code: da
+              tgt_region_code: en
+              text_field: custom.translation_en
       # en-el: 13.8 h across 1 corpora
       - type: group
         weight: 0.00208668
@@ -1072,10 +1090,11 @@ data:
             weight: 1.00000000
             tags:
               task: st
-              src_lang: en
-              tgt_lang: el
-              src_region_code: en
-              tgt_region_code: el
+              src_lang: el
+              tgt_lang: en
+              src_region_code: el
+              tgt_region_code: en
+              text_field: custom.translation_en
       # zh-en: 10.5 h across 1 corpora
       - type: group
         weight: 0.00181847
@@ -1137,10 +1156,11 @@ data:
             weight: 1.00000000
             tags:
               task: st
-              src_lang: en
-              tgt_lang: hr
-              src_region_code: en
-              tgt_region_code: hr
+              src_lang: hr
+              tgt_lang: en
+              src_region_code: hr
+              tgt_region_code: en
+              text_field: custom.translation_en
       # en-sk: 8.9 h across 1 corpora
       - type: group
         weight: 0.00167578
@@ -1154,10 +1174,11 @@ data:
             weight: 1.00000000
             tags:
               task: st
-              src_lang: en
-              tgt_lang: sk
-              src_region_code: en
-              tgt_region_code: sk
+              src_lang: sk
+              tgt_lang: en
+              src_region_code: sk
+              tgt_region_code: en
+              text_field: custom.translation_en
       # hu: 8.5 h across 1 corpora
       - type: group
         weight: 0.00163836
@@ -1216,10 +1237,11 @@ data:
             weight: 1.00000000
             tags:
               task: st
-              src_lang: en
-              tgt_lang: lt
-              src_region_code: en
-              tgt_region_code: lt
+              src_lang: lt
+              tgt_lang: en
+              src_region_code: lt
+              tgt_region_code: en
+              text_field: custom.translation_en
       # tr-en: 3.8 h across 1 corpora
       - type: group
         weight: 0.00109821

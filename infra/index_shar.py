@@ -47,7 +47,7 @@ Cost, measured on artemis against scratch-nyx:
     sequential `dd`, and not CPU utilisation.
 
 Usage:
-    python infra/index_shar.py --config config/train/SFT-v1.3.0.yaml --jobs 8
+    python infra/index_shar.py --config config/train/SFT-v1.3.1.yaml --jobs 8
     python infra/index_shar.py --root /path/to/shar --dry-run
 """
 

@@ -43,8 +43,8 @@ python3 infra/compute_mix_weights.py \
     --config       config/train/SFT-v1.2.7.yaml \
     --datasets-root /mnt/scratch-nyx/giuseppe/melt/melt-data/shar \
     --cache        hours.json \
-    --emit-config  config/train/SFT-v1.3.0.yaml \
-    --exp-name     SFT-v1.3.0
+    --emit-config  config/train/SFT-v1.3.1.yaml \
+    --exp-name     SFT-v1.3.1
 ```
 
 `--config` is both the source of truth for which datasets are in the mix *and*
@@ -175,7 +175,7 @@ Two constraints the loader enforces:
 
 ```python
 import yaml
-d = yaml.safe_load(open("config/train/SFT-v1.3.0.yaml"))
+d = yaml.safe_load(open("config/train/SFT-v1.3.1.yaml"))
 ic = d["data"]["train_ds"]["input_cfg"]
 assert abs(sum(g["weight"] for g in ic) - 1) < 1e-6
 for g in ic:

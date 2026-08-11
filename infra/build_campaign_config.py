@@ -24,9 +24,9 @@ copying audio the disk budget cannot hold. Hours are therefore enforced the way
 the trainer already works: sampling weights plus a step budget.
 
 For that to hold, the sources have to be measurable in the first place — the
-length filters read ``custom.num_tokens``, which many sources do not carry (see
-``infra/audit_num_tokens.py``). Audit the collection before relying on a mixture
-built here.
+length filters read ``custom.num_tokens``, which many sources do not carry.
+Check the collection with ``verification/check_shar_content.py`` in the
+MELT-proj/preprocessing repo before relying on a mixture built here.
 
 Usage::
 
@@ -376,8 +376,8 @@ def main() -> int:
         "\nHours are enforced by weights plus a step budget, not by subsetting.\n"
         "Set trainer.max_steps so the run consumes the intended audio:\n"
         "  max_steps = total_hours * 3600 / (batch_duration * world_size * grad_accum)\n"
-        "and check `infra/audit_num_tokens.py` first — the length filters are\n"
-        "inert on any source lacking custom.num_tokens."
+        "and run preprocessing's `verification/check_shar_content.py` first —\n"
+        "the length filters are inert on any source lacking custom.num_tokens."
     )
     return 0
 
