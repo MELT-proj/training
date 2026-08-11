@@ -114,8 +114,26 @@ ASR_SOURCES: dict[str, dict[str, str]] = {
     },
 }
 
-# CommonVoice keeps its transcript outside the supervision.
-TEXT_FIELD_OVERRIDES = {"cv22_sidon": "custom.metadata.sentence"}
+# Where a corpus keeps the text the campaign should train on.
+#
+# The mix has to be consistent in *casing and punctuation* as well as in hours,
+# so every corpus trains on cased, punctuated text. YODAS Granary and CoVoST2
+# already carry that in the supervision, and CommonVoice carries it outside the
+# supervision (which is empty). MLS and FLEURS keep a lowercase, unpunctuated
+# supervision and hold the restored text in ``custom.pnc_text``.
+#
+# This also settles what ``custom.num_tokens`` means: it is the Qwen3-1.7B count
+# of whichever field is named here, so ``max_tokens``/``max_tps`` filter on the
+# same string the model is trained on. On MLS the two differ by 10.7%.
+#
+# NOTE: ``mls_sidon`` de/fr/es/it have no ``pnc_text`` until the PNC backfill
+# runs. With ``data.strict_text_field`` this fails loudly at startup rather than
+# silently falling back to the supervision — which is the point.
+TEXT_FIELD_OVERRIDES = {
+    "cv22_sidon": "custom.metadata.sentence",
+    "mls_sidon": "custom.pnc_text",
+    "fleurs": "custom.pnc_text",
+}
 
 # Speech translation. Genuine en->X barely exists in this collection (CoVoST2
 # en_de at 430 h is the only direction among the training languages), whereas
