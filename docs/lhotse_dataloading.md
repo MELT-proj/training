@@ -236,7 +236,7 @@ Two consequences worth knowing:
   only runs inside a DataLoader worker subprocess. At `num_workers: 0` the partition
   collapses and every rank reads everything; the loader raises rather than allow it.
 
-To convert a collection, see `infra/index_shar.py`. The `.gz` manifests are replaced by
+To convert a collection, see `data-utils/index_shar.py` in MELT-proj/preprocessing. The `.gz` manifests are replaced by
 plain `.jsonl` permanently — the index stores byte offsets into them — so the migration
 is not reversible by re-compressing.
 

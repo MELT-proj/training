@@ -949,7 +949,7 @@ back to.
 
 Existing configs to copy from: `MA-VP-only-v1.0.yaml` (4 VoxPopuli languages),
 `MA-VP3-v1.0.yaml` (3 languages, indexed tree), `MA-v1.2.yaml`,
-`SFT-v1.3.0.yaml`.
+`SFT-v1.3.1.yaml`.
 
 ### What the knobs do
 
