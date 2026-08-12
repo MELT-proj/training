@@ -396,8 +396,8 @@ def indexed_synthetic_shar(tmp_path_factory) -> str:
 
     `to_shar` writes gzipped cut manifests, and the indexer skips those outright
     because an .idx is a table of byte offsets into a plain file. So this does
-    what infra/index_shar.py does to a real source: gunzip the manifests, then
-    write the sidecars.
+    what MELT-proj/preprocessing's `data-utils/index_shar.py` does to a real
+    source: gunzip the manifests, then write the sidecars.
     """
     import gzip
     import shutil
