@@ -886,11 +886,14 @@ class _StubSupervision:
 class _StubCut:
     """Minimal stand-in for a Cut, exercising only the text-resolution path."""
 
-    def __init__(self, cut_id="c0", text="hola mundo", custom=None, duration=1.0):
+    def __init__(self, cut_id="c0", text="hola mundo", custom=None, duration=1.0, tags=None):
         self.id = cut_id
         self.supervisions = [_StubSupervision(text)] if text is not None else []
         self.custom = custom or {}
         self.duration = duration
+        # Real cuts carry per-cut tags on the `tags` attribute (set by
+        # `_add_tags_to_cut`), not nested under `custom["tags"]`.
+        self.tags = tags or {}
 
 
 class TestStrictTextField:
@@ -962,10 +965,8 @@ class TestEvalValidityScanHonoursPerCutOverride:
         # `text` and discovering the problem only at fetch time.
         cut = _StubCut(
             text="hola mundo",
-            custom={
-                "translation_en": None,
-                "tags": {"text_field": "custom.translation_en"},
-            },
+            custom={"translation_en": None},
+            tags={"text_field": "custom.translation_en"},
         )
         cfg = OmegaConf.create(
             {"input_cfg": [], "text_field": "text", "strict_text_field": True}
@@ -979,10 +980,8 @@ class TestEvalValidityScanHonoursPerCutOverride:
 
         cut = _StubCut(
             text="hola mundo",
-            custom={
-                "translation_en": "hello world",
-                "tags": {"text_field": "custom.translation_en"},
-            },
+            custom={"translation_en": "hello world"},
+            tags={"text_field": "custom.translation_en"},
         )
         cfg = OmegaConf.create({"input_cfg": [], "text_field": "text"})
 
@@ -990,6 +989,72 @@ class TestEvalValidityScanHonoursPerCutOverride:
 
         assert len(ds) == 1
         assert ds._resolve_text_field(cut) == "custom.translation_en"
+
+
+class TestTagWriteReadRoundTrip:
+    """The tag writer and the tag readers must agree on where tags live.
+
+    `_add_tags_to_cut` (the writer, run over every `input_cfg` source/group)
+    puts per-cut tags on the `cut.tags` attribute. `MELTMapDataset
+    ._resolve_text_field`, `SpeechToTextDataset._get_text`, and
+    `SpeechTextQEDataset._get_score` used to look for a nested
+    `cut.custom["tags"]` dict instead, which the writer never created --
+    so a `tags.text_field`/`tags.target_field` override silently never
+    applied and fell back to the ds-level default. For a source with no
+    real supervision text (e.g. CommonVoice via cv22_sidon, whose transcript
+    lives only at `custom.metadata.sentence`) that fallback resolves to
+    nothing and the cut is dropped as empty -- exactly the symptom that
+    exposed this. `get_tags_from_cut` and the `dataset_id` lookup already
+    read the correct `cut.tags` attribute, which is why task/lang tagging
+    looked fine while text_field silently didn't apply. These tests exercise
+    the writer and each reader together, rather than a reader against a
+    hand-built cut shape that only matched the reader's (wrong) expectation.
+    """
+
+    def test_written_text_field_tag_resolves_in_map_dataset(self):
+        from melt.training.data.audio.lhotse.dataloader import _add_tags_to_cut
+        from melt.training.data.audio.lhotse.map_dataset import MELTMapDataset
+
+        cut = _StubCut(text=None, custom={"metadata": {"sentence": "bonjour le monde"}})
+        _add_tags_to_cut(
+            cut, {"task": "asr", "lang": "fr", "text_field": "custom.metadata.sentence"}
+        )
+
+        cfg = OmegaConf.create({"input_cfg": [], "text_field": "text"})
+        ds = MELTMapDataset(cuts=[cut], processor=None, config=cfg, is_train=False)
+
+        assert ds._resolve_text_field(cut) == "custom.metadata.sentence"
+        # Under the old bug this cut has no supervision text and no working
+        # override, so the validity scan drops it and len(ds) == 0.
+        assert len(ds) == 1
+
+    def test_written_text_field_tag_resolves_in_speech_to_text_dataset(self):
+        from melt.training.data.audio.lhotse.dataloader import _add_tags_to_cut
+        from melt.training.data.audio.lhotse.dataset import SpeechToTextDataset
+
+        cut = _StubCut(text=None, custom={"metadata": {"sentence": "bonjour le monde"}})
+        _add_tags_to_cut(
+            cut, {"task": "asr", "lang": "fr", "text_field": "custom.metadata.sentence"}
+        )
+
+        cfg = OmegaConf.create({"train_ds": {"text_field": "text"}})
+        ds = SpeechToTextDataset(processor=None, config=cfg, is_train=True)
+
+        assert ds._get_text(cut) == "bonjour le monde"
+
+    def test_written_target_field_tag_resolves_in_qe_dataset(self):
+        from melt.training.data.audio.lhotse.dataloader import _add_tags_to_cut
+        from melt.training.data.audio.lhotse.dataset import SpeechTextQEDataset
+
+        cut = _StubCut(custom={"score": 84.0})
+        _add_tags_to_cut(
+            cut, {"task": "speechqe", "target_field": "custom.score", "normalize_factor": 100.0}
+        )
+
+        cfg = OmegaConf.create({"train_ds": {}})
+        ds = SpeechTextQEDataset(processor=None, config=cfg, is_train=True)
+
+        assert ds._get_score(cut) == pytest.approx(0.84)
 
 
 class TestSharManifestDiscovery:
