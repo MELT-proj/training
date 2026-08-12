@@ -337,6 +337,58 @@ class TestNestedGroups:
         assert first.custom.get("task") == "asr"
         assert first.custom.get("region_code") == "de_de"
         assert first.custom.get("lang") == "de"
+        # Same, on the `cut.tags` attribute -- this is what get_tags_from_cut
+        # and the text_field/target_field readers actually consume, and
+        # `_add_tags_to_cut` used to replace it outright on the group's pass
+        # (`cut.tags = tags`) rather than merge, silently dropping every
+        # child-only key even though `cut.custom` merged correctly.
+        assert first.tags.get("task") == "asr"
+        assert first.tags.get("region_code") == "de_de"
+        assert first.tags.get("lang") == "de"
+
+    def test_group_tags_do_not_clobber_a_child_only_text_field(self, synthetic_shar):
+        """A group wrapping a source with its own `tags.text_field` (e.g. a
+        two-tier language/corpus mix with a per-corpus text_field override,
+        as used for `cv22_sidon`) must not lose that override to the group's
+        own tagging pass.
+        """
+        from melt.training.data.audio.lhotse.dataloader import read_cutset_from_config
+        from melt.training.data.audio.lhotse.map_dataset import MELTMapDataset
+
+        config = OmegaConf.create(
+            {
+                "input_cfg": [
+                    {
+                        "type": "group",
+                        "weight": 1.0,
+                        "tags": {"task": "asr", "lang": "en"},
+                        "input_cfg": [
+                            {
+                                "type": "lhotse_shar",
+                                "shar_path": synthetic_shar["a"],
+                                "weight": 1.0,
+                                "tags": {
+                                    "task": "asr",
+                                    "lang": "en",
+                                    "text_field": "custom.metadata.sentence",
+                                },
+                            }
+                        ],
+                    }
+                ],
+                "shuffle": False,
+                "seed": 42,
+                "shard_seed": 0,
+            }
+        )
+
+        cuts, _ = read_cutset_from_config(config, repeat=False)
+        first = next(iter(cuts))
+        assert first.tags.get("text_field") == "custom.metadata.sentence"
+
+        ds_cfg = OmegaConf.create({"input_cfg": [], "text_field": "text"})
+        ds = MELTMapDataset(cuts=[first], processor=None, config=ds_cfg, is_train=False)
+        assert ds._resolve_text_field(first) == "custom.metadata.sentence"
 
     def test_flat_config_still_loads(self, synthetic_shar):
         """A config with no groups must behave exactly as before."""
