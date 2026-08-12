@@ -250,26 +250,31 @@ data:
         tags:
           task: asr
           lang: de
+          text_field: custom.pnc_text
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/en/train
         tags:
           task: asr
           lang: en
+          text_field: custom.pnc_text
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/es/train
         tags:
           task: asr
           lang: es
+          text_field: custom.pnc_text
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/fr/train
         tags:
           task: asr
           lang: fr
+          text_field: custom.pnc_text
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/it/train
         tags:
           task: asr
           lang: it
+          text_field: custom.pnc_text
 
       # YODAS-Granary
       - type: lhotse_shar

@@ -126,13 +126,15 @@ ASR_SOURCES: dict[str, dict[str, str]] = {
 # of whichever field is named here, so ``max_tokens``/``max_tps`` filter on the
 # same string the model is trained on. On MLS the two differ by 10.7%.
 #
-# NOTE: ``mls_sidon`` de/fr/es/it have no ``pnc_text`` until the PNC backfill
-# runs. With ``data.strict_text_field`` this fails loudly at startup rather than
-# silently falling back to the supervision — which is the point.
+# With ``data.strict_text_field`` a source lacking the named field fails
+# loudly at startup rather than silently falling back to the supervision —
+# which is the point. See docs/pnc_coverage.md for exactly which sources have
+# ``pnc_text`` today; do not add a corpus here ahead of its backfill landing.
 TEXT_FIELD_OVERRIDES = {
     "cv22_sidon": "custom.metadata.sentence",
     "mls_sidon": "custom.pnc_text",
     "fleurs": "custom.pnc_text",
+    "voxpopuli": "custom.pnc_text",
 }
 
 # Speech translation. Genuine en->X barely exists in this collection (CoVoST2

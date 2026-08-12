@@ -120,6 +120,7 @@ data:
             tags:
               task: asr
               lang: en
+              text_field: custom.pnc_text
               region_code: en
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/other/train.500
@@ -288,6 +289,7 @@ data:
             tags:
               task: asr
               lang: de
+              text_field: custom.pnc_text
               region_code: de
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/de_de/train
@@ -333,6 +335,7 @@ data:
             tags:
               task: asr
               lang: fr
+              text_field: custom.pnc_text
               region_code: fr
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/fr_fr/train
@@ -378,6 +381,7 @@ data:
             tags:
               task: asr
               lang: es
+              text_field: custom.pnc_text
               region_code: es
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/es_419/train
@@ -495,6 +499,7 @@ data:
             tags:
               task: asr
               lang: it
+              text_field: custom.pnc_text
               region_code: it
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/it_it/train
