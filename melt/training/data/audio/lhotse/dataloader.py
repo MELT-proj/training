@@ -684,13 +684,23 @@ def _resolve_weights(
 
 
 def _add_tags_to_cut(cut: Cut, tags: dict[str, str]) -> Cut:
-    """Add metadata tags to a cut."""
+    """Add metadata tags to a cut.
+
+    Merges into any tags a nested level already applied, with *tags* winning
+    on shared keys -- matching ``cut.custom.update`` just above. A group
+    calls this after its children, so a group tag overwrites a child's value
+    for the same key (see the call site's docstring) while a child-only key,
+    e.g. a per-source ``text_field``, survives the group's own pass. A plain
+    ``cut.tags = tags`` would instead replace the dict outright and silently
+    drop every child-only key.
+    """
     if cut.custom is None:
         cut.custom = {}
 
     cut.custom.update(tags)
     # Also store as attribute for easier access
-    cut.tags = tags
+    existing_tags = cut.tags if getattr(cut, "tags", None) else {}
+    cut.tags = {**existing_tags, **tags}
     return cut
 
 

@@ -118,11 +118,15 @@ class MELTMapDataset(torch.utils.data.Dataset):
 
         A ``tags.text_field`` on the cut takes precedence over the ds-level
         setting — that is how ST sources point at ``custom.translation_en``.
+
+        Per-cut tags live on the ``cut.tags`` attribute (set by
+        ``_add_tags_to_cut``), not nested under ``cut.custom["tags"]`` — see
+        ``get_tags_from_cut``, which reads the same attribute.
         """
-        if hasattr(cut, "custom") and cut.custom:
-            tags = cut.custom.get("tags", {})
-            if isinstance(tags, dict) and tags.get("text_field"):
-                return str(tags["text_field"])
+        if hasattr(cut, "tags") and cut.tags:
+            text_field = cut.tags.get("text_field")
+            if text_field:
+                return str(text_field)
         return self._text_field
 
     def __len__(self) -> int:
