@@ -21,7 +21,11 @@ from omegaconf import DictConfig
 
 from .....logging_utils import get_logger
 from .....modeling import MELTProcessor
-from ....data.chat_templates import ChatTemplateConfig, get_chat_template_config
+from ....data.chat_templates import (
+    ChatTemplateConfig,
+    get_chat_template_config,
+    validate_chat_template_config,
+)
 from .helpers import (
     LANGUAGE_ISO_TO_NAME,
     TASK_TEMPLATES,
@@ -84,6 +88,10 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         self.apply_chat_template = bool(_get_config_value(config, "apply_chat_template", False))
         self.sample_rate = int(_get_config_value(config, "sample_rate", 16000))
         self.min_chars = int(_get_config_value(config, "min_chars", 0))
+        # When set, a configured text_field that resolves to nothing is an error
+        # rather than a silent fallback to the supervision text. See
+        # ``get_text_from_cut``.
+        self.strict_text_field = bool(_get_config_value(config, "strict_text_field", False))
 
         # Template selection strategy when apply_chat_template is True.
         # "random"        – randomly pick from all templates for the task (current default)
@@ -110,6 +118,7 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         if self.apply_chat_template:
             ct_name = str(_get_config_value(config, "chat_template_config", "chatml"))
             ct_cfg: ChatTemplateConfig = get_chat_template_config(ct_name)
+            validate_chat_template_config(processor.tokenizer, ct_cfg, ct_name)
             self._assistant_start_ids: list[int] = processor.tokenizer.encode(
                 ct_cfg.assistant_start, add_special_tokens=False
             )
@@ -359,7 +368,7 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
             tags = cut.custom.get("tags", {})
             if isinstance(tags, dict) and tags.get("text_field"):
                 text_field = tags["text_field"]
-        return get_text_from_cut(cut, text_field)
+        return get_text_from_cut(cut, text_field, strict=self.strict_text_field)
 
     def _get_tags(self, cut: Cut) -> tuple[str, str, str, str]:
         """Extract task and language tags from a cut (delegates to shared helper).

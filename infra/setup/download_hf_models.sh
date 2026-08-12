@@ -13,6 +13,18 @@ mkdir -p "${HF_HOME}"
 MODELS=(
   "facebook/w2v-bert-2.0"
   "Qwen/Qwen2.5-0.5B"
+
+  # Ablation campaign backbones (base vs instruct). MN5 compute nodes run
+  # offline, so every one of these must be in HF_HOME before the first job.
+  # Check `tokenizer.chat_template` on each *base* checkpoint after downloading:
+  # Qwen 2.5 base ships one, which would make a base-vs-instruct comparison a
+  # comparison of formatting rather than of tuning.
+  "Qwen/Qwen3.5-2B-Base"
+  "Qwen/Qwen3.5-2B"
+  "utter-project/EuroLLM-1.7B"
+  "utter-project/EuroLLM-1.7B-Instruct"
+  "meta-llama/Llama-3.2-1B"
+  "meta-llama/Llama-3.2-1B-Instruct"
 )
 
 echo "============================================================"

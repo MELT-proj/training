@@ -184,3 +184,9 @@ cython_debug/
 # Kept local on purpose: they describe work in progress and reasoning, not the
 # state of the code, so they go stale the moment the branch moves on.
 history/
+
+# build_campaign_config.py output: the hours cache and its rendered configs.
+# Tracked on the campaign-artifacts branch instead -- fetch it directly
+# rather than merging, since neither file is code under review.
+campaign_hours.json
+config/train/ABL-*.yaml

@@ -47,6 +47,7 @@ model:
 data:
   sample_rate: 16000
   apply_chat_template: false
+  strict_text_field: true
 
   train_ds:
     total_hours: 3720.17 #42877.25  # Optional: total hours of data for estimation

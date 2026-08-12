@@ -70,13 +70,20 @@ class MELTMapDataset(torch.utils.data.Dataset):
         ds_config = _get_config_value(config, ds_key, None)
         source = ds_config if ds_config is not None else config
         self._text_field = str(_get_config_value(source, "text_field", "text"))
+        self._strict_text_field = bool(_get_config_value(config, "strict_text_field", False))
 
         # Build a *valid-indices* list once (cuts with missing text are skipped).
         # This is computed at construction time and reused across all eval calls.
+        # The scan must resolve text_field exactly as ``__getitem__`` does — using
+        # the ds-level field here while the fetch honoured the per-cut tag
+        # override let a cut pass the scan and then come back ``__invalid__``,
+        # silently shrinking the eval set.
         self._valid_indices: list[int] = []
         skipped = 0
         for idx, cut in enumerate(cuts):
-            text = get_text_from_cut(cut, self._text_field)
+            text = get_text_from_cut(
+                cut, self._resolve_text_field(cut), strict=self._strict_text_field
+            )
             if text and text.strip():
                 self._valid_indices.append(idx)
             else:
@@ -106,6 +113,18 @@ class MELTMapDataset(torch.utils.data.Dataset):
             skipped,
         )
 
+    def _resolve_text_field(self, cut) -> str:
+        """Return the text field for *cut*, honouring the per-cut tag override.
+
+        A ``tags.text_field`` on the cut takes precedence over the ds-level
+        setting — that is how ST sources point at ``custom.translation_en``.
+        """
+        if hasattr(cut, "custom") and cut.custom:
+            tags = cut.custom.get("tags", {})
+            if isinstance(tags, dict) and tags.get("text_field"):
+                return str(tags["text_field"])
+        return self._text_field
+
     def __len__(self) -> int:
         return len(self._valid_indices)
 
@@ -119,14 +138,9 @@ class MELTMapDataset(torch.utils.data.Dataset):
             return {"__invalid__": True, "cut_id": cut.id}
 
         # --- text ---
-        # Per-cut text_field override (tags.text_field takes precedence)
-        text_field = self._text_field
-        if hasattr(cut, "custom") and cut.custom:
-            tags = cut.custom.get("tags", {})
-            if isinstance(tags, dict) and tags.get("text_field"):
-                text_field = tags["text_field"]
-
-        text = get_text_from_cut(cut, text_field)
+        text = get_text_from_cut(
+            cut, self._resolve_text_field(cut), strict=self._strict_text_field
+        )
         if not text or not text.strip():
             return {"__invalid__": True, "cut_id": cut.id}
         text = text.strip().lower()

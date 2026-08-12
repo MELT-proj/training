@@ -396,8 +396,8 @@ def indexed_synthetic_shar(tmp_path_factory) -> str:
 
     `to_shar` writes gzipped cut manifests, and the indexer skips those outright
     because an .idx is a table of byte offsets into a plain file. So this does
-    what infra/index_shar.py does to a real source: gunzip the manifests, then
-    write the sidecars.
+    what MELT-proj/preprocessing's `data-utils/index_shar.py` does to a real
+    source: gunzip the manifests, then write the sidecars.
     """
     import gzip
     import shutil
@@ -875,6 +875,121 @@ class TestEvalTextFieldResolution:
         ds = MELTMapDataset(cuts=[], processor=None, config=cfg, is_train=False)
 
         assert ds._text_field == "text"
+
+
+class _StubSupervision:
+    def __init__(self, text, language="es"):
+        self.text = text
+        self.language = language
+
+
+class _StubCut:
+    """Minimal stand-in for a Cut, exercising only the text-resolution path."""
+
+    def __init__(self, cut_id="c0", text="hola mundo", custom=None, duration=1.0):
+        self.id = cut_id
+        self.supervisions = [_StubSupervision(text)] if text is not None else []
+        self.custom = custom or {}
+        self.duration = duration
+
+
+class TestStrictTextField:
+    """A configured `text_field` that resolves to nothing must not fall back.
+
+    ST sources point `text_field` at `custom.translation_en`, which holds
+    *different content* from the supervision text. Under the default fallback a
+    cut with a null translation quietly becomes an ASR pair wearing an ST label
+    and an inverted language pair — which is exactly the defect that shipped in
+    SFT-v1.3.0. Strict mode makes that state loud.
+    """
+
+    def test_strict_raises_when_configured_field_is_absent(self):
+        from melt.training.data.audio.lhotse.helpers import get_text_from_cut
+
+        cut = _StubCut(custom={"translation_en": None})
+
+        with pytest.raises(ValueError, match="translation_en"):
+            get_text_from_cut(cut, "custom.translation_en", strict=True)
+
+    def test_strict_raises_when_configured_field_is_blank(self):
+        from melt.training.data.audio.lhotse.helpers import get_text_from_cut
+
+        cut = _StubCut(custom={"translation_en": "   "})
+
+        with pytest.raises(ValueError):
+            get_text_from_cut(cut, "custom.translation_en", strict=True)
+
+    def test_non_strict_preserves_the_existing_fallback(self):
+        from melt.training.data.audio.lhotse.helpers import get_text_from_cut
+
+        cut = _StubCut(text="hola mundo", custom={"translation_en": None})
+
+        # The historical behaviour, which shipped configs still depend on.
+        assert get_text_from_cut(cut, "custom.translation_en") == "hola mundo"
+
+    def test_strict_is_satisfied_by_a_present_translation(self):
+        from melt.training.data.audio.lhotse.helpers import get_text_from_cut
+
+        cut = _StubCut(custom={"translation_en": "hello world"})
+
+        assert (
+            get_text_from_cut(cut, "custom.translation_en", strict=True) == "hello world"
+        )
+
+    def test_plain_text_field_is_unaffected_by_strict(self):
+        from melt.training.data.audio.lhotse.helpers import get_text_from_cut
+
+        cut = _StubCut(text="hola mundo")
+
+        assert get_text_from_cut(cut, "text", strict=True) == "hola mundo"
+
+
+class TestEvalValidityScanHonoursPerCutOverride:
+    """The validity scan and the fetch must resolve `text_field` identically.
+
+    The scan used the ds-level field while `__getitem__` applied the per-cut
+    `tags.text_field` override. An ST cut carrying a transcript but no
+    translation therefore passed the scan on `text` and then came back
+    `__invalid__` on `custom.translation_en`, silently shrinking the eval set
+    with no counter to show for it.
+    """
+
+    def test_scan_applies_the_override_under_strict_mode(self):
+        from melt.training.data.audio.lhotse.map_dataset import MELTMapDataset
+
+        # Transcript present, translation absent. The scan must resolve the
+        # per-cut override and fail there, rather than counting the cut valid on
+        # `text` and discovering the problem only at fetch time.
+        cut = _StubCut(
+            text="hola mundo",
+            custom={
+                "translation_en": None,
+                "tags": {"text_field": "custom.translation_en"},
+            },
+        )
+        cfg = OmegaConf.create(
+            {"input_cfg": [], "text_field": "text", "strict_text_field": True}
+        )
+
+        with pytest.raises(ValueError, match="translation_en"):
+            MELTMapDataset(cuts=[cut], processor=None, config=cfg, is_train=False)
+
+    def test_override_resolution_matches_between_scan_and_fetch(self):
+        from melt.training.data.audio.lhotse.map_dataset import MELTMapDataset
+
+        cut = _StubCut(
+            text="hola mundo",
+            custom={
+                "translation_en": "hello world",
+                "tags": {"text_field": "custom.translation_en"},
+            },
+        )
+        cfg = OmegaConf.create({"input_cfg": [], "text_field": "text"})
+
+        ds = MELTMapDataset(cuts=[cut], processor=None, config=cfg, is_train=False)
+
+        assert len(ds) == 1
+        assert ds._resolve_text_field(cut) == "custom.translation_en"
 
 
 class TestSharManifestDiscovery:

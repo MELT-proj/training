@@ -20,6 +20,11 @@ it ends.
 
 from dataclasses import dataclass
 
+from ...logging_utils import get_logger
+
+
+logger = get_logger(__name__)
+
 
 @dataclass(frozen=True)
 class ChatTemplateConfig:
@@ -37,9 +42,24 @@ class ChatTemplateConfig:
 
 
 CHAT_TEMPLATE_CONFIGS: dict[str, ChatTemplateConfig] = {
+    # Qwen 2.5, EuroLLM, and anything else emitting plain ChatML.
     "chatml": ChatTemplateConfig(
         assistant_start="<|im_start|>assistant\n",
         assistant_end="<|im_end|>\n",
+    ),
+    # NOTE on Qwen 3 / 3.5: they open the assistant turn with an empty reasoning
+    # block, `<|im_start|>assistant\n<think>\n\n</think>\n\n`, and
+    # `enable_thinking=False` does not remove it. There is deliberately no
+    # separate entry for them, because one would not help:
+    # `mask_non_assistant_tokens` keeps the boundaries *inclusive*, so a longer
+    # `assistant_start` still begins the kept span at the same index and yields
+    # byte-identical labels. The block is inside the loss either way. Fixing that
+    # means changing the masking semantics, not the boundary strings — see
+    # `docs/` for the write-up.
+    # Llama 3.x header format — not ChatML, and silently unfindable under it.
+    "llama3": ChatTemplateConfig(
+        assistant_start="<|start_header_id|>assistant<|end_header_id|>\n\n",
+        assistant_end="<|eot_id|>",
     ),
 }
 
@@ -59,3 +79,73 @@ def get_chat_template_config(name: str) -> ChatTemplateConfig:
             f"Available: {list(CHAT_TEMPLATE_CONFIGS.keys())}"
         )
     return CHAT_TEMPLATE_CONFIGS[name]
+
+
+def validate_chat_template_config(tokenizer, config: ChatTemplateConfig, name: str) -> None:
+    """Check that *config*'s boundaries appear in what *tokenizer* actually renders.
+
+    Label masking locates ``assistant_start`` / ``assistant_end`` as literal
+    strings. When they are absent — a Llama tokenizer under the ``chatml``
+    config, say — nothing raises: the span is simply never found, and the run
+    trains on the wrong tokens while reporting a perfectly plausible loss. A
+    boundary mismatch has to fail the run, not degrade it.
+
+    Args:
+        tokenizer: Tokenizer that will render the training samples.
+        config: The boundary configuration being used.
+        name: Its registry key, for the error message.
+
+    Raises:
+        ValueError: If either boundary is missing from the rendered probe.
+    """
+    if not hasattr(tokenizer, "apply_chat_template"):
+        return
+    if not getattr(tokenizer, "chat_template", None):
+        return
+
+    probe = [
+        {"role": "user", "content": "__melt_probe_user__"},
+        {"role": "assistant", "content": "__melt_probe_assistant__"},
+    ]
+    try:
+        rendered = tokenizer.apply_chat_template(probe, tokenize=False)
+    except Exception:  # noqa: BLE001 - a tokenizer that cannot render is not our problem here
+        return
+
+    missing = [
+        label
+        for label, boundary in (
+            ("assistant_start", config.assistant_start),
+            ("assistant_end", config.assistant_end),
+        )
+        if boundary not in rendered
+    ]
+    if missing:
+        raise ValueError(
+            f"chat_template_config '{name}' does not match this tokenizer: "
+            f"{', '.join(missing)} not found in the rendered chat. Label "
+            f"masking would silently train on the wrong tokens.\n"
+            f"Rendered probe: {rendered!r}\n"
+            f"Available configs: {list(CHAT_TEMPLATE_CONFIGS.keys())}"
+        )
+
+    # Anything the template injects between the boundary and the content -- Qwen
+    # 3's empty `<think>` block, say -- lands inside the loss. That is worth
+    # knowing, but it is not a *mismatch*: masking keeps the boundaries
+    # inclusively, so no choice of boundary string excludes it. Warn rather than
+    # raise, or a config that behaves identically to the default would be
+    # rejected for no gain.
+    start = rendered.find(config.assistant_start)
+    content = rendered.find("__melt_probe_assistant__")
+    if start >= 0 and content >= 0:
+        between = rendered[start + len(config.assistant_start) : content]
+        if between.strip():
+            logger.warning(
+                "Chat template for config %r injects %r before the assistant "
+                "content. Because label masking is inclusive of the boundaries, "
+                "those tokens are part of the training target, and the model "
+                "will learn to emit them before every response. Strip them at "
+                "evaluation time or the hypothesis will contain them.",
+                name,
+                between,
+            )

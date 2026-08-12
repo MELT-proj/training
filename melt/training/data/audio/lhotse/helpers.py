@@ -244,7 +244,7 @@ def load_audio_from_cut(cut: Cut) -> "np.ndarray | None":  # noqa: F821
         return None
 
 
-def get_text_from_cut(cut: Cut, text_field: str) -> str | None:
+def get_text_from_cut(cut: Cut, text_field: str, strict: bool = False) -> str | None:
     """Extract the text transcript from a cut.
 
     Args:
@@ -252,9 +252,18 @@ def get_text_from_cut(cut: Cut, text_field: str) -> str | None:
         text_field: Dot-separated path to the text field (e.g.
             ``"custom.metadata.sentence"``) or ``"text"`` to use
             supervision text directly.
+        strict: When ``True``, an explicitly configured *text_field* that
+            resolves to nothing raises instead of falling back to the
+            supervision text. Use this whenever the configured field holds
+            *different content* from the supervision — an ST source whose
+            target is ``custom.translation_en``, for instance, silently
+            degrades into an ASR sample under the default fallback.
 
     Returns:
         Text transcript, or ``None`` if no text is available.
+
+    Raises:
+        ValueError: If *strict* and an explicit *text_field* is missing.
     """
     text: str | None = None
 
@@ -262,6 +271,13 @@ def get_text_from_cut(cut: Cut, text_field: str) -> str | None:
         text = _get_nested_value(cut, text_field)
         if text is None and hasattr(cut, "custom") and cut.custom:
             text = cut.custom.get(text_field)
+
+        if strict and (text is None or not str(text).strip()):
+            raise ValueError(
+                f"Cut {cut.id!r} has no value at text_field {text_field!r}. "
+                "Refusing to fall back to the supervision text, which holds "
+                "different content and would silently mislabel this sample."
+            )
 
     # Fall back to supervision text
     if text is None and cut.supervisions:
