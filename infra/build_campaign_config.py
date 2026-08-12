@@ -13,9 +13,18 @@ alpha/beta policy in ``compute_mix_weights.py``. Instead:
   one that binds).
 
 Italian's natural mix is roughly 36% CommonVoice, 35% MLS, 17% YODAS, 11%
-VoxPopuli, 1% FLEURS, and every other training language holds enough in *every*
-one of those corpora to match it at 709 h. That number is not a coincidence —
-709 h is exactly all of Italian, so it is the ceiling for a matched design.
+VoxPopuli, and every other training language holds enough in *every* one of
+those corpora to match it at up to 700.3 h — that number is not a
+coincidence, it is exactly all of Italian across those four corpora, so it
+is the ceiling for a matched design.
+
+FLEURS was a fifth corpus here (~1% of Italian's mix) but cannot supply even
+that share in every language at any budget near 709 h — en and es fall
+0.2-1.5 h short — so the campaign runs with ``--exclude-corpus fleurs``.
+Nothing in this script excludes it automatically: omit the flag and a
+budget above ~590 h fails feasibility the same way it did during design.
+FLEURS is still measured and cached like any other source, just not
+trained on, so it stays comparable if this decision is revisited.
 
 Hours are **not** enforced by subsetting manifests. A Shar source pairs
 ``cuts.NNNNNN.jsonl`` positionally with ``recording.NNNNNN.tar``, so a filtered
@@ -31,12 +40,13 @@ MELT-proj/preprocessing repo before relying on a mixture built here.
 Usage::
 
     python3 infra/build_campaign_config.py \\
-        --template      config/train/MA-v1.2.yaml \\
-        --datasets-root /mnt/scratch-nyx/giuseppe/melt/melt-data/shar \\
-        --budget-hours  709 \\
-        --tasks         both \\
-        --cache         campaign_hours.json \\
-        --out           config/train/ABL-MA-709.yaml
+        --template       config/train/MA-v1.2.yaml \\
+        --datasets-root  /mnt/scratch-nyx/giuseppe/melt/melt-data/shar \\
+        --budget-hours   700.3 \\
+        --exclude-corpus fleurs \\
+        --tasks          both \\
+        --cache          campaign_hours.json \\
+        --out            config/train/ABL-MA-700.yaml
 
 Run it where the data is; it reads manifests, not audio.
 """
