@@ -355,63 +355,128 @@ data:
     lang_field: lang
 
   validation_ds:
-    total_hours: 6732.55
+    total_hours: 212.08
     total_cuts: 58238  # Optional: total number of cuts for estimation
     force_estimate: false
 
     input_cfg:
-      - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/validation
-        tags:
-          task: asr
-          lang: en
-      - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/it/validation
-        tags:
-          task: asr
-          lang: it
-          text_field: custom.metadata.sentence
-      - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/de/validation
-        tags:
-          task: asr
-          lang: de
-          text_field: custom.metadata.sentence
+      # ASR en validation: full cv22_sidon/mls_sidon/voxpopuli sets
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/en/validation
         tags:
           task: asr
           lang: en
           text_field: custom.metadata.sentence
+        # 27.3 h of cv22_sidon (validation split)
       - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/zh-CN/validation
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/english/dev
         tags:
           task: asr
-          lang: zh
-          text_field: custom.metadata.sentence
+          lang: en
+          text_field: custom.pnc_text
+        # 15.8 h of mls_sidon (dev split)
       - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/zh-HK/validation
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/en/validation
         tags:
           task: asr
-          lang: zh
-          text_field: custom.metadata.sentence
+          lang: en
+          text_field: custom.pnc_text
+        # 5.0 h of voxpopuli (validation split)
+      # ASR de validation: full cv22_sidon/mls_sidon/voxpopuli sets
       - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/zh-TW/validation
-        tags:
-          task: asr
-          lang: zh
-          text_field: custom.metadata.sentence
-      - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/it_it/validation
-        tags:
-          task: asr
-          lang: it
-      - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/de_de/validation
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/de/validation
         tags:
           task: asr
           lang: de
-  
+          text_field: custom.metadata.sentence
+        # 2.5 h of cv22_sidon (validation split)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/german/dev
+        tags:
+          task: asr
+          lang: de
+          text_field: custom.pnc_text
+        # 14.3 h of mls_sidon (dev split)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/de/validation
+        tags:
+          task: asr
+          lang: de
+          text_field: custom.pnc_text
+        # 5.0 h of voxpopuli (validation split)
+      # ASR fr validation: full cv22_sidon/mls_sidon/voxpopuli sets
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/fr/validation
+        tags:
+          task: asr
+          lang: fr
+          text_field: custom.metadata.sentence
+        # 24.3 h of cv22_sidon (validation split)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/french/dev
+        tags:
+          task: asr
+          lang: fr
+          text_field: custom.pnc_text
+        # 10.1 h of mls_sidon (dev split)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/fr/validation
+        tags:
+          task: asr
+          lang: fr
+          text_field: custom.pnc_text
+        # 5.0 h of voxpopuli (validation split)
+      # ASR es validation: full cv22_sidon/mls_sidon/voxpopuli sets
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/es/validation
+        tags:
+          task: asr
+          lang: es
+          text_field: custom.metadata.sentence
+        # 26.8 h of cv22_sidon (validation split)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/spanish/dev
+        tags:
+          task: asr
+          lang: es
+          text_field: custom.pnc_text
+        # 10.0 h of mls_sidon (dev split)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/es/validation
+        tags:
+          task: asr
+          lang: es
+          text_field: custom.pnc_text
+        # 5.1 h of voxpopuli (validation split)
+      # ASR it validation: full cv22_sidon/mls_sidon/voxpopuli sets
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/it/validation
+        tags:
+          task: asr
+          lang: it
+          text_field: custom.metadata.sentence
+        # 25.4 h of cv22_sidon (validation split)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/italian/dev
+        tags:
+          task: asr
+          lang: it
+          text_field: custom.pnc_text
+        # 5.2 h of mls_sidon (dev split)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/it/validation
+        tags:
+          task: asr
+          lang: it
+          text_field: custom.pnc_text
+        # 4.5 h of voxpopuli (validation split)
+      # ST en->de validation (dev split): 26.0 h. No X->en probe: yodas-granary's `ast` sets have no held-out split.
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_de/dev
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: de
     batch_size: null
     batch_duration: 300.0
     lhotse_sampler_type: dynamic_bucketing

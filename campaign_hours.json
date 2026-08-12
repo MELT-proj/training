@@ -28,5 +28,21 @@
   "yodas-granary/French/ast": 11511.742416232653,
   "yodas-granary/Spanish/ast": 25833.30787805558,
   "yodas-granary/Italian/ast": 6024.731587100696,
-  "covost2/en_de/train": 429.85010965277786
+  "covost2/en_de/train": 429.85010965277786,
+  "cv22_sidon/en/validation": 27.275886614583193,
+  "mls_sidon/english/dev": 15.754560468750013,
+  "voxpopuli/en/validation": 4.975575815972226,
+  "cv22_sidon/de/validation": 2.5477266666666702,
+  "mls_sidon/german/dev": 14.282896822916701,
+  "voxpopuli/de/validation": 4.975249097222227,
+  "cv22_sidon/fr/validation": 24.261691666666493,
+  "mls_sidon/french/dev": 10.07122944444446,
+  "voxpopuli/fr/validation": 4.963374878472221,
+  "cv22_sidon/es/validation": 26.77229930555537,
+  "mls_sidon/spanish/dev": 9.988661475694455,
+  "voxpopuli/es/validation": 5.126808749999998,
+  "cv22_sidon/it/validation": 25.410520486110794,
+  "mls_sidon/italian/dev": 5.175593506944448,
+  "voxpopuli/it/validation": 4.451892552083332,
+  "covost2/en_de/dev": 26.047262534722268
 }

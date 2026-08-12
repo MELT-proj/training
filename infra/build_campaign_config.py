@@ -37,6 +37,18 @@ length filters read ``custom.num_tokens``, which many sources do not carry.
 Check the collection with ``verification/check_shar_content.py`` in the
 MELT-proj/preprocessing repo before relying on a mixture built here.
 
+``validation_ds`` is rebuilt the same way: one flat, unweighted entry per
+training language for every corpus that carries a real held-out split
+(``cv22_sidon``, ``mls_sidon``, ``voxpopuli``). ``yodas-granary``'s ``asr_only``
+and ``ast`` directories are train-only monolithic scrapes with no held-out
+split anywhere on disk, so it is never part of validation, budget or not.
+FLEURS is excluded from validation for the same reason it is excluded from
+training here (see above) -- it stays comparable, not part of the mix. Entries
+are flat ``type: lhotse_shar`` (no ``type: group``, no ``weight:``): eval
+concatenates every source's *full* manifest rather than muxing/subsampling it
+(``materialize_cuts_for_eval`` does not support ``type: group`` at all), which
+is also why validation is not subject to ``--budget-hours``.
+
 Usage::
 
     python3 infra/build_campaign_config.py \\
@@ -54,6 +66,7 @@ Run it where the data is; it reads manifests, not audio.
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -62,6 +75,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from compute_mix_weights import (  # noqa: E402
+    _find_block,
     measure_shard,
     plan_source,
     write_cache,
@@ -163,6 +177,39 @@ ST_SOURCES: dict[str, dict] = {
 ST_PROBE = {"en-de": {"path": "covost2/en_de/train", "src": "en", "tgt": "de"}}
 
 TRANSLATION_FIELD = "custom.translation_en"
+
+# ---------------------------------------------------------------------------
+# validation_ds: full, unweighted per-language sets from every corpus that
+# actually has a held-out split.
+# ---------------------------------------------------------------------------
+
+# Corpus -> its held-out split's directory name. Not spelled the same
+# everywhere: cv22_sidon and voxpopuli use "validation", MLS uses "dev".
+# yodas-granary and fleurs are deliberately absent: yodas-granary's `asr_only`
+# and `ast` directories are train-only monolithic scrapes with no held-out
+# split on disk at all, and fleurs is excluded from the campaign entirely (see
+# the module docstring), training and validation alike.
+VALIDATION_SPLIT: dict[str, str] = {
+    "cv22_sidon": "validation",
+    "mls_sidon": "dev",
+    "voxpopuli": "validation",
+}
+
+# The en->de ST probe's held-out split (CoVoST2 spells it "dev"). None of the
+# X->en directions get one: yodas-granary's `ast` sets are train-only, same as
+# their `asr_only` counterparts.
+ST_PROBE_VALIDATION_SPLIT = "dev"
+
+
+def validation_path(train_path: str, split: str) -> str:
+    """Swap a source's trailing ``.../train`` segment for its held-out split."""
+    prefix, _, leaf = train_path.rpartition("/")
+    if leaf != "train":
+        raise ValueError(
+            f"expected a path ending in '/train' to derive a '{split}' "
+            f"validation path from, got {train_path!r}"
+        )
+    return f"{prefix}/{split}"
 
 
 def measure(paths: list[str], root: Path, cache: dict, cache_path: Path | None,
@@ -307,6 +354,97 @@ def yaml_block(template: dict[str, float], hours: dict[str, float],
     return lines, total_hours
 
 
+def validation_yaml_block(asr_sources: dict[str, dict[str, str]], hours: dict[str, float],
+                          tasks: str) -> tuple[list[str], float]:
+    """Render validation_ds's ``input_cfg`` block: full, unweighted, per-language.
+
+    Flat ``type: lhotse_shar`` entries only (see the module docstring) --
+    every language in ``TRAIN_LANGS`` gets one entry per corpus in
+    ``asr_sources`` that also has a held-out split (``VALIDATION_SPLIT``), plus
+    the en->de ST probe's split if *tasks* trains it. No ``weight:``: eval
+    reads each source's full manifest, which is the point (no subsampling).
+    """
+    lines: list[str] = ["    input_cfg:"]
+    total_hours = 0.0
+
+    if tasks in ("asr", "both"):
+        val_corpora = [c for c in VALIDATION_SPLIT if c in asr_sources]
+        for lang in TRAIN_LANGS:
+            lines.append(f"      # ASR {lang} validation: full {'/'.join(val_corpora)} sets")
+            for corpus in val_corpora:
+                split = VALIDATION_SPLIT[corpus]
+                rel = validation_path(ASR_SOURCES[corpus][lang], split)
+                h = hours.get(rel, 0.0)
+                lines.append("      - type: lhotse_shar")
+                lines.append(
+                    f"        shar_path: ${{oc.env:LOCAL_DATASETS_DIR}}/{rel}"
+                )
+                lines.append("        tags:")
+                lines.append("          task: asr")
+                lines.append(f"          lang: {lang}")
+                if corpus in TEXT_FIELD_OVERRIDES:
+                    lines.append(
+                        f"          text_field: {TEXT_FIELD_OVERRIDES[corpus]}"
+                    )
+                lines.append(f"        # {h:,.1f} h of {corpus} ({split} split)")
+                total_hours += h
+
+    if tasks in ("st", "both"):
+        spec = ST_PROBE["en-de"]
+        rel = validation_path(spec["path"], ST_PROBE_VALIDATION_SPLIT)
+        h = hours.get(rel, 0.0)
+        lines.append(
+            f"      # ST {spec['src']}->{spec['tgt']} validation "
+            f"({ST_PROBE_VALIDATION_SPLIT} split): {h:,.1f} h. No X->en probe: "
+            "yodas-granary's `ast` sets have no held-out split."
+        )
+        lines.append("      - type: lhotse_shar")
+        lines.append(f"        shar_path: ${{oc.env:LOCAL_DATASETS_DIR}}/{rel}")
+        lines.append("        tags:")
+        lines.append("          task: st")
+        lines.append(f"          src_lang: {spec['src']}")
+        lines.append(f"          tgt_lang: {spec['tgt']}")
+        total_hours += h
+
+    return lines, total_hours
+
+
+def _section_span(lines: list[str], section: str) -> tuple[int, int, int]:
+    """Index range ``[start, end)`` of a top-level ``section:`` block, and its indent."""
+    sec = next((i for i, l in enumerate(lines)
+                if re.match(rf"^\s*{section}:\s*$", l)), None)
+    if sec is None:
+        raise ValueError(f"Could not find a '{section}:' section in the template")
+    sec_indent = len(lines[sec]) - len(lines[sec].lstrip())
+    end = len(lines)
+    for i in range(sec + 1, len(lines)):
+        line = lines[i]
+        if not line.strip():
+            continue
+        if len(line) - len(line.lstrip()) <= sec_indent:
+            end = i
+            break
+    return sec, end, sec_indent
+
+
+def _replace_scalar_in_section(lines: list[str], section: str, key: str, value: str) -> None:
+    """Rewrite the first ``key: ...`` scalar found within ``section:``'s own block.
+
+    Unlike ``compute_mix_weights._replace_scalar`` (an unbounded forward scan),
+    this stays inside *section* -- a config with two ``total_hours:`` scalars
+    (train_ds and validation_ds) would otherwise have the wrong one overwritten
+    whenever the search started above both of them.
+    """
+    start, end, _ = _section_span(lines, section)
+    pattern = re.compile(rf"^(\s*){key}:\s*\S.*$")
+    for i in range(start, end):
+        m = pattern.match(lines[i])
+        if m:
+            lines[i] = f"{m.group(1)}{key}: {value}"
+            return
+    raise ValueError(f"Could not find '{key}:' scalar under '{section}:' in the template")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--template", required=True, type=Path,
@@ -336,16 +474,26 @@ def main() -> int:
     if args.cache and args.cache.exists():
         cache = json.loads(args.cache.read_text())
 
+    asr_sources = {c: p for c, p in ASR_SOURCES.items()
+                   if c not in args.exclude_corpus}
+    val_corpora = [c for c in VALIDATION_SPLIT if c in asr_sources]
+
     paths = [p for corpus in ASR_SOURCES.values() for p in corpus.values()]
     paths += [s["path"] for s in ST_SOURCES.values()]
     paths += [s["path"] for s in ST_PROBE.values()]
+    if args.tasks in ("asr", "both"):
+        paths += [
+            validation_path(ASR_SOURCES[corpus][lang], VALIDATION_SPLIT[corpus])
+            for lang in TRAIN_LANGS
+            for corpus in val_corpora
+        ]
+    if args.tasks in ("st", "both"):
+        paths.append(validation_path(ST_PROBE["en-de"]["path"], ST_PROBE_VALIDATION_SPLIT))
 
     print(f"Measuring {len(paths)} sources under {args.datasets_root}")
     hours = measure(paths, args.datasets_root, cache, args.cache,
                     args.sample_shards, args.jobs)
 
-    asr_sources = {c: p for c, p in ASR_SOURCES.items()
-                   if c not in args.exclude_corpus}
     template = build_template(hours, args.reference_lang, asr_sources)
     print(f"\nDomain template from '{args.reference_lang}':")
     for corpus, share in sorted(template.items(), key=lambda kv: -kv[1]):
@@ -366,38 +514,22 @@ def main() -> int:
         return 1
 
     lines, total = yaml_block(template, hours, args.budget_hours, args.tasks)
+    val_lines, val_total = validation_yaml_block(asr_sources, hours, args.tasks)
 
-    text = args.template.read_text().splitlines(keepends=True)
-    out: list[str] = []
-    i = 0
-    replaced = False
-    while i < len(text):
-        line = text[i]
-        if line.startswith("    input_cfg:") and not replaced:
-            out.extend(s + "\n" for s in lines)
-            i += 1
-            # Skip the template's own block.
-            while i < len(text) and (
-                not text[i].strip() or text[i].startswith("      ")
-                or text[i].startswith("        ")
-            ):
-                i += 1
-            replaced = True
-            continue
-        if line.strip().startswith("total_hours:"):
-            indent = line[: len(line) - len(line.lstrip())]
-            out.append(f"{indent}total_hours: {total:.2f}\n")
-            i += 1
-            continue
-        out.append(line)
-        i += 1
-
-    if not replaced:
-        print("error: no '    input_cfg:' block found in the template",
-              file=sys.stderr)
+    out_lines = args.template.read_text(encoding="utf-8").splitlines()
+    try:
+        for section, block, section_total in (
+            ("train_ds", lines, total),
+            ("validation_ds", val_lines, val_total),
+        ):
+            start, end, _ = _find_block(out_lines, section, "input_cfg")
+            out_lines[start:end] = block
+            _replace_scalar_in_section(out_lines, section, "total_hours", f"{section_total:.2f}")
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    args.out.write_text("".join(out))
+    args.out.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
 
     if args.sample_shards:
         print(
@@ -408,10 +540,12 @@ def main() -> int:
         )
 
     print(f"\nWrote {args.out}")
-    print(f"  tasks           : {args.tasks}")
-    print(f"  hours/language  : {args.budget_hours:,.1f}")
-    print(f"  total hours     : {total:,.1f}")
-    print(f"  held out        : {', '.join(HELD_OUT_LANGS)}")
+    print(f"  tasks               : {args.tasks}")
+    print(f"  hours/language      : {args.budget_hours:,.1f}")
+    print(f"  total train hours   : {total:,.1f}")
+    print(f"  total val hours     : {val_total:,.1f} "
+          f"(full sets, not subsampled, from: {', '.join(val_corpora) or 'none'})")
+    print(f"  held out            : {', '.join(HELD_OUT_LANGS)}")
     print(
         "\nHours are enforced by weights plus a step budget, not by subsetting.\n"
         "Set trainer.max_steps so the run consumes the intended audio:\n"
