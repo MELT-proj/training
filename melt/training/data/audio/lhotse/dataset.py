@@ -214,9 +214,7 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
                 logger.warning(
                     "Skipping cut %s: empty or missing text (text_field=%r, supervisions=%s).",
                     cut.id,
-                    getattr(getattr(cut, "custom", None) or {}, "get", lambda *a: None)("tags", {}).get("text_field")
-                    if hasattr(cut, "custom") and cut.custom
-                    else None,
+                    cut.tags.get("text_field") if hasattr(cut, "tags") and cut.tags else None,
                     len(cut.supervisions) if cut.supervisions else 0,
                 )
                 continue
@@ -363,11 +361,14 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         """Extract text transcript from a cut (delegates to shared helper)."""
         ds_config = _get_config_value(self.config, "train_ds" if self.is_train else "validation_ds", None)
         text_field = _get_config_value(ds_config, "text_field", "text") if ds_config else "text"
-        # Per-cut text_field override from tags
-        if hasattr(cut, "custom") and cut.custom:
-            tags = cut.custom.get("tags", {})
-            if isinstance(tags, dict) and tags.get("text_field"):
-                text_field = tags["text_field"]
+        # Per-cut text_field override from tags. Tags live on the `cut.tags`
+        # attribute (set by `_add_tags_to_cut`), not nested under
+        # `cut.custom["tags"]` -- see `get_tags_from_cut`, which reads the
+        # same attribute.
+        if hasattr(cut, "tags") and cut.tags:
+            tag_text_field = cut.tags.get("text_field")
+            if tag_text_field:
+                text_field = tag_text_field
         return get_text_from_cut(cut, text_field, strict=self.strict_text_field)
 
     def _get_tags(self, cut: Cut) -> tuple[str, str, str, str]:
@@ -628,10 +629,10 @@ class SpeechTextQEDataset(SpeechToTextDataset):
     def _get_score(self, cut: Cut) -> float:
         """Extract and validate the quality score from a cut's custom tags.
 
-        The field path is read per-cut from ``cut.custom["tags"]["target_field"]``
-        (set via the ``tags`` block of the corresponding ``input_cfg`` entry in the
-        YAML config, e.g. ``target_field: custom.score``).  The value at that path
-        is then resolved with dot-notation via ``_get_nested_value``.
+        The field path is read per-cut from ``cut.tags["target_field"]`` (set via
+        the ``tags`` block of the corresponding ``input_cfg`` entry in the YAML
+        config, e.g. ``target_field: custom.score``).  The value at that path is
+        then resolved with dot-notation via ``_get_nested_value``.
 
         Args:
             cut: Lhotse Cut object.
@@ -647,11 +648,9 @@ class SpeechTextQEDataset(SpeechToTextDataset):
         target_field: str | None = None
         normalize_factor: float = 1.0
 
-        if hasattr(cut, "custom") and cut.custom:
-            tags = cut.custom.get("tags", {})
-            if isinstance(tags, dict):
-                target_field = tags.get("target_field")
-                normalize_factor = tags.get("normalize_factor", normalize_factor)
+        if hasattr(cut, "tags") and cut.tags:
+            target_field = cut.tags.get("target_field")
+            normalize_factor = cut.tags.get("normalize_factor", normalize_factor)
 
         if not target_field:
             raise RuntimeError(
