@@ -185,11 +185,12 @@ def measure(paths: list[str], root: Path, cache: dict, cache_path: Path | None,
     return {p: cache.get(p, 0.0) for p in paths}
 
 
-def build_template(hours: dict[str, float], reference: str) -> dict[str, float]:
+def build_template(hours: dict[str, float], reference: str,
+                    sources: dict[str, dict[str, str]]) -> dict[str, float]:
     """Corpus shares of the reference language, normalised to 1."""
     per_corpus = {
         corpus: hours.get(paths[reference], 0.0)
-        for corpus, paths in ASR_SOURCES.items()
+        for corpus, paths in sources.items()
     }
     total = sum(per_corpus.values())
     if total <= 0:
@@ -304,6 +305,12 @@ def main() -> int:
                         help="Hours per language (ASR) and per direction (ST).")
     parser.add_argument("--tasks", choices=("asr", "st", "both"), default="both")
     parser.add_argument("--reference-lang", default=REFERENCE_LANG)
+    parser.add_argument("--exclude-corpus", nargs="*", default=[],
+                        choices=sorted(ASR_SOURCES),
+                        help="Drop these corpora from the ASR domain template "
+                             "entirely (e.g. one too small to hit the budget "
+                             "in every language). Still measured and cached, "
+                             "just not trained on.")
     parser.add_argument("--cache", type=Path, default=None)
     parser.add_argument("--sample-shards", type=int, default=None,
                         help="Read only N shards per source and extrapolate. For "
@@ -326,7 +333,9 @@ def main() -> int:
     hours = measure(paths, args.datasets_root, cache, args.cache,
                     args.sample_shards, args.jobs)
 
-    template = build_template(hours, args.reference_lang)
+    asr_sources = {c: p for c, p in ASR_SOURCES.items()
+                   if c not in args.exclude_corpus}
+    template = build_template(hours, args.reference_lang, asr_sources)
     print(f"\nDomain template from '{args.reference_lang}':")
     for corpus, share in sorted(template.items(), key=lambda kv: -kv[1]):
         print(f"  {corpus:<16} {share * 100:5.1f}%  "
