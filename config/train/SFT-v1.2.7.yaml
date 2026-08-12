@@ -849,7 +849,9 @@ trainer:
 
   # Batch and accumulation
   per_device_train_batch_size: -1  # Handled by Lhotse, set to 1
-  per_device_eval_batch_size: -1   # Handled by Lhotse, set to 1
+  # Eval does NOT go through Lhotse — it uses a plain DataLoader, and -1 here
+  # crashes the first eval. 4 is known-good; 16 OOMs on 64 GB H100s.
+  per_device_eval_batch_size: 4
   gradient_accumulation_steps: 4
 
   # LR schedule

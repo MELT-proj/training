@@ -90,6 +90,46 @@ def _shutdown_dataloader_workers(dataloader: DataLoader | None) -> None:
         logger.warning(f"Ignoring error while shutting down dataloader workers: {exc}")
 
 
+def _validate_eval_batch_size(args: TrainingArguments) -> None:
+    """Reject the ``-1`` batching sentinel on the *eval* side, at startup.
+
+    ``per_device_train_batch_size: -1`` means "Lhotse decides the batch", and
+    the train path honours it (see ``get_total_train_batch_size``).  Eval does
+    not: it uses a stock map-style DataLoader, and ``Trainer.evaluation_loop``
+    reads ``args.eval_batch_size`` directly to size its loss buffer
+    (``losses.repeat(batch_size)``), which fails with an unhelpful "Trying to
+    create tensor with negative dimension -1" — and only at the *first eval*,
+    tens of minutes into a run.
+
+    Copying the ``-1`` down from the train field is an easy mistake to make in
+    a new config, so refuse it here rather than at the first eval.
+    """
+    batch_size = getattr(args, "per_device_eval_batch_size", None)
+    if batch_size is None or batch_size >= 1:
+        return
+
+    # A config that never evaluates has no eval batch to size; leave it alone.
+    # `eval_strategy` may be an IntervalStrategy enum or a plain string, and
+    # str() renders the enum as "IntervalStrategy.NO", so match on the suffix.
+    strategy = str(getattr(args, "eval_strategy", "no")).lower()
+    eval_enabled = bool(
+        getattr(args, "do_eval", False)
+        or getattr(args, "eval_on_start", False)
+        or not strategy.endswith("no")
+    )
+    if not eval_enabled:
+        return
+
+    raise ValueError(
+        f"trainer.per_device_eval_batch_size is {batch_size}, but evaluation is "
+        "enabled. The -1 'Lhotse handles batching' sentinel is valid only for "
+        "per_device_train_batch_size; the eval path uses a plain DataLoader and "
+        "needs a real batch size. Set trainer.per_device_eval_batch_size to a "
+        "positive value (4 is known-good; 16 OOMs on 64 GB H100s), either in the "
+        "config or with --trainer.per_device_eval_batch_size 4."
+    )
+
+
 class MELTTrainer(Trainer):
     """Custom Trainer for MELT models with Lhotse data loading.
 
@@ -123,6 +163,8 @@ class MELTTrainer(Trainer):
         # Store config and processor before calling super().__init__
         self.config = config
         self.processor = processor
+
+        _validate_eval_batch_size(args)
 
         # Seeding happens in train.py, before the model is built -- HF's
         # Trainer.__init__ seeds too, but by then our model already exists.

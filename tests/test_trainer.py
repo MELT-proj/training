@@ -4,8 +4,10 @@ from unittest.mock import patch
 import pytest
 import torch
 
+from transformers.trainer_utils import IntervalStrategy
+
 from melt.modeling import MELTConfig, MELTForCausalLM
-from melt.training.trainer import MELTTrainer
+from melt.training.trainer import MELTTrainer, _validate_eval_batch_size
 
 
 def _make_minimal_model():
@@ -122,6 +124,71 @@ def test_eval_dataloader_normalizes_batch_size_sentinel():
     """-1 means "batching handled elsewhere"; DataLoader rejects it outright."""
     dl = _make_eval_trainer(per_device_eval_batch_size=-1).get_eval_dataloader()
     assert dl.batch_size == 1
+
+
+# ---------------------------------------------------------------------------
+# eval batch size validation
+# ---------------------------------------------------------------------------
+
+
+def _eval_bs_args(**overrides):
+    args = SimpleNamespace(
+        per_device_eval_batch_size=-1,
+        do_eval=True,
+        eval_on_start=False,
+        eval_strategy="steps",
+    )
+    for key, value in overrides.items():
+        setattr(args, key, value)
+    return args
+
+
+def test_eval_batch_size_sentinel_rejected_when_evaluating():
+    """The train-side -1 sentinel crashes HF's evaluation_loop; catch it early.
+
+    Left alone it surfaces as "Trying to create tensor with negative dimension
+    -1" from ``losses.repeat(batch_size)``, at the first eval rather than at
+    startup.
+    """
+    with pytest.raises(ValueError, match="per_device_eval_batch_size"):
+        _validate_eval_batch_size(_eval_bs_args())
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"do_eval": True},
+        {"do_eval": False, "eval_on_start": True, "eval_strategy": "no"},
+        {"do_eval": False, "eval_strategy": "epoch"},
+    ],
+)
+def test_eval_batch_size_sentinel_rejected_however_eval_is_enabled(overrides):
+    with pytest.raises(ValueError):
+        _validate_eval_batch_size(_eval_bs_args(**overrides))
+
+
+def test_eval_batch_size_sentinel_allowed_when_eval_is_off():
+    """No eval, no eval batch to size — don't block a train-only run."""
+    _validate_eval_batch_size(
+        _eval_bs_args(do_eval=False, eval_on_start=False, eval_strategy="no")
+    )
+
+
+def test_eval_batch_size_enum_strategy_is_understood():
+    """`eval_strategy` reaches us as an IntervalStrategy, not a bare string."""
+    with pytest.raises(ValueError):
+        _validate_eval_batch_size(
+            _eval_bs_args(do_eval=False, eval_strategy=IntervalStrategy.STEPS)
+        )
+    _validate_eval_batch_size(
+        _eval_bs_args(
+            do_eval=False, eval_on_start=False, eval_strategy=IntervalStrategy.NO
+        )
+    )
+
+
+def test_positive_eval_batch_size_accepted():
+    _validate_eval_batch_size(_eval_bs_args(per_device_eval_batch_size=4))
 
 
 def test_eval_dataloader_zero_workers_has_no_prefetch_factor():
