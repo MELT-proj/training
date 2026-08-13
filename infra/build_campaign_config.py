@@ -47,7 +47,9 @@ training here (see above) -- it stays comparable, not part of the mix. Entries
 are flat ``type: lhotse_shar`` (no ``type: group``, no ``weight:``): eval
 concatenates every source's *full* manifest rather than muxing/subsampling it
 (``materialize_cuts_for_eval`` does not support ``type: group`` at all), which
-is also why validation is not subject to ``--budget-hours``.
+is also why validation is not subject to ``--budget-hours``.  Every entry also
+carries a ``name`` (``asr_<lang>`` or ``st_<src>_<tgt>``): the trainer
+evaluates each name separately and reports ``eval_<name>_loss`` per set.
 
 Usage::
 
@@ -363,6 +365,12 @@ def validation_yaml_block(asr_sources: dict[str, dict[str, str]], hours: dict[st
     ``asr_sources`` that also has a held-out split (``VALIDATION_SPLIT``), plus
     the en->de ST probe's split if *tasks* trains it. No ``weight:``: eval
     reads each source's full manifest, which is the point (no subsampling).
+
+    Every entry carries a ``name`` (per language for ASR, per direction for
+    ST).  The trainer splits ``validation_ds`` on those names and reports each
+    set separately, so a run logs ``eval_asr_<lang>_loss`` /
+    ``eval_st_<src>_<tgt>_loss`` plus per-set WER/CER instead of one flat
+    ``eval_loss`` over everything.
     """
     lines: list[str] = ["    input_cfg:"]
     total_hours = 0.0
@@ -376,6 +384,7 @@ def validation_yaml_block(asr_sources: dict[str, dict[str, str]], hours: dict[st
                 rel = validation_path(ASR_SOURCES[corpus][lang], split)
                 h = hours.get(rel, 0.0)
                 lines.append("      - type: lhotse_shar")
+                lines.append(f"        name: asr_{lang}")
                 lines.append(
                     f"        shar_path: ${{oc.env:LOCAL_DATASETS_DIR}}/{rel}"
                 )
@@ -399,6 +408,7 @@ def validation_yaml_block(asr_sources: dict[str, dict[str, str]], hours: dict[st
             "yodas-granary's `ast` sets have no held-out split."
         )
         lines.append("      - type: lhotse_shar")
+        lines.append(f"        name: st_{spec['src']}_{spec['tgt']}")
         lines.append(f"        shar_path: ${{oc.env:LOCAL_DATASETS_DIR}}/{rel}")
         lines.append("        tags:")
         lines.append("          task: st")

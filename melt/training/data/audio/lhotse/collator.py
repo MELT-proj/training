@@ -156,8 +156,9 @@ class MELTDataCollator:
             labels[mask] = -100
         batch["labels"] = labels
 
-        # 6. Attach langs for per-language WER/CER
+        # 6. Attach langs/tasks for per-language and per-task WER/CER
         batch["langs"] = langs
+        batch["tasks"] = tasks
 
         return batch
 

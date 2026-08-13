@@ -652,12 +652,16 @@ world_size: 4, ... is_distributed: True
 ```
 
 **Loss and metrics.** Each eval prints a metrics dict to the log — overall
-`eval_loss`, `eval_wer`, `eval_cer`, plus per-language `eval_wer_<lang>` /
-`eval_cer_<lang>`. To watch them:
+`eval_loss`, `eval_wer`, `eval_cer`, per-language `eval_wer_<lang>` /
+`eval_cer_<lang>`, and per-task `eval_wer_asr` / `eval_wer_st` (same for
+`cer`). Campaign configs also name their validation sources (`asr_<lang>`,
+`st_<src>_<tgt>`), which splits eval into one reported set per name: each
+metrics dict then carries an `eval_<name>_` prefix and a per-set
+`eval_<name>_loss`. To watch them:
 
 ```bash
 # [mn5]
-grep -oE "'eval_(loss|wer|cer)': [0-9.]+" ~/training/logs/melt-train-container.<jobid>.out
+grep -oE "'eval_(loss|wer|cer)[a-z_]*': [0-9.]+" ~/training/logs/melt-train-container.<jobid>.out
 ```
 
 W&B runs **offline** (no internet), writing to `$OUTPUT_DIR/wandb/`. To see them

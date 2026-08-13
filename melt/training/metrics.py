@@ -16,7 +16,8 @@ def pull_final_logits(logits: torch.Tensor, labels: torch.Tensor):
 
 
 class TrainingEvaluator:
-    """Computes WER and CER during evaluation, with optional per-language breakdown.
+    """Computes WER and CER during evaluation, with optional per-language and
+    per-task breakdowns.
 
     Args:
         config: Evaluation configuration (enable_whisper_normalization, etc.).
@@ -30,6 +31,7 @@ class TrainingEvaluator:
         self._predictions: list[str] = []
         self._references: list[str] = []
         self._langs: list[str] = []
+        self._tasks: list[str] = []
 
         if self.config.enable_whisper_normalization:
             self.normalizer = BasicTextNormalizer()
@@ -46,6 +48,7 @@ class TrainingEvaluator:
         # hold only the current batch — so the codes for this batch start where
         # the previous call stopped, not at 0.
         langs = getattr(predictions, "langs", None)
+        tasks = getattr(predictions, "tasks", None)
         offset = len(self._langs)
 
         # Logits and label_ids contain n_batch elements of shape
@@ -70,10 +73,14 @@ class TrainingEvaluator:
             # key with nothing after the underscore.
             self._langs.append(lang or "unknown")
 
+            task = tasks[offset + i] if tasks is not None and offset + i < len(tasks) else ""
+            self._tasks.append(task or "unknown")
+
         if compute_result:
             preds = list(self._predictions)
             refs = list(self._references)
             run_langs = list(self._langs)
+            run_tasks = list(self._tasks)
 
             if self.config.enable_whisper_normalization:
                 preds = [self._normalize_text(p) for p in preds]
@@ -125,9 +132,47 @@ class TrainingEvaluator:
                     r[f"wer_{lang}"] = jiwer.wer(lr, lp)
                     r[f"cer_{lang}"] = jiwer.cer(lr, lp)
 
+            # --- Per-task metrics ---
+            task_to_preds: dict[str, list[str]] = defaultdict(list)
+            task_to_refs: dict[str, list[str]] = defaultdict(list)
+            for pred, ref, task in zip(preds, refs, run_tasks):
+                task_to_preds[task].append(pred)
+                task_to_refs[task].append(ref)
+
+            # Unlike the language split, an "unknown" task bucket is not
+            # emitted as a metric: every dataset item carries a task (the
+            # collator defaults to "asr"), so a missing code means the
+            # plumbing broke rather than the data being untagged — and the
+            # same samples already land in the per-language `unknown` bucket.
+            n_unknown_task = len(task_to_preds.get("unknown", ()))
+            if n_unknown_task:
+                logger.warning(
+                    "%d/%d evaluated samples had no task code; they are "
+                    "excluded from the per-task WER/CER split.",
+                    n_unknown_task,
+                    len(preds),
+                )
+
+            if list(task_to_preds) != ["unknown"]:
+                logger.info(
+                    "Per-task eval samples: %s",
+                    ", ".join(
+                        f"{task}={len(task_to_preds[task])}"
+                        for task in sorted(task_to_preds)
+                    ),
+                )
+                for task in sorted(task_to_preds):
+                    if task == "unknown":
+                        continue
+                    tp = task_to_preds[task]
+                    tr = task_to_refs[task]
+                    r[f"wer_{task}"] = jiwer.wer(tr, tp)
+                    r[f"cer_{task}"] = jiwer.cer(tr, tp)
+
             # We finished, hence we clean the buffers for the next evaluation phase
             self._predictions = []
             self._references = []
             self._langs = []
+            self._tasks = []
 
             return r
