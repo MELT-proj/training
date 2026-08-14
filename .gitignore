@@ -185,8 +185,12 @@ cython_debug/
 # state of the code, so they go stale the moment the branch moves on.
 history/
 
-# build_campaign_config.py output: the hours cache and its rendered configs.
-# Tracked on the campaign-artifacts branch instead -- fetch it directly
-# rather than merging, since neither file is code under review.
+# build_campaign_config.py's hours cache. Tracked on the campaign-artifacts
+# branch instead -- fetch it directly rather than merging, since it is a
+# measurement, not code under review.
+#
+# The rendered `config/train/ABL-*.yaml` configs used to be ignored here too.
+# They are tracked now: a config nobody can see in the diff is a config nobody
+# reviews, and being gitignored kept them out of `sync_repo.sh --dirty` and
+# silently ran stale renders on the cluster.
 campaign_hours.json
-config/train/ABL-*.yaml

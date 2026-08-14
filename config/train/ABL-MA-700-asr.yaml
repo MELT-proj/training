@@ -50,7 +50,7 @@ data:
   strict_text_field: true
 
   train_ds:
-    total_hours: 6732.55
+    total_hours: 3501.50
     total_cuts: 2143430 #11588853  # Optional: total number of cuts for estimation
     force_estimate: false  # Force estimation of total_hours at start
 
@@ -58,7 +58,7 @@ data:
     input_cfg:
       # ASR en: 700.3 h, reference-matched mix
       - type: group
-        weight: 0.10401705
+        weight: 0.20000000
         tags:
           task: asr
           lang: en
@@ -96,7 +96,7 @@ data:
             # 78.1 h of voxpopuli
       # ASR de: 700.3 h, reference-matched mix
       - type: group
-        weight: 0.10401705
+        weight: 0.20000000
         tags:
           task: asr
           lang: de
@@ -134,7 +134,7 @@ data:
             # 78.1 h of voxpopuli
       # ASR fr: 700.3 h, reference-matched mix
       - type: group
-        weight: 0.10401705
+        weight: 0.20000000
         tags:
           task: asr
           lang: fr
@@ -172,7 +172,7 @@ data:
             # 78.1 h of voxpopuli
       # ASR es: 700.3 h, reference-matched mix
       - type: group
-        weight: 0.10401705
+        weight: 0.20000000
         tags:
           task: asr
           lang: es
@@ -210,7 +210,7 @@ data:
             # 78.1 h of voxpopuli
       # ASR it: 700.3 h, reference-matched mix
       - type: group
-        weight: 0.10401705
+        weight: 0.20000000
         tags:
           task: asr
           lang: it
@@ -246,85 +246,6 @@ data:
               lang: it
               text_field: custom.pnc_text
             # 78.1 h of voxpopuli
-      # ST de->en: 700.3 h (7,429.1 h available)
-      - type: group
-        weight: 0.10401705
-        tags:
-          task: st
-          src_lang: de
-          tgt_lang: en
-        input_cfg:
-          - type: lhotse_shar
-            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/German/ast
-            weight: 1.00000000
-            tags:
-              task: st
-              src_lang: de
-              tgt_lang: en
-              text_field: custom.translation_en
-      # ST fr->en: 700.3 h (11,511.7 h available)
-      - type: group
-        weight: 0.10401705
-        tags:
-          task: st
-          src_lang: fr
-          tgt_lang: en
-        input_cfg:
-          - type: lhotse_shar
-            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/French/ast
-            weight: 1.00000000
-            tags:
-              task: st
-              src_lang: fr
-              tgt_lang: en
-              text_field: custom.translation_en
-      # ST es->en: 700.3 h (25,833.3 h available)
-      - type: group
-        weight: 0.10401705
-        tags:
-          task: st
-          src_lang: es
-          tgt_lang: en
-        input_cfg:
-          - type: lhotse_shar
-            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Spanish/ast
-            weight: 1.00000000
-            tags:
-              task: st
-              src_lang: es
-              tgt_lang: en
-              text_field: custom.translation_en
-      # ST it->en: 700.3 h (6,024.7 h available)
-      - type: group
-        weight: 0.10401705
-        tags:
-          task: st
-          src_lang: it
-          tgt_lang: en
-        input_cfg:
-          - type: lhotse_shar
-            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Italian/ast
-            weight: 1.00000000
-            tags:
-              task: st
-              src_lang: it
-              tgt_lang: en
-              text_field: custom.translation_en
-      # ST en->de: 429.9 h (429.9 h available)
-      - type: group
-        weight: 0.06384655
-        tags:
-          task: st
-          src_lang: en
-          tgt_lang: de
-        input_cfg:
-          - type: lhotse_shar
-            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_de/train
-            weight: 1.00000000
-            tags:
-              task: st
-              src_lang: en
-              tgt_lang: de
     # Batch settings
     batch_size: null  # Use batch_duration instead for dynamic batching
     batch_duration: 480  # seconds of audio per batch
@@ -355,7 +276,7 @@ data:
     lang_field: lang
 
   validation_ds:
-    total_hours: 212.08
+    total_hours: 186.03
     total_cuts: 58238  # Optional: total number of cuts for estimation
     force_estimate: false
 
@@ -485,14 +406,6 @@ data:
           lang: it
           text_field: custom.pnc_text
         # 4.5 h of voxpopuli (validation split)
-      # ST en->de validation (dev split): 26.0 h. No X->en probe: yodas-granary's `ast` sets have no held-out split.
-      - type: lhotse_shar
-        name: st_en_de
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_de/dev
-        tags:
-          task: st
-          src_lang: en
-          tgt_lang: de
     batch_size: null
     batch_duration: 300.0
     lhotse_sampler_type: dynamic_bucketing

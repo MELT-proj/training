@@ -51,8 +51,26 @@ is also why validation is not subject to ``--budget-hours``.  Every entry also
 carries a ``name`` (``asr_<lang>`` or ``st_<src>_<tgt>``): the trainer
 evaluates each name separately and reports ``eval_<name>_loss`` per set.
 
+``--tasks`` picks the task composition, which is what Phase D of the campaign
+compares. ``asr`` and ``both`` are *nested*: the ASR-only config holds exactly
+the sources of the ASR+ST one minus its ST groups, at the same per-language
+budget and the same reference-matched corpus mix, so a difference between the
+two runs is the ST data and nothing else. What changes is only the group
+weights, which are always proportional to the hours each group contributes
+(see ``yaml_block``): dropping the ST groups renormalises the five ASR
+languages from 1/9 each to 1/5 each.
+
+Both renders are modality-alignment configs, so ``data.apply_chat_template`` is
+pinned to ``false`` whatever the template said. MA for an *instruct* backbone
+still runs the chat template with an empty task instruction, but that is a
+command-line override on the run (``--data.apply_chat_template true
+--data.prompt_template_selection custom --data.prompt_template '{audio_token}'``),
+deliberately kept out of the config so the two arms differ only in the shell
+history.
+
 Usage::
 
+    # ASR+ST (the mixed arm)
     python3 infra/build_campaign_config.py \\
         --template       config/train/MA-v1.2.yaml \\
         --datasets-root  /mnt/scratch-nyx/giuseppe/melt/melt-data/shar \\
@@ -61,6 +79,16 @@ Usage::
         --tasks          both \\
         --cache          campaign_hours.json \\
         --out            config/train/ABL-MA-700.yaml
+
+    # ASR only (the modality-alignment arm), same flags but --tasks asr
+    python3 infra/build_campaign_config.py \\
+        --template       config/train/MA-v1.2.yaml \\
+        --datasets-root  /mnt/scratch-nyx/giuseppe/melt/melt-data/shar \\
+        --budget-hours   700.3 \\
+        --exclude-corpus fleurs \\
+        --tasks          asr \\
+        --cache          campaign_hours.json \\
+        --out            config/train/ABL-MA-700-asr.yaml
 
 Run it where the data is; it reads manifests, not audio.
 """
@@ -277,23 +305,48 @@ def check_feasible(hours: dict[str, float], template: dict[str, float],
     return problems
 
 
-def yaml_block(template: dict[str, float], hours: dict[str, float],
-               budget: float, tasks: str) -> tuple[list[str], float]:
-    """Render the input_cfg block, and return it with the total hours it implies."""
-    lines: list[str] = ["    input_cfg:"]
+def group_hours(hours: dict[str, float], budget: float,
+                tasks: str) -> list[tuple[str, float]]:
+    """The top-level groups this task composition trains, and the hours each draws.
 
+    An ASR language always draws the full budget -- feasibility was checked
+    first. An ST direction draws whatever it has, capped at the budget: every
+    X->en direction clears it several times over, but the en->de probe holds
+    only ~430 h and is *meant* to stay a probe rather than be cycled up to a
+    full language's worth (see ``ST_SOURCES``' note and the campaign design).
+    """
     groups: list[tuple[str, float]] = []
     if tasks in ("asr", "both"):
-        groups.extend((f"asr:{lang}", 1.0) for lang in TRAIN_LANGS)
+        groups.extend((f"asr:{lang}", budget) for lang in TRAIN_LANGS)
     if tasks in ("st", "both"):
-        groups.extend((f"st:{pair}", 1.0) for pair in ST_SOURCES)
-        groups.append(("st:en-de", 1.0))
+        for pair, spec in list(ST_SOURCES.items()) + list(ST_PROBE.items()):
+            groups.append((f"st:{pair}", min(budget, hours.get(spec["path"], 0.0))))
+    return groups
 
-    group_weight = 1.0 / len(groups)
+
+def yaml_block(template: dict[str, float], hours: dict[str, float],
+               budget: float, tasks: str) -> tuple[list[str], float]:
+    """Render the input_cfg block, and return it with the total hours it implies.
+
+    Group weights are the group's share of the mixture's *hours*, not a flat
+    ``1/len(groups)``: a group that draws fewer hours than the budget has to be
+    sampled proportionally less often, or the mixture the trainer actually
+    draws stops matching the ``total_hours`` written beside it. This only ever
+    bites the en->de probe (~430 h against a 700 h budget); with ``--tasks
+    asr`` every group draws the same budget and the weights collapse back to
+    ``1/len(TRAIN_LANGS)`` exactly.
+    """
+    lines: list[str] = ["    input_cfg:"]
+
+    groups = group_hours(hours, budget, tasks)
+    mixture_hours = sum(h for _, h in groups)
+    if mixture_hours <= 0:
+        raise SystemExit(f"No trainable hours for --tasks {tasks}.")
     total_hours = 0.0
 
-    for name, _ in groups:
+    for name, drawn in groups:
         kind, key = name.split(":", 1)
+        group_weight = drawn / mixture_hours
 
         if kind == "asr":
             lang = key
@@ -319,13 +372,12 @@ def yaml_block(template: dict[str, float], hours: dict[str, float],
                         f"              text_field: {TEXT_FIELD_OVERRIDES[corpus]}"
                     )
                 lines.append(f"            # {share * budget:,.1f} h of {corpus}")
-            total_hours += budget
+            total_hours += drawn
 
         else:
             spec = ST_SOURCES.get(key) or ST_PROBE[key]
             rel = spec["path"]
             available = hours.get(rel, 0.0)
-            drawn = min(budget, available)
             lines.append(
                 f"      # ST {spec['src']}->{spec['tgt']}: {drawn:,.1f} h "
                 f"({available:,.1f} h available)"
@@ -488,9 +540,13 @@ def main() -> int:
                    if c not in args.exclude_corpus}
     val_corpora = [c for c in VALIDATION_SPLIT if c in asr_sources]
 
+    # Every ASR corpus is measured even when excluded from the mix, so the
+    # cache stays comparable if an exclusion is revisited. The ST sources are
+    # not: with --tasks asr they contribute nothing to either block, and
+    # yodas-granary's `ast` sets are the largest sources in the collection
+    # (es->en alone is 25,833 h) — measuring them would dominate a cold run's
+    # I/O to produce numbers the config never uses.
     paths = [p for corpus in ASR_SOURCES.values() for p in corpus.values()]
-    paths += [s["path"] for s in ST_SOURCES.values()]
-    paths += [s["path"] for s in ST_PROBE.values()]
     if args.tasks in ("asr", "both"):
         paths += [
             validation_path(ASR_SOURCES[corpus][lang], VALIDATION_SPLIT[corpus])
@@ -498,6 +554,8 @@ def main() -> int:
             for corpus in val_corpora
         ]
     if args.tasks in ("st", "both"):
+        paths += [s["path"] for s in ST_SOURCES.values()]
+        paths += [s["path"] for s in ST_PROBE.values()]
         paths.append(validation_path(ST_PROBE["en-de"]["path"], ST_PROBE_VALIDATION_SPLIT))
 
     print(f"Measuring {len(paths)} sources under {args.datasets_root}")
@@ -523,6 +581,13 @@ def main() -> int:
         print(f"\nThe matched ceiling is {ceiling:,.1f} h/language.")
         return 1
 
+    groups = group_hours(hours, args.budget_hours, args.tasks)
+    mixture_hours = sum(h for _, h in groups)
+    print(f"\nTop-level groups for --tasks {args.tasks} "
+          f"(weight = share of the mixture's hours):")
+    for name, drawn in groups:
+        print(f"  {name:<12} {drawn / mixture_hours:.6f}  {drawn:8,.1f} h")
+
     lines, total = yaml_block(template, hours, args.budget_hours, args.tasks)
     val_lines, val_total = validation_yaml_block(asr_sources, hours, args.tasks)
 
@@ -535,6 +600,11 @@ def main() -> int:
             start, end, _ = _find_block(out_lines, section, "input_cfg")
             out_lines[start:end] = block
             _replace_scalar_in_section(out_lines, section, "total_hours", f"{section_total:.2f}")
+        # Both renders are MA-stage configs, so pin this rather than inherit it:
+        # rendering from an SFT template would otherwise quietly train modality
+        # alignment under a chat template. The instruct arms turn it back on per
+        # run from the command line (see the module docstring).
+        _replace_scalar_in_section(out_lines, "data", "apply_chat_template", "false")
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
