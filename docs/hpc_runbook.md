@@ -351,6 +351,46 @@ commit or stash on MN5 first.
 `runs/` is gitignored but holds the configs you launch with, so it is rsynced in
 both modes. Without that you'd edit a config locally and silently run the old one.
 
+**`config/train/ABL-*.yaml` is tracked**, so a committed render travels in both
+modes. It was gitignored until 2026-08-14, and that is worth knowing when
+reading older MN5 checkouts: `--dirty` feeds `.gitignore` to rsync as a filter,
+so a regenerated ablation config used to stay on the laptop while MN5 silently
+kept whatever it had. Commit renders now rather than relying on `--dirty`.
+
+Regenerating **on MN5** is still the safer habit for a *new* budget or task
+composition — the data is there, so the measurement is real rather than
+inherited from a cache someone else built:
+
+```bash
+# [mn5] from ~/training
+python3 infra/build_campaign_config.py \
+  --template config/train/ABL-MA-700.yaml \
+  --datasets-root /gpfs/projects/epor48/melt-data/shar \
+  --budget-hours 125 --tasks both --exclude-corpus fleurs \
+  --cache projects/ablation-campaign/campaign_hours.json \
+  --out config/train/ABL-MA-125.yaml
+```
+
+`--tasks` picks the task composition. `both` gives the ASR+ST mix;
+`asr` gives the ASR-only modality-alignment arm, which is the same config
+minus its ST groups — same languages, same budget, same corpus mix, with the
+five ASR groups renormalised from 1/9 to 1/5 each. Render the pair from the
+same template and the same `--budget-hours` so the two runs differ only in the
+ST data:
+
+```bash
+# [mn5] the ASR-only arm at the same budget
+python3 infra/build_campaign_config.py \
+  --template config/train/ABL-MA-700.yaml \
+  --datasets-root /gpfs/projects/epor48/melt-data/shar \
+  --budget-hours 125 --tasks asr --exclude-corpus fleurs \
+  --cache projects/ablation-campaign/campaign_hours.json \
+  --out config/train/ABL-MA-125-asr.yaml
+```
+
+Check `grep -c fleurs config/train/ABL-*.yaml` on MN5 if you are unsure whether
+you are looking at a stale render (0 = current, since fleurs is excluded).
+
 Use the default for anything you'll want to reproduce: a run launched from a
 `--dirty` tree has no commit to trace its checkpoints back to.
 
@@ -443,10 +483,12 @@ for elapsed time.
    The host `OUTPUT_DIR` is only the bind source; a host path here fails.
 2. **Check `--trainer.per_device_eval_batch_size` is a positive number.**
    `per_device_train_batch_size` is `-1` ("Lhotse handles batching"), which the
-   train path understands but the eval path does not — it crashes at the first
-   eval. The shipped configs now set the *eval* one to `4` explicitly, so you
-   only need to pass it if you write a config from scratch or override the
-   train value by mistake. `4` is known-good; `16` OOMs on 64 GB H100s.
+   train path understands but the eval path does not. Every shipped config now
+   sets the *eval* one to `4` explicitly, and since 0.5.2 the trainer refuses a
+   negative eval batch size *at startup* when evaluation is enabled, instead of
+   crashing at the first eval tens of minutes in. You only need to pass it if
+   you write a config from scratch or override the train value by mistake. `4`
+   is known-good; `16` OOMs on 64 GB H100s.
 3. **Pick the QoS, wall time and node count with environment variables.**
    Do *not* edit the site file for these:
 
@@ -631,12 +673,16 @@ world_size: 4, ... is_distributed: True
 ```
 
 **Loss and metrics.** Each eval prints a metrics dict to the log — overall
-`eval_loss`, `eval_wer`, `eval_cer`, plus per-language `eval_wer_<lang>` /
-`eval_cer_<lang>`. To watch them:
+`eval_loss`, `eval_wer`, `eval_cer`, per-language `eval_wer_<lang>` /
+`eval_cer_<lang>`, and per-task `eval_wer_asr` / `eval_wer_st` (same for
+`cer`). Campaign configs also name their validation sources (`asr_<lang>`,
+`st_<src>_<tgt>`), which splits eval into one reported set per name: each
+metrics dict then carries an `eval_<name>_` prefix and a per-set
+`eval_<name>_loss`. To watch them:
 
 ```bash
 # [mn5]
-grep -oE "'eval_(loss|wer|cer)': [0-9.]+" ~/training/logs/melt-train-container.<jobid>.out
+grep -oE "'eval_(loss|wer|cer)[a-z_]*': [0-9.]+" ~/training/logs/melt-train-container.<jobid>.out
 ```
 
 W&B runs **offline** (no internet), writing to `$OUTPUT_DIR/wandb/`. To see them
@@ -1098,7 +1144,7 @@ from the eval metrics in §B4.
 
 | symptom | cause |
 |---|---|
-| `batch_size should be a positive integer, but got -1` | missing `--trainer.per_device_eval_batch_size` |
+| `trainer.per_device_eval_batch_size is -1, but evaluation is enabled` | exactly what it says — pass `--trainer.per_device_eval_batch_size 4` or fix the config. Before 0.5.2 the same config instead crashed at the first eval with `Trying to create tensor with negative dimension -1` (or `batch_size should be a positive integer, but got -1`) |
 | `False is not a valid SaveStrategy` (or `…EvalStrategy`) | you passed `--trainer.save_strategy no`. Overrides are parsed as YAML, so `no`/`off` become `false` and `yes`/`on` become `true`. Quote it: `--trainer.save_strategy "'no'"` |
 | Job exits instantly, no log | `logs/` didn't exist, or a bad `--output` path — see §B4 |
 | `` `use_bucketing` is retired `` | config predates `lhotse_sampler_type`; swap it as the message says |

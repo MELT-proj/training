@@ -1,9 +1,9 @@
 """Tests for :class:`melt.training.metrics.TrainingEvaluator`.
 
-The per-language breakdown is only meaningful if each decoded prediction is
-paired with the language code of the sample it came from.  Under
-``batch_eval_metrics`` the evaluator is called once per batch while the language
-buffer it reads from holds every code seen so far in the evaluation, so the
+The per-language and per-task breakdowns are only meaningful if each decoded
+prediction is paired with the language/task code of the sample it came from.
+Under ``batch_eval_metrics`` the evaluator is called once per batch while the
+buffers it reads from hold every code seen so far in the evaluation, so the
 pairing depends on an offset that these tests pin down.
 """
 
@@ -50,19 +50,24 @@ def evaluator():
     )
 
 
-def _feed(evaluator, batches, langs_per_batch):
+def _feed(evaluator, batches, langs_per_batch, tasks_per_batch=None):
     """Drive the evaluator the way Trainer.evaluation_loop does.
 
-    ``langs`` accumulates across batches (the trainer buffers every code it has
-    seen); ``predictions``/``label_ids`` carry only the current batch.
+    ``langs`` (and ``tasks``, when given) accumulate across batches — the
+    trainer buffers every code it has seen — while ``predictions``/
+    ``label_ids`` carry only the current batch.
     """
     seen: list[str] = []
+    seen_tasks: list[str] = []
     result = None
     for i, (batch, langs) in enumerate(zip(batches, langs_per_batch)):
         seen.extend(langs)
         logits, labels = _batch(batch)
         prediction = EvalPrediction(predictions=logits, label_ids=labels)
         prediction.langs = list(seen)
+        if tasks_per_batch is not None:
+            seen_tasks.extend(tasks_per_batch[i])
+            prediction.tasks = list(seen_tasks)
         result = evaluator(prediction, compute_result=(i == len(batches) - 1))
     return result
 
@@ -156,3 +161,66 @@ def test_buffers_are_cleared_between_evaluations(evaluator):
 
     assert first["wer_de"] == 0.0 and first["wer_fr"] == 1.0
     assert second["wer_de"] == 0.0 and second["wer_fr"] == 0.0
+
+
+def test_per_task_metrics_split_asr_from_st(evaluator):
+    """`wer_asr`/`wer_st` each count only their own samples.
+
+    The language split still reports the mixed bucket (the samples all share
+    one language), so the task keys are what separates the two groups.
+    """
+    batches = [[(1, True), (2, False)], [(3, True), (4, False)]]
+    langs_per_batch = [["de", "de"], ["de", "de"]]
+    tasks_per_batch = [["asr", "st"], ["asr", "st"]]
+
+    result = _feed(evaluator, batches, langs_per_batch, tasks_per_batch)
+
+    assert result["wer_asr"] == 0.0
+    assert result["wer_st"] == 1.0
+    assert result["wer"] == 0.5
+    assert result["wer_de"] == 0.5
+
+
+def test_task_codes_pair_with_the_right_batch(evaluator):
+    """Task codes use the same cumulative offset as language codes.
+
+    The batches interleave the tasks in opposite order, so an evaluator that
+    read batch 2's codes from index 0 would swap them and report both tasks at
+    0.5 instead of 0.0 / 1.0.
+    """
+    batches = [[(1, True), (2, False)], [(3, False), (4, True)]]
+    langs_per_batch = [["de", "de"], ["de", "de"]]
+    tasks_per_batch = [["asr", "st"], ["st", "asr"]]
+
+    result = _feed(evaluator, batches, langs_per_batch, tasks_per_batch)
+
+    assert result["wer_asr"] == 0.0  # samples 1 and 4, both correct
+    assert result["wer_st"] == 1.0  # samples 2 and 3, both wrong
+
+
+def test_short_task_buffer_is_excluded_not_guessed(evaluator):
+    """Samples whose task code is missing stay out of the per-task split.
+
+    They must not collide with the language split's `wer_unknown` key either.
+    """
+    batches = [[(1, True), (2, False)]]
+    langs_per_batch = [["de", "de"]]
+    tasks_per_batch = [["asr"]]
+
+    result = _feed(evaluator, batches, langs_per_batch, tasks_per_batch)
+
+    assert result["wer_asr"] == 0.0
+    assert "wer_st" not in result
+    assert "wer_unknown" not in result  # the language split is unaffected
+
+
+def test_no_task_keys_when_no_task_codes_are_available(evaluator):
+    """Old-style calls without `tasks` keep their exact previous output."""
+    batches = [[(1, True), (2, False)]]
+    langs_per_batch = [["de", "fr"]]
+
+    result = _feed(evaluator, batches, langs_per_batch)
+
+    assert not [k for k in result if k in ("wer_asr", "wer_st", "cer_asr", "cer_st")]
+    assert result["wer_de"] == 0.0
+    assert result["wer_fr"] == 1.0

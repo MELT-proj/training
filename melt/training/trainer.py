@@ -90,6 +90,46 @@ def _shutdown_dataloader_workers(dataloader: DataLoader | None) -> None:
         logger.warning(f"Ignoring error while shutting down dataloader workers: {exc}")
 
 
+def _validate_eval_batch_size(args: TrainingArguments) -> None:
+    """Reject the ``-1`` batching sentinel on the *eval* side, at startup.
+
+    ``per_device_train_batch_size: -1`` means "Lhotse decides the batch", and
+    the train path honours it (see ``get_total_train_batch_size``).  Eval does
+    not: it uses a stock map-style DataLoader, and ``Trainer.evaluation_loop``
+    reads ``args.eval_batch_size`` directly to size its loss buffer
+    (``losses.repeat(batch_size)``), which fails with an unhelpful "Trying to
+    create tensor with negative dimension -1" — and only at the *first eval*,
+    tens of minutes into a run.
+
+    Copying the ``-1`` down from the train field is an easy mistake to make in
+    a new config, so refuse it here rather than at the first eval.
+    """
+    batch_size = getattr(args, "per_device_eval_batch_size", None)
+    if batch_size is None or batch_size >= 1:
+        return
+
+    # A config that never evaluates has no eval batch to size; leave it alone.
+    # `eval_strategy` may be an IntervalStrategy enum or a plain string, and
+    # str() renders the enum as "IntervalStrategy.NO", so match on the suffix.
+    strategy = str(getattr(args, "eval_strategy", "no")).lower()
+    eval_enabled = bool(
+        getattr(args, "do_eval", False)
+        or getattr(args, "eval_on_start", False)
+        or not strategy.endswith("no")
+    )
+    if not eval_enabled:
+        return
+
+    raise ValueError(
+        f"trainer.per_device_eval_batch_size is {batch_size}, but evaluation is "
+        "enabled. The -1 'Lhotse handles batching' sentinel is valid only for "
+        "per_device_train_batch_size; the eval path uses a plain DataLoader and "
+        "needs a real batch size. Set trainer.per_device_eval_batch_size to a "
+        "positive value (4 is known-good; 16 OOMs on 64 GB H100s), either in the "
+        "config or with --trainer.per_device_eval_batch_size 4."
+    )
+
+
 class MELTTrainer(Trainer):
     """Custom Trainer for MELT models with Lhotse data loading.
 
@@ -123,6 +163,8 @@ class MELTTrainer(Trainer):
         # Store config and processor before calling super().__init__
         self.config = config
         self.processor = processor
+
+        _validate_eval_batch_size(args)
 
         # Seeding happens in train.py, before the model is built -- HF's
         # Trainer.__init__ seeds too, but by then our model already exists.
@@ -192,9 +234,11 @@ class MELTTrainer(Trainer):
         # Reference to the training dataloader (for sampler access during checkpoint saving)
         self._train_dataloader_ref: DataLoader | None = None
 
-        # Buffer for per-sample language codes collected during evaluation.
-        # Populated by prediction_step(), consumed by the compute_metrics wrapper below.
+        # Buffers for per-sample language and task codes collected during
+        # evaluation.  Populated by prediction_step(), consumed by the
+        # compute_metrics wrapper below.
         self._eval_langs_buffer: list[str] = []
+        self._eval_tasks_buffer: list[str] = []
 
         # Prepared eval dataloaders kept alive across evaluate() calls, keyed by
         # eval-dataset name.  Only populated when persistent workers are enabled
@@ -204,26 +248,29 @@ class MELTTrainer(Trainer):
         # Initialize parent (may set up distributed)
         super().__init__(model=model, args=args, eval_dataset=eval_dataset, **kwargs)
 
-        # Wrap compute_metrics so that language codes buffered during
+        # Wrap compute_metrics so that language and task codes buffered during
         # prediction_step are attached to EvalPrediction before the real
         # metric function runs.  This avoids the need to override the entire
-        # evaluation_loop just for langs plumbing.
+        # evaluation_loop just for langs/tasks plumbing.
         _original_compute_metrics = self.compute_metrics
         if _original_compute_metrics is not None:
 
-            def _compute_metrics_with_langs(
+            def _compute_metrics_with_meta(
                 eval_prediction: EvalPrediction, **kwargs
             ) -> dict:
                 if self._eval_langs_buffer:
                     eval_prediction.langs = list(self._eval_langs_buffer)
+                if self._eval_tasks_buffer:
+                    eval_prediction.tasks = list(self._eval_tasks_buffer)
                 result = _original_compute_metrics(eval_prediction, **kwargs)
-                # Clear the buffer on the *final* call (batch_eval_metrics mode
+                # Clear the buffers on the *final* call (batch_eval_metrics mode
                 # makes per-batch calls with compute_result=False).
                 if kwargs.get("compute_result", True):
                     self._eval_langs_buffer = []
+                    self._eval_tasks_buffer = []
                 return result
 
-            self.compute_metrics = _compute_metrics_with_langs
+            self.compute_metrics = _compute_metrics_with_meta
 
         # Start CUDA memory history recording if memory_profiling is enabled.
         # Must happen after super().__init__() so the CUDA device is already initialised.
@@ -1190,15 +1237,16 @@ class MELTTrainer(Trainer):
             self._memory_profiling = False
 
     def evaluation_loop(self, *args, **kwargs):
-        """Start every evaluation pass with an empty language buffer.
+        """Start every evaluation pass with empty language and task buffers.
 
-        The compute_metrics wrapper clears the buffer on its final call, but it
-        only runs when there are metrics to compute.  A loop with
+        The compute_metrics wrapper clears the buffers on its final call, but
+        it only runs when there are metrics to compute.  A loop with
         ``prediction_loss_only`` — or one aborted part-way — would otherwise
         leave stale codes behind for the next pass to misalign against.  With a
         dict of named eval sets this also keeps each set's codes separate.
         """
         self._eval_langs_buffer = []
+        self._eval_tasks_buffer = []
         return super().evaluation_loop(*args, **kwargs)
 
     def prediction_step(
@@ -1208,9 +1256,10 @@ class MELTTrainer(Trainer):
         prediction_loss_only: bool,
         ignore_keys: list[str] | None = None,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
-        """Pop ``langs`` from inputs before delegating to the base implementation.
+        """Pop ``langs`` and ``tasks`` from inputs before delegating to the base
+        implementation.
 
-        Language codes are buffered on the trainer so that the
+        Language and task codes are buffered on the trainer so that the
         ``compute_metrics`` wrapper can attach them to the
         :class:`EvalPrediction` later.
 
@@ -1218,17 +1267,23 @@ class MELTTrainer(Trainer):
         describe: ``Trainer.evaluation_loop`` hands ``compute_metrics`` logits
         and labels that have already been through ``gather_function``, so a
         buffer holding only this rank's codes would be ``world_size`` times too
-        short and would line each prediction up with the wrong language.
-        ``gather_for_metrics`` also trims the duplicate samples accelerate pads
-        the final batch with, exactly as it does for the logits.
+        short and would line each prediction up with the wrong language or
+        task.  ``gather_for_metrics`` also trims the duplicate samples
+        accelerate pads the final batch with, exactly as it does for the
+        logits.
         """
         langs = inputs.pop("langs", None)
         if langs is not None:
-            # Buffer is initialised in __init__, reset at the top of every
-            # evaluation_loop, and cleared by the compute_metrics wrapper on the
-            # final call.
+            # Buffers are initialised in __init__, reset at the top of every
+            # evaluation_loop, and cleared by the compute_metrics wrapper on
+            # the final call.
             self._eval_langs_buffer.extend(
                 self.accelerator.gather_for_metrics(list(langs), use_gather_object=True)
+            )
+        tasks = inputs.pop("tasks", None)
+        if tasks is not None:
+            self._eval_tasks_buffer.extend(
+                self.accelerator.gather_for_metrics(list(tasks), use_gather_object=True)
             )
         return super().prediction_step(
             model, inputs, prediction_loss_only, ignore_keys=ignore_keys,
