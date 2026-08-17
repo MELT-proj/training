@@ -119,10 +119,13 @@ data:
   chat_template_config: chatml
   min_chars: 3
   # When true, a configured `text_field` that resolves to nothing raises
-  # instead of silently falling back to the supervision text. Turn this on for
-  # any mix containing ST sources, whose target (`custom.translation_en`) holds
+  # instead of silently falling back to the supervision text — but only when
+  # a fallback actually exists to fall back to. Turn this on for any mix
+  # containing ST sources, whose target (`custom.translation_en`) holds
   # different content from the supervision — the fallback turns such a sample
-  # into an ASR pair wearing an ST label.
+  # into an ASR pair wearing an ST label. A cut with no text anywhere (no
+  # configured field, no supervision text, no `custom.text`) has nothing to
+  # mislabel, so it is skipped like the non-strict case instead of raising.
   strict_text_field: false
 
   train_ds:
