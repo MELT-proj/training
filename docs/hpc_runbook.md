@@ -351,8 +351,8 @@ commit or stash on MN5 first.
 `runs/` is gitignored but holds the configs you launch with, so it is rsynced in
 both modes. Without that you'd edit a config locally and silently run the old one.
 
-**`config/train/ABL-*.yaml` is tracked**, so a committed render travels in both
-modes. It was gitignored until 2026-08-14, and that is worth knowing when
+**`projects/ablation-campaign/ABL-*.yaml` is tracked**, so a committed render
+travels in both modes. It was gitignored until 2026-08-14, and that is worth knowing when
 reading older MN5 checkouts: `--dirty` feeds `.gitignore` to rsync as a filter,
 so a regenerated ablation config used to stay on the laptop while MN5 silently
 kept whatever it had. Commit renders now rather than relying on `--dirty`.
@@ -363,12 +363,12 @@ inherited from a cache someone else built:
 
 ```bash
 # [mn5] from ~/training
-python3 infra/build_campaign_config.py \
-  --template config/train/ABL-MA-700.yaml \
+python3 projects/ablation-campaign/build_campaign_config.py \
+  --template projects/ablation-campaign/ABL-MA-700.yaml \
   --datasets-root /gpfs/projects/epor48/melt-data/shar \
   --budget-hours 125 --tasks both --exclude-corpus fleurs \
   --cache projects/ablation-campaign/campaign_hours.json \
-  --out config/train/ABL-MA-125.yaml
+  --out projects/ablation-campaign/ABL-MA-125.yaml
 ```
 
 `--tasks` picks the task composition. `both` gives the ASR+ST mix;
@@ -380,16 +380,17 @@ ST data:
 
 ```bash
 # [mn5] the ASR-only arm at the same budget
-python3 infra/build_campaign_config.py \
-  --template config/train/ABL-MA-700.yaml \
+python3 projects/ablation-campaign/build_campaign_config.py \
+  --template projects/ablation-campaign/ABL-MA-700.yaml \
   --datasets-root /gpfs/projects/epor48/melt-data/shar \
   --budget-hours 125 --tasks asr --exclude-corpus fleurs \
   --cache projects/ablation-campaign/campaign_hours.json \
-  --out config/train/ABL-MA-125-asr.yaml
+  --out projects/ablation-campaign/ABL-MA-125-asr.yaml
 ```
 
-Check `grep -c fleurs config/train/ABL-*.yaml` on MN5 if you are unsure whether
-you are looking at a stale render (0 = current, since fleurs is excluded).
+Check `grep -c fleurs projects/ablation-campaign/ABL-*.yaml` on MN5 if you are
+unsure whether you are looking at a stale render (0 = current, since fleurs is
+excluded).
 
 Use the default for anything you'll want to reproduce: a run launched from a
 `--dirty` tree has no commit to trace its checkpoints back to.

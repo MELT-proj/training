@@ -190,7 +190,14 @@ history/
 # to be ignored here and carried on the campaign-artifacts branch alone, which
 # is worth knowing when reading an older checkout.
 #
-# The rendered `config/train/ABL-*.yaml` configs used to be ignored here too.
-# They are tracked now: a config nobody can see in the diff is a config nobody
-# reviews, and being gitignored kept them out of `sync_repo.sh --dirty` and
-# silently ran stale renders on the cluster.
+# The rendered `ABL-*.yaml` configs used to be ignored here too, back when they
+# were written to `config/train/`. They are tracked now, beside the cache in
+# `projects/ablation-campaign/`: a config nobody can see in the diff is a config
+# nobody reviews, and being gitignored kept them out of `sync_repo.sh --dirty`
+# and silently ran stale renders on the cluster.
+
+# compute_mix_weights.py's measured-hours cache (its --cache default). Unlike
+# the campaign cache above it is keyed by absolute shar path, so it is
+# machine-specific; keep it locally to make a re-run after adding a corpus
+# cheap, but do not track it.
+infra/.mix_weights_hours.json

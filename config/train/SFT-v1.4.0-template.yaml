@@ -1,0 +1,1101 @@
+# MELT Training Configuration
+# Following NeMo SpeechLM2 configuration structure
+#
+# Usage:
+#   python src/train.py --config config/train/asr.yaml
+#   python src/train.py --config config/train/asr.yaml --trainer.max_steps=1000
+#   python src/train.py --config config/train/asr.yaml --run.exp_name=my_experiment
+
+# =============================================================================
+# Run Configuration (non-TrainingArguments settings)
+# =============================================================================
+run:
+  exp_name: SFT-v1.4.0
+  dry_run: false
+
+# =============================================================================
+# Model Configuration
+# =============================================================================
+model:
+  encoder:
+    name: facebook/w2v-bert-2.0
+    freeze: true
+    max_audio_seq_len: 1500 # for frames of 20ms, this is 30s
+
+  decoder:
+    name: Qwen/Qwen3-1.7B
+    attn_implementation: flash_attention_2
+    freeze: false
+    bos_token: <|startoftext|>
+    eos_token: <|endoftext|>
+    pad_token: <|text_pad|> # used if not specified in tokenizer
+    audio_token: <|audio|>
+    audio_bos_token: <|audio_bos|>
+    audio_eos_token: <|audio_eos|>
+  
+  adapter:
+    freeze: true
+    _type: conformer
+    num_adapter_layers: 2
+    adapter_kernel_size: 3
+    adapter_stride: 2
+  
+  ckpt: null # IMPORTANT: this should be set from the CLI!
+
+# =============================================================================
+# Data Configuration
+# =============================================================================
+data:
+  sample_rate: 16000
+  apply_chat_template: true
+  strict_text_field: true
+
+  train_ds:
+    # Data sources - list of datasets to load
+    input_cfg:
+      # Librispeech
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/train.100
+        tags:
+          task: asr
+          lang: en
+          text_field: custom.pnc_text
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/train.360
+        tags:
+          task: asr
+          lang: en
+          text_field: custom.pnc_text
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/other/train.500
+        tags:
+          task: asr
+          lang: en
+          text_field: custom.pnc_text
+
+      # MLS Sidon
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/dutch/train
+        tags:
+          task: asr
+          lang: nl
+          text_field: custom.pnc_text
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/english/train
+        tags:
+          task: asr
+          lang: en
+          text_field: custom.pnc_text
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/french/train
+        tags:
+          task: asr
+          lang: fr
+          text_field: custom.pnc_text
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/german/train
+        tags:
+          task: asr
+          lang: de
+          text_field: custom.pnc_text
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/italian/train
+        tags:
+          task: asr
+          lang: it
+          text_field: custom.pnc_text
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/polish/train
+        tags:
+          task: asr
+          lang: pl
+          text_field: custom.pnc_text
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/portuguese/train
+        tags:
+          task: asr
+          lang: pt
+          text_field: custom.pnc_text
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/spanish/train
+        tags:
+          task: asr
+          lang: es
+          text_field: custom.pnc_text
+
+      # FLEURS
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/de_de/train
+        tags:
+          task: asr
+          lang: de_de
+          text_field: custom.pnc_text
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/en_us/train
+        tags:
+          task: asr
+          lang: en_us
+          text_field: custom.pnc_text
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/es_419/train
+        tags:
+          task: asr
+          lang: es_419
+          text_field: custom.pnc_text
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/fr_fr/train
+        tags:
+          task: asr
+          lang: fr_fr
+          text_field: custom.pnc_text
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/it_it/train
+        tags:
+          task: asr
+          lang: it_it
+          text_field: custom.pnc_text
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/pt_br/train
+        tags:
+          task: asr
+          lang: pt_br
+          text_field: custom.pnc_text
+
+      # CV 22 Sidon
+      # For CommonVoice, text is in custom.metadata.sentence, so override text_field
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/cs/train
+        tags:
+          task: asr
+          lang: cs
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/de/train
+        tags:
+          task: asr
+          lang: de
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/en/train
+        tags:
+          task: asr
+          lang: en
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/es/train
+        tags:
+          task: asr
+          lang: es
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/fr/train
+        tags:
+          task: asr
+          lang: fr
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/it/train
+        tags:
+          task: asr
+          lang: it
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ja/train
+        tags:
+          task: asr
+          lang: ja
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/pt/train
+        tags:
+          task: asr
+          lang: pt
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/zh-CN/train
+        tags:
+          task: asr
+          lang: zh-CN
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/zh-HK/train
+        tags:
+          task: asr
+          lang: zh-HK
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/zh-TW/train
+        tags:
+          task: asr
+          lang: zh-TW
+          text_field: custom.metadata.sentence
+
+      # People's Speech
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/peoples_speech/clean/train
+        tags:
+          task: asr
+          lang: en
+          text_field: custom.pnc_text
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/peoples_speech/clean_sa/train
+        tags:
+          task: asr
+          lang: en
+          text_field: custom.pnc_text
+
+      # VoxPopuli
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/de/train
+        tags:
+          task: asr
+          lang: de
+          text_field: custom.pnc_text
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/en/train
+        tags:
+          task: asr
+          lang: en
+          text_field: custom.pnc_text
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/es/train
+        tags:
+          task: asr
+          lang: es
+          text_field: custom.pnc_text
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/fr/train
+        tags:
+          task: asr
+          lang: fr
+          text_field: custom.pnc_text
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/it/train
+        tags:
+          task: asr
+          lang: it
+          text_field: custom.pnc_text
+
+      # YODAS-Granary
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Bulgarian/asr_only
+        tags:
+          task: asr
+          lang: bg
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Bulgarian/ast
+        tags:
+          task: st
+          src_lang: bg
+          tgt_lang: en
+          text_field: custom.translation_en
+      # Same audio as the ast source above, used as ASR as well: each cut
+      # carries the Bulgarian transcript in its supervision, and only the
+      # English translation is at custom.translation_en. No text_field, so
+      # the supervision text is used -- same convention as asr_only.
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Bulgarian/ast
+        tags:
+          task: asr
+          lang: bg
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Croatian/asr_only
+        tags:
+          task: asr
+          lang: hr
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Croatian/ast
+        tags:
+          task: st
+          src_lang: hr
+          tgt_lang: en
+          text_field: custom.translation_en
+      # Same audio as the ast source above, used as ASR as well: each cut
+      # carries the Croatian transcript in its supervision, and only the
+      # English translation is at custom.translation_en. No text_field, so
+      # the supervision text is used -- same convention as asr_only.
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Croatian/ast
+        tags:
+          task: asr
+          lang: hr
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Czech/asr_only
+        tags:
+          task: asr
+          lang: cs
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Czech/ast
+        tags:
+          task: st
+          src_lang: cs
+          tgt_lang: en
+          text_field: custom.translation_en
+      # Same audio as the ast source above, used as ASR as well: each cut
+      # carries the Czech transcript in its supervision, and only the
+      # English translation is at custom.translation_en. No text_field, so
+      # the supervision text is used -- same convention as asr_only.
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Czech/ast
+        tags:
+          task: asr
+          lang: cs
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Danish/asr_only
+        tags:
+          task: asr
+          lang: da
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Danish/ast
+        tags:
+          task: st
+          src_lang: da
+          tgt_lang: en
+          text_field: custom.translation_en
+      # Same audio as the ast source above, used as ASR as well: each cut
+      # carries the Danish transcript in its supervision, and only the
+      # English translation is at custom.translation_en. No text_field, so
+      # the supervision text is used -- same convention as asr_only.
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Danish/ast
+        tags:
+          task: asr
+          lang: da
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Dutch/asr_only
+        tags:
+          task: asr
+          lang: nl
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Dutch/ast
+        tags:
+          task: st
+          src_lang: nl
+          tgt_lang: en
+          text_field: custom.translation_en
+      # Same audio as the ast source above, used as ASR as well: each cut
+      # carries the Dutch transcript in its supervision, and only the
+      # English translation is at custom.translation_en. No text_field, so
+      # the supervision text is used -- same convention as asr_only.
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Dutch/ast
+        tags:
+          task: asr
+          lang: nl
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/English/asr_only
+        tags:
+          task: asr
+          lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Estonian/asr_only
+        tags:
+          task: asr
+          lang: et
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Estonian/ast
+        tags:
+          task: st
+          src_lang: et
+          tgt_lang: en
+          text_field: custom.translation_en
+      # Same audio as the ast source above, used as ASR as well: each cut
+      # carries the Estonian transcript in its supervision, and only the
+      # English translation is at custom.translation_en. No text_field, so
+      # the supervision text is used -- same convention as asr_only.
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Estonian/ast
+        tags:
+          task: asr
+          lang: et
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Finnish/asr_only
+        tags:
+          task: asr
+          lang: fi
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Finnish/ast
+        tags:
+          task: st
+          src_lang: fi
+          tgt_lang: en
+          text_field: custom.translation_en
+      # Same audio as the ast source above, used as ASR as well: each cut
+      # carries the Finnish transcript in its supervision, and only the
+      # English translation is at custom.translation_en. No text_field, so
+      # the supervision text is used -- same convention as asr_only.
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Finnish/ast
+        tags:
+          task: asr
+          lang: fi
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/French/asr_only
+        tags:
+          task: asr
+          lang: fr
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/French/ast
+        tags:
+          task: st
+          src_lang: fr
+          tgt_lang: en
+          text_field: custom.translation_en
+      # Same audio as the ast source above, used as ASR as well: each cut
+      # carries the French transcript in its supervision, and only the
+      # English translation is at custom.translation_en. No text_field, so
+      # the supervision text is used -- same convention as asr_only.
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/French/ast
+        tags:
+          task: asr
+          lang: fr
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/German/asr_only
+        tags:
+          task: asr
+          lang: de
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/German/ast
+        tags:
+          task: st
+          src_lang: de
+          tgt_lang: en
+          text_field: custom.translation_en
+      # Same audio as the ast source above, used as ASR as well: each cut
+      # carries the German transcript in its supervision, and only the
+      # English translation is at custom.translation_en. No text_field, so
+      # the supervision text is used -- same convention as asr_only.
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/German/ast
+        tags:
+          task: asr
+          lang: de
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Greek/asr_only
+        tags:
+          task: asr
+          lang: el
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Greek/ast
+        tags:
+          task: st
+          src_lang: el
+          tgt_lang: en
+          text_field: custom.translation_en
+      # Same audio as the ast source above, used as ASR as well: each cut
+      # carries the Greek transcript in its supervision, and only the
+      # English translation is at custom.translation_en. No text_field, so
+      # the supervision text is used -- same convention as asr_only.
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Greek/ast
+        tags:
+          task: asr
+          lang: el
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Hungarian/asr_only
+        tags:
+          task: asr
+          lang: hu
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Hungarian/ast
+        tags:
+          task: st
+          src_lang: hu
+          tgt_lang: en
+          text_field: custom.translation_en
+      # Same audio as the ast source above, used as ASR as well: each cut
+      # carries the Hungarian transcript in its supervision, and only the
+      # English translation is at custom.translation_en. No text_field, so
+      # the supervision text is used -- same convention as asr_only.
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Hungarian/ast
+        tags:
+          task: asr
+          lang: hu
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Italian/asr_only
+        tags:
+          task: asr
+          lang: it
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Italian/ast
+        tags:
+          task: st
+          src_lang: it
+          tgt_lang: en
+          text_field: custom.translation_en
+      # Same audio as the ast source above, used as ASR as well: each cut
+      # carries the Italian transcript in its supervision, and only the
+      # English translation is at custom.translation_en. No text_field, so
+      # the supervision text is used -- same convention as asr_only.
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Italian/ast
+        tags:
+          task: asr
+          lang: it
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Latvian/asr_only
+        tags:
+          task: asr
+          lang: lv
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Latvian/ast
+        tags:
+          task: st
+          src_lang: lv
+          tgt_lang: en
+          text_field: custom.translation_en
+      # Same audio as the ast source above, used as ASR as well: each cut
+      # carries the Latvian transcript in its supervision, and only the
+      # English translation is at custom.translation_en. No text_field, so
+      # the supervision text is used -- same convention as asr_only.
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Latvian/ast
+        tags:
+          task: asr
+          lang: lv
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Lithuanian/asr_only
+        tags:
+          task: asr
+          lang: lt
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Lithuanian/ast
+        tags:
+          task: st
+          src_lang: lt
+          tgt_lang: en
+          text_field: custom.translation_en
+      # Same audio as the ast source above, used as ASR as well: each cut
+      # carries the Lithuanian transcript in its supervision, and only the
+      # English translation is at custom.translation_en. No text_field, so
+      # the supervision text is used -- same convention as asr_only.
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Lithuanian/ast
+        tags:
+          task: asr
+          lang: lt
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Polish/asr_only
+        tags:
+          task: asr
+          lang: pl
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Polish/ast
+        tags:
+          task: st
+          src_lang: pl
+          tgt_lang: en
+          text_field: custom.translation_en
+      # Same audio as the ast source above, used as ASR as well: each cut
+      # carries the Polish transcript in its supervision, and only the
+      # English translation is at custom.translation_en. No text_field, so
+      # the supervision text is used -- same convention as asr_only.
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Polish/ast
+        tags:
+          task: asr
+          lang: pl
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Portuguese/asr_only
+        tags:
+          task: asr
+          lang: pt
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Portuguese/ast
+        tags:
+          task: st
+          src_lang: pt
+          tgt_lang: en
+          text_field: custom.translation_en
+      # Same audio as the ast source above, used as ASR as well: each cut
+      # carries the Portuguese transcript in its supervision, and only the
+      # English translation is at custom.translation_en. No text_field, so
+      # the supervision text is used -- same convention as asr_only.
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Portuguese/ast
+        tags:
+          task: asr
+          lang: pt
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Romanian/asr_only
+        tags:
+          task: asr
+          lang: ro
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Romanian/ast
+        tags:
+          task: st
+          src_lang: ro
+          tgt_lang: en
+          text_field: custom.translation_en
+      # Same audio as the ast source above, used as ASR as well: each cut
+      # carries the Romanian transcript in its supervision, and only the
+      # English translation is at custom.translation_en. No text_field, so
+      # the supervision text is used -- same convention as asr_only.
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Romanian/ast
+        tags:
+          task: asr
+          lang: ro
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Russian/asr_only
+        tags:
+          task: asr
+          lang: ru
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Russian/ast
+        tags:
+          task: st
+          src_lang: ru
+          tgt_lang: en
+          text_field: custom.translation_en
+      # Same audio as the ast source above, used as ASR as well: each cut
+      # carries the Russian transcript in its supervision, and only the
+      # English translation is at custom.translation_en. No text_field, so
+      # the supervision text is used -- same convention as asr_only.
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Russian/ast
+        tags:
+          task: asr
+          lang: ru
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Slovak/asr_only
+        tags:
+          task: asr
+          lang: sk
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Slovak/ast
+        tags:
+          task: st
+          src_lang: sk
+          tgt_lang: en
+          text_field: custom.translation_en
+      # Same audio as the ast source above, used as ASR as well: each cut
+      # carries the Slovak transcript in its supervision, and only the
+      # English translation is at custom.translation_en. No text_field, so
+      # the supervision text is used -- same convention as asr_only.
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Slovak/ast
+        tags:
+          task: asr
+          lang: sk
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Spanish/asr_only
+        tags:
+          task: asr
+          lang: es
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Spanish/ast
+        tags:
+          task: st
+          src_lang: es
+          tgt_lang: en
+          text_field: custom.translation_en
+      # Same audio as the ast source above, used as ASR as well: each cut
+      # carries the Spanish transcript in its supervision, and only the
+      # English translation is at custom.translation_en. No text_field, so
+      # the supervision text is used -- same convention as asr_only.
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Spanish/ast
+        tags:
+          task: asr
+          lang: es
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Swedish/asr_only
+        tags:
+          task: asr
+          lang: sv
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Swedish/ast
+        tags:
+          task: st
+          src_lang: sv
+          tgt_lang: en
+          text_field: custom.translation_en
+      # Same audio as the ast source above, used as ASR as well: each cut
+      # carries the Swedish transcript in its supervision, and only the
+      # English translation is at custom.translation_en. No text_field, so
+      # the supervision text is used -- same convention as asr_only.
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Swedish/ast
+        tags:
+          task: asr
+          lang: sv
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Ukrainian/asr_only
+        tags:
+          task: asr
+          lang: uk
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Ukrainian/ast
+        tags:
+          task: st
+          src_lang: uk
+          tgt_lang: en
+          text_field: custom.translation_en
+
+      # Same audio as the ast source above, used as ASR as well: each cut
+      # carries the Ukrainian transcript in its supervision, and only the
+      # English translation is at custom.translation_en. No text_field, so
+      # the supervision text is used -- same convention as asr_only.
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Ukrainian/ast
+        tags:
+          task: asr
+          lang: uk
+      # CoVoST2 (speech translation, English source)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_ar/train
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: ar
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_ca/train
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: ca
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_cy/train
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: cy
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_de/train
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: de
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_et/train
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: et
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_ja/train
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: ja
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_lv/train
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: lv
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_sl/train
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: sl
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_sv-SE/train
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: sv-SE
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_tr/train
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: tr
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_zh-CN/train
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: zh-CN
+
+      # CoVoST2 (speech translation, English target)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/ar_en/train
+        tags:
+          task: st
+          src_lang: ar
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/ca_en/train
+        tags:
+          task: st
+          src_lang: ca
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/cy_en/train
+        tags:
+          task: st
+          src_lang: cy
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/de_en/train
+        tags:
+          task: st
+          src_lang: de
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/es_en/train
+        tags:
+          task: st
+          src_lang: es
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/et_en/train
+        tags:
+          task: st
+          src_lang: et
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/fr_en/train
+        tags:
+          task: st
+          src_lang: fr
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/it_en/train
+        tags:
+          task: st
+          src_lang: it
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/ja_en/train
+        tags:
+          task: st
+          src_lang: ja
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/lv_en/train
+        tags:
+          task: st
+          src_lang: lv
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/nl_en/train
+        tags:
+          task: st
+          src_lang: nl
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/pt_en/train
+        tags:
+          task: st
+          src_lang: pt
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/ru_en/train
+        tags:
+          task: st
+          src_lang: ru
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/sl_en/train
+        tags:
+          task: st
+          src_lang: sl
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/sv-SE_en/train
+        tags:
+          task: st
+          src_lang: sv-SE
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/tr_en/train
+        tags:
+          task: st
+          src_lang: tr
+          tgt_lang: en
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/zh-CN_en/train
+        tags:
+          task: st
+          src_lang: zh-CN
+          tgt_lang: en
+
+    # Stats
+    # total_hours is overwritten by infra/compute_mix_weights.py from its own
+    # measurement; total_cuts is not (see docs/mixture_weights.md), so it is
+    # maintained here. Both count the 22 yodas-granary ast leaves twice, once
+    # per task, because the mixture draws from each of those leaves twice.
+    total_hours: 240916.1
+    total_cuts: 120949122
+    force_estimate: false
+
+    # Duration filtering
+    min_duration: 0.5
+    max_duration: 120.0
+    
+    # Batch settings
+    batch_size: null  # Use batch_duration instead for dynamic batching
+    batch_duration: 90  # seconds of audio per batch
+    quadratic_duration: 30 # see https://lhotse.readthedocs.io/en/latest/datasets.html#lhotse.dataset.sampling.TimeConstraint
+
+    # Bucketing for efficient batching
+    lhotse_sampler_type: dynamic_bucketing  # One among: dynamic_bucketing, dynamic, bucketing
+    num_buckets: 30
+    buffer_size: 10000
+    bucket_duration_bins: [2.42, 3.6, 4.54, 5.41, 6.26, 7.18, 8.24, 9.52, 10.64, 11.64, 12.61, 13.56, 14.42, 14.89, 15.62, 16.58, 17.58, 18.58, 19.64, 21.6, 23.92, 26.18, 28.44, 31.7, 34.9, 36.4, 37.5, 38.42, 39.24]
+
+    # Sampling
+    shuffle: true
+    drop_last: false
+    seed: 42
+    # A scalar here is one value shared by every process, so every DDP rank
+    # resolves the same RNG and yields the same batch sequence. 'randomized'
+    # resolves per rank and worker while staying reproducible across runs.
+    shard_seed: randomized
+
+    # DataLoader settings
+    num_workers: 1
+    pin_memory: true
+    prefetch_factor: 32
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+  validation_ds:
+    input_cfg:
+      # English Validation
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/validation
+        tags:
+          task: asr
+          lang: en
+          text_field: custom.pnc_text
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/other/validation
+        tags:
+          task: asr
+          lang: en
+          text_field: custom.pnc_text
+
+      # Multilingual Validation
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/es_419/validation
+        tags:
+          task: asr
+          lang: es_419
+          text_field: custom.pnc_text
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/cs/validation
+        tags:
+          task: asr
+          lang: cs
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/de/validation
+        tags:
+          task: asr
+          lang: de
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/zh-CN/validation
+        tags:
+          task: asr
+          lang: zh-CN
+          text_field: custom.metadata.sentence
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/pt_br/validation
+        tags:
+          task: asr
+          lang: pt_br
+          text_field: custom.pnc_text
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/polish/dev
+        tags:
+          task: asr
+          lang: pl
+          text_field: custom.pnc_text
+  
+    # Statistics
+    total_hours: null
+    total_cuts: null
+    force_estimate: true
+
+    # Batch composition
+    batch_size: 16
+    batch_duration: null
+    lhotse_sampler_type: dynamic_bucketing
+    num_buckets: 30
+    bucket_duration_bins: null
+    
+    buffer_size: 20000
+    shuffle: false
+    drop_last: true
+    min_duration: 0.5
+    max_duration: 120.0
+    num_workers: 0
+    pin_memory: true
+    prefetch_factor: null
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+# =============================================================================
+# Trainer Configuration
+# =============================================================================
+trainer:
+  output_dir: ${oc.env:OUTPUT_DIR}
+  overwrite_output_dir: false
+  resume_from_checkpoint: null
+  seed: 42
+  do_train: true
+  do_eval: true
+  eval_on_start: true
+  average_tokens_across_devices: true
+
+  # Batch and accumulation
+  per_device_train_batch_size: -1  # Handled by Lhotse, set to 1
+  # Eval does NOT go through Lhotse — it uses a plain DataLoader, and -1 here
+  # crashes the first eval. 4 is known-good; 16 OOMs on 64 GB H100s.
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 4
+
+  # LR schedule
+  lr_scheduler_type: cosine
+  warmup_steps: 20
+
+  # Duration
+  num_train_epochs: 2
+  max_steps: -1
+
+  # Logging
+  logging_strategy: steps
+  logging_steps: 5
+  report_to: wandb
+
+  # Evaluation
+  eval_strategy: steps # "no" # steps
+  eval_steps: 100
+  batch_eval_metrics: true
+
+  # Checkpointing
+  save_strategy: steps
+  save_steps: 1000
+  save_total_limit: 5
+
+  # Performance
+  bf16: true
+  group_by_length: false
+  dataloader_num_workers: 4  # Eval-only knob (train workers come from data.train_ds.num_workers)
+  remove_unused_columns: false
+  ddp_find_unused_parameters: false
+
+  max_grad_norm: 1.0
+
+evaluation:
+  compute_metrics: true
+  enable_whisper_normalization: true
+
+optimization:
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  encoder_lr: 6e-6
+  decoder_lr: 2e-5
+  adapter_lr: 2e-4
+  min_lr_scale: 0.1
