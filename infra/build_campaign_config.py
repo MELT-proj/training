@@ -182,9 +182,11 @@ ASR_SOURCES: dict[str, dict[str, str]] = {
 #
 # With ``data.strict_text_field`` a source lacking the named field fails
 # loudly at startup rather than silently falling back to the supervision —
-# which is the point. See ``docs/pnc_coverage.md`` in the MELT-proj/preprocessing
-# repo for exactly which sources have ``pnc_text`` today; do not add a corpus
-# here ahead of its backfill landing.
+# which is the point. The one cut it lets through quietly is the one with no
+# text anywhere: nothing to fall back to means nothing to mislabel, so the
+# loader skips it as it always did. See ``docs/pnc_coverage.md`` in the
+# MELT-proj/preprocessing repo for exactly which sources have ``pnc_text``
+# today; do not add a corpus here ahead of its backfill landing.
 TEXT_FIELD_OVERRIDES = {
     "cv22_sidon": "custom.metadata.sentence",
     "mls_sidon": "custom.pnc_text",
