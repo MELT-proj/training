@@ -367,7 +367,8 @@ python3 infra/build_campaign_config.py \
   --template config/train/ABL-MA-700.yaml \
   --datasets-root /gpfs/projects/epor48/melt-data/shar \
   --budget-hours 125 --tasks both --exclude-corpus fleurs \
-  --cache campaign_hours.json --out config/train/ABL-MA-125.yaml
+  --cache projects/ablation-campaign/campaign_hours.json \
+  --out config/train/ABL-MA-125.yaml
 ```
 
 `--tasks` picks the task composition. `both` gives the ASR+ST mix;
@@ -383,7 +384,8 @@ python3 infra/build_campaign_config.py \
   --template config/train/ABL-MA-700.yaml \
   --datasets-root /gpfs/projects/epor48/melt-data/shar \
   --budget-hours 125 --tasks asr --exclude-corpus fleurs \
-  --cache campaign_hours.json --out config/train/ABL-MA-125-asr.yaml
+  --cache projects/ablation-campaign/campaign_hours.json \
+  --out config/train/ABL-MA-125-asr.yaml
 ```
 
 Check `grep -c fleurs config/train/ABL-*.yaml` on MN5 if you are unsure whether

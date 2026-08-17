@@ -77,7 +77,7 @@ Usage::
         --budget-hours   700.3 \\
         --exclude-corpus fleurs \\
         --tasks          both \\
-        --cache          campaign_hours.json \\
+        --cache          projects/ablation-campaign/campaign_hours.json \\
         --out            config/train/ABL-MA-700.yaml
 
     # ASR only (the modality-alignment arm), same flags but --tasks asr
@@ -87,7 +87,7 @@ Usage::
         --budget-hours   700.3 \\
         --exclude-corpus fleurs \\
         --tasks          asr \\
-        --cache          campaign_hours.json \\
+        --cache          projects/ablation-campaign/campaign_hours.json \\
         --out            config/train/ABL-MA-700-asr.yaml
 
 Run it where the data is; it reads manifests, not audio.
