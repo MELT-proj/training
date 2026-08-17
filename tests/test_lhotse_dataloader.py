@@ -998,6 +998,49 @@ class TestStrictTextField:
 
         assert get_text_from_cut(cut, "text", strict=True) == "hola mundo"
 
+    def test_strict_returns_none_when_no_text_exists_anywhere(self):
+        from melt.training.data.audio.lhotse.helpers import get_text_from_cut
+
+        # No supervisions (text=None), no custom.text, and the configured
+        # field is absent too. There is nothing here to mislabel — a fallback
+        # was never on the table — so strict mode must skip the cut like the
+        # non-strict path instead of raising.
+        cut = _StubCut(text=None, custom={"translation_en": None})
+
+        assert get_text_from_cut(cut, "custom.translation_en", strict=True) is None
+
+    def test_strict_returns_none_when_only_fallback_is_whitespace(self):
+        from melt.training.data.audio.lhotse.helpers import get_text_from_cut
+
+        # The supervision text exists but is whitespace-only, which counts as
+        # absent for fallback purposes. There is still no real fallback to
+        # protect against, so this must skip rather than raise.
+        cut = _StubCut(text="   ", custom={"translation_en": None})
+
+        assert get_text_from_cut(cut, "custom.translation_en", strict=True) is None
+
+    def test_strict_still_raises_when_a_custom_text_fallback_exists(self):
+        from melt.training.data.audio.lhotse.helpers import get_text_from_cut
+
+        # No supervisions, but `custom.text` is populated — that is a real
+        # fallback that falling back to would silently mislabel the sample,
+        # so strict mode must still raise even though the supervision list
+        # is empty.
+        cut = _StubCut(text=None, custom={"translation_en": None, "text": "hola mundo"})
+
+        with pytest.raises(ValueError, match="translation_en"):
+            get_text_from_cut(cut, "custom.translation_en", strict=True)
+
+    def test_non_strict_returns_none_for_a_textless_cut(self):
+        from melt.training.data.audio.lhotse.helpers import get_text_from_cut
+
+        # Same textless cut as the strict "skip, don't raise" case above:
+        # non-strict mode already returned None here and this refactor must
+        # not change that.
+        cut = _StubCut(text=None, custom={"translation_en": None})
+
+        assert get_text_from_cut(cut, "custom.translation_en", strict=False) is None
+
 
 class TestEvalValidityScanHonoursPerCutOverride:
     """The validity scan and the fetch must resolve `text_field` identically.
@@ -1041,6 +1084,22 @@ class TestEvalValidityScanHonoursPerCutOverride:
 
         assert len(ds) == 1
         assert ds._resolve_text_field(cut) == "custom.translation_en"
+
+    def test_strict_scan_skips_a_textless_cut_instead_of_raising(self):
+        from melt.training.data.audio.lhotse.map_dataset import MELTMapDataset
+
+        # A cut with no supervision text and no custom.text under the
+        # configured text_field has nothing a fallback could mislabel, so
+        # construction must complete and simply exclude the cut rather than
+        # raising out of the constructor.
+        cut = _StubCut(text=None, custom={"translation_en": None})
+        cfg = OmegaConf.create(
+            {"input_cfg": [], "text_field": "custom.translation_en", "strict_text_field": True}
+        )
+
+        ds = MELTMapDataset(cuts=[cut], processor=None, config=cfg, is_train=False)
+
+        assert len(ds) == 0
 
 
 class TestTagWriteReadRoundTrip:
