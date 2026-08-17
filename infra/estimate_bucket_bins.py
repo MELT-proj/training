@@ -30,6 +30,12 @@ from lhotse import CutSet
 from omegaconf import DictConfig, ListConfig, OmegaConf
 from tqdm import tqdm
 
+# Kept in a module of its own so that tools which only need the bin arithmetic
+# can import it without joblib/omegaconf/lhotse, which are not installed
+# everywhere this repo runs.  Re-exported here so this script's own callers and
+# `from estimate_bucket_bins import ...` keep working unchanged.
+from bucket_bins import estimate_bins_from_durations, format_bins_for_yaml  # noqa: F401
+
 
 def load_yaml_config(config_path: str | Path) -> DictConfig:
     """Load a YAML configuration file using OmegaConf.
@@ -458,49 +464,6 @@ def load_cutset_from_config(
     return all_durations, per_source_results, False
 
 
-def estimate_bins_from_durations(
-    durations: list[float],
-    num_buckets: int,
-) -> list[float]:
-    """
-    Estimate bucket duration bins from a list of durations.
-
-    This implements the same algorithm as Lhotse's estimate_duration_buckets:
-    - Sort durations
-    - Divide total duration equally among buckets
-    - Place bin boundaries where cumulative duration crosses thresholds
-
-    Args:
-        durations: List of cut durations.
-        num_buckets: Desired number of buckets.
-
-    Returns:
-        List of (num_buckets - 1) boundary duration values.
-    """
-    if len(durations) == 0:
-        raise ValueError("No durations provided")
-
-    if num_buckets > len(durations):
-        raise ValueError(f"Number of buckets ({num_buckets}) must be <= number of cuts ({len(durations)})")
-
-    # Sort durations
-    sizes = np.array(durations)
-    sizes.sort()
-
-    # Target duration per bucket
-    size_per_bucket = sizes.sum() / num_buckets
-
-    bins = []
-    tot = 0.0
-    for size in sizes:
-        if tot > size_per_bucket:
-            bins.append(float(size))
-            tot = 0.0
-        tot += size
-
-    return bins
-
-
 def _print_extreme_cuts(label: str, durations: list[float], n: int = 10) -> None:
     """Print the N longest and N shortest cut durations for a given split.
 
@@ -526,12 +489,6 @@ def _print_extreme_cuts(label: str, durations: list[float], n: int = 10) -> None
     print(f"\n  Top {n} longest {label} cuts (seconds):")
     for i, d in enumerate(longest, 1):
         print(f"    {i:>3}. {d:.3f}s")
-
-
-def format_bins_for_yaml(bins: list[float], precision: int = 2) -> str:
-    """Format bins as a YAML-compatible list string."""
-    formatted = [round(b, precision) for b in bins]
-    return f"[{', '.join(map(str, formatted))}]"
 
 
 def load_cached_results(output_path: Path) -> dict:
