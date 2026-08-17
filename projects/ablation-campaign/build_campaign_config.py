@@ -71,24 +71,24 @@ history.
 Usage::
 
     # ASR+ST (the mixed arm)
-    python3 infra/build_campaign_config.py \\
+    python3 projects/ablation-campaign/build_campaign_config.py \\
         --template       config/train/MA-v1.2.yaml \\
         --datasets-root  /mnt/scratch-nyx/giuseppe/melt/melt-data/shar \\
         --budget-hours   700.3 \\
         --exclude-corpus fleurs \\
         --tasks          both \\
         --cache          projects/ablation-campaign/campaign_hours.json \\
-        --out            config/train/ABL-MA-700.yaml
+        --out            projects/ablation-campaign/ABL-MA-700.yaml
 
     # ASR only (the modality-alignment arm), same flags but --tasks asr
-    python3 infra/build_campaign_config.py \\
+    python3 projects/ablation-campaign/build_campaign_config.py \\
         --template       config/train/MA-v1.2.yaml \\
         --datasets-root  /mnt/scratch-nyx/giuseppe/melt/melt-data/shar \\
         --budget-hours   700.3 \\
         --exclude-corpus fleurs \\
         --tasks          asr \\
         --cache          projects/ablation-campaign/campaign_hours.json \\
-        --out            config/train/ABL-MA-700-asr.yaml
+        --out            projects/ablation-campaign/ABL-MA-700-asr.yaml
 
 Run it where the data is; it reads manifests, not audio.
 """
@@ -102,7 +102,9 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# This script lives with the campaign it renders, but borrows the measurement
+# half of infra/compute_mix_weights.py, which stays put as general tooling.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "infra"))
 
 from compute_mix_weights import (  # noqa: E402
     _find_block,
