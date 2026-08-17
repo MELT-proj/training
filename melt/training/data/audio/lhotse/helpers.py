@@ -244,6 +244,37 @@ def load_audio_from_cut(cut: Cut) -> "np.ndarray | None":  # noqa: F821
         return None
 
 
+def _fallback_text_from_cut(cut: Cut) -> str | None:
+    """Return the supervision/``custom.text`` fallback text for *cut*.
+
+    Joins the non-blank supervision texts; if that yields nothing, falls
+    back to ``cut.custom["text"]``. Whitespace-only text counts as absent.
+    Both the strict-mode "does a fallback exist" check and the ordinary
+    non-strict fallback path in ``get_text_from_cut`` call this, so the two
+    can't drift apart.
+
+    Args:
+        cut: Lhotse Cut object.
+
+    Returns:
+        The stripped fallback text, or ``None`` if none is available.
+    """
+    text: str | None = None
+
+    if cut.supervisions:
+        texts = [sup.text for sup in cut.supervisions if sup.text]
+        if texts:
+            text = " ".join(texts)
+
+    if text is None and hasattr(cut, "custom") and cut.custom:
+        text = cut.custom.get("text")
+
+    if text is not None:
+        text = text.strip()
+
+    return text or None
+
+
 def get_text_from_cut(cut: Cut, text_field: str, strict: bool = False) -> str | None:
     """Extract the text transcript from a cut.
 
@@ -254,16 +285,25 @@ def get_text_from_cut(cut: Cut, text_field: str, strict: bool = False) -> str | 
             supervision text directly.
         strict: When ``True``, an explicitly configured *text_field* that
             resolves to nothing raises instead of falling back to the
-            supervision text. Use this whenever the configured field holds
-            *different content* from the supervision — an ST source whose
-            target is ``custom.translation_en``, for instance, silently
-            degrades into an ASR sample under the default fallback.
+            supervision text — but only when a fallback actually exists.
+            Use this whenever the configured field holds *different content*
+            from the supervision — an ST source whose target is
+            ``custom.translation_en``, for instance, silently degrades into
+            an ASR sample under the default fallback. A cut with no text
+            anywhere (the configured field is empty and there is no
+            supervision text and no ``custom.text``) has nothing to
+            mislabel, so it is skipped like the non-strict case: this
+            returns ``None`` instead of raising.
 
     Returns:
         Text transcript, or ``None`` if no text is available.
 
     Raises:
-        ValueError: If *strict* and an explicit *text_field* is missing.
+        ValueError: If *strict*, the configured *text_field* resolves to
+            nothing, and a fallback text exists — falling back there would
+            silently mislabel the sample. If no fallback exists either, the
+            cut has no text anywhere and is skipped (returns ``None``)
+            rather than raising.
     """
     text: str | None = None
 
@@ -273,21 +313,25 @@ def get_text_from_cut(cut: Cut, text_field: str, strict: bool = False) -> str | 
             text = cut.custom.get(text_field)
 
         if strict and (text is None or not str(text).strip()):
+            fallback = _fallback_text_from_cut(cut)
+            if fallback is None:
+                logger.debug(
+                    "Cut %s has no value at text_field %r and no fallback "
+                    "text either (no supervision text, no custom.text); "
+                    "skipping instead of raising.",
+                    cut.id,
+                    text_field,
+                )
+                return None
             raise ValueError(
                 f"Cut {cut.id!r} has no value at text_field {text_field!r}. "
                 "Refusing to fall back to the supervision text, which holds "
                 "different content and would silently mislabel this sample."
             )
 
-    # Fall back to supervision text
-    if text is None and cut.supervisions:
-        texts = [sup.text for sup in cut.supervisions if sup.text]
-        if texts:
-            text = " ".join(texts)
-
-    # Final fallback: ``custom.text``
-    if text is None and hasattr(cut, "custom") and cut.custom:
-        text = cut.custom.get("text")
+    # Fall back to supervision text, then ``custom.text``
+    if text is None:
+        text = _fallback_text_from_cut(cut)
 
     if text is not None:
         text = text.strip()
