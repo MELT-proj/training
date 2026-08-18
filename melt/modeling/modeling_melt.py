@@ -1153,8 +1153,18 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
                 self._get_audio_embeddings(
                     input_features=input_features,
                     features_attention_mask=features_attention_mask,
-                    output_attentions=True,
-                    output_hidden_states=True,
+                    # The audio stack returns `encoder_outputs[0]` (the final
+                    # layer's output) as a plain Tensor, so the per-layer
+                    # attention probabilities and hidden states these flags
+                    # collect are discarded immediately and nothing downstream
+                    # can reach them.  Requesting them anyway pins all
+                    # `num_hidden_layers` attention matrices alive at once
+                    # instead of one at a time -- and they are quadratic in
+                    # sequence length, so on long audio that dominates encoder
+                    # memory and caps the usable batch size.  `generate()`
+                    # already passes False here; this keeps the paths aligned.
+                    output_attentions=False,
+                    output_hidden_states=False,
                     return_dict=return_dict,
                     **kwargs_encoder,
                 )
@@ -1616,8 +1626,18 @@ class MELTForSequenceClassification(MELTPreTrainedModel):
                 self._get_audio_embeddings(
                     input_features=input_features,
                     features_attention_mask=features_attention_mask,
-                    output_attentions=True,
-                    output_hidden_states=True,
+                    # The audio stack returns `encoder_outputs[0]` (the final
+                    # layer's output) as a plain Tensor, so the per-layer
+                    # attention probabilities and hidden states these flags
+                    # collect are discarded immediately and nothing downstream
+                    # can reach them.  Requesting them anyway pins all
+                    # `num_hidden_layers` attention matrices alive at once
+                    # instead of one at a time -- and they are quadratic in
+                    # sequence length, so on long audio that dominates encoder
+                    # memory and caps the usable batch size.  `generate()`
+                    # already passes False here; this keeps the paths aligned.
+                    output_attentions=False,
+                    output_hidden_states=False,
                     return_dict=return_dict,
                     **kwargs_encoder,
                 )
