@@ -45,7 +45,9 @@ export MASTER_PORT=60001
 # is allocated whole, all 80 CPUs and 4 GPUs, however few you use:
 #   MELT_TIME=00:20:00 MELT_QOS=acc_debug infra/runners/submit-container.sh mn5 …
 # MELT_NODES scales out; bash/run_train.sh derives world_size from SLURM, so no
-# other change is needed to go multi-node.
+# other change is needed to go multi-node. No --partition is passed by default
+# (account+QoS already select the right one on MN5); set MELT_PARTITION only
+# if you need to override it explicitly.
 SBATCH_ARGS=(
     --time="${MELT_TIME:-01:00:00}"
     --nodes="${MELT_NODES:-1}"
@@ -54,3 +56,4 @@ SBATCH_ARGS=(
     --qos="${MELT_QOS:-acc_ehpc}"
     --cpus-per-task=80
 )
+[[ -n "${MELT_PARTITION:-}" ]] && SBATCH_ARGS+=(--partition="${MELT_PARTITION}")
