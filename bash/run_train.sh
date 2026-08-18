@@ -116,11 +116,29 @@ fi
 
 NUM_NODES="${SLURM_NNODES:-1}"
 WORLD_SIZE=$((NUM_NODES * GPUS_PER_NODE))
-MASTER_PORT="${MASTER_PORT:-6000}"
+# MASTER_PORT default: derived from SLURM_JOB_ID, not a fixed value. A fixed
+# rendezvous port broke concurrent jobs sharing a node -- the second job's
+# torch-elastic agent can't bind the port and dies before user code runs,
+# with an unhelpful internal error (AttributeError on a None launch result).
+# SLURM_JOB_ID is exactly the right key: constant across every rank/node of
+# ONE job (so they all rendezvous on the same port) and unique across
+# concurrent jobs (so they don't collide). This can't be computed in
+# infra/runners/sites/*.sh -- those are sourced on the LOGIN node at submit
+# time, before the job exists, so SLURM_JOB_ID is empty there; a value set
+# there would be baked in via sbatch's default --export=ALL and shared by
+# every job regardless of ID. It has to be computed here, inside the job.
+# Range 20000-29999 avoids privileged ports (<1024) and the Linux ephemeral
+# port range (net.ipv4.ip_local_port_range, commonly 32768-60999) -- the old
+# hardcoded 60001 sat inside that ephemeral range and could also collide with
+# a random outgoing connection's source port, not just another job.
+# Outside SLURM (local run) there is no job id and no concurrency to worry
+# about, so this keeps the previous fixed default.
 if [[ "$RUNNING_UNDER_SLURM" -eq 1 ]]; then
+    MASTER_PORT="${MASTER_PORT:-$(( 20000 + SLURM_JOB_ID % 10000 ))}"
     # scontrol may be unavailable inside containers; allow MASTER_ADDR from the host.
     MASTER_ADDR="${MASTER_ADDR:-$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)}"
 else
+    MASTER_PORT="${MASTER_PORT:-6000}"
     MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
 fi
 
