@@ -51,6 +51,7 @@ export TMPDIR="${TMPDIR:-/tmp}"
 
 export WANDB_PROJECT="${WANDB_PROJECT:-melt}"
 export WANDB_MODE="${WANDB_MODE:-online}"
+export MELT_SEED="${MELT_SEED:-42}"
 export TORCHDYNAMO_VERBOSE="${TORCHDYNAMO_VERBOSE:-1}"
 export TORCH_NCCL_ASYNC_ERROR_HANDLING="${TORCH_NCCL_ASYNC_ERROR_HANDLING:-1}"
 export HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-1}"
@@ -123,13 +124,21 @@ else
     MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
 fi
 
+# Explicit shard_seed override: train YAMLs set an int (not 'randomized',
+# which the dataloader rejects for indexed Shar sources -- see
+# melt/training/data/audio/lhotse/dataloader.py), so this only needs to change
+# the value, not silence a warning. Spliced in ahead of "$@" below so an
+# explicit --data.*.shard_seed on the CLI still wins (OmegaConf dotlist merge
+# keeps the last occurrence of a key).
+SEED_ARGS=(--data.train_ds.shard_seed "$MELT_SEED" --data.validation_ds.shard_seed "$MELT_SEED")
+
 log_master "[run_train] starting (context: $CONTEXT, nodes=$NUM_NODES, gpus/node=$GPUS_PER_NODE, world_size=$WORLD_SIZE)"
 log_master "[run_train] accelerate config: $ACCELERATE_CONFIG | grad_accum: $GRAD_ACC_STEPS | master: $MASTER_ADDR:$MASTER_PORT"
 if is_master_node; then
     echo "[run_train] environment:"
     for v in VENV_PATH HF_HOME HF_HUB_OFFLINE LOCAL_DATASETS_DIR \
              TMPDIR ACCELERATE_LOG_LEVEL TRANSFORMERS_VERBOSITY TORCHDYNAMO_VERBOSE \
-             TORCH_NCCL_ASYNC_ERROR_HANDLING HF_HUB_ENABLE_HF_TRANSFER; do
+             TORCH_NCCL_ASYNC_ERROR_HANDLING HF_HUB_ENABLE_HF_TRANSFER MELT_SEED; do
         echo "  $v=${!v:-}"
     done
     # Whatever experiment tracker is configured, print its settings: they
@@ -204,7 +213,7 @@ if [[ "$RUNNING_UNDER_SLURM" -eq 1 ]]; then
         # Re-invoking srun inside a step nests/breaks; SLURM_PROCID is this task's rank.
         log_master "[run_train] inside an srun step; launching directly"
         "${LAUNCH_CMD[@]}" --machine_rank "${SLURM_PROCID:-0}" \
-            --module melt.training.train "$@" 2>&1
+            --module melt.training.train "${SEED_ARGS[@]}" "$@" 2>&1
     else
         # One srun task per node; --machine_rank is evaluated per task inside the
         # step (splice it in right after `accelerate launch`).
@@ -212,8 +221,8 @@ if [[ "$RUNNING_UNDER_SLURM" -eq 1 ]]; then
         srun "${SRUN_ARGS[@]}" --jobid "$SLURM_JOB_ID" bash -c '
             cmd=("$@")
             exec "${cmd[@]:0:2}" --machine_rank "${SLURM_PROCID:-0}" "${cmd[@]:2}"
-        ' _ "${LAUNCH_CMD[@]}" --module melt.training.train "$@" 2>&1
+        ' _ "${LAUNCH_CMD[@]}" --module melt.training.train "${SEED_ARGS[@]}" "$@" 2>&1
     fi
 else
-    "${LAUNCH_CMD[@]}" --module melt.training.train "$@" 2>&1
+    "${LAUNCH_CMD[@]}" --module melt.training.train "${SEED_ARGS[@]}" "$@" 2>&1
 fi

@@ -17,6 +17,10 @@ export VENV_PATH=/mnt/scratch-artemis/giuseppe/venvs/melt-312/bin/activate
 # --- misc -----------------------------------------------------------------
 export WANDB_MODE=online
 export MASTER_PORT=60001
+# run_train.sh forwards this as an explicit --data.{train,validation}_ds.shard_seed
+# override, so no train YAML needs shard_seed: randomized (invalid for indexed
+# Shar sources -- see melt/training/data/audio/lhotse/dataloader.py).
+export MELT_SEED="${MELT_SEED:-42}"
 
 # --- scheduler ------------------------------------------------------------
 # MELT_NODES/MELT_QOS/MELT_TIME/MELT_PARTITION/MELT_GPUS_PER_NODE are overridable

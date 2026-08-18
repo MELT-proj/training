@@ -37,6 +37,7 @@ export VENV_PATH=/path/to/venvs/melt/bin/activate     # python virtualenv activa
 # --- misc -----------------------------------------------------------------
 export WANDB_MODE=online                              # use offline on air-gapped sites (+ export HF_HUB_OFFLINE=1)
 export MASTER_PORT=60001                              # rendezvous port; bump if it clashes on the node
+export MELT_SEED="${MELT_SEED:-42}"                   # forwarded by run_train.sh as an explicit shard_seed override
 
 # --- scheduler ------------------------------------------------------------
 # Passed verbatim to sbatch. Set partition/QoS/account/time/nodes/gpus here.

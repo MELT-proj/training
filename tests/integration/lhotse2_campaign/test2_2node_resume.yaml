@@ -95,7 +95,7 @@ data:
     shuffle: true
     drop_last: false
     seed: 42
-    shard_seed: randomized
+    shard_seed: 42
 
     # 8 ranks x 2 workers = 16 streams. Must be identical across ranks:
     # compare_cut_ids.py infers workers_per_rank from the dump.

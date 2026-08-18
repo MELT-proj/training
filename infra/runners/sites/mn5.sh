@@ -36,6 +36,10 @@ export REMOTE_REPO=training
 export WANDB_MODE=offline
 export HF_HUB_OFFLINE=1
 export MASTER_PORT=60001
+# run_train.sh forwards this as an explicit --data.{train,validation}_ds.shard_seed
+# override, so no train YAML needs shard_seed: randomized (invalid for indexed
+# Shar sources -- see melt/training/data/audio/lhotse/dataloader.py).
+export MELT_SEED="${MELT_SEED:-42}"
 
 # --- scheduler ------------------------------------------------------------
 # MELT_TIME and MELT_QOS are overridable mainly to pick the right QoS: acc_debug

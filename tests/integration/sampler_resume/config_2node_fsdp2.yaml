@@ -5,7 +5,7 @@
 # loading remains per-rank (standard data-parallel sharding).
 #
 # Key choices that affect reproducibility:
-#   - shard_seed: randomized  (fixed per-run; essential for cross-run determinism)
+#   - shard_seed: 42  (fixed per-run; essential for cross-run determinism)
 #   - seed: 42                (sampler / shuffle seed)
 #   - num_workers: 1          (one forked worker per rank → 4 workers total)
 #   - prefetch_factor: 2      (worker keeps 2 batches prefetched)
@@ -62,7 +62,7 @@ data:
     shuffle: true
     drop_last: false
     seed: 42
-    shard_seed: randomized        # fixed per-run: essential for cross-run reproducibility
+    shard_seed: 42        # fixed per-run: essential for cross-run reproducibility
 
     min_duration: 0.5
     max_duration: 30.0

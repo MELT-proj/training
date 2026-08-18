@@ -11,7 +11,8 @@
 # no WER/CER generation runs — the metric compared here is eval_loss.
 #
 # Key choices that affect reproducibility:
-#   - shard_seed: randomized  (resolves per rank+worker, deterministically)
+#   - shard_seed: 42  (fixed scalar; indexed sources already partition per
+#                      rank+worker, so a shared value stays deterministic)
 #   - seed: 42                (base for LHOTSE_PROCESS_SEED)
 #   - num_workers: 1          (one forked worker per rank; avoids the
 #                              rank-wide fast-forward count being applied
@@ -70,7 +71,7 @@ data:
     shuffle: true
     drop_last: false
     seed: 42
-    shard_seed: randomized
+    shard_seed: 42
 
     min_duration: 0.5
     max_duration: 30.0

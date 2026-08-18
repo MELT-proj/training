@@ -125,7 +125,7 @@ data:
     shuffle: true
     drop_last: false
     seed: 42
-    shard_seed: randomized
+    shard_seed: 42
 
     num_workers: 2
     pin_memory: true

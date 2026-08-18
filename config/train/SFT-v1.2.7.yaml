@@ -743,10 +743,10 @@ data:
     shuffle: true
     drop_last: false
     seed: 42
-    # A scalar here is one value shared by every process, so every DDP rank
-    # resolves the same RNG and yields the same batch sequence. 'randomized'
-    # resolves per rank and worker while staying reproducible across runs.
-    shard_seed: randomized
+    # A fixed scalar, not 'randomized': with indexed sources the partitioning
+    # already separates the per-(rank, worker) streams, and the loader ignores
+    # 'randomized' and falls back to `seed` with a warning anyway.
+    shard_seed: 42
 
     # DataLoader settings
     num_workers: 1

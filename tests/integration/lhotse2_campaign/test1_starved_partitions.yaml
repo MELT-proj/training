@@ -115,7 +115,7 @@ data:
     shuffle: true
     drop_last: false
     seed: 42
-    shard_seed: randomized
+    shard_seed: 42
 
     # 4 GPUs x 2 workers = 8 partitions. This is the number the tiny sources
     # are measured against.

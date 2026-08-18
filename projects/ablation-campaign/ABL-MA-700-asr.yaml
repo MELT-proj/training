@@ -261,7 +261,7 @@ data:
     shuffle: true
     drop_last: false
     seed: 42
-    shard_seed: randomized
+    shard_seed: 42
 
     # Duration filtering
     min_duration: 0.5
