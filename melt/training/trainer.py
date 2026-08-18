@@ -1496,6 +1496,25 @@ class MELTTrainer(Seq2SeqTrainer):
         )
         return gen_kwargs
 
+    def _cast_to_audio_dtype(self, features: torch.Tensor | None) -> torch.Tensor | None:
+        """Cast *features* to the dtype the audio encoder's weights are in.
+
+        Only meaningful while the parameters are unsharded — see the call site.
+        Reads the dtype off the audio stack rather than the whole model because
+        the audio stack is what consumes these tensors.
+        """
+        if features is None or not features.is_floating_point():
+            return features
+
+        audio_stack = getattr(self.model, "audio_stack", None)
+        if audio_stack is None:
+            return features
+
+        for param in audio_stack.parameters():
+            if param.is_floating_point():
+                return features.to(param.dtype)
+        return features
+
     def _pad_tensors_to_max_len(self, tensor, max_length):
         """Right-pad *tensor* to *max_length* with the tokenizer's pad id.
 
@@ -1595,12 +1614,21 @@ class MELTTrainer(Seq2SeqTrainer):
             )
 
         with torch.no_grad(), unsharded_for_generation(self.model, model):
+            # The same pre-forward hook that all-gathers also applies
+            # MixedPrecisionPolicy.cast_forward_inputs, so bypassing forward
+            # leaves the float32 audio features to meet bf16 weights:
+            # "RuntimeError: expected scalar type Float but found BFloat16"
+            # (artemis job 327826).  Read the dtype *inside* this block: a
+            # sharded parameter keeps its storage dtype and only the
+            # all-gathered copy follows param_dtype.
+            input_features = self._cast_to_audio_dtype(inputs.get("input_features"))
+
             # `self.model` rather than `model`: under DDP the latter is the
             # wrapper, whose forward is the training forward, not generate().
             generated_tokens = self.model.generate(
                 input_ids=prompt_input_ids,
                 attention_mask=prompt_attention_mask,
-                input_features=inputs.get("input_features"),
+                input_features=input_features,
                 features_attention_mask=inputs.get("features_attention_mask"),
                 **gen_kwargs,
             )

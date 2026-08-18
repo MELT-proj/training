@@ -697,3 +697,23 @@ def test_parameters_are_resharded_even_if_generation_raises(monkeypatch):
             raise RuntimeError("boom")
 
     assert root.events == ["unshard", "reshard"]
+
+
+def test_audio_features_are_cast_to_the_encoder_dtype():
+    """FSDP2's mixed-precision policy casts forward inputs in the pre-forward
+    hook, which generate() bypasses along with the all-gather."""
+    audio_stack = torch.nn.Linear(4, 4).to(torch.bfloat16)
+    trainer = _bare_trainer(model=SimpleNamespace(audio_stack=audio_stack))
+
+    cast = trainer._cast_to_audio_dtype(torch.zeros(2, 3, 4, dtype=torch.float32))
+
+    assert cast.dtype == torch.bfloat16
+
+
+def test_non_float_and_missing_features_are_left_alone():
+    audio_stack = torch.nn.Linear(4, 4).to(torch.bfloat16)
+    trainer = _bare_trainer(model=SimpleNamespace(audio_stack=audio_stack))
+
+    assert trainer._cast_to_audio_dtype(None) is None
+    ints = torch.ones(2, 3, dtype=torch.long)
+    assert trainer._cast_to_audio_dtype(ints) is ints
