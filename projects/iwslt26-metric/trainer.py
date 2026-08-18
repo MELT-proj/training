@@ -13,7 +13,7 @@ MELTTrainer.
 import numpy as np
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
-from transformers import TrainingArguments
+from transformers import Seq2SeqTrainingArguments
 from transformers.trainer_utils import EvalLoopOutput
 
 from melt.training.data.audio.lhotse import (
@@ -39,7 +39,7 @@ class MELTTrainerForRegression(MELTTrainer):
 
     Args:
         model: The model to train.
-        args: HuggingFace TrainingArguments.
+        args: HuggingFace Seq2SeqTrainingArguments.
         config: OmegaConf DictConfig with Lhotse data loading settings.
         processor: MELTProcessor for audio processing.
         **kwargs: Additional arguments forwarded to MELTTrainer / Trainer.
@@ -48,7 +48,7 @@ class MELTTrainerForRegression(MELTTrainer):
     def __init__(
         self,
         model,
-        args: TrainingArguments,
+        args: Seq2SeqTrainingArguments,
         config: DictConfig,
         processor: MELTProcessor,
         **kwargs,

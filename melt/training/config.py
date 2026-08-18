@@ -10,7 +10,7 @@ It supports:
 Config hierarchy:
 - model: encoder, decoder, adapter settings
 - data: train_ds, validation_ds settings
-- trainer: TrainingArguments-compatible settings
+- trainer: Seq2SeqTrainingArguments-compatible settings
 - optimization: learning rate settings for different components
 - run: run-specific settings (exp_name, dry_run, etc.)
 
@@ -29,7 +29,7 @@ import sys
 
 from omegaconf import DictConfig, OmegaConf
 
-from transformers import TrainingArguments
+from transformers import Seq2SeqTrainingArguments
 
 
 # =============================================================================
@@ -199,7 +199,7 @@ data:
     lang_field: lang
 
 # =============================================================================
-# Trainer Configuration (TrainingArguments-compatible)
+# Trainer Configuration (Seq2SeqTrainingArguments-compatible)
 # =============================================================================
 trainer:
   output_dir: ./outputs
@@ -221,6 +221,13 @@ trainer:
     - none
   eval_strategy: "no"
   eval_steps: 3000
+  # Evaluation decodes with generate() rather than scoring a teacher-forced
+  # forward pass; MELTTrainer refuses to compute WER/CER without it.
+  # generation_max_length counts *new* tokens for MELT -- see
+  # MELTTrainer._generation_kwargs.
+  predict_with_generate: true
+  generation_max_length: 256
+  generation_num_beams: 1
   save_strategy: steps
   save_steps: 1000
   save_total_limit: 5
@@ -385,7 +392,7 @@ def parse_args_and_load_config() -> DictConfig:
         print("  run.*          : Run settings (exp_name, dry_run)")
         print("  model.*        : Model settings (encoder, decoder, adapter)")
         print("  data.*         : Data settings (train_ds, validation_ds)")
-        print("  trainer.*      : TrainingArguments settings")
+        print("  trainer.*      : Seq2SeqTrainingArguments settings")
         print("  optimization.* : Learning rate settings")
         sys.exit(0)
 
@@ -465,16 +472,16 @@ def config_to_dict(cfg: DictConfig) -> dict:
 
 
 def trainer_args_dict(cfg: DictConfig) -> dict:
-    """Extract TrainingArguments-compatible dict from config.
+    """Extract Seq2SeqTrainingArguments-compatible dict from config.
 
     The trainer section of the config maps directly to HuggingFace
-    TrainingArguments. This function extracts and validates those fields.
+    Seq2SeqTrainingArguments. This function extracts and validates those fields.
 
     Args:
         cfg: Full configuration DictConfig.
 
     Returns:
-        Dictionary suitable for TrainingArguments(**dict).
+        Dictionary suitable for Seq2SeqTrainingArguments(**dict).
     """
     trainer_cfg = cfg.get("trainer", {})
 
@@ -487,12 +494,15 @@ def trainer_args_dict(cfg: DictConfig) -> dict:
         result["output_dir"] = os.path.expanduser(result["output_dir"])
 
     # Handle exp_name from run section (previously was in trainer)
-    # exp_name is not a TrainingArgument, so we don't include it
+    # exp_name is not a training argument, so we don't include it
 
-    # Get valid TrainingArguments keys
-    valid_keys = set(TrainingArguments(output_dir=".").to_dict().keys())
+    # Get valid Seq2SeqTrainingArguments keys.  Seq2Seq rather than the plain
+    # TrainingArguments because MELTTrainer derives from Seq2SeqTrainer: this is
+    # what makes `predict_with_generate`, `generation_max_length`,
+    # `generation_num_beams` and `generation_config` settable from YAML.
+    valid_keys = set(Seq2SeqTrainingArguments(output_dir=".").to_dict().keys())
 
-    # Filter to only valid TrainingArguments
+    # Filter to only valid training arguments
     result = {k: v for k, v in result.items() if k in valid_keys}
 
     return result

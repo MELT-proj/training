@@ -133,6 +133,11 @@ data:
     lang_field: lang
 
   validation_ds:
+    # Generation-based evaluation costs ~N sequential decoder steps per sample
+    # instead of a single forward, so the full validation set is not affordable
+    # at this eval cadence. materialize_cuts_for_eval applies the cap with a
+    # seeded shuffle, so every run scores the same subset.
+    max_samples: 1000
     input_cfg:
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/en/validation
@@ -224,6 +229,13 @@ trainer:
   eval_steps: 500
   batch_eval_metrics: true
 
+  # Evaluation decodes with generate() -- greedy, at most this many *new*
+  # tokens (MELT's prompt is audio, so generation_max_length is read as a
+  # new-token budget; see MELTTrainer._generation_kwargs).
+  predict_with_generate: true
+  generation_max_length: 256
+  generation_num_beams: 1
+
   # Checkpointing
   save_strategy: steps
   save_steps: 500
@@ -241,6 +253,9 @@ trainer:
 evaluation:
   compute_metrics: true
   enable_whisper_normalization: true
+  # Reference/hypothesis pairs printed to stdout and logged to W&B each eval.
+  # 0 disables.
+  log_num_samples: 10
 
 optimization:
   adam_beta1: 0.9

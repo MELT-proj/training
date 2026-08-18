@@ -1,10 +1,18 @@
 """Tests for :class:`melt.training.metrics.TrainingEvaluator`.
 
-The per-language and per-task breakdowns are only meaningful if each decoded
-prediction is paired with the language/task code of the sample it came from.
-Under ``batch_eval_metrics`` the evaluator is called once per batch while the
-buffers it reads from hold every code seen so far in the evaluation, so the
-pairing depends on an offset that these tests pin down.
+The evaluator scores *generated token ids* against label ids: both sides are
+decoded to text and handed to jiwer, so what is measured is what the model
+would emit at inference.
+
+Two properties are pinned down here.  First, the per-language and per-task
+breakdowns are only meaningful if each decoded prediction is paired with the
+language/task code of the sample it came from; under ``batch_eval_metrics`` the
+evaluator is called once per batch while the buffers it reads from hold every
+code seen so far, so the pairing depends on an offset.  Second, sequences are
+built with ``seq_len > 1`` throughout: the previous fixture used ``seq_len=1``,
+where a one-position misalignment between predictions and references is
+invisible, and that is exactly how an off-by-one survived in the old
+teacher-forced path.
 """
 
 from types import SimpleNamespace
@@ -15,31 +23,47 @@ from transformers import EvalPrediction
 
 from melt.training.metrics import TrainingEvaluator
 
-VOCAB_SIZE = 16
+PAD_TOKEN_ID = 0
+#: Added to every token of a wrong prediction, so no word of it survives.
+WRONG_OFFSET = 500
+#: Words per sample.  Anything above 1 exposes a prediction/reference shift.
+SEQ_LEN = 3
 
 
 class _StubProcessor:
     """Decodes token ids to `w<id>` words — enough for jiwer to score."""
 
-    def decode(self, tokens, skip_special_tokens=True):  # noqa: ARG002
-        return " ".join(f"w{t}" for t in tokens)
+    tokenizer = SimpleNamespace(pad_token_id=PAD_TOKEN_ID, eos_token_id=PAD_TOKEN_ID)
+
+    def batch_decode(self, sequences, skip_special_tokens=True):  # noqa: ARG002
+        return [
+            " ".join(f"w{int(t)}" for t in row if int(t) != PAD_TOKEN_ID)
+            for row in sequences
+        ]
+
+
+def _words(token: int) -> list[int]:
+    """The `SEQ_LEN` distinct token ids that spell out sample *token*."""
+    return [token * 10 + k for k in range(1, SEQ_LEN + 1)]
 
 
 def _batch(samples: list[tuple[int, bool]]):
-    """Build (logits, labels) for a batch.
+    """Build (prediction_ids, label_ids) for a batch.
 
     Args:
         samples: one ``(token_id, correct)`` pair per sample.  ``correct=False``
-            makes the argmax land on a different token, i.e. WER 1.0 for that
-            sample.
+            shifts every word of the prediction out of range of its reference,
+            i.e. WER 1.0 for that sample.
     """
-    logits = torch.zeros(len(samples), 1, VOCAB_SIZE)
-    labels = torch.zeros(len(samples), 1, dtype=torch.long)
-    for i, (token, correct) in enumerate(samples):
-        labels[i, 0] = token
-        predicted = token if correct else (token + 1) % VOCAB_SIZE
-        logits[i, 0, predicted] = 1.0
-    return logits, labels
+    labels = torch.tensor([_words(token) for token, _ in samples], dtype=torch.long)
+    predictions = torch.tensor(
+        [
+            _words(token) if correct else [w + WRONG_OFFSET for w in _words(token)]
+            for token, correct in samples
+        ],
+        dtype=torch.long,
+    )
+    return predictions, labels
 
 
 @pytest.fixture
@@ -62,14 +86,138 @@ def _feed(evaluator, batches, langs_per_batch, tasks_per_batch=None):
     result = None
     for i, (batch, langs) in enumerate(zip(batches, langs_per_batch)):
         seen.extend(langs)
-        logits, labels = _batch(batch)
-        prediction = EvalPrediction(predictions=logits, label_ids=labels)
+        predictions, labels = _batch(batch)
+        prediction = EvalPrediction(predictions=predictions, label_ids=labels)
         prediction.langs = list(seen)
         if tasks_per_batch is not None:
             seen_tasks.extend(tasks_per_batch[i])
             prediction.tasks = list(seen_tasks)
         result = evaluator(prediction, compute_result=(i == len(batches) - 1))
     return result
+
+
+# ---------------------------------------------------------------------------
+# Scoring
+# ---------------------------------------------------------------------------
+
+
+def test_an_exact_multi_token_match_scores_zero(evaluator):
+    """The regression the old `seq_len=1` fixture could not catch.
+
+    Teacher forcing compared `argmax(logit[j])` with `label[j]` while
+    `logit[j]` predicts token `j+1`, so a *perfect* model scored WER 0.4 on a
+    five-token reference.  With one token per sample the shift has nothing to
+    slide against and the bug is unobservable; with three it is immediate.
+    """
+    predictions, labels = _batch([(1, True), (2, True), (3, True)])
+
+    result = evaluator(
+        EvalPrediction(predictions=predictions, label_ids=labels),
+        compute_result=True,
+    )
+
+    assert result["wer"] == 0.0
+    assert result["cer"] == 0.0
+
+
+def test_a_one_position_shift_is_not_free(evaluator):
+    """Predictions offset by one position must cost real errors."""
+    _, labels = _batch([(1, True), (2, True)])
+    # Drop each reference's first word and pad the tail: exactly the shape of
+    # the old off-by-one.
+    shifted = torch.cat(
+        [labels[:, 1:], torch.full((labels.shape[0], 1), PAD_TOKEN_ID)], dim=1
+    )
+
+    result = evaluator(
+        EvalPrediction(predictions=shifted, label_ids=labels), compute_result=True
+    )
+
+    assert result["wer"] > 0.0
+
+
+def test_ignore_index_is_decoded_as_nothing(evaluator):
+    """`-100` reaches the evaluator from two directions and means "nothing".
+
+    HF writes it into the labels for masked positions, and `evaluation_loop`
+    pads ragged tensors with it before gathering.  Feeding it to the tokenizer
+    raises, so it has to be mapped to the pad id first.
+    """
+    predictions, labels = _batch([(1, True), (2, True)])
+    padded_labels = torch.cat(
+        [labels, torch.full((labels.shape[0], 2), -100)], dim=1
+    )
+    padded_predictions = torch.cat(
+        [predictions, torch.full((predictions.shape[0], 2), -100)], dim=1
+    )
+
+    result = evaluator(
+        EvalPrediction(predictions=padded_predictions, label_ids=padded_labels),
+        compute_result=True,
+    )
+
+    assert result["wer"] == 0.0
+
+
+def test_numpy_predictions_are_accepted(evaluator):
+    """Without `batch_eval_metrics` the loop hands over numpy, not tensors."""
+    predictions, labels = _batch([(1, True), (2, False)])
+
+    result = evaluator(
+        EvalPrediction(
+            predictions=predictions.numpy(), label_ids=labels.numpy()
+        ),
+        compute_result=True,
+    )
+
+    assert result["wer"] == 0.5
+
+
+# ---------------------------------------------------------------------------
+# Sample logging
+# ---------------------------------------------------------------------------
+
+
+def test_sample_texts_are_stashed_for_the_trainer(evaluator):
+    """`last_samples` is what the trainer prints and sends to W&B."""
+    evaluator.log_num_samples = 2
+    batches = [[(1, True), (2, False), (3, True)]]
+
+    _feed(evaluator, batches, [["de", "fr", "it"]], [["asr", "st", "asr"]])
+
+    assert len(evaluator.last_samples) == 2
+    first = evaluator.last_samples[0]
+    assert first["lang"] == "de" and first["task"] == "asr"
+    assert first["reference"] == first["prediction"] == "w11 w12 w13"
+    # The raw text is kept alongside the normalised one; with normalisation off
+    # they coincide, but both fields must be present for the trainer to read.
+    assert first["reference_raw"] == first["reference"]
+    second = evaluator.last_samples[1]
+    assert second["reference"] != second["prediction"]
+
+
+def test_sample_logging_can_be_switched_off(evaluator):
+    evaluator.log_num_samples = 0
+
+    _feed(evaluator, [[(1, True), (2, False)]], [["de", "fr"]])
+
+    assert evaluator.last_samples == []
+
+
+def test_log_num_samples_is_read_from_the_config():
+    evaluator = TrainingEvaluator(
+        config=SimpleNamespace(
+            enable_whisper_normalization=False, log_num_samples=3
+        ),
+        processor=_StubProcessor(),
+    )
+
+    assert evaluator.log_num_samples == 3
+
+
+# ---------------------------------------------------------------------------
+# Per-language / per-task breakdowns
+# ---------------------------------------------------------------------------
 
 
 def test_per_language_metrics_track_the_right_samples(evaluator):
@@ -103,8 +251,8 @@ def test_no_unknown_bucket_when_every_sample_is_tagged(evaluator):
     """A full set of codes must produce no `unknown` metrics at all.
 
     This is the shape of the original defect: the buffer was shorter than the
-    batch (it held one rank's codes while the logits were gathered from all of
-    them), so the tail of every early batch fell through to `unknown`.
+    batch (it held one rank's codes while the predictions were gathered from all
+    of them), so the tail of every early batch fell through to `unknown`.
     """
     batches = [[(1, True), (2, False)], [(3, True), (4, False)]]
     langs_per_batch = [["de", "es"], ["fr", "de"]]
@@ -145,9 +293,10 @@ def test_empty_language_code_is_bucketed_as_unknown(evaluator):
 def test_breakdown_is_skipped_when_no_codes_are_available(evaluator):
     """With nothing to split by, `wer_unknown` would just restate `wer`."""
     batches = [[(1, True), (2, False)]]
-    logits, labels = _batch(batches[0])
+    predictions, labels = _batch(batches[0])
     result = evaluator(
-        EvalPrediction(predictions=logits, label_ids=labels), compute_result=True
+        EvalPrediction(predictions=predictions, label_ids=labels),
+        compute_result=True,
     )
 
     assert result == {"wer": 0.5, "cer": pytest.approx(result["cer"])}

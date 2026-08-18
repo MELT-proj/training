@@ -88,7 +88,13 @@ class MELTDataCollator:
         src_langs: list[str] = [it.get("src_lang", "") for it in valid]
         tgt_langs: list[str] = [it.get("tgt_lang", "") for it in valid]
 
-        # 3. Format texts
+        # 3. Format texts.  Evaluation additionally needs the *prompt* alone --
+        # everything up to where the target transcript starts -- because
+        # `MELTTrainer.prediction_step` decodes it with `generate()` and would
+        # otherwise be handed the ground truth it is meant to predict.
+        want_prompts = not self.is_train
+        prompts: list[str] | None = None
+
         if self.apply_chat_template:
             formatted = apply_chat_template_to_texts(
                 texts,
@@ -100,13 +106,17 @@ class MELTDataCollator:
                 prompt_template_selection=self.prompt_template_selection,
                 src_langs=src_langs,
                 tgt_langs=tgt_langs,
+                return_prompts=want_prompts,
             )
+            if want_prompts:
+                formatted, prompts = formatted
         else:
             if self.prompt_template:
                 # Custom template: supports {audio_token}, {t}, {lang},
                 # {src_lang}, and {tgt_lang}.
                 # May be a single string or a dict mapping task → template.
                 formatted = []
+                prompts = [] if want_prompts else None
                 for t, lang, task, src_lang, tgt_lang in zip(
                     texts, langs, tasks, src_langs, tgt_langs
                 ):
@@ -117,17 +127,24 @@ class MELTDataCollator:
                     )
                     lang_key = (lang or "").lower()
                     language_name = LANGUAGE_ISO_TO_NAME.get(lang_key, "")
-                    formatted.append(
-                        template.format(
-                            audio_token=self.processor.audio_token,
-                            t=t,
-                            lang=language_name,
-                            src_lang=_resolve_language_name_safe(src_lang),
-                            tgt_lang=_resolve_language_name_safe(tgt_lang),
-                        )
+                    fmt_kwargs = dict(
+                        audio_token=self.processor.audio_token,
+                        t=t,
+                        lang=language_name,
+                        src_lang=_resolve_language_name_safe(src_lang),
+                        tgt_lang=_resolve_language_name_safe(tgt_lang),
                     )
+                    formatted.append(template.format(**fmt_kwargs))
+                    if want_prompts:
+                        # Substituting an empty transcript leaves the template's
+                        # own lead-in intact -- the same trick
+                        # SpeechToTextDataset uses to locate the prompt/target
+                        # boundary for label masking (dataset.py).
+                        prompts.append(template.format(**{**fmt_kwargs, "t": ""}))
             else:
                 formatted = [f"{self.processor.audio_token}{t}" for t in texts]
+                if want_prompts:
+                    prompts = [self.processor.audio_token] * len(texts)
 
         # 4. Batch-process through MELTProcessor
         audio_inputs = [[a] for a in audios]  # list of lists
@@ -156,7 +173,24 @@ class MELTDataCollator:
             labels[mask] = -100
         batch["labels"] = labels
 
-        # 6. Attach langs/tasks for per-language and per-task WER/CER
+        # 6. Attach the generation prompt (evaluation only).
+        #
+        # Tokenised separately from `formatted` but with the same audio bos/eos
+        # wrapping the processor applies internally, and left-padded, which is
+        # what batched generation needs so that every sequence's last real token
+        # sits at the same index.  The audio features are *not* recomputed: the
+        # prompt reuses the ones already in `batch`.
+        if prompts is not None:
+            prompt_inputs = self.processor.tokenizer(
+                [self.processor._surround_bos_eos_mm_tokens(p) for p in prompts],
+                padding=True,
+                padding_side="left",
+                return_tensors="pt",
+            )
+            batch["prompt_input_ids"] = prompt_inputs["input_ids"]
+            batch["prompt_attention_mask"] = prompt_inputs["attention_mask"]
+
+        # 7. Attach langs/tasks for per-language and per-task WER/CER
         batch["langs"] = langs
         batch["tasks"] = tasks
 
