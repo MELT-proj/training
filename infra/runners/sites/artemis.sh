@@ -19,8 +19,9 @@ export WANDB_MODE=online
 export MASTER_PORT=60001
 
 # --- scheduler ------------------------------------------------------------
-# MELT_NODES/MELT_QOS/MELT_TIME/MELT_PARTITION are overridable the same way as on mn5:
+# MELT_NODES/MELT_QOS/MELT_TIME/MELT_PARTITION/MELT_GPUS_PER_NODE are overridable
+# the same way as on mn5:
 #   MELT_QOS=gpu-debug MELT_PARTITION=a6000 infra/runners/submit-container.sh artemis …
-SBATCH_ARGS=(--time="${MELT_TIME:-01:00:00}" --nodes="${MELT_NODES:-1}" --gpus-per-node=2 --qos="${MELT_QOS:-gpu-h100}" --partition="${MELT_PARTITION:-h100}")
+SBATCH_ARGS=(--time="${MELT_TIME:-01:00:00}" --nodes="${MELT_NODES:-1}" --gpus-per-node="${MELT_GPUS_PER_NODE:-2}" --qos="${MELT_QOS:-gpu-h100}" --partition="${MELT_PARTITION:-h100}")
 # a6000 debug alternative:
 # SBATCH_ARGS=(--time=01:00:00 --nodes=1 --gpus-per-node=2 --qos=gpu-debug --partition=a6000)
