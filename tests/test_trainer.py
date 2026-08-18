@@ -602,3 +602,98 @@ def test_generated_tokens_are_padded_to_a_fixed_width():
     )
 
     assert short.shape == long.shape == (2, 4)
+
+
+# ---------------------------------------------------------------------------
+# FSDP unsharding around generate()
+# ---------------------------------------------------------------------------
+
+
+class _FakeFSDPModule(torch.nn.Module):
+    """Stands in for a torch FSDP2 `FSDPModule` — records unshard/reshard."""
+
+    def __init__(self):
+        super().__init__()
+        self.events: list[str] = []
+
+    def unshard(self):
+        self.events.append("unshard")
+
+    def reshard(self):
+        self.events.append("reshard")
+
+
+def _fsdp2_tree():
+    """A root with two separately-wrapped children, the FSDP2 shape."""
+    root = _FakeFSDPModule()
+    root.a = _FakeFSDPModule()
+    root.b = _FakeFSDPModule()
+    return root
+
+
+def test_unsharded_for_generation_is_a_noop_without_fsdp():
+    """DDP and single-GPU runs must pay nothing for this."""
+    from melt.training.trainer import unsharded_for_generation
+
+    model = torch.nn.Linear(2, 2)
+    with unsharded_for_generation(model, model):
+        pass  # nothing to assert beyond not raising
+
+
+def test_every_fsdp2_submodule_is_unsharded(monkeypatch):
+    """`FSDPModule.unshard()` is not recursive.
+
+    Unsharding only the root leaves every transformer block a DTensor, and the
+    first decoder layer then fails exactly the way the embedding did.
+    """
+    from melt.training import trainer as trainer_module
+
+    monkeypatch.setattr(
+        trainer_module, "_fsdp1_module_class", lambda: None
+    )
+    monkeypatch.setattr(
+        trainer_module, "_fsdp2_module_class", lambda: _FakeFSDPModule
+    )
+    root = _fsdp2_tree()
+
+    with trainer_module.unsharded_for_generation(root):
+        assert root.events == ["unshard"]
+        assert root.a.events == ["unshard"]
+        assert root.b.events == ["unshard"]
+
+    assert root.events == ["unshard", "reshard"]
+    assert root.a.events == ["unshard", "reshard"]
+    assert root.b.events == ["unshard", "reshard"]
+
+
+def test_a_module_passed_twice_is_unsharded_once(monkeypatch):
+    """`self.model` and the prepared `model` are the same object under FSDP2."""
+    from melt.training import trainer as trainer_module
+
+    monkeypatch.setattr(trainer_module, "_fsdp1_module_class", lambda: None)
+    monkeypatch.setattr(
+        trainer_module, "_fsdp2_module_class", lambda: _FakeFSDPModule
+    )
+    root = _fsdp2_tree()
+
+    with trainer_module.unsharded_for_generation(root, root, None):
+        pass
+
+    assert root.events == ["unshard", "reshard"]
+
+
+def test_parameters_are_resharded_even_if_generation_raises(monkeypatch):
+    """An OOM mid-decode must not leave the model unsharded for training."""
+    from melt.training import trainer as trainer_module
+
+    monkeypatch.setattr(trainer_module, "_fsdp1_module_class", lambda: None)
+    monkeypatch.setattr(
+        trainer_module, "_fsdp2_module_class", lambda: _FakeFSDPModule
+    )
+    root = _fsdp2_tree()
+
+    with pytest.raises(RuntimeError, match="boom"):
+        with trainer_module.unsharded_for_generation(root):
+            raise RuntimeError("boom")
+
+    assert root.events == ["unshard", "reshard"]

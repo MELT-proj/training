@@ -10,6 +10,7 @@ Key features:
 - Proper step/epoch tracking for Lhotse's infinite dataloaders
 """
 
+import contextlib
 import functools
 import inspect
 import math
@@ -49,6 +50,95 @@ logger = get_logger(__name__)
 #: ``trainer.generation_max_length`` nor an explicit ``max_new_tokens`` is set.
 #: Matches ``tests/integration/inference/run_inference.py``'s default.
 DEFAULT_GENERATION_MAX_NEW_TOKENS = 256
+
+
+def _fsdp2_module_class():
+    """Return ``torch.distributed.fsdp.FSDPModule``, or None if unavailable.
+
+    Isolated behind a function because the class only exists from torch 2.6 on,
+    and because it is the seam the unshard tests inject a stand-in through.
+    """
+    try:
+        from torch.distributed.fsdp import FSDPModule
+    except ImportError:  # pragma: no cover - torch < 2.6
+        return None
+    return FSDPModule
+
+
+def _fsdp1_module_class():
+    """Return ``torch.distributed.fsdp.FullyShardedDataParallel``, or None."""
+    try:
+        from torch.distributed.fsdp import FullyShardedDataParallel
+    except ImportError:  # pragma: no cover - defensive
+        return None
+    return FullyShardedDataParallel
+
+
+@contextlib.contextmanager
+def unsharded_for_generation(*models: torch.nn.Module):
+    """Materialise every parameter as a real tensor for the duration of the block.
+
+    Both FSDP flavours install their all-gather on ``forward()``, and
+    ``generate()`` never calls the wrapped module's ``forward``:
+    ``MELTForCausalLM.generate`` reaches straight for the embedding table and
+    then drives the text decoder itself.  Under FSDP2 the parameters are
+    therefore still ``DTensor`` when the first lookup runs, and it fails with
+    ``aten.embedding.default: got mixed torch.Tensor and DTensor`` (artemis job
+    327817) rather than quietly producing a wrong answer.
+
+    The whole model is unsharded at once, which does give up FSDP's memory
+    saving for the length of one batch's decoding.  That is the right trade
+    here: generation walks every layer once per generated token, so resharding
+    between layers would re-all-gather the entire model hundreds of times per
+    batch.
+
+    A no-op when nothing is sharded, so the DDP and single-GPU paths pay
+    nothing.  ``unshard`` is collective, and every rank runs the same number of
+    eval batches, so the calls stay in step across ranks.
+    """
+    # `self.model` and the prepared `model` are usually the same object under
+    # FSDP2 (fully_shard rewrites in place) and different under DDP; take each
+    # distinct one once.
+    roots: list[torch.nn.Module] = []
+    seen_roots: set[int] = set()
+    for root in models:
+        if root is not None and id(root) not in seen_roots:
+            seen_roots.add(id(root))
+            roots.append(root)
+
+    fsdp1_class = _fsdp1_module_class()
+    if fsdp1_class is not None:
+        wrapped = [m for m in roots if isinstance(m, fsdp1_class)]
+        if wrapped:
+            with contextlib.ExitStack() as stack:
+                for module in wrapped:
+                    stack.enter_context(fsdp1_class.summon_full_params(module))
+                yield
+            return
+
+    fsdp2_class = _fsdp2_module_class()
+    sharded: list[torch.nn.Module] = []
+    if fsdp2_class is not None:
+        seen: set[int] = set()
+        for root in roots:
+            # `FSDPModule.unshard()` is deliberately not recursive, so every
+            # separately-wrapped submodule has to be visited.
+            for module in root.modules():
+                if isinstance(module, fsdp2_class) and id(module) not in seen:
+                    seen.add(id(module))
+                    sharded.append(module)
+
+    if not sharded:
+        yield
+        return
+
+    for module in sharded:
+        module.unshard()
+    try:
+        yield
+    finally:
+        for module in reversed(sharded):
+            module.reshard()
 
 
 def current_cpumem_usage():
@@ -1504,7 +1594,7 @@ class MELTTrainer(Seq2SeqTrainer):
                 "instead would feed the model the target transcript."
             )
 
-        with torch.no_grad():
+        with torch.no_grad(), unsharded_for_generation(self.model, model):
             # `self.model` rather than `model`: under DDP the latter is the
             # wrapper, whose forward is the training forward, not generate().
             generated_tokens = self.model.generate(
