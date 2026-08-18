@@ -48,6 +48,7 @@ pytest tests/test_librispeech_lhotse.py
 pytest tests/test_peoples_speech_lhotse.py
 ```
 
+
 ## Development Setup
 
 1. Create a virtual environment and install the package in editable mode:
@@ -83,3 +84,26 @@ Common launch variables:
 - `OUTPUT_DIR`: Output directory for checkpoints/logs (host path; bind-mounted to a writable container path)
 - `SINGULARITY_IMG`: Path to the `.sif` image for container runs
 - `TMPDIR_HOST`: Host tmp directory to bind into container
+
+## artemis- or nyx- specific commands
+
+### Python Environments
+
+Depending on the result of the command `hostname`, you can find specific venvs to be used for testing and debugging purposes. If hostname is `nyx` or `artemis` you can find:
+
+- `/mnt/scratch-artemis/giuseppe/venvs/melt-312/`: fully functional python 3.12 venv, used for lhotse 1.*
+- `/mnt/scratch-nyx/giuseppe/venvs/lhotse2`: minimal venv to be used with lhotse 2.*
+
+### Testing
+
+To run the test suite on `nyx` or `artemis`, you can use:
+
+```
+cd ~/melt-proj/training
+singularity exec --bind /mnt/scratch-nyx,/mnt/scratch-artemis \
+  /mnt/scratch-artemis/giuseppe/melt-data/melt_cuda126_lhotse2_td.sif \
+  bash -c 'source /workspace/venv/bin/activate
+    export PYTHONPATH=/mnt/scratch-nyx/giuseppe/container-extras:$PYTHONPATH
+    export HF_HOME=/mnt/scratch-artemis/giuseppe/.cache/huggingface
+    python -m pytest tests/ -v'
+```

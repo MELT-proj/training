@@ -173,16 +173,18 @@ Two constraints the loader enforces:
 
 ## Checking a config before training on it
 
-```python
-import yaml
-d = yaml.safe_load(open("config/train/SFT-v1.3.1.yaml"))
-ic = d["data"]["train_ds"]["input_cfg"]
-assert abs(sum(g["weight"] for g in ic) - 1) < 1e-6
-for g in ic:
-    assert abs(sum(c["weight"] for c in g["input_cfg"]) - 1) < 1e-6
-print(len(ic), "language entries",
-      sum(len(g["input_cfg"]) for g in ic), "corpora")
+```bash
+python3 infra/check_training_config.py --config config/train/SFT-v1.3.1.yaml
 ```
+
+That checks the weights against this policy — every `p_l` and `p_c` recomputed from measured hours
+at the config's own alpha and beta — plus `total_hours`, `total_cuts`, `bucket_duration_bins`, the
+validation `name:` keys, and the tag and path consistency of every source. It prints the command or
+the YAML edit for anything that does not check out. See
+[config_verification.md](config_verification.md).
+
+Worth knowing here: it recomputes weights from the same hours cache this script writes, so once you
+have run `compute_mix_weights.py` the weight check costs nothing.
 
 ## Caveats
 

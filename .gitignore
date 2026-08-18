@@ -7,6 +7,7 @@ recording*
 scratch-artemis
 runs
 eval-runs
+.claude
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -201,3 +202,9 @@ history/
 # machine-specific; keep it locally to make a re-run after adding a corpus
 # cheap, but do not track it.
 infra/.mix_weights_hours.json
+
+# check_training_config.py's measurement cache (its --cache default). Same
+# reasoning: absolute shar paths, so machine-specific. It holds more than the
+# hours cache -- per-source cut counts and a duration histogram -- because
+# nothing else records those, and re-measuring them is a ~20 minute pass.
+infra/.config_check_cache.json
