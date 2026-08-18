@@ -1652,7 +1652,7 @@ data:
     lhotse_sampler_type: dynamic_bucketing  # One among: dynamic_bucketing, dynamic, bucketing
     num_buckets: 30
     buffer_size: 10000
-    bucket_duration_bins: [2.42, 3.6, 4.54, 5.41, 6.26, 7.18, 8.24, 9.52, 10.64, 11.64, 12.61, 13.56, 14.42, 14.89, 15.62, 16.58, 17.58, 18.58, 19.64, 21.6, 23.92, 26.18, 28.44, 31.7, 34.9, 36.4, 37.5, 38.42, 39.24]
+    bucket_duration_bins: [2.4, 3.54, 4.46, 5.34, 6.19, 7.12, 8.17, 9.4, 10.58, 11.62, 12.65, 13.67, 14.56, 15.08, 16.12, 17.19, 18.28, 19.41, 21.12, 23.3, 25.4, 27.5, 29.58, 33.52, 35.54, 36.78, 37.78, 38.58, 39.3]
 
     # Sampling
     shuffle: true
@@ -1675,12 +1675,14 @@ data:
     input_cfg:
       # English Validation
       - type: lhotse_shar
+        name: asr_en
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/validation
         tags:
           task: asr
           lang: en
           text_field: custom.pnc_text
       - type: lhotse_shar
+        name: asr_en
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/other/validation
         tags:
           task: asr
@@ -1689,36 +1691,42 @@ data:
 
       # Multilingual Validation
       - type: lhotse_shar
+        name: asr_es
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/es_419/validation
         tags:
           task: asr
           lang: es_419
           text_field: custom.pnc_text
       - type: lhotse_shar
+        name: asr_cs
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/cs/validation
         tags:
           task: asr
           lang: cs
           text_field: custom.metadata.sentence
       - type: lhotse_shar
+        name: asr_de
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/de/validation
         tags:
           task: asr
           lang: de
           text_field: custom.metadata.sentence
       - type: lhotse_shar
+        name: asr_zh
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/zh-CN/validation
         tags:
           task: asr
           lang: zh-CN
           text_field: custom.metadata.sentence
       - type: lhotse_shar
+        name: asr_pt
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/pt_br/validation
         tags:
           task: asr
           lang: pt_br
           text_field: custom.pnc_text
       - type: lhotse_shar
+        name: asr_pl
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/polish/dev
         tags:
           task: asr
@@ -1726,17 +1734,19 @@ data:
           text_field: custom.pnc_text
   
     # Statistics
-    total_hours: null
-    total_cuts: null
+    total_hours: 45.7
+    total_cuts: 28815
     force_estimate: true
+
+    # data.strict_text_field is not inherited by eval (resolve_eval_data_config
+    # only carries apply_chat_template/prompt_template/*/chat_template_config,
+    # dataloader.py:1226-1231), so it is set explicitly here to match training.
+    strict_text_field: true
 
     # Batch composition
     batch_size: 16
     batch_duration: null
-    lhotse_sampler_type: dynamic_bucketing
-    num_buckets: 30
-    bucket_duration_bins: null
-    
+
     buffer_size: 20000
     shuffle: false
     drop_last: true

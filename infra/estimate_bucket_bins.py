@@ -305,6 +305,28 @@ def get_durations_from_shar(
     return durations, sample_record, total_words, cuts_with_text, word_counts
 
 
+def _flatten_input_cfg(
+    input_cfg: list[dict[str, object]] | ListConfig,
+) -> list[dict[str, object]]:
+    """Recursively expand `type: group` entries into their leaf source configs.
+
+    A group's own `weight`/`tags` only affect muxing at training time
+    (dataloader.py's `_combine_entries`), not duration measurement here, so
+    they are dropped — only the leaves' `lhotse_shar`/`lhotse_cuts` entries
+    matter for bin estimation. Without this, a group entry was silently
+    skipped: it matches neither `lhotse_shar` nor `lhotse_cuts`, so its
+    durations never got counted.
+    """
+    leaves: list[dict[str, object]] = []
+    for raw_source_cfg in input_cfg:
+        source_cfg = _normalize_source_cfg(raw_source_cfg)
+        if source_cfg.get("type") == "group":
+            leaves.extend(_flatten_input_cfg(source_cfg.get("input_cfg", [])))
+        else:
+            leaves.append(source_cfg)
+    return leaves
+
+
 def _source_cache_key(source_cfg: dict[str, object]) -> str:
     """Build a unique cache key for a source configuration."""
     source_type = source_cfg.get("type", "lhotse_shar")
@@ -349,6 +371,8 @@ def load_cutset_from_config(
     """
     if cached_sources is None:
         cached_sources = {}
+
+    input_cfg = _flatten_input_cfg(input_cfg)
 
     # ── Fast path: all sources cached with complete metadata ──────────────
     if not force_recompute:
@@ -925,9 +949,18 @@ Examples:
 
     data_config = config.get("data", {})
 
-    # Load cached results if they exist (and we're not forcing recompute)
+    # Load previously saved output if it exists, regardless of --force-recompute:
+    # this seeds output["train_ds"]/["validation_ds"] for *both* splits (below),
+    # and --train-only/--val-only mean only one split is reprocessed per run. If
+    # this load were skipped whenever --force-recompute is set, a forced,
+    # single-split run (e.g. `--val-only --force-recompute`) would start the
+    # other split's output at {} and then overwrite the on-disk JSON with it,
+    # silently deleting that split's previously computed stats. Per-split
+    # `force_recompute` is still passed to load_cutset_from_config below, which
+    # is what actually controls whether *this run's* sources are re-read from
+    # disk vs. taken from cache.
     cached_data = {}
-    if not args.force_recompute and output_path.exists():
+    if output_path.exists():
         print(f"Loading cached results from: {output_path}")
         cached_data = load_cached_results(output_path)
         cached_data = _compact_cached_output(cached_data)

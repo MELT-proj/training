@@ -43,6 +43,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
+import math
 import os
 import sys
 import time
@@ -95,7 +96,7 @@ CHECKS: dict[str, tuple[str, str]] = {
     "E3": ("runtime", "steps per epoch is derivable"),
     "C1": ("runtime", "strict_text_field reaches the eval path"),
     "C2": ("runtime", "per_device_eval_batch_size is valid for eval"),
-    "C3": ("runtime", "max_duration fits the encoder's audio window"),
+    "C3": ("runtime", "cuts above the encoder's audio window are chunked, not truncated"),
     "C4": ("bins", "the top bucket covers the longest cuts"),
     "C5": ("bins", "bins were measured for this mixture, not copied"),
 }
@@ -1745,15 +1746,20 @@ def check_runtime(
             split = data.get(where) or {}
             max_duration = split.get("max_duration")
             if max_duration and float(max_duration) > window:
+                num_chunks = math.ceil(float(max_duration) / window)
                 report.add(
                     "C3", where,
-                    f"max_duration is {float(max_duration):g} s but the encoder window is "
-                    f"{window:g} s ({max_frames} frames x {ENCODER_FRAME_SECONDS * 1000:g} ms)",
+                    f"max_duration is {float(max_duration):g} s, above the encoder's "
+                    f"{window:g} s window ({max_frames} frames x "
+                    f"{ENCODER_FRAME_SECONDS * 1000:g} ms) -- expected, not a truncation risk",
                     line=line_index.get(f"data.{where}.max_duration"),
-                    fix=[f"Cuts between {window:g} s and {float(max_duration):g} s are admitted "
-                         "by the sampler but do not fit the encoder's audio window.",
-                         f"Either lower data.{where}.max_duration to {window:g}, or raise "
-                         "model.encoder.max_audio_seq_len if the encoder supports it."],
+                    fix=[f"MELTAudioStack.encoder chunks any sequence longer than {max_frames} "
+                         "frames instead of truncating it (modeling_melt.py:509-555): a "
+                         f"{float(max_duration):g} s cut is split into "
+                         f"ceil({float(max_duration):g} / {window:g}) = {num_chunks} chunks of "
+                         f"up to {window:g} s, the last one zero-padded, stacked into the batch "
+                         "dimension, and encoded independently before the adapter reassembles "
+                         "them. No config change is implied by this message."],
                 )
 
 

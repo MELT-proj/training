@@ -208,3 +208,12 @@ infra/.mix_weights_hours.json
 # hours cache -- per-source cut counts and a duration histogram -- because
 # nothing else records those, and re-measuring them is a ~20 minute pass.
 infra/.config_check_cache.json
+
+# estimate_bucket_bins.py's per-config output/cache (<config-stem>_bucket_info.json
+# and .csv, its --output default). Same reasoning again -- absolute shar paths
+# as cache keys -- plus it fully re-derives its own bins on the next
+# --force-recompute rather than composing from a durations histogram, so
+# there is nothing here worth tracking. Kept out of config/train/ (its
+# original default location) so a generated file never looks like part of the
+# config a reviewer is meant to read.
+infra/.bucket_info/
