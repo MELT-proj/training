@@ -130,6 +130,15 @@ def prepare_model(
         )
         model.text_decoder.resize_token_embeddings(len(processor.tokenizer), mean_resizing=False, pad_to_multiple_of=8)
 
+    # prepare_melt_config() withholds pad_token_id when it falls outside the
+    # decoder's original vocab_size (nn.Embedding bounds-checks it as padding_idx
+    # at construction time, before this resize could run). Now that the table is
+    # big enough, set the real id on both the free-standing config and the model.
+    pad_token_id = processor.tokenizer.convert_tokens_to_ids([processor.tokenizer.pad_token])[0]
+    if config.text_decoder_config.pad_token_id != pad_token_id:
+        config.text_decoder_config.pad_token_id = pad_token_id
+        model.text_decoder.config.pad_token_id = pad_token_id
+
     lora_cfg = model_cfg.get("lora", None)
     lora_enabled = lora_cfg is not None and lora_cfg.get("enabled", False)
     if lora_enabled:

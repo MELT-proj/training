@@ -99,6 +99,16 @@ def prepare_melt_config(cfg: DictConfig, processor: MELTProcessor) -> MELTConfig
     config.text_decoder_config.audio_token_id = tokenizer.convert_tokens_to_ids([processor.audio_token])[0]
     config.text_decoder_config.audio_bos_token_id = tokenizer.convert_tokens_to_ids([processor.audio_bos_token])[0]
     config.text_decoder_config.audio_eos_token_id = tokenizer.convert_tokens_to_ids([processor.audio_eos_token])[0]
-    config.text_decoder_config.pad_token_id = tokenizer.convert_tokens_to_ids([tokenizer.pad_token])[0]
+
+    # pad_token_id becomes nn.Embedding's `padding_idx`, which HF bounds-checks
+    # against vocab_size *at model construction time* -- unlike the other ids
+    # above, which are just read later. If add_special_tokens (prepare_processor)
+    # had to append a brand-new pad token, its id is >= the pretrained decoder's
+    # original vocab_size and construction would assert. Leave it off the config
+    # here; train.py's prepare_model sets it after resize_token_embeddings has
+    # actually grown the embedding table to fit.
+    pad_token_id = tokenizer.convert_tokens_to_ids([tokenizer.pad_token])[0]
+    if pad_token_id < config.text_decoder_config.vocab_size:
+        config.text_decoder_config.pad_token_id = pad_token_id
 
     return config
