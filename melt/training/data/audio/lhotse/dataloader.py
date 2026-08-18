@@ -338,9 +338,9 @@ def estimate_steps_per_epoch(
         world_size: Number of distributed processes.
 
     Returns:
-        Tuple of (steps_per_epoch, total_duration_hours, num_cuts).
+        Tuple of (steps_per_epoch, total_duration_hours, num_cuts,
+        batches_per_epoch, batches_per_rank).
     """
-    num_workers = _get_config_value(config, "num_workers", 1)
     total_hours = _get_config_value(config, "total_hours", None)
     total_cuts = _get_config_value(config, "total_cuts", None)
     force_estimate = _get_config_value(config, "force_estimate", None)
@@ -374,24 +374,29 @@ def estimate_steps_per_epoch(
         logger.warning("Neither batch_size nor batch_duration is set; cannot estimate steps per epoch")
         return -1, 0.0, 0, 0, 0
 
-    # NOTE: this divisor is not currently justified, and is kept only because
-    # changing it moves reported epoch length -- and therefore the LR schedule --
-    # for every run. Deliberately left alone here; see #52 step 5.
+    # `num_workers` deliberately does not appear in this divisor.
     #
-    # It used to be explained by `split_for_dataloading=True`, which was never
-    # passed. Now that indexed sources really are partitioned, the `world_size`
-    # part is finally correct. The extra `num_workers` factor still looks wrong:
-    # a rank's workers feed one interleaved stream for that rank, so the rank
-    # consumes `batches_per_epoch / world_size` batches however many workers
-    # produce them, and dividing again under-reports epoch length by num_workers.
-    # It is the same factor as the resume over-skip in #46 (superseded by #55),
-    # so settle both together rather than changing this in isolation.
-    batches_per_worker = batches_per_epoch / (world_size * num_workers) if num_workers > 0 else batches_per_epoch / world_size
+    # lhotse's `make_worker_init_fn` gives worker `w` of rank `r` the partition
+    # (rank = r * num_workers + w, world_size = world_size * num_workers), so a
+    # single worker does emit only `batches_per_epoch / (world_size *
+    # num_workers)` batches. But a rank's DataLoader interleaves all of its
+    # workers round-robin into one stream, so the rank still consumes
+    # `batches_per_epoch / world_size` batches per epoch however many workers
+    # produce them -- and it is the rank's stream that `len(dataloader)` counts
+    # and that the training loop steps through.
+    #
+    # Dividing by `num_workers` as well therefore under-reported epoch length by
+    # exactly that factor, which propagated into `max_steps` (when derived from
+    # `num_train_epochs`) and from there into the LR schedule. The extra factor
+    # predates #52: it was a leftover from `split_for_dataloading=True`, which
+    # was never actually passed. Now that indexed sources really are partitioned
+    # the `world_size` term is correct on its own.
+    batches_per_rank = batches_per_epoch / world_size
 
     # The number of update steps is rescaled by gradient accumulation steps
-    optimizer_steps_per_epoch = math.ceil(batches_per_worker / gradient_accumulation_steps)
+    optimizer_steps_per_epoch = math.ceil(batches_per_rank / gradient_accumulation_steps)
 
-    return optimizer_steps_per_epoch, total_hours, total_cuts, batches_per_epoch, batches_per_worker
+    return optimizer_steps_per_epoch, total_hours, total_cuts, batches_per_epoch, batches_per_rank
 
 
 def read_cutset_from_config(config: DictConfig, repeat: bool = True) -> tuple[CutSet, bool]:
@@ -1035,21 +1040,22 @@ def get_lhotse_dataloader_from_config(
         logger.info(f"Using InfiniteIterableDatasetWrapper for shar data ({'infinite' if repeat else 'finite'} mode)")
         logger.info(f"Using world size: {world_size}, rank: {global_rank}")
 
-        # Estimate batches per epoch for progress bars
-        # We need micro-batches per worker, per rank, per epoch (not optimizer steps)
-        # So we call estimate_steps_per_epoch with gradient_accumulation_steps=1
-        _, total_duration_hours, total_cuts, _, batches_per_worker = estimate_steps_per_epoch(
+        # Estimate batches per epoch for progress bars.
+        # We need micro-batches per rank per epoch (not optimizer steps), which
+        # is what this DataLoader yields once its workers are interleaved, so we
+        # call estimate_steps_per_epoch with gradient_accumulation_steps=1.
+        _, total_duration_hours, total_cuts, _, batches_per_rank = estimate_steps_per_epoch(
             config=config,
             gradient_accumulation_steps=1,  # We want micro-batches, not optimizer steps
             world_size=world_size,
         )
         # Convert to int for __len__
-        batches_per_worker_int = max(1, int(batches_per_worker))
+        batches_per_rank_int = max(1, int(batches_per_rank))
         logger.info(
             "This dataloader will yield (approx):\n"
             + f" {total_cuts} total cuts (after filtering)\n"
             + f" with a total duration of {total_duration_hours:.2f} hours and\n"
-            + f" with an estimated {batches_per_worker_int} micro-batches per epoch per rank"
+            + f" with an estimated {batches_per_rank_int} micro-batches per epoch per rank"
         )
         if repeat:
             logger.info(
@@ -1070,7 +1076,7 @@ def get_lhotse_dataloader_from_config(
             wrapped_dataset = InfiniteIterableDatasetWrapper(
                 dataset=dataset,
                 sampler=sampler,
-                estimated_batches_per_epoch=batches_per_worker_int,
+                estimated_batches_per_epoch=batches_per_rank_int,
             )
 
         # This runs in every worker subprocess and is where LHOTSE_PROCESS_SEED
