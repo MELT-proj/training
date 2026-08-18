@@ -80,6 +80,14 @@ HOST_TMPDIR="${TMPDIR_HOST:-/tmp}"
 HOST_LOCAL_DATASETS_DIR="${LOCAL_DATASETS_DIR_HOST:-${LOCAL_DATASETS_DIR:-${SUBMIT_DIR}/shar}}"
 HOST_OUTPUT_DIR="${OUTPUT_DIR:-${SUBMIT_DIR}/outputs}"
 HOST_HF_HOME="${HF_HOME:-}"
+# huggingface-cli login always writes to ~/.cache/huggingface/token regardless
+# of HF_HOME (sites point HF_HOME at a shared cache dir, not $HOME), and $HOME
+# itself is not bound into the container -- so without reading it here, on the
+# host, the container sees neither the real $HOME nor a token. Read here and
+# forward explicitly (see container_env HF_TOKEN below).
+HOST_HF_TOKEN="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-}}"
+[[ -z "${HOST_HF_TOKEN}" && -f "${HOME}/.cache/huggingface/token" ]] \
+    && HOST_HF_TOKEN="$(cat "${HOME}/.cache/huggingface/token")"
 
 mkdir -p "${HOST_TMPDIR}" "${SUBMIT_DIR}/logs" "${HOST_OUTPUT_DIR}/wandb"
 [[ -n "${HOST_HF_HOME}" ]] && mkdir -p "${HOST_HF_HOME}"
@@ -113,6 +121,14 @@ if [[ -n "${HOST_HF_HOME}" ]]; then
     container_env HF_HUB_CACHE /workspace/hf_cache/hub
 else
     echo "WARNING: HF_HOME not set on host; HF cache will not be shared into the container."
+fi
+
+# Gated/private HF repos: forward the token, never print it.
+if [[ -n "${HOST_HF_TOKEN}" ]]; then
+    container_env HF_TOKEN "${HOST_HF_TOKEN}"
+    echo "[container] HF_TOKEN: forwarded (from \${HF_TOKEN:-\$HOME/.cache/huggingface/token})"
+else
+    echo "[container] HF_TOKEN: not set on host and no ~/.cache/huggingface/token found -- gated repos will fail to download"
 fi
 
 # NCCL heartbeat headroom for slow collectives.
