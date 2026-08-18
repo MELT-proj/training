@@ -101,6 +101,11 @@ container_env WANDB_DIR          /workspace/outputs/wandb
 container_env TRITON_CACHE_DIR /workspace/tmp/.triton
 container_env TRITON_HOME      /workspace/tmp/.triton
 container_env XDG_CACHE_HOME   /workspace/tmp/.cache
+# wandb artifact staging (config_artifact.add_file, etc.) uses WANDB_DATA_DIR
+# (defaults to ~/.local/share/wandb/..., i.e. XDG_DATA_HOME), which is a
+# separate setting from WANDB_DIR above -- redirect it too or it tries to
+# mkdir under the unwritable $HOME.
+container_env WANDB_DATA_DIR   /workspace/tmp/.local/share
 
 # HF cache is shared into the container only when HF_HOME is set on the host.
 if [[ -n "${HOST_HF_HOME}" ]]; then
