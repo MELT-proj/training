@@ -1755,8 +1755,10 @@ def check_runtime(
             "eval decodes with generate() but validation_ds has no max_samples",
             line=line_index.get("data.validation_ds"),
             fix=["Generation costs ~one decoder step per output token per sample, against",
-                 "a single forward before. Set data.validation_ds.max_samples (1000 is the",
-                 "campaign default); materialize_cuts_for_eval applies it with a seeded",
+                 "a single forward before -- ~2.2 s/utterance at generation_max_length 64",
+                 "on an H100, scaling with the budget. Set data.validation_ds.max_samples;",
+                 "note it applies PER NAMED eval set, so 200 across five named sets scores",
+                 "1000 utterances. materialize_cuts_for_eval applies it with a seeded",
                  "shuffle, so every run scores the same subset."],
         )
 

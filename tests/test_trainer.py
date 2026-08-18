@@ -717,3 +717,12 @@ def test_non_float_and_missing_features_are_left_alone():
     assert trainer._cast_to_audio_dtype(None) is None
     ints = torch.ones(2, 3, dtype=torch.long)
     assert trainer._cast_to_audio_dtype(ints) is ints
+
+
+def test_multi_line_generations_stay_on_one_log_line():
+    """A Qwen3 checkpoint emits a `</think>` block before its answer; a raw
+    newline in the middle breaks the REF/HYP pairing the block exists for."""
+    from melt.training.trainer import _one_line
+
+    assert _one_line("\n\n</think>\n\nIt seems like you") == "</think> It seems like you"
+    assert _one_line("already one line") == "already one line"

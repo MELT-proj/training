@@ -52,6 +52,16 @@ logger = get_logger(__name__)
 DEFAULT_GENERATION_MAX_NEW_TOKENS = 256
 
 
+def _one_line(text: str) -> str:
+    """Collapse *text* onto a single line for the eval sample log.
+
+    Generations are frequently multi-line -- a Qwen3 checkpoint emits a
+    ``</think>`` block and then prose -- and a raw newline inside the block
+    breaks the REF/HYP pairing that makes it readable in the first place.
+    """
+    return " ".join(text.split())
+
+
 def _fsdp2_module_class():
     """Return ``torch.distributed.fsdp.FSDPModule``, or None if unavailable.
 
@@ -1432,8 +1442,8 @@ class MELTTrainer(Seq2SeqTrainer):
                 lines.append(
                     f"  [{i}] lang={sample['lang']} task={sample['task']}"
                 )
-                lines.append(f"      REF: {sample['reference_raw']}")
-                lines.append(f"      HYP: {sample['prediction_raw']}")
+                lines.append(f"      REF: {_one_line(sample['reference_raw'])}")
+                lines.append(f"      HYP: {_one_line(sample['prediction_raw'])}")
             logger.info("\n".join(lines))
 
         # `report_to` may exclude wandb, and train.py only calls wandb.init on
@@ -1458,7 +1468,14 @@ class MELTTrainer(Seq2SeqTrainer):
             columns=columns,
             data=[[sample[c] for c in columns] for sample in samples],
         )
-        wandb.log({f"{prefix}/samples": table}, step=step)
+        # wandb drops anything logged at a step below the run's current one, and
+        # eval_on_start reports global_step 0 after startup has already pushed
+        # the run past it ("Tried to log to step 0 that is less than the current
+        # step 4"). Land the table on the earliest step wandb will still accept
+        # rather than lose it.
+        wandb.log(
+            {f"{prefix}/samples": table}, step=max(step, wandb.run.step)
+        )
 
     def _generation_kwargs(self, gen_kwargs: dict) -> dict:
         """Build the ``generate()`` kwargs for one evaluation batch.

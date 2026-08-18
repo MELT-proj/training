@@ -176,9 +176,19 @@ data:
 
   validation_ds:
     # Generation-based evaluation costs ~N sequential decoder steps per sample
-    # instead of a single forward, so the full validation set is not affordable
-    # at this eval cadence. materialize_cuts_for_eval applies the cap with a
-    # seeded shuffle, so every run scores the same subset.
+    # instead of a single forward, so the full validation set is not affordable.
+    #
+    # NOTE this cap is applied PER NAMED EVAL SET, not per config: here
+    # one eval set, so ~1000 utterances per eval.
+    #
+    # Measured on an H100 (artemis job 327830): ~2.2 s/utterance at
+    # generation_max_length 64, and the cost is roughly linear in the token
+    # budget because nothing in the training targets teaches the model to stop
+    # (see docs/generation_eval.md) -- so every sample spends the whole budget.
+    # Budget the eval against eval_steps before raising either number.
+    #
+    # materialize_cuts_for_eval applies the cap with a seeded shuffle, so every
+    # run scores the same subset.
     max_samples: 1000
     total_hours: 91.49  # Optional: total hours of data for estimation
     total_cuts: 58238  # Optional: total number of cuts for estimation

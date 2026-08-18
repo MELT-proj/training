@@ -44,7 +44,7 @@ trainer:
 
 data:
   validation_ds:
-    max_samples: 1000           # required in practice
+    max_samples: 200            # required; applied PER NAMED eval set
 
 evaluation:
   log_num_samples: 10           # REF/HYP pairs printed and sent to W&B; 0 disables
@@ -61,7 +61,7 @@ decoder with `inputs_embeds=`. For that input form,
 `max_new_tokens`, which is also the only reading that makes sense when the
 prompt is audio.
 
-### `max_samples` is not optional
+### `max_samples` is not optional, and it is *per named eval set*
 
 Generation costs roughly one sequential decoder step per output token per
 sample, against a single forward before. The unbounded validation set (28,815
@@ -70,6 +70,24 @@ teacher forcing and does not finish under generation.
 `materialize_cuts_for_eval` applies `max_samples` with a seeded shuffle, so
 every run scores the same subset. `infra/check_training_config.py` flags a
 config that omits it (check **C6**).
+
+The cap applies to each named validation source separately. A config whose
+`validation_ds` entries carry `name: asr_en`, `asr_de`, … is split into one
+eval set per name, and each one draws up to `max_samples` cuts — so
+`max_samples: 200` across five named sets evaluates **1,000** utterances, not
+200. The shipped configs set the per-set number so the total lands near 1,000.
+
+**Budget it against `eval_steps` before raising either number.** Measured on
+one H100 (artemis job 327830, Qwen3-1.7B + w2v-bert-2.0, batch 4):
+
+| | |
+|---|---|
+| `generation_max_length: 64` | ~2.2 s per utterance |
+| 1,000 utterances at 64 tokens | ~35 min per eval |
+| 1,000 utterances at 256 tokens | ~2 h per eval (cost is ~linear in the budget) |
+
+The linearity is not incidental — see the next section. `eval_steps: 100`
+predates generation-based eval and is not viable with it.
 
 ## Reading the generations
 
@@ -98,7 +116,10 @@ allows, regardless of utterance length.
 
 This is a property of the training data, not of the eval path, and fixing it
 means changing what the model is trained on (and retraining). Until then, keep
-`generation_max_length` tight.
+`generation_max_length` tight: it is not a ceiling that is rarely reached, it
+is the per-sample cost of every eval, which is why the table above scales
+linearly with it. A model that stopped at its own EOS would decode a 20-token
+transcript in 20 steps instead of 256.
 
 ## Batched generation
 
