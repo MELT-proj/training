@@ -569,7 +569,7 @@ class MELTTrainer(Trainer):
         Roughly:
         Parent Trainer._inner_training_loop:
         ├── for epoch in range(0, sys.maxsize):     # runs "forever"
-        │   ├── steps_in_epoch = len(dataloader)    # = batches_per_worker (int)
+        │   ├── steps_in_epoch = len(dataloader)    # = batches_per_rank (int)
         │   ├── for update_step in total_updates:   # = steps_in_epoch // grad_accum
         │   │   ├── for micro_batch in grad_accum:
         │   │   │   └── self.state.global_step += 1 (after grad_accum micro-batches)
@@ -593,7 +593,7 @@ class MELTTrainer(Trainer):
             self.dataset_duration_hours,
             self.dataset_num_cuts,
             batches_per_epoch,
-            batches_per_worker,
+            batches_per_rank,
         ) = estimate_steps_per_epoch(
             config=self.config.data.train_ds,
             gradient_accumulation_steps=args.gradient_accumulation_steps,
@@ -631,10 +631,11 @@ class MELTTrainer(Trainer):
             num_train_epochs = args.num_train_epochs
             num_train_samples = num_train_epochs * batches_per_epoch
 
-        # len_dataloader MUST match len(dataloader.dataset) = batches_per_worker
+        # len_dataloader MUST match len(dataloader.dataset) = batches_per_rank
         # This is what the InfiniteIterableDatasetWrapper.__len__ returns
-        # It represents micro-batches per worker, per rank, per epoch
-        len_dataloader = int(batches_per_worker)
+        # It represents micro-batches per rank per epoch: the rank's DataLoader
+        # interleaves all of its workers, so num_workers does not divide this.
+        len_dataloader = int(batches_per_rank)
 
         logger.info(
             f"Single epoch estimation: {self.dataset_num_cuts} cuts, \n"

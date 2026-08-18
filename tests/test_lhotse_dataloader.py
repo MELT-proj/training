@@ -1239,3 +1239,132 @@ class TestSharManifestDiscovery:
 
         names = [p.name for p in shar_manifest_files(tmp_path)]
         assert names == ["cuts.000000.jsonl", "cuts.000001.jsonl.gz"]
+
+
+class TestStepsPerEpochEstimate:
+    """`estimate_steps_per_epoch` counts a rank's batches, not one worker's.
+
+    A rank's DataLoader interleaves all of its workers into a single stream, so
+    the epoch length the training loop sees -- and therefore `max_steps` when it
+    is derived from `num_train_epochs`, and the LR schedule derived from that --
+    must not depend on `num_workers`.
+
+    It used to. The divisor carried an extra `num_workers` factor left over from
+    `split_for_dataloading=True`, which was never actually passed, so every run
+    at the packaged default of 2 workers under-reported its epoch length by 2x.
+    lhotse's `make_worker_init_fn` does give worker `w` of rank `r` the
+    partition (r * num_workers + w, world_size * num_workers), but that splits
+    the rank's stream among its workers -- it does not shorten it.
+    """
+
+    # 100 h at 200 s/batch is 1800 micro-batches over the whole mixture, before
+    # any rank or grad-accum division. `total_hours` is set explicitly so the
+    # estimator never touches disk and `shar_path` is never read.
+    TOTAL_HOURS = 100.0
+    BATCH_DURATION = 200.0
+    BATCHES_PER_EPOCH = 1800
+
+    @staticmethod
+    def _config(**overrides):
+        config = {
+            "input_cfg": [{"type": "lhotse_shar", "shar_path": "/nonexistent"}],
+            "total_hours": TestStepsPerEpochEstimate.TOTAL_HOURS,
+            "batch_duration": TestStepsPerEpochEstimate.BATCH_DURATION,
+            "num_workers": 2,
+        }
+        config.update(overrides)
+        return OmegaConf.create(config)
+
+    @pytest.mark.parametrize("num_workers", [0, 1, 2, 4, 8])
+    def test_epoch_length_is_independent_of_num_workers(self, num_workers):
+        from melt.training.data.audio.lhotse.dataloader import estimate_steps_per_epoch
+
+        steps, _, _, batches_per_epoch, batches_per_rank = estimate_steps_per_epoch(
+            config=self._config(num_workers=num_workers),
+            gradient_accumulation_steps=1,
+            world_size=1,
+        )
+
+        assert batches_per_epoch == self.BATCHES_PER_EPOCH
+        assert batches_per_rank == self.BATCHES_PER_EPOCH
+        assert steps == self.BATCHES_PER_EPOCH
+
+    def test_num_workers_does_not_change_steps_at_scale(self):
+        """The same run at 1 vs 8 workers must schedule the same number of steps."""
+        from melt.training.data.audio.lhotse.dataloader import estimate_steps_per_epoch
+
+        def steps_at(num_workers):
+            return estimate_steps_per_epoch(
+                config=self._config(num_workers=num_workers),
+                gradient_accumulation_steps=8,
+                world_size=4,
+            )[0]
+
+        assert steps_at(1) == steps_at(2) == steps_at(8)
+
+    def test_matches_the_documented_formula(self):
+        """The estimate is the formula in the module docstring and in
+        `projects/ablation-campaign/build_campaign_config.py`:
+
+            steps = total_hours * 3600 / (batch_duration * world_size * grad_accum)
+        """
+        import math
+
+        from melt.training.data.audio.lhotse.dataloader import estimate_steps_per_epoch
+
+        world_size, grad_accum = 4, 8
+        steps, hours, _, _, _ = estimate_steps_per_epoch(
+            config=self._config(num_workers=2),
+            gradient_accumulation_steps=grad_accum,
+            world_size=world_size,
+        )
+
+        expected = math.ceil(
+            math.ceil(self.TOTAL_HOURS * 3600 / self.BATCH_DURATION)
+            / (world_size * grad_accum)
+        )
+        assert hours == self.TOTAL_HOURS
+        assert steps == expected == 57
+
+    def test_world_size_and_grad_accum_still_divide(self):
+        from melt.training.data.audio.lhotse.dataloader import estimate_steps_per_epoch
+
+        _, _, _, _, one_rank = estimate_steps_per_epoch(
+            config=self._config(), gradient_accumulation_steps=1, world_size=1
+        )
+        _, _, _, _, four_ranks = estimate_steps_per_epoch(
+            config=self._config(), gradient_accumulation_steps=1, world_size=4
+        )
+        four_ranks_ga2, *_ = estimate_steps_per_epoch(
+            config=self._config(), gradient_accumulation_steps=2, world_size=4
+        )
+
+        assert one_rank == self.BATCHES_PER_EPOCH
+        assert four_ranks == self.BATCHES_PER_EPOCH / 4
+        assert four_ranks_ga2 == self.BATCHES_PER_EPOCH / 8
+
+    def test_dataloader_len_is_per_rank_not_per_worker(self, indexed_synthetic_shar):
+        """`len(dataloader)` is what HF Trainer uses as `steps_in_epoch`.
+
+        It has to be the number of batches the rank's loader yields, which is
+        the same however many workers feed it.
+        """
+        from melt.training.data.audio.lhotse.dataloader import (
+            get_lhotse_dataloader_from_config,
+        )
+
+        def loader_len(num_workers):
+            dl = get_lhotse_dataloader_from_config(
+                config=_loader_config(
+                    indexed_synthetic_shar,
+                    total_hours=self.TOTAL_HOURS,
+                    batch_duration=self.BATCH_DURATION,
+                    num_workers=num_workers,
+                ),
+                global_rank=0,
+                world_size=2,
+                dataset=_IdDataset(),
+            )
+            return len(dl)
+
+        assert loader_len(1) == loader_len(2) == self.BATCHES_PER_EPOCH // 2
