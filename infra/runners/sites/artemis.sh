@@ -8,11 +8,11 @@ export LOCAL_DATASETS_DIR="${LOCAL_DATASETS_DIR:-/mnt/scratch-nyx/giuseppe/melt/
 export TMPDIR_HOST="${TMPDIR_HOST:-/tmp}"
 
 # --- container mode -------------------------------------------------------
-export SINGULARITY_IMG=/mnt/scratch-artemis/giuseppe/melt-data/melt_cuda126.sif
-export SINGULARITY_BIN=singularity
+export SINGULARITY_IMG=${SINGULARITY_IMG:-/mnt/scratch-artemis/giuseppe/melt-data/melt_cuda126.sif}
+export SINGULARITY_BIN=${SINGULARITY_BIN:-singularity}
 
 # --- native mode ----------------------------------------------------------
-export VENV_PATH=/mnt/scratch-artemis/giuseppe/venvs/melt/bin/activate
+export VENV_PATH=/mnt/scratch-artemis/giuseppe/venvs/melt-312/bin/activate
 
 # --- misc -----------------------------------------------------------------
 export WANDB_MODE=online
