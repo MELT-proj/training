@@ -70,25 +70,20 @@ history.
 
 Usage::
 
-    # ASR+ST (the mixed arm)
+    # ASR only (the modality-alignment arm) -- the campaign's only live render
     python3 projects/ablation-campaign/build_campaign_config.py \\
         --template       config/train/MA-v1.2.yaml \\
         --datasets-root  /mnt/scratch-nyx/giuseppe/melt/melt-data/shar \\
-        --budget-hours   700.3 \\
-        --exclude-corpus fleurs \\
-        --tasks          both \\
-        --cache          projects/ablation-campaign/campaign_hours.json \\
-        --out            projects/ablation-campaign/ABL-MA-700.yaml
-
-    # ASR only (the modality-alignment arm), same flags but --tasks asr
-    python3 projects/ablation-campaign/build_campaign_config.py \\
-        --template       config/train/MA-v1.2.yaml \\
-        --datasets-root  /mnt/scratch-nyx/giuseppe/melt/melt-data/shar \\
-        --budget-hours   700.3 \\
+        --budget-hours   125 \\
         --exclude-corpus fleurs \\
         --tasks          asr \\
         --cache          projects/ablation-campaign/campaign_hours.json \\
-        --out            projects/ablation-campaign/ABL-MA-700-asr.yaml
+        --out            projects/ablation-campaign/ABL-MA-125-asr.yaml
+
+    --tasks both (the ASR+ST mix) and other --budget-hours values still work;
+    the 700 h and ASR+ST renders were removed from the tree on 2026-08-19 so the
+    campaign could focus on ASR modality alignment at 125 h.  Re-render them
+    from this same template if they are needed again.
 
 Run it where the data is; it reads manifests, not audio.
 """
