@@ -5,13 +5,6 @@
 #   python src/train.py --config config/train/asr.yaml
 #   python src/train.py --config config/train/asr.yaml --trainer.max_steps=1000
 #   python src/train.py --config config/train/asr.yaml --run.exp_name=my_experiment
-#
-# Launch these ABL runs with config/accelerate/fsdp2_noreshard.yaml, not
-# fsdp2.yaml: resharding after forward costs ~28% throughput here and buys
-# memory this workload does not need (see that file's header).
-#
-#   infra/runners/submit-container.sh <site> config/accelerate/fsdp2_noreshard.yaml \
-#     --config projects/ablation-campaign/<this file>
 
 # =============================================================================
 # Run Configuration (non-TrainingArguments settings)
