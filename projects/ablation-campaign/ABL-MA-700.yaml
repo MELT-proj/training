@@ -5,6 +5,13 @@
 #   python src/train.py --config config/train/asr.yaml
 #   python src/train.py --config config/train/asr.yaml --trainer.max_steps=1000
 #   python src/train.py --config config/train/asr.yaml --run.exp_name=my_experiment
+#
+# Launch these ABL runs with config/accelerate/fsdp2_noreshard.yaml, not
+# fsdp2.yaml: resharding after forward costs ~28% throughput here and buys
+# memory this workload does not need (see that file's header).
+#
+#   infra/runners/submit-container.sh <site> config/accelerate/fsdp2_noreshard.yaml \
+#     --config projects/ablation-campaign/<this file>
 
 # =============================================================================
 # Run Configuration (non-TrainingArguments settings)
@@ -333,7 +340,17 @@ data:
     # Bucketing for efficient batching
     lhotse_sampler_type: dynamic_bucketing  # One among: dynamic_bucketing, dynamic, bucketing
     num_buckets: 30
-    buffer_size: 10000
+    # Raised from 10000 after throughput benchmarking on artemis (2x H100,
+    # 300 steps each, one knob per job -- jobs 327899/327913).  buffer_size is
+    # the DynamicBucketingSampler pool; it trades I/O locality for batch
+    # diversity, and the cost is real: 10000 ran 1.74x slower per step than
+    # 2000, plus a one-time fill of ~460 s vs ~47 s.  Cross-dataset and
+    # cross-language mixing comes from CutSet.mux *upstream* of this buffer, so
+    # this knob only controls local reordering; past roughly 30-50x the batch
+    # size per bucket it buys nothing measurable.  50000 keeps a wide pool
+    # (~1600 cuts/bucket) while staying far from the regime where the fill cost
+    # is measured in hours.
+    buffer_size: 50000
     bucket_duration_bins: [3.42, 3.88, 4.18, 4.44, 4.68, 4.87, 5.06, 5.23, 5.4, 5.58, 5.76, 5.9, 6.08, 6.24, 6.41, 6.6, 6.8, 7.01, 7.22, 7.46, 7.75, 8.09, 8.5, 9.1, 10.1, 12.67, 14.12, 15.06, 15.9]
 
     # Sampling
@@ -344,7 +361,7 @@ data:
 
     # Duration filtering
     min_duration: 0.5
-    max_duration: 30.0
+    max_duration: 90.0
 
     # DataLoader settings
     num_workers: 1
