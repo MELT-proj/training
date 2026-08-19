@@ -35,7 +35,15 @@ export REMOTE_REPO=training
 # and run fully offline.
 export WANDB_MODE=offline
 export HF_HUB_OFFLINE=1
-export MASTER_PORT=60001
+# MASTER_PORT is deliberately NOT set here. This file is sourced on the LOGIN
+# node at submit time, before the job (and its SLURM_JOB_ID) exists, so a
+# fixed value here would apply to every job the same way and two jobs landing
+# on the same node would collide on the rendezvous port -- the second one's
+# torch-elastic agent fails to bind and the job dies before user code runs.
+# bash/run_train.sh (and the container shim) derive a per-job default from
+# SLURM_JOB_ID instead, at the point where it's actually set. See there for
+# the derivation; set MASTER_PORT here (or in the environment) only to force
+# a specific value.
 # run_train.sh forwards this as an explicit --data.{train,validation}_ds.shard_seed
 # override, so no train YAML needs shard_seed: randomized (invalid for indexed
 # Shar sources -- see melt/training/data/audio/lhotse/dataloader.py).

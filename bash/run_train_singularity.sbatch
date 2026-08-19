@@ -175,7 +175,19 @@ container_env SLURM_GPUS_ON_NODE "${SLURM_GPUS_ON_NODE:-}"
 container_env SLURM_JOB_NODELIST "${SLURM_JOB_NODELIST:-}"
 
 # Multi-node: compute MASTER_ADDR on the host (scontrol is usually absent in the container).
-MASTER_PORT="${MASTER_PORT:-6000}"
+# MASTER_PORT is derived from SLURM_JOB_ID (constant per job, unique across
+# concurrent jobs) rather than fixed -- a fixed port made a second job landing
+# on the same node fail its torch-elastic rendezvous and die before user code
+# ran. This has to happen here (inside the job, forwarded into the container
+# below) rather than in infra/runners/sites/*.sh, which is sourced on the
+# LOGIN node at submit time before SLURM_JOB_ID exists. Same derivation and
+# range (20000-29999, clear of privileged and Linux ephemeral ports) as
+# bash/run_train.sh -- see the comment there for the full rationale.
+if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+    MASTER_PORT="${MASTER_PORT:-$(( 20000 + SLURM_JOB_ID % 10000 ))}"
+else
+    MASTER_PORT="${MASTER_PORT:-6000}"
+fi
 if [[ -n "${SLURM_JOB_NODELIST:-}" ]] && command -v scontrol >/dev/null 2>&1; then
     MASTER_ADDR_HOST="$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | head -n 1)"
 else

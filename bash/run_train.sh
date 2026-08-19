@@ -116,11 +116,29 @@ fi
 
 NUM_NODES="${SLURM_NNODES:-1}"
 WORLD_SIZE=$((NUM_NODES * GPUS_PER_NODE))
-MASTER_PORT="${MASTER_PORT:-6000}"
+# MASTER_PORT default: derived from SLURM_JOB_ID, not a fixed value. A fixed
+# rendezvous port broke concurrent jobs sharing a node -- the second job's
+# torch-elastic agent can't bind the port and dies before user code runs,
+# with an unhelpful internal error (AttributeError on a None launch result).
+# SLURM_JOB_ID is exactly the right key: constant across every rank/node of
+# ONE job (so they all rendezvous on the same port) and unique across
+# concurrent jobs (so they don't collide). This can't be computed in
+# infra/runners/sites/*.sh -- those are sourced on the LOGIN node at submit
+# time, before the job exists, so SLURM_JOB_ID is empty there; a value set
+# there would be baked in via sbatch's default --export=ALL and shared by
+# every job regardless of ID. It has to be computed here, inside the job.
+# Range 20000-29999 avoids privileged ports (<1024) and the Linux ephemeral
+# port range (net.ipv4.ip_local_port_range, commonly 32768-60999) -- the old
+# hardcoded 60001 sat inside that ephemeral range and could also collide with
+# a random outgoing connection's source port, not just another job.
+# Outside SLURM (local run) there is no job id and no concurrency to worry
+# about, so this keeps the previous fixed default.
 if [[ "$RUNNING_UNDER_SLURM" -eq 1 ]]; then
+    MASTER_PORT="${MASTER_PORT:-$(( 20000 + SLURM_JOB_ID % 10000 ))}"
     # scontrol may be unavailable inside containers; allow MASTER_ADDR from the host.
     MASTER_ADDR="${MASTER_ADDR:-$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)}"
 else
+    MASTER_PORT="${MASTER_PORT:-6000}"
     MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
 fi
 
@@ -175,9 +193,6 @@ fi
 # --machine_rank is intentionally omitted here: under SLURM it must be the
 # per-task SLURM_PROCID, which is injected at launch time below.
 if [[ "$RUNNING_UNDER_SLURM" -eq 1 ]]; then
-    # Multi-node uses the c10d rendezvous backend (torchrun/FSDP). DeepSpeed
-    # ignores these flags and uses its own launcher; for multi-node DeepSpeed
-    # use a hostfile or switch to FSDP.
     LAUNCH_CMD=(
         accelerate launch
         --config_file "$ACCELERATE_CONFIG"
@@ -186,11 +201,43 @@ if [[ "$RUNNING_UNDER_SLURM" -eq 1 ]]; then
         --num_processes "$WORLD_SIZE"
         --main_process_ip "$MASTER_ADDR"
         --main_process_port "$MASTER_PORT"
-        --rdzv_backend c10d
-        --rdzv_conf "rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT"
         --max_restarts 0
         --tee 3
     )
+    # Rendezvous backend, and why it is conditional.
+    #
+    # This used to pass `--rdzv_backend c10d --rdzv_conf
+    # "rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT"` unconditionally, which did NOT
+    # do what it reads like. `--rdzv_conf` is a freeform key=value bag for
+    # backend options: torch puts it in RendezvousParameters.config and only
+    # ever reads the endpoint from RendezvousParameters.endpoint, so that line
+    # was inert. Meanwhile `torch.distributed.run.get_rdzv_endpoint` falls back
+    # to "$master_addr:$master_port" ONLY for the static backend; under c10d it
+    # returns `args.rdzv_endpoint`, which accelerate leaves empty for a
+    # single-machine launch (accelerate/utils/launch.py:prepare_multi_gpu_env
+    # sets only master_port when num_machines <= 1). An empty endpoint resolves
+    # to c10d's DEFAULT_PORT, localhost:29400 -- a fixed port, identical for
+    # every job, whatever MASTER_PORT says.
+    #
+    # That is a real collision, not a theoretical one: two single-node jobs on
+    # one node both rendezvous on 29400, the second silently attaches to the
+    # first one's store as a client, and dies when the first exits
+    # (RendezvousConnectionError against remote=[localhost]:29400 -- artemis
+    # jobs 327878/327879). Deriving MASTER_PORT per job cannot help while the
+    # port is not the one being used.
+    #
+    # accelerate exposes no `--rdzv_endpoint` flag to fix it directly (only
+    # --rdzv_backend and --rdzv_conf), so the fix is to stop forcing c10d where
+    # it buys nothing. Single node: the default static backend honours
+    # --main_process_port, so each job rendezvouses on its own derived port.
+    # Multi node: c10d is kept, because node ranks and the head address are
+    # what it is actually there for, and this path is not reachable on a
+    # single-node site to test. Multi-node jobs therefore still share 29400 --
+    # a pre-existing exposure, unchanged by this commit, and only a problem for
+    # two concurrent multi-node jobs whose head node is the same.
+    if [[ "$NUM_NODES" -gt 1 ]]; then
+        LAUNCH_CMD+=(--rdzv_backend c10d)
+    fi
 else
     LAUNCH_CMD=(
         accelerate launch

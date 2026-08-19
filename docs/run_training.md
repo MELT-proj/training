@@ -62,7 +62,7 @@ launcher fills sane defaults, so a bare local run needs none of them.
 | `WANDB_MODE` | launcher / wandb | `online` | Use `offline` on air-gapped sites. |
 | `HF_HUB_OFFLINE` | launcher / HF libs | unset (online) | Set `1` on air-gapped sites (pre-download with `infra/setup/download_hf_models.sh`). |
 | `MASTER_ADDR` | launcher | SLURM: first node (`scontrol`); local: `127.0.0.1` | Container mode computes it on the host and forwards it. |
-| `MASTER_PORT` | launcher | `6000` | Bump if it clashes on the node. |
+| `MASTER_PORT` | launcher | SLURM: `20000 + SLURM_JOB_ID % 10000`; local: `6000` | Derived per job so concurrent jobs on the same node don't collide on rendezvous. Set explicitly to force a fixed value. |
 | `GPUS_PER_NODE` | launcher | SLURM: `SLURM_GPUS_ON_NODE`; local: `nvidia-smi` count or `1` | Rarely set by hand. |
 | `GPU_MEM_MONITORING` | launcher | `0` | `1` ⇒ per-node GPU-memory CSV under `logs/`. |
 

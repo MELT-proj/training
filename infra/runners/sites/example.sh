@@ -36,7 +36,11 @@ export VENV_PATH=/path/to/venvs/melt/bin/activate     # python virtualenv activa
 
 # --- misc -----------------------------------------------------------------
 export WANDB_MODE=online                              # use offline on air-gapped sites (+ export HF_HUB_OFFLINE=1)
-export MASTER_PORT=60001                              # rendezvous port; bump if it clashes on the node
+# Do NOT hardcode MASTER_PORT here: this file is sourced at submit time, on
+# the login node, before SLURM_JOB_ID exists -- a fixed value would be baked
+# into every job identically and concurrent jobs on the same node would
+# collide on the rendezvous port. bash/run_train.sh derives a per-job default
+# from SLURM_JOB_ID instead. Set MASTER_PORT here only to force a fixed value.
 export MELT_SEED="${MELT_SEED:-42}"                   # forwarded by run_train.sh as an explicit shard_seed override
 
 # --- scheduler ------------------------------------------------------------
