@@ -17,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from transformers import TrainingArguments
+from transformers import Seq2SeqTrainingArguments
 
 from src.logging_utils import configure_logging, get_logger
 from src.training.config import (
@@ -39,7 +39,7 @@ def main() -> None:
     cfg = parse_args_and_load_config()
     cfg = expand_env_vars_in_config(cfg)
 
-    targs = TrainingArguments(**trainer_args_dict(cfg))
+    targs = Seq2SeqTrainingArguments(**trainer_args_dict(cfg))
     output_dir = Path(targs.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 

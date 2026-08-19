@@ -107,3 +107,9 @@ singularity exec --bind /mnt/scratch-nyx,/mnt/scratch-artemis \
     export HF_HOME=/mnt/scratch-artemis/giuseppe/.cache/huggingface
     python -m pytest tests/ -v'
 ```
+
+## Staleness Warning
+
+This codebase is an academic-driven effort. Hence, we will likely stop updating the files related to past projects. For those files, avoid updating the code and adapting to new conventions. The following list of projects is now stale:
+
+- `projects/iwslt26-metric/`

@@ -269,17 +269,30 @@ data:
 
     # Duration filtering
     min_duration: 0.5
-    max_duration: 120.0
+    max_duration: 90.0
     
     # Batch settings
     batch_size: null  # Use batch_duration instead for dynamic batching
-    batch_duration: 90  # seconds of audio per batch
+    # 120 s, up from 90: measured +52% throughput on artemis (2x H100,
+    # job 327902 vs 327899).  The other ABL configs already run at 480 s
+    # and are NOT covered by that measurement -- do not copy 120 onto them.
+    batch_duration: 120  # seconds of audio per batch
     quadratic_duration: 30 # see https://lhotse.readthedocs.io/en/latest/datasets.html#lhotse.dataset.sampling.TimeConstraint
 
     # Bucketing for efficient batching
     lhotse_sampler_type: dynamic_bucketing  # One among: dynamic_bucketing, dynamic, bucketing
     num_buckets: 30
-    buffer_size: 10000
+    # Raised from 10000 after throughput benchmarking on artemis (2x H100,
+    # 300 steps each, one knob per job -- jobs 327899/327913).  buffer_size is
+    # the DynamicBucketingSampler pool; it trades I/O locality for batch
+    # diversity, and the cost is real: 10000 ran 1.74x slower per step than
+    # 2000, plus a one-time fill of ~460 s vs ~47 s.  Cross-dataset and
+    # cross-language mixing comes from CutSet.mux *upstream* of this buffer, so
+    # this knob only controls local reordering; past roughly 30-50x the batch
+    # size per bucket it buys nothing measurable.  50000 keeps a wide pool
+    # (~1600 cuts/bucket) while staying far from the regime where the fill cost
+    # is measured in hours.
+    buffer_size: 50000
     bucket_duration_bins: [2.6, 4.0, 5.0, 6.0, 7.02, 8.18, 9.54, 10.56, 11.38, 12.16, 12.94, 13.68, 14.41, 15.14, 15.86, 16.59, 17.32, 18.05, 18.81, 19.58, 21.18, 23.78, 26.32, 28.9, 33.18, 35.62, 36.98, 38.08, 39.08]
 
     # Sampling
@@ -300,6 +313,21 @@ data:
     lang_field: lang
 
   validation_ds:
+    # Generation-based evaluation costs ~N sequential decoder steps per sample
+    # instead of a single forward, so the full validation set is not affordable.
+    #
+    # NOTE this cap is applied PER NAMED EVAL SET, not per config: here
+    # 5 named eval sets x 200 = ~1000 utterances per eval.
+    #
+    # Measured on an H100 (artemis job 327830): ~2.2 s/utterance at
+    # generation_max_length 64, and the cost is roughly linear in the token
+    # budget because nothing in the training targets teaches the model to stop
+    # (see docs/generation_eval.md) -- so every sample spends the whole budget.
+    # Budget the eval against eval_steps before raising either number.
+    #
+    # materialize_cuts_for_eval applies the cap with a seeded shuffle, so every
+    # run scores the same subset.
+    max_samples: 200
     input_cfg:
       # ASR en validation: full cv22_sidon/mls_sidon/voxpopuli sets
       - type: lhotse_shar
@@ -490,6 +518,13 @@ trainer:
   eval_steps: 100
   batch_eval_metrics: true
 
+  # Evaluation decodes with generate() -- greedy, at most this many *new*
+  # tokens (MELT's prompt is audio, so generation_max_length is read as a
+  # new-token budget; see MELTTrainer._generation_kwargs).
+  predict_with_generate: true
+  generation_max_length: 256
+  generation_num_beams: 1
+
   # Checkpointing
   save_strategy: steps
   save_steps: 1000
@@ -507,6 +542,9 @@ trainer:
 evaluation:
   compute_metrics: true
   enable_whisper_normalization: true
+  # Reference/hypothesis pairs printed to stdout and logged to W&B each eval.
+  # 0 disables.
+  log_num_samples: 10
 
 optimization:
   adam_beta1: 0.9

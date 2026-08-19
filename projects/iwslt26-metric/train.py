@@ -25,7 +25,7 @@ from omegaconf import DictConfig, OmegaConf
 from peft import LoraConfig, TaskType, get_peft_model
 
 import wandb
-from transformers import TrainingArguments
+from transformers import Seq2SeqTrainingArguments
 from transformers.modeling_utils import find_tied_parameters
 from transformers.trainer_utils import get_last_checkpoint
 
@@ -39,7 +39,7 @@ from melt.training.config import (
     save_config,
     trainer_args_dict,
 )
-from melt.training.metrics import TrainingEvaluator, pull_final_logits
+from melt.training.metrics import TrainingEvaluator
 from melt.training.trainer import count_trainable_parameters
 from .trainer import MELTTrainerForRegression
 
@@ -52,14 +52,14 @@ torch.set_float32_matmul_precision("high")
 
 def prepare_model(
     cfg: DictConfig,
-    targs: TrainingArguments,
+    targs: Seq2SeqTrainingArguments,
     processor: MELTProcessor,
 ) -> tuple[MELTForSequenceClassification, str | None]:
     """Prepare the model for training.
 
     Args:
         cfg: Training configuration (OmegaConf DictConfig).
-        targs: HuggingFace TrainingArguments.
+        targs: HuggingFace Seq2SeqTrainingArguments.
         processor: MELTProcessor instance.
 
     Returns:
@@ -244,7 +244,7 @@ def main(cfg: DictConfig) -> None:
         wandb.log_artifact(config_artifact)
 
     # Create training arguments
-    targs = TrainingArguments(**trainer_args_dict(cfg))
+    targs = Seq2SeqTrainingArguments(**trainer_args_dict(cfg))
 
     ##########################
     ## PROCESSOR SETUP
@@ -262,12 +262,14 @@ def main(cfg: DictConfig) -> None:
     ## TRAINING
     ##########################
     compute_metrics = None
-    preprocess_logits_for_metrics = None
     if hasattr(cfg, "evaluation") and cfg.evaluation is not None:
-        # TODO: we might extend this class to other metrics, its CPU-bound WER/CER computation for now
+        # TrainingEvaluator now scores decoded generations, not logits, so it
+        # needs a Seq2SeqTrainingArguments with predict_with_generate and a
+        # collator that emits prompt-only inputs. This project's config has no
+        # `evaluation` section, so nothing here is exercised today — wiring it
+        # up means moving this trainer onto that path first.
         train_evaluator = TrainingEvaluator(cfg.evaluation, processor)
         compute_metrics = train_evaluator
-        preprocess_logits_for_metrics = pull_final_logits
 
     # No explicit train_dataset/eval_dataset - they are handled by Lhotse
     trainer = MELTTrainerForRegression(
@@ -275,7 +277,6 @@ def main(cfg: DictConfig) -> None:
         args=targs,
         config=cfg,
         processor=processor,
-        preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         compute_metrics=compute_metrics
     )
 

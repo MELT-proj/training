@@ -9,19 +9,41 @@ from ..logging_utils import get_logger
 
 logger = get_logger(__name__)
 
+#: Number of decoded reference/hypothesis pairs stashed on the evaluator for
+#: the trainer to log, when the config does not say otherwise.
+DEFAULT_LOG_NUM_SAMPLES = 10
 
-def pull_final_logits(logits: torch.Tensor, labels: torch.Tensor):
-    """Pull the final logits corresponding to the label sequence length."""
-    return logits[:, -labels.shape[1]:, :]
+
+def _config_value(config, key: str, default):
+    """Read *key* off an OmegaConf node, a dataclass, or a plain namespace."""
+    getter = getattr(config, "get", None)
+    if callable(getter):
+        value = getter(key, default)
+    else:
+        value = getattr(config, key, default)
+    return default if value is None else value
 
 
 class TrainingEvaluator:
     """Computes WER and CER during evaluation, with optional per-language and
     per-task breakdowns.
 
+    Predictions arrive as *generated token ids* -- ``MELTTrainer.prediction_step``
+    decodes each batch with ``generate()`` rather than taking the argmax of a
+    teacher-forced forward pass, so what is scored here is what the model would
+    actually emit at inference.
+
     Args:
-        config: Evaluation configuration (enable_whisper_normalization, etc.).
+        config: Evaluation configuration (``enable_whisper_normalization``,
+            ``log_num_samples``).
         processor: MELTProcessor whose tokenizer is used for decoding.
+
+    Attributes:
+        last_samples: The first ``log_num_samples`` decoded pairs of the most
+            recent evaluation, as ``{lang, task, reference, prediction,
+            reference_raw, prediction_raw}`` dicts.  Populated on the final
+            (``compute_result=True``) call and consumed by the trainer, which
+            is where the global step and the W&B run live.
     """
 
     def __init__(self, config, processor):
@@ -33,40 +55,59 @@ class TrainingEvaluator:
         self._langs: list[str] = []
         self._tasks: list[str] = []
 
+        self.log_num_samples = int(
+            _config_value(config, "log_num_samples", DEFAULT_LOG_NUM_SAMPLES)
+        )
+        self.last_samples: list[dict[str, str]] = []
+
         if self.config.enable_whisper_normalization:
             self.normalizer = BasicTextNormalizer()
 
     def _normalize_text(self, text: str) -> str:
         return self.normalizer(text).strip()
 
+    def _decode(self, token_ids) -> list[str]:
+        """Decode a batch of token ids to strings.
+
+        ``-100`` appears in two places and means "nothing" in both: HF's ignore
+        index in the labels, and the value ``evaluation_loop`` pads with when it
+        squares up ragged tensors across ranks.  The tokenizer would reject it,
+        so swap it for the pad id -- which ``skip_special_tokens`` then drops.
+        """
+        if isinstance(token_ids, torch.Tensor):
+            token_ids = token_ids.detach().cpu()
+        else:
+            token_ids = torch.as_tensor(token_ids)
+
+        pad_token_id = self.processor.tokenizer.pad_token_id
+        if pad_token_id is None:
+            pad_token_id = self.processor.tokenizer.eos_token_id
+        token_ids = torch.where(
+            token_ids == -100,
+            torch.full_like(token_ids, pad_token_id),
+            token_ids,
+        )
+        return self.processor.batch_decode(token_ids, skip_special_tokens=True)
+
     def __call__(self, predictions: EvalPrediction, compute_result: bool) -> dict[str, float]:
-        logits, labels = predictions
+        pred_ids, label_ids = predictions
 
         # Access per-sample language codes if available.  Under
         # `batch_eval_metrics` this is called once per batch and `langs` holds
-        # every code seen so far in this evaluation, while `logits`/`labels`
-        # hold only the current batch — so the codes for this batch start where
-        # the previous call stopped, not at 0.
+        # every code seen so far in this evaluation, while `predictions`/
+        # `labels` hold only the current batch — so the codes for this batch
+        # start where the previous call stopped, not at 0.
         langs = getattr(predictions, "langs", None)
         tasks = getattr(predictions, "tasks", None)
         offset = len(self._langs)
 
-        # Logits and label_ids contain n_batch elements of shape
-        # (seq_len, vocab_size) and (seq_len,) respectively.
-        # 1. iterate over each row and extract predicted / reference tokens
-        #    only when the label is not -100 (HF ignore index).
-        # 2. decode using the processor's tokenizer.
-        for i, (logit, label_id) in enumerate(zip(logits, labels)):
-            ref_tokens = label_id.cpu().tolist()
-            pred_tokens = logit.argmax(dim=-1).cpu().tolist()
+        batch_predictions = self._decode(pred_ids)
+        batch_references = self._decode(label_ids)
 
-            # Filter out tokens where the label is -100
-            pred_tokens = [p for p, l in zip(pred_tokens, ref_tokens) if l != -100]
-            ref_tokens = [l for l in ref_tokens if l != -100]
+        self._predictions.extend(batch_predictions)
+        self._references.extend(batch_references)
 
-            self._predictions.append(self.processor.decode(pred_tokens, skip_special_tokens=True))
-            self._references.append(self.processor.decode(ref_tokens, skip_special_tokens=True))
-
+        for i in range(len(batch_predictions)):
             lang = langs[offset + i] if langs is not None and offset + i < len(langs) else ""
             # A cut with no language tag reaches us as an empty string; bucket
             # it with the genuinely missing ones rather than emitting a `wer_`
@@ -77,14 +118,32 @@ class TrainingEvaluator:
             self._tasks.append(task or "unknown")
 
         if compute_result:
-            preds = list(self._predictions)
-            refs = list(self._references)
+            raw_preds = list(self._predictions)
+            raw_refs = list(self._references)
+            preds = raw_preds
+            refs = raw_refs
             run_langs = list(self._langs)
             run_tasks = list(self._tasks)
 
             if self.config.enable_whisper_normalization:
                 preds = [self._normalize_text(p) for p in preds]
                 refs = [self._normalize_text(r) for r in refs]
+
+            # Stash a few decoded pairs for the trainer to log.  Both forms are
+            # kept: the normaliser rewrites the text (case, punctuation), and
+            # what you want to read when a run looks wrong is what the model
+            # actually emitted.
+            self.last_samples = [
+                {
+                    "lang": run_langs[i],
+                    "task": run_tasks[i],
+                    "reference": refs[i],
+                    "prediction": preds[i],
+                    "reference_raw": raw_refs[i],
+                    "prediction_raw": raw_preds[i],
+                }
+                for i in range(min(self.log_num_samples, len(preds)))
+            ]
 
             # --- Overall metrics ---
             r: dict[str, float] = {

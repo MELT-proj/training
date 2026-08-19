@@ -99,6 +99,7 @@ CHECKS: dict[str, tuple[str, str]] = {
     "C3": ("runtime", "cuts above the encoder's audio window are chunked, not truncated"),
     "C4": ("bins", "the top bucket covers the longest cuts"),
     "C5": ("bins", "bins were measured for this mixture, not copied"),
+    "C6": ("runtime", "generation-based eval has a bounded validation set"),
 }
 
 # The requested four are hard failures; everything else this script noticed is
@@ -1652,7 +1653,7 @@ def check_runtime(
 ) -> None:
     """E1-E3, C1-C3: config shapes that fail or mislead at training time."""
     data = cfg.get("data") or {}
-    report.ran_check("E1", "E2", "E3", "C1", "C2", "C3")
+    report.ran_check("E1", "E2", "E3", "C1", "C2", "C3", "C6")
 
     for where in ("train_ds", "validation_ds"):
         split = data.get(where) or {}
@@ -1736,6 +1737,29 @@ def check_runtime(
             line=line_index.get("trainer.per_device_eval_batch_size"),
             fix=["Eval does not go through Lhotse; it uses a plain DataLoader and -1 crashes",
                  "the first eval. Set a real batch size (4 is known good on 64 GB H100s)."],
+        )
+
+    # Generation-based eval decodes token by token: roughly N sequential decoder
+    # steps per sample instead of one forward. The full validation set was
+    # already the dominant cost under teacher forcing; under generation it does
+    # not finish. max_samples is what bounds it.
+    validation = data.get("validation_ds") or {}
+    if (
+        eval_enabled
+        and trainer.get("predict_with_generate") is not False
+        and validation.get("input_cfg")
+        and validation.get("max_samples") in (None, 0)
+    ):
+        report.add(
+            "C6", "validation_ds",
+            "eval decodes with generate() but validation_ds has no max_samples",
+            line=line_index.get("data.validation_ds"),
+            fix=["Generation costs ~one decoder step per output token per sample, against",
+                 "a single forward before -- ~2.2 s/utterance at generation_max_length 64",
+                 "on an H100, scaling with the budget. Set data.validation_ds.max_samples;",
+                 "note it applies PER NAMED eval set, so 200 across five named sets scores",
+                 "1000 utterances. materialize_cuts_for_eval applies it with a seeded",
+                 "shuffle, so every run scores the same subset."],
         )
 
     encoder = ((cfg.get("model") or {}).get("encoder") or {})

@@ -408,7 +408,8 @@ def apply_chat_template_to_texts(
     prompt_template_selection: str = "random",
     src_langs: list[str] | None = None,
     tgt_langs: list[str] | None = None,
-) -> list[str]:
+    return_prompts: bool = False,
+) -> list[str] | tuple[list[str], list[str]]:
     """Format each sample with a task-specific prompt wrapped in the
     tokenizer's chat template.
 
@@ -425,9 +426,16 @@ def apply_chat_template_to_texts(
             ``"random"`` (default), ``"with_language"``, or ``"custom"``.
         src_langs: Source language ISO codes (per sample).  May be empty.
         tgt_langs: Target language ISO codes (per sample).  May be empty.
+        return_prompts: Also return the generation prompt for each sample —
+            the same user turn, rendered with ``add_generation_prompt=True``
+            and no assistant content.  Produced here rather than by a second
+            call so that both strings use the *same* randomly drawn task
+            template; a second call would re-draw and the prompt would stop
+            being a prefix of the full text.
 
     Returns:
-        List of fully formatted chat strings ready for the processor.
+        List of fully formatted chat strings ready for the processor, or —
+        when *return_prompts* is set — a ``(full, prompt)`` pair of lists.
     """
     import random
 
@@ -442,6 +450,7 @@ def apply_chat_template_to_texts(
         )
 
     formatted: list[str] = []
+    prompts: list[str] = []
     for text, task, lang, src_lang, tgt_lang in zip(texts, tasks, langs, src_langs, tgt_langs):
         if prompt_template_selection == "custom":
             template = resolve_custom_template(prompt_template, task)
@@ -493,6 +502,18 @@ def apply_chat_template_to_texts(
         )
         formatted.append(full_text)
 
+        if return_prompts:
+            prompts.append(
+                tokenizer.apply_chat_template(
+                    [{"role": "user", "content": prompt}],
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    enable_thinking=False,
+                )
+            )
+
+    if return_prompts:
+        return formatted, prompts
     return formatted
 
 

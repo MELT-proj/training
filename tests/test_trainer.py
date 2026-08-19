@@ -383,3 +383,346 @@ def test_train_shuts_dataloaders_down_even_when_training_raises():
             trainer.train()
 
     assert calls == [True], "train() must shut the dataloaders down on the error path"
+
+
+# ---------------------------------------------------------------------------
+# Generation-based evaluation
+# ---------------------------------------------------------------------------
+
+
+def _bare_trainer(**attrs):
+    """A MELTTrainer with none of Trainer.__init__'s machinery run."""
+    with patch.object(MELTTrainer, "__init__", lambda self, **kwargs: None):
+        trainer = MELTTrainer.__new__(MELTTrainer)
+    for key, value in attrs.items():
+        setattr(trainer, key, value)
+    return trainer
+
+
+def test_generation_max_length_becomes_a_new_token_budget():
+    """`max_length` is meaningless when the prompt is 1,200 audio frames.
+
+    `GenerationMixin._prepare_generated_length` subtracts the `inputs_embeds`
+    length from `max_length`, so passing the 256 that
+    `Seq2SeqTrainer.evaluate` puts there yields a negative budget and
+    generation returns before emitting a token — silently, as an empty
+    hypothesis and a WER of 1.0 that reads like a broken model.
+    """
+    trainer = _bare_trainer(_gen_kwargs={"max_length": 256, "num_beams": 1})
+
+    gen_kwargs = trainer._generation_kwargs({})
+
+    assert gen_kwargs["max_new_tokens"] == 256
+    assert "max_length" not in gen_kwargs
+    assert gen_kwargs["num_beams"] == 1
+
+
+def test_explicit_max_new_tokens_wins_over_max_length():
+    trainer = _bare_trainer(_gen_kwargs={"max_length": 256})
+
+    gen_kwargs = trainer._generation_kwargs({"max_new_tokens": 32})
+
+    assert gen_kwargs["max_new_tokens"] == 32
+
+
+def test_generation_budget_falls_back_to_a_default():
+    """Without a budget the padding target would be undefined and ranks could
+    gather differently-shaped tensors."""
+    from melt.training.trainer import DEFAULT_GENERATION_MAX_NEW_TOKENS
+
+    trainer = _bare_trainer(_gen_kwargs={})
+
+    gen_kwargs = trainer._generation_kwargs({})
+
+    assert gen_kwargs["max_new_tokens"] == DEFAULT_GENERATION_MAX_NEW_TOKENS
+
+
+def test_none_valued_generation_kwargs_are_dropped():
+    """`generation_num_beams: null` must not reach generate() as `num_beams=None`."""
+    trainer = _bare_trainer(_gen_kwargs={"max_length": 64, "num_beams": None})
+
+    gen_kwargs = trainer._generation_kwargs({})
+
+    assert "num_beams" not in gen_kwargs
+
+
+def test_pad_to_max_len_uses_the_processor_pad_id():
+    """MELT sets no `model.config.pad_token_id`, which is what
+    Seq2SeqTrainer's version would reach for."""
+    trainer = _bare_trainer(
+        processor=SimpleNamespace(
+            tokenizer=SimpleNamespace(pad_token_id=7, eos_token_id=9)
+        )
+    )
+    tensor = torch.tensor([[1, 2], [3, 4]])
+
+    padded = trainer._pad_tensors_to_max_len(tensor, 4)
+
+    assert padded.shape == (2, 4)
+    assert padded.tolist() == [[1, 2, 7, 7], [3, 4, 7, 7]]
+
+
+def test_pad_to_max_len_falls_back_to_eos():
+    trainer = _bare_trainer(
+        processor=SimpleNamespace(
+            tokenizer=SimpleNamespace(pad_token_id=None, eos_token_id=9)
+        )
+    )
+
+    padded = trainer._pad_tensors_to_max_len(torch.tensor([[1]]), 3)
+
+    assert padded.tolist() == [[1, 9, 9]]
+
+
+class _StubGenerator(torch.nn.Module):
+    """Records what generate() was called with and returns fixed tokens."""
+
+    def __init__(self, generated_len: int = 2):
+        super().__init__()
+        self.generated_len = generated_len
+        self.generate_calls: list[dict] = []
+        self.forward_calls: list[dict] = []
+
+    def generate(self, **kwargs):
+        self.generate_calls.append(kwargs)
+        batch = kwargs["input_ids"].shape[0]
+        return torch.full((batch, self.generated_len), 5, dtype=torch.long)
+
+    def forward(self, **kwargs):
+        self.forward_calls.append(kwargs)
+        return {"loss": torch.tensor(1.25)}
+
+
+def _generating_trainer(model):
+    import contextlib
+
+    trainer = _bare_trainer(
+        model=model,
+        args=SimpleNamespace(predict_with_generate=True, prediction_loss_only=False),
+        processor=SimpleNamespace(
+            tokenizer=SimpleNamespace(pad_token_id=0, eos_token_id=0)
+        ),
+        label_smoother=None,
+        _gen_kwargs={"max_length": 4},
+        _eval_langs_buffer=[],
+        _eval_tasks_buffer=[],
+    )
+    trainer._prepare_inputs = lambda inputs: inputs
+    trainer.compute_loss_context_manager = contextlib.nullcontext
+    trainer.accelerator = SimpleNamespace(
+        gather_for_metrics=lambda values, use_gather_object=False: values
+    )
+    return trainer
+
+
+def _eval_batch():
+    return {
+        "input_ids": torch.tensor([[1, 2, 3], [1, 2, 4]]),
+        "attention_mask": torch.ones(2, 3, dtype=torch.long),
+        "labels": torch.tensor([[-100, 2, 3], [-100, 2, 4]]),
+        "prompt_input_ids": torch.tensor([[1], [1]]),
+        "prompt_attention_mask": torch.ones(2, 1, dtype=torch.long),
+        "input_features": torch.zeros(2, 8, 4),
+        "features_attention_mask": torch.ones(2, 8, dtype=torch.long),
+        "langs": ["de", "fr"],
+        "tasks": ["asr", "asr"],
+    }
+
+
+def test_prediction_step_generates_from_the_prompt_not_the_target():
+    """The whole point of the split: generate() must never see the transcript."""
+    model = _StubGenerator()
+    trainer = _generating_trainer(model)
+
+    loss, predictions, labels = trainer.prediction_step(
+        model, _eval_batch(), prediction_loss_only=False
+    )
+
+    (call,) = model.generate_calls
+    assert torch.equal(call["input_ids"], torch.tensor([[1], [1]]))
+    assert call["input_features"] is not None
+    assert "labels" not in call
+    assert loss.item() == pytest.approx(1.25)
+    assert predictions.shape == (2, 4)  # padded to the generation budget
+    assert labels.shape == (2, 4)
+
+
+def test_prediction_step_scores_the_loss_on_the_full_inputs():
+    """eval_loss must stay comparable with runs made before the switch, so the
+    loss forward keeps seeing the teacher-forced inputs — prompt fields and
+    metadata removed."""
+    model = _StubGenerator()
+    trainer = _generating_trainer(model)
+
+    trainer.prediction_step(model, _eval_batch(), prediction_loss_only=False)
+
+    (call,) = model.forward_calls
+    assert torch.equal(call["input_ids"], torch.tensor([[1, 2, 3], [1, 2, 4]]))
+    assert "prompt_input_ids" not in call
+    assert "langs" not in call and "tasks" not in call
+
+
+def test_prediction_step_buffers_language_and_task_codes():
+    model = _StubGenerator()
+    trainer = _generating_trainer(model)
+
+    trainer.prediction_step(model, _eval_batch(), prediction_loss_only=False)
+
+    assert trainer._eval_langs_buffer == ["de", "fr"]
+    assert trainer._eval_tasks_buffer == ["asr", "asr"]
+
+
+def test_prediction_step_rejects_a_batch_without_a_prompt():
+    """A train-mode collator on the eval side would otherwise generate from
+    `input_ids` and score the model against its own input."""
+    model = _StubGenerator()
+    trainer = _generating_trainer(model)
+    batch = _eval_batch()
+    del batch["prompt_input_ids"]
+    del batch["prompt_attention_mask"]
+
+    with pytest.raises(ValueError, match="prompt_input_ids"):
+        trainer.prediction_step(model, batch, prediction_loss_only=False)
+
+
+def test_generated_tokens_are_padded_to_a_fixed_width():
+    """Ranks whose batches stop generating earlier must still gather the same
+    shape — the classic "works on one GPU, hangs on four"."""
+    model = _StubGenerator(generated_len=2)
+    trainer = _generating_trainer(model)
+
+    _, short, _ = trainer.prediction_step(
+        model, _eval_batch(), prediction_loss_only=False
+    )
+
+    model_long = _StubGenerator(generated_len=3)
+    trainer_long = _generating_trainer(model_long)
+    _, long, _ = trainer_long.prediction_step(
+        model_long, _eval_batch(), prediction_loss_only=False
+    )
+
+    assert short.shape == long.shape == (2, 4)
+
+
+# ---------------------------------------------------------------------------
+# FSDP unsharding around generate()
+# ---------------------------------------------------------------------------
+
+
+class _FakeFSDPModule(torch.nn.Module):
+    """Stands in for a torch FSDP2 `FSDPModule` — records unshard/reshard."""
+
+    def __init__(self):
+        super().__init__()
+        self.events: list[str] = []
+
+    def unshard(self):
+        self.events.append("unshard")
+
+    def reshard(self):
+        self.events.append("reshard")
+
+
+def _fsdp2_tree():
+    """A root with two separately-wrapped children, the FSDP2 shape."""
+    root = _FakeFSDPModule()
+    root.a = _FakeFSDPModule()
+    root.b = _FakeFSDPModule()
+    return root
+
+
+def test_unsharded_for_generation_is_a_noop_without_fsdp():
+    """DDP and single-GPU runs must pay nothing for this."""
+    from melt.training.trainer import unsharded_for_generation
+
+    model = torch.nn.Linear(2, 2)
+    with unsharded_for_generation(model, model):
+        pass  # nothing to assert beyond not raising
+
+
+def test_every_fsdp2_submodule_is_unsharded(monkeypatch):
+    """`FSDPModule.unshard()` is not recursive.
+
+    Unsharding only the root leaves every transformer block a DTensor, and the
+    first decoder layer then fails exactly the way the embedding did.
+    """
+    from melt.training import trainer as trainer_module
+
+    monkeypatch.setattr(
+        trainer_module, "_fsdp1_module_class", lambda: None
+    )
+    monkeypatch.setattr(
+        trainer_module, "_fsdp2_module_class", lambda: _FakeFSDPModule
+    )
+    root = _fsdp2_tree()
+
+    with trainer_module.unsharded_for_generation(root):
+        assert root.events == ["unshard"]
+        assert root.a.events == ["unshard"]
+        assert root.b.events == ["unshard"]
+
+    assert root.events == ["unshard", "reshard"]
+    assert root.a.events == ["unshard", "reshard"]
+    assert root.b.events == ["unshard", "reshard"]
+
+
+def test_a_module_passed_twice_is_unsharded_once(monkeypatch):
+    """`self.model` and the prepared `model` are the same object under FSDP2."""
+    from melt.training import trainer as trainer_module
+
+    monkeypatch.setattr(trainer_module, "_fsdp1_module_class", lambda: None)
+    monkeypatch.setattr(
+        trainer_module, "_fsdp2_module_class", lambda: _FakeFSDPModule
+    )
+    root = _fsdp2_tree()
+
+    with trainer_module.unsharded_for_generation(root, root, None):
+        pass
+
+    assert root.events == ["unshard", "reshard"]
+
+
+def test_parameters_are_resharded_even_if_generation_raises(monkeypatch):
+    """An OOM mid-decode must not leave the model unsharded for training."""
+    from melt.training import trainer as trainer_module
+
+    monkeypatch.setattr(trainer_module, "_fsdp1_module_class", lambda: None)
+    monkeypatch.setattr(
+        trainer_module, "_fsdp2_module_class", lambda: _FakeFSDPModule
+    )
+    root = _fsdp2_tree()
+
+    with pytest.raises(RuntimeError, match="boom"):
+        with trainer_module.unsharded_for_generation(root):
+            raise RuntimeError("boom")
+
+    assert root.events == ["unshard", "reshard"]
+
+
+def test_audio_features_are_cast_to_the_encoder_dtype():
+    """FSDP2's mixed-precision policy casts forward inputs in the pre-forward
+    hook, which generate() bypasses along with the all-gather."""
+    audio_stack = torch.nn.Linear(4, 4).to(torch.bfloat16)
+    trainer = _bare_trainer(model=SimpleNamespace(audio_stack=audio_stack))
+
+    cast = trainer._cast_to_audio_dtype(torch.zeros(2, 3, 4, dtype=torch.float32))
+
+    assert cast.dtype == torch.bfloat16
+
+
+def test_non_float_and_missing_features_are_left_alone():
+    audio_stack = torch.nn.Linear(4, 4).to(torch.bfloat16)
+    trainer = _bare_trainer(model=SimpleNamespace(audio_stack=audio_stack))
+
+    assert trainer._cast_to_audio_dtype(None) is None
+    ints = torch.ones(2, 3, dtype=torch.long)
+    assert trainer._cast_to_audio_dtype(ints) is ints
+
+
+def test_multi_line_generations_stay_on_one_log_line():
+    """A Qwen3 checkpoint emits a `</think>` block before its answer; a raw
+    newline in the middle breaks the REF/HYP pairing the block exists for."""
+    from melt.training.trainer import _one_line
+
+    assert _one_line("\n\n</think>\n\nIt seems like you") == "</think> It seems like you"
+    assert _one_line("already one line") == "already one line"

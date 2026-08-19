@@ -320,6 +320,9 @@ trainer:
   # Evaluation
   eval_strategy: steps # "no" # steps
   eval_steps: 100000
+  # This project trains a regression head (MELTForSequenceClassification), which
+  # has no generate(); the default of true belongs to the causal-LM path.
+  predict_with_generate: false
 
   # Checkpointing
   save_strategy: steps

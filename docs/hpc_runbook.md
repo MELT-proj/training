@@ -362,31 +362,22 @@ composition — the data is there, so the measurement is real rather than
 inherited from a cache someone else built:
 
 ```bash
-# [mn5] from ~/training
+# [mn5] the ASR-only arm -- the campaign's only live render
 python3 projects/ablation-campaign/build_campaign_config.py \
-  --template projects/ablation-campaign/ABL-MA-700.yaml \
-  --datasets-root /gpfs/projects/epor48/melt-data/shar \
-  --budget-hours 125 --tasks both --exclude-corpus fleurs \
-  --cache projects/ablation-campaign/campaign_hours.json \
-  --out projects/ablation-campaign/ABL-MA-125.yaml
-```
-
-`--tasks` picks the task composition. `both` gives the ASR+ST mix;
-`asr` gives the ASR-only modality-alignment arm, which is the same config
-minus its ST groups — same languages, same budget, same corpus mix, with the
-five ASR groups renormalised from 1/9 to 1/5 each. Render the pair from the
-same template and the same `--budget-hours` so the two runs differ only in the
-ST data:
-
-```bash
-# [mn5] the ASR-only arm at the same budget
-python3 projects/ablation-campaign/build_campaign_config.py \
-  --template projects/ablation-campaign/ABL-MA-700.yaml \
+  --template config/train/MA-v1.2.yaml \
   --datasets-root /gpfs/projects/epor48/melt-data/shar \
   --budget-hours 125 --tasks asr --exclude-corpus fleurs \
   --cache projects/ablation-campaign/campaign_hours.json \
   --out projects/ablation-campaign/ABL-MA-125-asr.yaml
 ```
+
+`--tasks` picks the task composition. `asr` gives the ASR-only
+modality-alignment arm; `both` gives the ASR+ST mix, which is the same config
+plus its ST groups — same languages, same budget, same corpus mix, with the
+five ASR groups renormalised from 1/5 to 1/9 each. The 700 h renders and the
+ASR+ST arm were removed from the tree on 2026-08-19 so the campaign could focus
+on ASR modality alignment at 125 h; re-render them from the same template and
+the same `--budget-hours` if they are needed again.
 
 Check `grep -c fleurs projects/ablation-campaign/ABL-*.yaml` on MN5 if you are
 unsure whether you are looking at a stale render (0 = current, since fleurs is

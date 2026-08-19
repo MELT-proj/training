@@ -10,6 +10,9 @@ Key features:
 - Proper step/epoch tracking for Lhotse's infinite dataloaders
 """
 
+import contextlib
+import functools
+import inspect
 import math
 import os
 import sys
@@ -18,7 +21,7 @@ from typing import Any, Optional, Union
 import torch
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
-from transformers import Trainer, TrainingArguments
+from transformers import Seq2SeqTrainer, Seq2SeqTrainingArguments, Trainer, TrainingArguments
 from transformers.trainer_utils import (
     EvalPrediction,
     PREFIX_CHECKPOINT_DIR,
@@ -26,7 +29,7 @@ from transformers.trainer_utils import (
 )
 
 from .. import ddp
-from ..logging_utils import force_print, get_logger
+from ..logging_utils import _is_global_master, force_print, get_logger
 from ..modeling import MELTProcessor
 from .data.audio.lhotse import (
     FallbackDataset,
@@ -42,6 +45,110 @@ from .data.audio.lhotse import (
 )
 
 logger = get_logger(__name__)
+
+#: Fallback decoding budget, in newly generated tokens, when neither
+#: ``trainer.generation_max_length`` nor an explicit ``max_new_tokens`` is set.
+#: Matches ``tests/integration/inference/run_inference.py``'s default.
+DEFAULT_GENERATION_MAX_NEW_TOKENS = 256
+
+
+def _one_line(text: str) -> str:
+    """Collapse *text* onto a single line for the eval sample log.
+
+    Generations are frequently multi-line -- a Qwen3 checkpoint emits a
+    ``</think>`` block and then prose -- and a raw newline inside the block
+    breaks the REF/HYP pairing that makes it readable in the first place.
+    """
+    return " ".join(text.split())
+
+
+def _fsdp2_module_class():
+    """Return ``torch.distributed.fsdp.FSDPModule``, or None if unavailable.
+
+    Isolated behind a function because the class only exists from torch 2.6 on,
+    and because it is the seam the unshard tests inject a stand-in through.
+    """
+    try:
+        from torch.distributed.fsdp import FSDPModule
+    except ImportError:  # pragma: no cover - torch < 2.6
+        return None
+    return FSDPModule
+
+
+def _fsdp1_module_class():
+    """Return ``torch.distributed.fsdp.FullyShardedDataParallel``, or None."""
+    try:
+        from torch.distributed.fsdp import FullyShardedDataParallel
+    except ImportError:  # pragma: no cover - defensive
+        return None
+    return FullyShardedDataParallel
+
+
+@contextlib.contextmanager
+def unsharded_for_generation(*models: torch.nn.Module):
+    """Materialise every parameter as a real tensor for the duration of the block.
+
+    Both FSDP flavours install their all-gather on ``forward()``, and
+    ``generate()`` never calls the wrapped module's ``forward``:
+    ``MELTForCausalLM.generate`` reaches straight for the embedding table and
+    then drives the text decoder itself.  Under FSDP2 the parameters are
+    therefore still ``DTensor`` when the first lookup runs, and it fails with
+    ``aten.embedding.default: got mixed torch.Tensor and DTensor`` (artemis job
+    327817) rather than quietly producing a wrong answer.
+
+    The whole model is unsharded at once, which does give up FSDP's memory
+    saving for the length of one batch's decoding.  That is the right trade
+    here: generation walks every layer once per generated token, so resharding
+    between layers would re-all-gather the entire model hundreds of times per
+    batch.
+
+    A no-op when nothing is sharded, so the DDP and single-GPU paths pay
+    nothing.  ``unshard`` is collective, and every rank runs the same number of
+    eval batches, so the calls stay in step across ranks.
+    """
+    # `self.model` and the prepared `model` are usually the same object under
+    # FSDP2 (fully_shard rewrites in place) and different under DDP; take each
+    # distinct one once.
+    roots: list[torch.nn.Module] = []
+    seen_roots: set[int] = set()
+    for root in models:
+        if root is not None and id(root) not in seen_roots:
+            seen_roots.add(id(root))
+            roots.append(root)
+
+    fsdp1_class = _fsdp1_module_class()
+    if fsdp1_class is not None:
+        wrapped = [m for m in roots if isinstance(m, fsdp1_class)]
+        if wrapped:
+            with contextlib.ExitStack() as stack:
+                for module in wrapped:
+                    stack.enter_context(fsdp1_class.summon_full_params(module))
+                yield
+            return
+
+    fsdp2_class = _fsdp2_module_class()
+    sharded: list[torch.nn.Module] = []
+    if fsdp2_class is not None:
+        seen: set[int] = set()
+        for root in roots:
+            # `FSDPModule.unshard()` is deliberately not recursive, so every
+            # separately-wrapped submodule has to be visited.
+            for module in root.modules():
+                if isinstance(module, fsdp2_class) and id(module) not in seen:
+                    seen.add(id(module))
+                    sharded.append(module)
+
+    if not sharded:
+        yield
+        return
+
+    for module in sharded:
+        module.unshard()
+    try:
+        yield
+    finally:
+        for module in reversed(sharded):
+            module.reshard()
 
 
 def current_cpumem_usage():
@@ -130,12 +237,18 @@ def _validate_eval_batch_size(args: TrainingArguments) -> None:
     )
 
 
-class MELTTrainer(Trainer):
+class MELTTrainer(Seq2SeqTrainer):
     """Custom Trainer for MELT models with Lhotse data loading.
 
     This trainer overrides the dataloader creation methods to use
     Lhotse samplers for dynamic batching and efficient speech data loading.
     It also provides epoch estimation for Lhotse's infinite dataloaders.
+
+    It derives from :class:`~transformers.Seq2SeqTrainer` for its
+    ``predict_with_generate`` plumbing: evaluation decodes each batch with
+    ``generate()`` instead of scoring a teacher-forced forward pass, so the WER
+    reported during training is the WER the checkpoint would reproduce at
+    inference.
 
     Args:
         model: The model to train.
@@ -155,7 +268,7 @@ class MELTTrainer(Trainer):
     def __init__(
         self,
         model,
-        args: TrainingArguments,
+        args: Seq2SeqTrainingArguments,
         config: DictConfig,
         processor: MELTProcessor,
         **kwargs,
@@ -240,6 +353,10 @@ class MELTTrainer(Trainer):
         self._eval_langs_buffer: list[str] = []
         self._eval_tasks_buffer: list[str] = []
 
+        # Which named eval set is currently running; set by evaluation_loop and
+        # used to key the logged sample table.
+        self._eval_metric_key_prefix: str = "eval"
+
         # Prepared eval dataloaders kept alive across evaluate() calls, keyed by
         # eval-dataset name.  Only populated when persistent workers are enabled
         # (see get_eval_dataloader).
@@ -247,6 +364,21 @@ class MELTTrainer(Trainer):
 
         # Initialize parent (may set up distributed)
         super().__init__(model=model, args=args, eval_dataset=eval_dataset, **kwargs)
+
+        # WER/CER are computed from decoded *generations*.  Without
+        # predict_with_generate the eval loop hands compute_metrics raw logits,
+        # which TrainingEvaluator would decode as token ids and score into
+        # nonsense — so refuse the combination rather than report it.
+        if self.compute_metrics is not None and not getattr(
+            args, "predict_with_generate", False
+        ):
+            raise ValueError(
+                "An `evaluation` section is configured (compute_metrics is set) "
+                "but trainer.predict_with_generate is False. MELT scores WER/CER "
+                "on text decoded with generate(); there is no teacher-forced "
+                "metric path any more. Set trainer.predict_with_generate: true, "
+                "or drop the `evaluation` section to evaluate loss only."
+            )
 
         # Wrap compute_metrics so that language and task codes buffered during
         # prediction_step are attached to EvalPrediction before the real
@@ -268,6 +400,13 @@ class MELTTrainer(Trainer):
                 if kwargs.get("compute_result", True):
                     self._eval_langs_buffer = []
                     self._eval_tasks_buffer = []
+                    # Logged here rather than inside the evaluator: this wrapper
+                    # fires exactly once per evaluation and, unlike the
+                    # evaluator, can see self.state.global_step — which W&B
+                    # needs to place the rows on the right step.
+                    self._log_eval_samples(
+                        getattr(_original_compute_metrics, "last_samples", None)
+                    )
                 return result
 
             self.compute_metrics = _compute_metrics_with_meta
@@ -1245,10 +1384,178 @@ class MELTTrainer(Trainer):
         ``prediction_loss_only`` — or one aborted part-way — would otherwise
         leave stale codes behind for the next pass to misalign against.  With a
         dict of named eval sets this also keeps each set's codes separate.
+
+        The pass's ``metric_key_prefix`` is also captured here: it is the only
+        place that knows *which* named eval set is running, and the sample
+        logger needs it to keep ``asr_de`` rows out of ``asr_en``'s table.
+
+        This is also where ``gather_function`` is put back.
+        ``Seq2SeqTrainer.evaluate`` swaps it for the plain ``accelerator.gather``
+        so that ``predict()`` returns every row, including the duplicates
+        accelerate appends to even the last batch out across ranks.  Here that
+        is wrong twice over: the duplicated samples would be scored a second
+        time, and the language/task codes — which have to be gathered as objects,
+        via ``gather_for_metrics`` — *are* trimmed, so the two sides would drift
+        apart and every prediction past the first short batch would be paired
+        with the wrong language.
         """
+        self.gather_function = self.accelerator.gather_for_metrics
+        if "use_gather_object" in inspect.signature(self.gather_function).parameters:
+            self.gather_function = functools.partial(
+                self.gather_function,
+                use_gather_object=self.args.eval_use_gather_object,
+            )
+
         self._eval_langs_buffer = []
         self._eval_tasks_buffer = []
+        if "metric_key_prefix" in kwargs:
+            self._eval_metric_key_prefix = kwargs["metric_key_prefix"]
+        elif len(args) >= 5:
+            self._eval_metric_key_prefix = args[4]
+        else:
+            self._eval_metric_key_prefix = "eval"
         return super().evaluation_loop(*args, **kwargs)
+
+    def _log_eval_samples(self, samples: list[dict] | None) -> None:
+        """Print a few reference/hypothesis pairs and mirror them to W&B.
+
+        Reading what the model actually emitted is most of the point of scoring
+        generations rather than a teacher-forced argmax: a WER of 1.4 that comes
+        from looping, from drifting into the wrong language, or from never
+        stopping all look identical in the metric and obvious in the text.
+
+        Both the normalised and the raw strings are shown -- the normaliser
+        rewrites case and punctuation, and the raw form is what the checkpoint
+        would hand a user.
+        """
+        if not samples:
+            return
+
+        prefix = self._eval_metric_key_prefix
+        step = self.state.global_step
+
+        if _is_global_master():
+            lines = [
+                f"[{prefix}] step {step} — {len(samples)} sample generation(s):"
+            ]
+            for i, sample in enumerate(samples):
+                lines.append(
+                    f"  [{i}] lang={sample['lang']} task={sample['task']}"
+                )
+                lines.append(f"      REF: {_one_line(sample['reference_raw'])}")
+                lines.append(f"      HYP: {_one_line(sample['prediction_raw'])}")
+            logger.info("\n".join(lines))
+
+        # `report_to` may exclude wandb, and train.py only calls wandb.init on
+        # the global master, so an un-initialised run is the normal case on
+        # every other rank rather than an error.
+        try:
+            import wandb
+        except ImportError:  # pragma: no cover - wandb is an optional extra
+            return
+        if wandb.run is None:
+            return
+
+        columns = [
+            "lang",
+            "task",
+            "reference",
+            "prediction",
+            "reference_raw",
+            "prediction_raw",
+        ]
+        table = wandb.Table(
+            columns=columns,
+            data=[[sample[c] for c in columns] for sample in samples],
+        )
+        # wandb drops anything logged at a step below the run's current one, and
+        # eval_on_start reports global_step 0 after startup has already pushed
+        # the run past it ("Tried to log to step 0 that is less than the current
+        # step 4"). Land the table on the earliest step wandb will still accept
+        # rather than lose it.
+        wandb.log(
+            {f"{prefix}/samples": table}, step=max(step, wandb.run.step)
+        )
+
+    def _generation_kwargs(self, gen_kwargs: dict) -> dict:
+        """Build the ``generate()`` kwargs for one evaluation batch.
+
+        Mostly this mirrors ``Seq2SeqTrainer.prediction_step``, with one
+        substitution that is not cosmetic: ``max_length`` becomes
+        ``max_new_tokens``.
+
+        ``MELTForCausalLM.generate`` merges the audio embeddings and then
+        delegates to the text decoder with ``inputs_embeds=``.  For that input
+        form ``GenerationMixin._prepare_generated_length`` subtracts the prompt
+        length from ``max_length`` — and the prompt here is ~1200 audio frames,
+        so a ``max_length`` of 256 comes out negative and generation stops
+        before emitting a single token.  ``trainer.generation_max_length``
+        therefore means "at most this many *new* tokens" for MELT, which is also
+        the only reading that makes sense when the prompt is audio.
+        """
+        if not gen_kwargs and hasattr(self, "_gen_kwargs"):
+            gen_kwargs = self._gen_kwargs
+        gen_kwargs = {k: v for k, v in gen_kwargs.items() if v is not None}
+
+        max_length = gen_kwargs.pop("max_length", None)
+        if "max_new_tokens" not in gen_kwargs:
+            gen_kwargs["max_new_tokens"] = (
+                int(max_length)
+                if max_length is not None
+                else DEFAULT_GENERATION_MAX_NEW_TOKENS
+            )
+
+        gen_kwargs.setdefault("use_cache", True)
+        gen_kwargs.setdefault(
+            "synced_gpus",
+            bool(getattr(self, "is_deepspeed_enabled", False))
+            or bool(getattr(self, "is_fsdp_enabled", False)),
+        )
+        return gen_kwargs
+
+    def _cast_to_audio_dtype(self, features: torch.Tensor | None) -> torch.Tensor | None:
+        """Cast *features* to the dtype the audio encoder's weights are in.
+
+        Only meaningful while the parameters are unsharded — see the call site.
+        Reads the dtype off the audio stack rather than the whole model because
+        the audio stack is what consumes these tensors.
+        """
+        if features is None or not features.is_floating_point():
+            return features
+
+        audio_stack = getattr(self.model, "audio_stack", None)
+        if audio_stack is None:
+            return features
+
+        for param in audio_stack.parameters():
+            if param.is_floating_point():
+                return features.to(param.dtype)
+        return features
+
+    def _pad_tensors_to_max_len(self, tensor, max_length):
+        """Right-pad *tensor* to *max_length* with the tokenizer's pad id.
+
+        ``Seq2SeqTrainer``'s version looks for a ``processing_class``, which
+        MELTTrainer does not pass to ``super().__init__``, and then falls back
+        to ``model.config.pad_token_id`` — which MELT never sets (the pad id
+        lives on ``text_decoder_config``, deliberately: see
+        ``setup.prepare_melt_config``).  Both lookups would fail, so read the
+        id off the processor we already hold.
+        """
+        pad_token_id = self.processor.tokenizer.pad_token_id
+        if pad_token_id is None:
+            pad_token_id = self.processor.tokenizer.eos_token_id
+        if pad_token_id is None:
+            raise ValueError(
+                "The tokenizer has neither a pad nor an eos token, so generated "
+                "sequences cannot be padded to a common length for gathering."
+            )
+
+        padded = tensor.new_full(
+            (tensor.shape[0], max_length), fill_value=pad_token_id
+        )
+        padded[:, : tensor.shape[-1]] = tensor
+        return padded
 
     def prediction_step(
         self,
@@ -1256,22 +1563,33 @@ class MELTTrainer(Trainer):
         inputs: dict,
         prediction_loss_only: bool,
         ignore_keys: list[str] | None = None,
+        **gen_kwargs,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
-        """Pop ``langs`` and ``tasks`` from inputs before delegating to the base
-        implementation.
+        """Decode the batch with ``generate()`` and score the loss separately.
 
-        Language and task codes are buffered on the trainer so that the
-        ``compute_metrics`` wrapper can attach them to the
-        :class:`EvalPrediction` later.
+        Two things happen here that the stock implementations do not do.
 
-        The codes must make the same trip across ranks as the tensors they
-        describe: ``Trainer.evaluation_loop`` hands ``compute_metrics`` logits
-        and labels that have already been through ``gather_function``, so a
-        buffer holding only this rank's codes would be ``world_size`` times too
-        short and would line each prediction up with the wrong language or
-        task.  ``gather_for_metrics`` also trims the duplicate samples
-        accelerate pads the final batch with, exactly as it does for the
-        logits.
+        **Language/task codes.**  ``langs`` and ``tasks`` are popped off the
+        inputs and buffered on the trainer so the ``compute_metrics`` wrapper
+        can attach them to the :class:`EvalPrediction` later.  The codes must
+        make the same trip across ranks as the tensors they describe:
+        ``Trainer.evaluation_loop`` hands ``compute_metrics`` predictions and
+        labels that have already been through ``gather_function``, so a buffer
+        holding only this rank's codes would be ``world_size`` times too short
+        and would line each prediction up with the wrong language or task.
+        ``gather_for_metrics`` also trims the duplicate samples accelerate pads
+        the final batch with, exactly as it does for the predictions.
+
+        **Two input sets.**  ``Seq2SeqTrainer`` generates from ``inputs`` as
+        they stand, which is right for an encoder-decoder and wrong here: MELT
+        is decoder-only and its eval ``input_ids`` hold the audio placeholder
+        *and* the target transcript, so generating from them would hand the
+        model the answer.  The collator emits a second, prompt-only pair
+        (``prompt_input_ids`` / ``prompt_attention_mask``, left-padded) that
+        ``generate()`` consumes, while the full inputs go to the ``no_grad``
+        forward that produces ``eval_loss`` — unchanged, so the loss stays
+        comparable with runs made before this switch.  The audio features are
+        shared: they are featurised once, by the collator.
         """
         langs = inputs.pop("langs", None)
         if langs is not None:
@@ -1286,9 +1604,83 @@ class MELTTrainer(Trainer):
             self._eval_tasks_buffer.extend(
                 self.accelerator.gather_for_metrics(list(tasks), use_gather_object=True)
             )
-        return super().prediction_step(
-            model, inputs, prediction_loss_only, ignore_keys=ignore_keys,
-        )
+
+        # getattr, not attribute access: MELTTrainerForRegression subclasses this
+        # trainer while still passing a plain TrainingArguments.
+        if not getattr(self.args, "predict_with_generate", False) or prediction_loss_only:
+            # Nothing to decode: fall through to the plain forward pass.  Skip
+            # Seq2SeqTrainer, whose only contribution on this branch is the
+            # same delegation.
+            inputs.pop("prompt_input_ids", None)
+            inputs.pop("prompt_attention_mask", None)
+            return Trainer.prediction_step(
+                self, model, inputs, prediction_loss_only, ignore_keys=ignore_keys,
+            )
+
+        inputs = self._prepare_inputs(inputs)
+        gen_kwargs = self._generation_kwargs(gen_kwargs)
+
+        prompt_input_ids = inputs.pop("prompt_input_ids", None)
+        prompt_attention_mask = inputs.pop("prompt_attention_mask", None)
+        if prompt_input_ids is None:
+            raise ValueError(
+                "predict_with_generate is enabled but the eval batch has no "
+                "`prompt_input_ids`. MELTDataCollator emits them only when "
+                "constructed with is_train=False; generating from `input_ids` "
+                "instead would feed the model the target transcript."
+            )
+
+        with torch.no_grad(), unsharded_for_generation(self.model, model):
+            # The same pre-forward hook that all-gathers also applies
+            # MixedPrecisionPolicy.cast_forward_inputs, so bypassing forward
+            # leaves the float32 audio features to meet bf16 weights:
+            # "RuntimeError: expected scalar type Float but found BFloat16"
+            # (artemis job 327826).  Read the dtype *inside* this block: a
+            # sharded parameter keeps its storage dtype and only the
+            # all-gathered copy follows param_dtype.
+            input_features = self._cast_to_audio_dtype(inputs.get("input_features"))
+
+            # `self.model` rather than `model`: under DDP the latter is the
+            # wrapper, whose forward is the training forward, not generate().
+            generated_tokens = self.model.generate(
+                input_ids=prompt_input_ids,
+                attention_mask=prompt_attention_mask,
+                input_features=input_features,
+                features_attention_mask=inputs.get("features_attention_mask"),
+                **gen_kwargs,
+            )
+
+        # Generating from `inputs_embeds` returns only the new tokens, so there
+        # is no prompt to strip -- but the batch stops at its own longest
+        # sequence, and ranks whose batches stopped earlier would gather a
+        # differently-shaped tensor.  Pad every batch to the same budget.
+        max_new_tokens = gen_kwargs["max_new_tokens"]
+        if generated_tokens.shape[-1] < max_new_tokens:
+            generated_tokens = self._pad_tensors_to_max_len(
+                generated_tokens, max_new_tokens
+            )
+
+        has_labels = "labels" in inputs
+        loss = None
+        if has_labels:
+            with torch.no_grad():
+                with self.compute_loss_context_manager():
+                    outputs = model(**inputs)
+                if self.label_smoother is not None:
+                    loss = self.label_smoother(outputs, inputs["labels"]).detach().mean()
+                else:
+                    loss = (
+                        outputs["loss"] if isinstance(outputs, dict) else outputs[0]
+                    ).detach().mean()
+
+        if self.args.prediction_loss_only:
+            return loss, None, None
+
+        labels = inputs["labels"] if has_labels else None
+        if labels is not None and labels.shape[-1] < max_new_tokens:
+            labels = self._pad_tensors_to_max_len(labels, max_new_tokens)
+
+        return loss, generated_tokens, labels
 
 
 def sanitize_model_name(x: str) -> str:

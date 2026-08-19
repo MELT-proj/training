@@ -13,10 +13,11 @@ Usage
         --split test.clean \\
         --max-samples 100
 
-    # Local SHAR directory
+    # Local SHAR directory, decoding 8 samples per generate() call
     python run_inference.py \\
         --checkpoint ./checkpoints/melt-asr \\
         --dataset shar::/data/librispeech/shar/test-clean \\
+        --batch-size 8
 
 Output
 ------
@@ -255,6 +256,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--temperature", type=float, default=None,
         help="Sampling temperature. Omit for greedy decoding.",
+    )
+    parser.add_argument(
+        "--batch-size", type=int, default=1,
+        help="Number of samples decoded per generate() call (default: 1). "
+             "Prompts and merged audio embeddings are left-padded, so a larger "
+             "batch must produce byte-identical hypotheses; if it does not, "
+             "padding is leaking into attention.",
     )
 
     # --- Output ---
@@ -500,6 +508,76 @@ def _load_metadata(metadata_path: Path) -> dict[str, Any] | None:
 # ---------------------------------------------------------------------------
 
 
+def _generate_hypotheses(
+    model: MELTForCausalLM,
+    processor: MELTProcessor,
+    text_prompt: str,
+    audios: list[Any],
+    sample_rates: list[int],
+    device: str,
+    generate_kwargs: dict[str, Any],
+    verbose_out: bool,
+) -> tuple[list[str], list[list[str]] | None]:
+    """Decode one batch of audio in a single ``generate()`` call.
+
+    The whole batch shares one prompt, so the processor is handed
+    ``text=[prompt] * n`` and ``audio=[[a] for a in audios]`` — the list-of-lists
+    shape ``MELTDataCollator`` uses.  It left-pads the prompts, and
+    ``_inject_tensor`` left-pads the merged audio embeddings, so every sequence's
+    last real position lines up and the batch decodes as if each sample had been
+    run alone.
+
+    Returns the hypotheses and, when *verbose_out*, the input tokens per sample.
+    """
+    sample_rate = sample_rates[0]
+    if any(sr != sample_rate for sr in sample_rates):
+        raise ValueError(
+            "A batch mixes sampling rates "
+            f"({sorted(set(sample_rates))}); the feature extractor takes one "
+            "rate per call. Use --batch-size 1 for this dataset, or resample it."
+        )
+
+    processor_outputs = processor(
+        text=[text_prompt] * len(audios),
+        audio=[[a] for a in audios],
+        sampling_rate=sample_rate,
+        return_tensors="pt",
+        padding=True,
+    )
+
+    inputs = {
+        k: v.to(device)
+        for k, v in processor_outputs.items()
+        if v is not None
+    }
+
+    with torch.no_grad():
+        generated_ids = model.generate(
+            input_ids=inputs["input_ids"],
+            input_features=inputs.get("input_features"),
+            features_attention_mask=inputs.get("features_attention_mask"),
+            attention_mask=inputs.get("attention_mask"),
+            **generate_kwargs,
+        )
+
+    hypotheses = processor.batch_decode(generated_ids, skip_special_tokens=True)
+
+    input_tokens = None
+    if verbose_out:
+        input_tokens = [
+            processor.tokenizer.convert_ids_to_tokens(row)
+            for row in inputs["input_ids"]
+        ]
+
+    return hypotheses, input_tokens
+
+
+def _chunks(items: list[Any], size: int):
+    """Split *items* into consecutive lists of at most *size* elements."""
+    for start in range(0, len(items), size):
+        yield items[start:start + size]
+
+
 def run_inference(
     model: MELTForCausalLM,
     processor: MELTProcessor,
@@ -515,6 +593,7 @@ def run_inference(
     completed_ids: set[str],
     verbose_out: bool = False,
     apply_chat_template: bool = False,
+    batch_size: int = 1,
 ) -> EvalStats:
     """Run inference over *dataset*, streaming results to *results_path*.
 
@@ -528,7 +607,6 @@ def run_inference(
     hypotheses: list[str] = []
     completed = 0
     errors = 0
-    skipped = 0
 
     # --- Prompt formatting ------------------------------------------------
     # Replace {audio_token} placeholder with the processor's audio token.
@@ -561,80 +639,90 @@ def run_inference(
     if temperature is not None:
         generate_kwargs["temperature"] = temperature
 
-    for instance in tqdm(dataset, desc="Running ASR inference", unit="sample"):
-        file_id = str(instance[file_id_column])
+    if batch_size < 1:
+        raise ValueError(f"batch_size must be >= 1, got {batch_size}")
 
-        if file_id in completed_ids:
-            skipped += 1
-            continue
+    pending = [
+        instance
+        for instance in dataset
+        if str(instance[file_id_column]) not in completed_ids
+    ]
+    skipped = len(dataset) - len(pending)
 
-        try:
-            reference_text = str(instance[text_column]).lower().strip()
-            audio_array, sample_rate = _resolve_audio(instance)
+    def _run_one_batch(batch: list[dict[str, Any]]) -> None:
+        """Decode *batch* and record every sample in it. Raises on failure."""
+        nonlocal completed
 
-            # --- Preprocessing ---------------------------------------------
-            processor_outputs = processor(
-                text=text_prompt,
-                audio=audio_array,
-                sampling_rate=sample_rate,
-                return_tensors="pt",
-                padding=True,
-            )
+        file_ids = [str(instance[file_id_column]) for instance in batch]
+        reference_texts = [
+            str(instance[text_column]).lower().strip() for instance in batch
+        ]
+        resolved = [_resolve_audio(instance) for instance in batch]
+        audios = [audio for audio, _ in resolved]
+        sample_rates = [sr for _, sr in resolved]
 
-            inputs = {
-                k: v.to(device)
-                for k, v in processor_outputs.items()
-                if v is not None
-            }
+        batch_hypotheses, batch_input_tokens = _generate_hypotheses(
+            model=model,
+            processor=processor,
+            text_prompt=text_prompt,
+            audios=audios,
+            sample_rates=sample_rates,
+            device=device,
+            generate_kwargs=generate_kwargs,
+            verbose_out=verbose_out,
+        )
 
-            logger.debug(
-                "Sample '%s': input_ids shape=%s, input_features shape=%s",
-                file_id,
-                tuple(inputs["input_ids"].shape),
-                tuple(inputs.get("input_features", torch.tensor(0.0)).shape),
-            )
-
-            # --- Generation ------------------------------------------------
-            with torch.no_grad():
-
-                generated_ids = model.generate(
-                    input_ids=inputs["input_ids"],
-                    input_features=inputs.get("input_features"),
-                    features_attention_mask=inputs.get("features_attention_mask"),
-                    attention_mask=inputs.get("attention_mask"),
-                    **generate_kwargs,
-                )
-
-            hypothesis = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        for i, (file_id, reference_text, hypothesis) in enumerate(
+            zip(file_ids, reference_texts, batch_hypotheses)
+        ):
             row_wer, row_cer = _single_wer_cer(reference_text, hypothesis)
-
-            input_tokens = None
-            if verbose_out:
-                input_tokens = processor.tokenizer.convert_ids_to_tokens(
-                    inputs["input_ids"][0]
-                )
-
-            result = SampleResult(
-                file_id=file_id,
-                reference=reference_text,
-                hypothesis=hypothesis,
-                wer=row_wer,
-                cer=row_cer,
-                input_tokens=input_tokens,
+            _append_result(
+                results_path,
+                SampleResult(
+                    file_id=file_id,
+                    reference=reference_text,
+                    hypothesis=hypothesis,
+                    wer=row_wer,
+                    cer=row_cer,
+                    input_tokens=(
+                        batch_input_tokens[i] if batch_input_tokens else None
+                    ),
+                ),
             )
-
-            _append_result(results_path, result)
-
             references.append(reference_text)
             hypotheses.append(hypothesis)
             completed += 1
 
+    for batch in tqdm(
+        list(_chunks(pending, batch_size)),
+        desc="Running ASR inference",
+        unit="batch" if batch_size > 1 else "sample",
+    ):
+        try:
+            _run_one_batch(batch)
         except Exception:
+            if len(batch) == 1:
+                logger.exception(
+                    "Error processing sample '%s' — skipping.",
+                    batch[0][file_id_column],
+                )
+                errors += 1
+                continue
+            # Retry one at a time so a single bad sample costs one sample, not
+            # the whole batch, and so the traceback names the sample at fault.
             logger.exception(
-                "Error processing sample '%s' — skipping.", file_id
+                "Error processing a batch of %d — retrying it sample by sample.",
+                len(batch),
             )
-            errors += 1
-            continue
+            for instance in batch:
+                try:
+                    _run_one_batch([instance])
+                except Exception:
+                    logger.exception(
+                        "Error processing sample '%s' — skipping.",
+                        instance[file_id_column],
+                    )
+                    errors += 1
 
     corpus_wer, corpus_cer = compute_wer_cer(references, hypotheses)
     return EvalStats(
@@ -661,6 +749,9 @@ def main() -> None:
     # ------------------------------------------------------------------
     if args.max_samples is not None and args.max_samples <= 0:
         raise SystemExit("--max-samples must be a positive integer.")
+
+    if args.batch_size < 1:
+        raise SystemExit("--batch-size must be a positive integer.")
 
     # ------------------------------------------------------------------
     # Device & environment
@@ -727,6 +818,7 @@ def main() -> None:
         "prompt_hash": hashlib.md5(args.prompt.encode()).hexdigest()[:8],
         "max_new_tokens": args.max_new_tokens,
         "temperature": args.temperature,
+        "batch_size": args.batch_size,
         "seed": args.seed,
         "device": device,
         "num_gpus": len(gpu_names),
@@ -784,6 +876,7 @@ def main() -> None:
             completed_ids=completed_ids,
             verbose_out=args.verbose_out,
             apply_chat_template=args.apply_chat_template,
+            batch_size=args.batch_size,
         )
     except Exception:
         # Update metadata to CRASHED before exiting

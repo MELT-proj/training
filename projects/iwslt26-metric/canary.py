@@ -22,7 +22,7 @@ import wandb
 from lhotse import CutSet
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader, Dataset
-from transformers import TrainerCallback, TrainingArguments
+from transformers import Seq2SeqTrainingArguments, TrainerCallback
 
 from melt.logging_utils import configure_logging, get_logger
 from melt.modeling import MELTProcessor
@@ -268,7 +268,7 @@ def main(cfg: DictConfig, num_cuts: int = 10) -> None:
 
     # Use the same model preparation as the main training script:
     # loads the checkpoint, applies LoRA, freezes components per config.
-    targs_for_prepare = TrainingArguments(**trainer_args_dict(cfg))
+    targs_for_prepare = Seq2SeqTrainingArguments(**trainer_args_dict(cfg))
     model, _, _ = prepare_model(cfg, targs_for_prepare, processor)
     trainable_str = count_trainable_parameters(model)
     logger.info("[Canary] Trainable parameters: %s", trainable_str)
@@ -292,7 +292,7 @@ def main(cfg: DictConfig, num_cuts: int = 10) -> None:
             "report_to": ["wandb"],
         }
     )
-    targs = TrainingArguments(**targs_dict)
+    targs = Seq2SeqTrainingArguments(**targs_dict)
 
     # Initialise wandb before the trainer so the full stdout is captured and
     # the run carries the "canary" tag. Mirrors the pattern in train.py.
