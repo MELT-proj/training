@@ -1,216 +1,202 @@
-# How Lhotse Dynamic Bucketing Sampler Works
+# How Lhotse builds batches
 
-Let me break down the data flow from disk to batches, focusing on shuffling, shard loading, and bucketing behavior.
+This walks the data path from disk to a training batch: what each component does,
+where randomness enters, and which knobs trade against which.
 
-## Overview: Shard Structure
+Source of truth for the MELT side is `melt/training/data/audio/lhotse/dataloader.py`;
+the sampler internals described here are lhotse's
+`dataset/sampling/dynamic_bucketing.py`.
 
-First, clarify a key point: **Shards do NOT contain pre-sorted audio by length**. When you convert datasets using your scripts (e.g., `infra/setup/lhotse/librispeech.py`), the `SharWriter`:
-
-1. Writes cuts in **the order they appear** in the source dataset
-2. Groups them into shards based on `--shard-size` (e.g., 25,000 cuts)
-3. **No sorting by duration happens during conversion**
-
-So each shard contains a **random mix** of short and long utterances as they occurred in the original dataset splits.
+> **Lhotse 2 changed the on-disk contract.** Shar collections are now *indexed*, and
+> that is not merely a partitioning detail — it changes what a cut holds in memory and
+> how audio is read. See [Indexed Shar](#indexed-shar-the-lhotse-2-change) below.
 
 ---
 
-## Step-by-Step: Loading and Shuffling Pipeline
+## The unit: a cut
 
-### 1. **Dataset Initialization** (happens once per epoch)
+A **cut** is one training example: a pointer to a span of audio, plus its supervisions
+(transcript, language, speaker) and any custom metadata.
+
+A cut is *metadata*. It describes where the audio lives; whether it also carries the
+audio itself depends on the reader, which is the crux of the indexed change.
+
+---
+
+## 1. Shards on disk
+
+Shar stores a dataset as numbered pairs of files:
+
+```
+cuts.000000.jsonl        ← metadata for a group of cuts
+recording.000000.tar     ← the matching audio blobs
+cuts.000001.jsonl
+recording.000001.tar
+```
+
+A **shard** is one such pair. Sharding means readers stream sequentially through a tar
+instead of opening millions of small files.
+
+**Shards are not sorted by duration.** `SharWriter` writes cuts in the order they appear
+in the source dataset, so every shard holds a random mix of short and long utterances.
+All length grouping happens at sampling time (§6), never during conversion.
+
+---
+
+## 2. Shards become a lazy stream of cuts
+
+`CutSet.from_shar()` returns a **lazy** CutSet — an iterator, not a list. Nothing is
+loaded up front; pulling from it yields cuts one at a time, shard by shard
+(`dataloader.py:585`):
 
 ```python
-# In src/data/audio/lhotse/dataloader.py
 cuts = CutSet.from_shar(
-    in_dir="/path/to/shar/train/",
-    # Lazy loading: reads shard manifests (JSON metadata), NOT audio bytes
+    in_dir=shar_path,
+    shuffle_shards=shuffle,
+    seed=shard_seed,
+    stateful_shuffle=shuffle,
+    indexed=indexed,
 )
 ```
 
-**What happens:**
-- Lhotse scans the SHAR directory and reads all `.jsonl.gz` manifest files
-- Builds an in-memory index: `{cut_id: (shard_number, byte_offset)}`
-- **Audio bytes stay on disk** at this point
-- Memory usage: ~few hundred MB for metadata (cut IDs, durations, text, etc.)
+- **`shuffle_shards`** permutes the *order shards are visited*. Coarse-grained: it
+  decides which region of the corpus you meet when, not the order within a region.
+- **`stateful_shuffle`** makes that permutation resumable, so a restarted job continues
+  the traversal instead of replaying from the top.
+
+For training the stream is also wrapped in `repeat()`, making it infinite — the epoch
+boundary becomes a bookkeeping convention rather than the end of the iterator.
 
 ---
 
-### 2. **Sampler Creation** (per epoch)
+## 3. Many datasets become one stream
+
+Training runs over many sources, so `CutSet.mux()` interleaves them into a single
+stream, drawing from each by weight (`dataloader.py:633`):
 
 ```python
-# Dynamic bucketing sampler
-sampler = DynamicBucketingSampler(
-    cuts,
-    max_duration=300.0,  # Max total audio seconds per batch
-    shuffle=True,
-    drop_last=True,
-    buffer_size=10000,   # Key parameter!
-)
+return CutSet.mux(*cutsets, weights=weights, seed=shard_seed), use_iterable, total_cuts
 ```
 
-**What happens:**
-- The sampler creates an **internal shuffle buffer** (size = `buffer_size`, e.g., 10,000 cuts)
-- This buffer will hold cut metadata (not audio bytes) during iteration
+**This is the layer that controls language and task balance**, and it sits *upstream* of
+everything below. Nothing further down can change how much German you see — in
+particular, `buffer_size` cannot. See `docs/mixture_weights.md` for how weights resolve.
 
 ---
 
-### 3. **Iteration Starts** (each training step)
+## 4. The stream splits across workers
 
-When the DataLoader worker calls `next(sampler)`, here's the flow:
+Each DP rank runs a DataLoader with some number of worker processes. Every worker gets
+its **own private copy of the whole pipeline** — its own mux, its own sampler, its own
+buffer — plus a partition identifier saying which slice of the data is its job.
 
-#### **Step 3a: Fill the shuffle buffer**
+`make_worker_init_fn` gives worker `w` of rank `r` the partition
+`(rank = r * num_workers + w, world_size = world_size * num_workers)`. Workers never
+coordinate; they produce batches independently and the DataLoader interleaves them.
 
-```
-┌─────────────────────────────────────────┐
-│ Disk: SHAR shards (shard-000000.tar)   │
-│   ├─ cut_0001.flac (metadata in .jsonl)│
-│   ├─ cut_0002.flac                      │
-│   └─ ...                                │
-└─────────────────────────────────────────┘
-              ↓ (sequential read of manifests)
-┌─────────────────────────────────────────┐
-│ Shuffle Buffer (in RAM, metadata only) │
-│   [cut_0001, cut_0045, cut_0123, ...]  │  ← 10,000 random cuts
-│   sorted by duration                    │
-└─────────────────────────────────────────┘
-```
-
-**Details:**
-- Lhotse reads cuts **sequentially from shards** until the buffer has `buffer_size` cuts
-- **Which shard?** It reads shards in order: `shard-000000.tar`, then `shard-000001.tar`, etc.
-- **Shuffling:** Once the buffer is full, Lhotse **shuffles the buffer randomly**
-- **Sorting:** After shuffling, cuts are **sorted by duration** (ascending or descending based on config)
-
-#### **Step 3b: Create a batch (bucketing)**
-
-```
-Buffer (sorted by duration):
-[2.3s, 2.5s, 2.8s, ... 18.1s, 18.5s, 19.2s]
-              ↓
-Pick cuts greedily until max_duration reached:
-Batch 1: [2.3s, 2.5s, 2.8s, 3.1s, ...]  → total ~300s
-              ↓
-Return batch of cut IDs to DataLoader worker
-```
-
-**Bucketing logic:**
-- Start from the **shortest** cut in the buffer
-- Keep adding cuts until `sum(durations) >= max_duration` (e.g., 300s)
-- This creates **batches with similar-length utterances** (natural bucketing)
-- Remove those cuts from the buffer
-
-#### **Step 3c: Refill buffer** (streaming behavior)
-
-After emitting a batch:
-- Buffer now has fewer cuts (e.g., 9,800 left)
-- Lhotse **refills** by reading the next cuts from disk (continuing sequentially through shards)
-- Shuffles the **new cuts only**, then merges with remaining buffer
-- Re-sorts by duration
+Note the consequence: **`buffer_size` is per worker, per rank.** Total resident cuts is
+`buffer_size × world_size × num_workers`.
 
 ---
 
-### 4. **Audio Loading** (lazy, happens in DataLoader worker)
+## 5. The buffer: a reservoir for shuffling
 
-**Key point:** Audio bytes are loaded **AFTER** the sampler returns cut IDs.
+The sampler cannot shuffle a stream it has not read. So before yielding anything it
+pulls `buffer_size` cuts out of the muxed stream and holds them
+(`dataloader.py:850`, default `10000`). That pool is the window it gets to be random
+within.
 
-```python
-# In the DataLoader collate function
-for cut_id in batch:
-    audio_bytes = read_from_shar(cut_id)  # Seeks to byte offset in .tar
-    audio = decode_flac(audio_bytes)      # Decode to waveform
-    features = processor(audio)           # Feature extraction
-```
+Two properties matter:
 
-**What happens:**
-- The DataLoader worker **seeks directly** to the byte offset in the relevant `.tar` file (from the metadata index)
-- Reads compressed audio bytes (FLAC/WAV)
-- Decodes in memory
-- **No entire shard is loaded**—only the specific cuts needed for this batch
-
----
-
-## Answering Your Specific Questions
-
-### Q: How does the loader decide which shard to load to memory?
-
-**A:** It doesn't load entire shards into memory. Instead:
-1. **Manifests** (`.jsonl.gz`) are read sequentially to fill the shuffle buffer with metadata
-2. **Audio bytes** are loaded **on-demand** per-cut when building batches
-3. The sampler reads shards in **sequential order** (shard-000000, shard-000001, ...) to fill the buffer, but audio loading is **random-access** based on batch composition
-
-### Q: Does each shard contain only examples of similar length?
-
-**A:** No. Shards contain cuts in the order they appeared in the source dataset (e.g., LibriSpeech's original ordering). Bucketing happens **dynamically at sampling time**, not during conversion.
+- **The initial fill is blocking.** `_collect_cuts_in_buckets(self.buffer_size)` runs
+  synchronously before the first batch, so nothing trains until the whole buffer is
+  read. This is a one-time startup cost that grows with the buffer — and grows
+  *superlinearly* in practice, since a wider window draws from more shards at once.
+  (Lhotse has a background-producer mode, but `concurrent` defaults to `False` and MELT
+  does not pass it.)
+- **Refill is incremental.** After each batch the sampler pulls exactly as many new cuts
+  as the batch consumed, so occupancy stays constant and the window slides along the
+  stream.
 
 ---
 
-## Visual Summary: Full Pipeline
+## 6. The buffer is organised into buckets
 
-```
-Epoch Start
-    ↓
-┌──────────────────────────────────────────────────────────┐
-│ 1. Read shard manifests sequentially                     │
-│    shard-000000.jsonl.gz → shard-000001.jsonl.gz → ...   │
-│    (metadata only, ~10k cuts)                            │
-└──────────────────────────────────────────────────────────┘
-    ↓
-┌──────────────────────────────────────────────────────────┐
-│ 2. Fill shuffle buffer (10k cuts metadata in RAM)       │
-│    Shuffle randomly                                      │
-│    Sort by duration                                      │
-└──────────────────────────────────────────────────────────┘
-    ↓
-┌──────────────────────────────────────────────────────────┐
-│ 3. Emit batch (greedy bucketing by duration)            │
-│    Batch: [cut_001, cut_045, cut_123, ...]              │
-│    (similar durations, ~300s total)                      │
-└──────────────────────────────────────────────────────────┘
-    ↓
-┌──────────────────────────────────────────────────────────┐
-│ 4. DataLoader worker loads audio bytes (lazy)           │
-│    For each cut_id:                                      │
-│      - Seek to byte offset in .tar                      │
-│      - Read FLAC bytes                                   │
-│      - Decode to waveform                               │
-│      - Extract features                                  │
-└──────────────────────────────────────────────────────────┘
-    ↓
-Training step processes batch
-    ↓
-Next batch: refill buffer from next cuts in shards, repeat
-```
+The pool is not one flat pile. It is **`num_buckets` FIFO queues split by duration**,
+with boundaries given by `bucket_duration_bins` — bucket 0 holds the shortest cuts, the
+last the longest. As each cut arrives from the stream its duration decides which bucket
+it is filed into.
+
+The point is **padding efficiency**. Batching a 3-second clip with a 30-second clip
+means padding the short one out and burning most of the compute on silence. Drawing a
+batch from a single bucket keeps its members similar in length.
+
+`num_buckets` sets how finely you slice: more buckets means tighter length matching, but
+each bucket holds proportionally fewer cuts to choose from.
+
+Use `infra/estimate_bucket_bins.py` to measure bins against a real mixture rather than
+guessing them.
 
 ---
 
-## Key Parameters in Your Config
+## 7. Building one batch
 
-From `src/config.py` and `src/data/audio/lhotse/dataloader.py`:
+Per batch, `DynamicBucketer.__iter__` does the following.
 
-```python
-@dataclass
-class DatasetConfig:
-    # ...
-    max_duration: float = 300.0        # Max seconds per batch
-    buffer_size: int = 10000   # Buffer size (affects randomness vs memory)
-    num_workers: int = 8               # DataLoader workers (parallel audio loading)
-```
+1. **Pick a bucket** (`_select_bucket`). It finds buckets that are *ready* — `_is_ready`
+   accumulates durations until the constraint is close to exceeding, i.e. "can this
+   bucket fill a whole batch?" — and chooses among them. If none is ready it either
+   stops or emits a partial batch, per `drop_last`.
+2. **Shuffle that bucket** (`pick_at_random`) and draw cuts in the shuffled order.
+3. **Add cuts until a constraint trips** (`DurationBatcher`):
+   - `batch_duration` caps total seconds of audio per batch,
+   - `batch_size` caps the cut count,
+   - `quadratic_duration` adds an extra penalty for long utterances, because attention
+     cost grows faster than linearly with sequence length — so a batch of long clips is
+     closed earlier than raw duration alone would suggest.
+4. **Remove the used cuts** from the bucket and **refill** the same number from the
+   stream.
 
-### Tuning `buffer_size`:
-- **Larger** (e.g., 50k): Better shuffle quality, more memory
-- **Smaller** (e.g., 5k): Less memory, slightly less random (but usually fine)
-- **Rule of thumb**: 10k-20k is good for most cases
+So a batch is neither a contiguous slice of the data nor a draw from the whole dataset:
+it is a random draw from **one duration bucket of the current buffer**.
+
+> **Naming trap.** In the MELT config, `batch_duration` is what becomes lhotse's
+> `max_duration` sampler argument (`DynamicBucketingSampler(cuts, max_duration=batch_duration, …)`).
+> The config's own `max_duration` is something else entirely — a **per-cut filter** that
+> drops utterances longer than the threshold before they ever reach the sampler. Do not
+> read one for the other.
 
 ---
 
-## Indexed Shar: how ranks and workers get different data
+## 8. Audio is read last
 
-A Shar source can be read two ways, chosen by `indexed` in the dataset config.
+Everything above moved metadata only. Once a batch of cuts is chosen, the **Dataset**
+does the real work: for each cut it goes to the recording tar, reads the audio, decodes,
+extracts features, tokenises the text, pads, and stacks into tensors.
 
-**Streaming** (no `.idx` sidecars). Nothing partitions the corpus, so every DP rank
-and every DataLoader worker iterates *all* of it. Separation is statistical: each
-process walks the shards in its own random order. Because independent streams sample
-the same corpus with replacement, one nominal epoch covers about `1 - e⁻¹` ≈ **63.2%**
-of the data, the rest being repeats.
+The I/O pattern here is therefore determined by *which cuts ended up together in a
+batch* — which is decided by the buffer and the buckets upstream.
+
+---
+
+## Indexed Shar: the lhotse 2 change
+
+A Shar source can be read two ways, chosen by `indexed` in the dataset config. Lhotse 2
+made the indexed path the one we use, and it differs on **three** axes, not just the
+partitioning one that gets discussed most.
+
+```yaml
+train_ds:
+  indexed: null   # null = auto-detect per source; true = require; false = force streaming
+```
+
+### (a) Coverage — every cut exactly once
+
+**Streaming** (no `.idx` sidecars). Nothing partitions the corpus, so every DP rank and
+every DataLoader worker iterates *all* of it. Separation is statistical: each process
+walks the shards in its own random order. Because independent streams sample the same
+corpus with replacement, one nominal epoch covers about `1 - e⁻¹` ≈ **63.2%** of the
+data, the rest being repeats.
 
 **Indexed** (`.idx` sidecars present). Lhotse partitions by *sample index* across the
 whole `rank × worker` pool, so every cut is produced **exactly once** and an epoch is
@@ -221,12 +207,32 @@ whole `rank × worker` pool, so every cut is produced **exactly once** and an ep
 | indexed | 4 × 43,207 | 172,828 / 172,828 | **0** |
 | streaming | 4 × 172,828 | 172,828 / 172,828 | 518,484 |
 
-```yaml
-train_ds:
-  indexed: null   # null = auto-detect per source; true = require; false = force streaming
-```
+### (b) Memory — offsets instead of audio bytes
 
-Two consequences worth knowing:
+This is the part that is easy to miss. The two readers fill a cut's audio placeholder
+differently:
+
+- **Streaming** → `shar/readers/tar.py` → `fill_shar_placeholder`, which does
+  `sources[0].type = "memory"; sources[0].source = data`. The **encoded audio bytes are
+  attached to the cut** and stay resident for as long as that cut sits in the sampler
+  buffer.
+- **Indexed** → `shar/readers/indexed.py` → `fill_shar_placeholder_lazy`, which stores
+  `(tar_path, offset, end_offset)`. The cut stays lightweight; the audio is fetched by
+  seeking at collate time (§8).
+
+So under lhotse 2 the buffer holds manifests and file offsets, and its memory cost is
+roughly independent of audio length. Under streaming, buffer memory scaled with the
+audio itself — which is why large buffers used to be far more dangerous than they are
+now.
+
+### (c) Read pattern — seeks instead of sequential scans
+
+The flip side of (b): indexed reads are **random-access seeks** into tars at collate
+time, where streaming reads were sequential scans. This is what couples batch diversity
+to I/O cost (see the tradeoff below), and it is more pronounced on a shared or network
+filesystem than on local scratch.
+
+### Two operational consequences
 
 - **`shard_seed: randomized` does not apply to indexed sources.** Partitioning already
   separates the streams, so shard order should be identical everywhere — and lhotse
@@ -236,17 +242,100 @@ Two consequences worth knowing:
   only runs inside a DataLoader worker subprocess. At `num_workers: 0` the partition
   collapses and every rank reads everything; the loader raises rather than allow it.
 
-To convert a collection, see `data-utils/index_shar.py` in MELT-proj/preprocessing. The `.gz` manifests are replaced by
-plain `.jsonl` permanently — the index stores byte offsets into them — so the migration
-is not reversible by re-compressing.
+To convert a collection, see `data-utils/index_shar.py` in MELT-proj/preprocessing. The
+`.gz` manifests are replaced by plain `.jsonl` permanently — the index stores byte
+offsets into them — so the migration is not reversible by re-compressing.
 
 ---
 
-## Why This Design?
+## Where randomness comes from
 
-1. **Memory efficiency**: Only metadata in RAM, audio stays on disk until needed
-2. **I/O efficiency**: Sequential manifest reads + random-access audio loads (good for HDDs and network FS)
-3. **Dynamic batching**: Bucketing happens at sampling time, so you get efficient batches without pre-sorting the entire dataset
-4. **Shuffle quality**: The buffer provides good randomness while keeping memory bounded
+Three independent levels. Only the third is `buffer_size`.
 
-This is why Lhotse works well for large-scale speech training on HPC systems like yours (shared FS, multi-GPU, long utterances).
+| level | what it randomises | controlled by |
+|---|---|---|
+| shard order | which region of a source you meet when | `shuffle_shards` |
+| source interleaving | the dataset / language mixture | `mux` weights |
+| within-buffer | which specific cuts share a batch | `buffer_size` |
+
+---
+
+## The `buffer_size` tradeoff
+
+A **bigger** buffer means each bucket holds a wider sample of the stream, so the cuts
+that end up in a batch were drawn from further apart — more decorrelated batches.
+
+A **smaller** buffer means a batch's members were neighbours in the stream, so they are
+likelier to share a source, a speaker, or a recording session.
+
+The costs on the other side:
+
+1. **A longer blocking fill** before the first step (§5).
+2. **More memory held** — though under indexed Shar this is manifests only (§b), so it
+   is far cheaper than it was under streaming.
+3. **More scattered reads.** Because a batch's cuts came from further apart in the
+   stream, their audio lives at more scattered offsets across more tar files, so the
+   collate step does more seeking and less sequential reading.
+
+Point 3 is the structural one: **batch diversity and read locality are the same dial
+pointing in opposite directions.** The very property that makes a batch diverse is that
+its members came from far-apart places on disk.
+
+What `buffer_size` does *not* affect: mixture balance (fixed by mux, §3), shard
+shuffling (§2), or batch fullness (bucketing keeps batches packed regardless, §6).
+
+### Sizing it
+
+Think in terms of **pool per bucket** — `buffer_size / num_buckets` — measured against
+the number of cuts in a batch. That ratio, not the raw buffer number, is what determines
+how much freedom the sampler has when composing a batch.
+
+Note also that resident cuts scale as `buffer_size × world_size × num_workers` (§4), so
+a value that is fine on one GPU is multiplied across a run.
+
+---
+
+## Visual summary
+
+```
+  shards on disk (cuts.NNNNNN.jsonl + recording.NNNNNN.tar + .idx)
+        │  shuffle_shards: permute shard visit order
+        ▼
+  lazy CutSet per source  ──repeat()──▶ infinite stream
+        │
+        ▼
+  CutSet.mux(weights)          ← language / dataset balance decided HERE
+        │
+        ▼
+  per (rank × worker) partition by sample index      [indexed only]
+        │
+        ▼
+  ┌─────────── sampler buffer (buffer_size cuts) ───────────┐
+  │  filed on arrival into num_buckets duration queues      │
+  │   [bucket 0: short] … [bucket N: long]                  │
+  └─────────────────────────────────────────────────────────┘
+        │  pick a ready bucket → shuffle it → draw until
+        │  batch_duration / batch_size / quadratic_duration trips
+        ▼
+  batch of cuts (metadata only)
+        │
+        ▼
+  Dataset: seek to (tar, offset) → decode → features → tokenise → pad → stack
+        │
+        ▼
+  training step
+```
+
+---
+
+## Why this design
+
+1. **Memory efficiency** — only metadata is resident; audio stays on disk until needed.
+2. **Bounded shuffling** — the buffer gives randomness without materialising the corpus.
+3. **Dynamic batching** — length grouping happens at sampling time, so no pre-sorting
+   pass over the dataset is required.
+4. **Exact coverage** — indexed partitioning makes an epoch mean what it says.
+
+Which is why Lhotse suits large-scale speech training on shared-filesystem HPC: the
+expensive resource is random I/O, and every layer above is arranged to keep metadata
+cheap and defer audio reads to the last possible moment.
