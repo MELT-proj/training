@@ -68,4 +68,6 @@ SBATCH_ARGS=(
     --qos="${MELT_QOS:-acc_ehpc}"
     --cpus-per-task=80
 )
-[[ -n "${MELT_PARTITION:-}" ]] && SBATCH_ARGS+=(--partition="${MELT_PARTITION}")
+if [[ -n "${MELT_PARTITION:-}" ]]; then
+    SBATCH_ARGS+=(--partition="${MELT_PARTITION}")
+fi
