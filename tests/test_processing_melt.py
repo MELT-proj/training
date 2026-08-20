@@ -10,6 +10,12 @@ from melt.modeling import MELT_REQUIRED_SPECIAL_TOKENS, MELTProcessor
 from transformers import AutoConfig, AutoFeatureExtractor, AutoTokenizer
 
 
+# Every test here builds a real tokenizer or feature extractor, and the audio
+# fixture is fetched over the network too, so the whole module needs the
+# HuggingFace Hub (or a warm cache). GitHub CI deselects it.
+pytestmark = pytest.mark.hub
+
+
 # Audio sample URL for testing
 AUDIO_SAMPLE_URL = "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2-Audio/audio/guess_age_gender.wav"
 

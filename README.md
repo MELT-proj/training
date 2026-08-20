@@ -23,6 +23,21 @@ For setup and usage details, see the folder-specific guides:
 ```bash
 pytest tests/                      # unit tests
 LOCAL_DATASETS_DIR=/path/to/shar pytest tests/   # also runs the 5 that need real Shar data
+pytest tests/ -m "not hub"         # skip everything that downloads from the HF Hub
+pytest tests/ -m hub               # only those
+```
+
+Tests marked `hub` need a config, tokenizer or set of weights from the
+HuggingFace Hub. Run the full suite somewhere with a warm HF cache; **GitHub CI
+deselects them** (`-m "not hub"`, with `HF_HUB_OFFLINE=1` so an unmarked one
+fails loudly rather than silently downloading). A cold runner would otherwise
+re-fetch hundreds of MB per run, and Xet-backed repos such as `gpt2` and
+`Qwen3-1.7B` cannot be downloaded there at all. If you add a test that touches
+the Hub, mark it:
+
+```python
+@pytest.mark.hub
+def test_something_with_a_real_tokenizer(): ...
 ```
 
 CI does **not** re-run on every push to a pull request. It runs once when the PR

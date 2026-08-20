@@ -24,6 +24,7 @@ def _make_minimal_model():
     return model
 
 
+@pytest.mark.hub
 def test_create_optimizer_freeze_flags():
     model = _make_minimal_model()
 
@@ -237,6 +238,7 @@ def _adapter_state(model):
     return {k: v.clone() for k, v in model.audio_stack.adapter.state_dict().items()}
 
 
+@pytest.mark.hub
 def test_model_init_is_reproducible_under_set_seed():
     """Two models built from the same config must be identical.
 
@@ -257,6 +259,7 @@ def test_model_init_is_reproducible_under_set_seed():
         assert torch.equal(first[key], second[key]), f"adapter param {key} differs"
 
         
+@pytest.mark.hub
 def test_model_init_differs_without_reseeding():
     """Guards the test above against silently passing on a constant init.
 

@@ -40,6 +40,7 @@ def _make_melt_config(**kwargs):
 # ============================================================================
 
 
+@pytest.mark.hub
 def test_freeze_audio_stack():
     """Ensure component-level freeze methods work correctly."""
     config = _make_melt_config()
@@ -332,6 +333,7 @@ class TestAdapterOutputFeaturesShape:
 # ============================================================================
 
 
+@pytest.mark.hub
 class TestInjectTensor:
     """Test _inject_tensor using the 2-D (attention mask) path which does not
     require a live text_decoder instance."""

@@ -120,6 +120,7 @@ def _make_cut(cut_id: str, text: str, lang: str, task: str = "asr") -> MonoCut:
 # Tests
 # ---------------------------------------------------------------------------
 
+@pytest.mark.hub
 class TestPromptTemplateLabels:
     """Verify label masking when ``apply_chat_template=False`` and a custom
     ``prompt_template`` is provided."""
@@ -235,6 +236,7 @@ class TestPromptTemplateLabels:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.hub
 class TestPerTaskPromptTemplateLabels:
     """Verify per-task custom ``prompt_template`` dict in non-chat-template mode."""
 
@@ -348,6 +350,7 @@ class TestPerTaskPromptTemplateLabels:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.hub
 class TestPerTaskChatTemplateLabels:
     """Verify per-task custom ``prompt_template`` dict in chat-template mode."""
 
@@ -433,6 +436,7 @@ class TestPerTaskChatTemplateLabels:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.hub
 class TestPromptTemplateBackwardCompat:
     """Verify single-string prompt_template still works identically."""
 
@@ -543,6 +547,7 @@ class TestPromptTemplateNormalization:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.hub
 class TestSTLanguagePlaceholders:
     """Verify that {src_lang} and {tgt_lang} work in ST prompt templates."""
 
@@ -642,6 +647,7 @@ class TestTemplateSelectionStrategies:
             return_langs=False,
         )
 
+    @pytest.mark.hub
     @pytest.mark.parametrize("selection", ["random", "with_language"])
     def test_selection_strategy_produces_a_batch(self, processor, selection):
         cut = _make_cut("en-1", "hello world", "en", task="asr")

@@ -50,6 +50,14 @@ flash-attn = [
     "flash-attn",
 ]
 
+[tool.pytest.ini_options]
+markers = [
+    # Anything that has to reach the HuggingFace Hub for a config, a tokenizer
+    # or a set of weights. GitHub CI deselects these (see
+    # .github/workflows/ci.yml); run them somewhere with a warm HF cache.
+    "hub: needs to download a config, tokenizer or weights from the HuggingFace Hub",
+]
+
 [tool.setuptools.packages.find]
 # The top-level package is `melt` (i.e. `melt/__init__.py`), with
 # subpackages like `melt.training`, `melt.modeling`, and `melt.evaluation`.
