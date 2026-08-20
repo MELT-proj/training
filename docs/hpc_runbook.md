@@ -667,10 +667,16 @@ world_size: 4, ... is_distributed: True
 **Loss and metrics.** Each eval prints a metrics dict to the log — overall
 `eval_loss`, `eval_wer`, `eval_cer`, per-language `eval_wer_<lang>` /
 `eval_cer_<lang>`, and per-task `eval_wer_asr` / `eval_wer_st` (same for
-`cer`). Campaign configs also name their validation sources (`asr_<lang>`,
+`cer`) — but only when the evaluated samples actually span more than one
+language or task; a bucket that would just restate the overall number is
+skipped. Campaign configs also name their validation sources (`asr_<lang>`,
 `st_<src>_<tgt>`), which splits eval into one reported set per name: each
 metrics dict then carries an `eval_<name>_` prefix and a per-set
-`eval_<name>_loss`. To watch them:
+`eval_<name>_loss`. A named set is usually homogeneous (one language, one
+task), so in practice it reports only `eval_<name>_loss`, `eval_<name>_wer`,
+`eval_<name>_cer` — e.g. `eval_asr_es_loss`, `eval_asr_es_wer`,
+`eval_asr_es_cer`, with no redundant `eval_asr_es_wer_es` or
+`eval_asr_es_wer_asr`. To watch them:
 
 ```bash
 # [mn5]

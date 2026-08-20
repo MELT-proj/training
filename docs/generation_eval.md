@@ -29,7 +29,8 @@ not: numbers from before this change are not comparable with numbers after it.
 2. `MELTTrainer.prediction_step` generates from the prompt pair plus the shared
    audio features, then runs a `no_grad` forward on the full inputs for the loss.
 3. `TrainingEvaluator` decodes both the generated ids and the labels and scores
-   them with jiwer, keeping the per-language and per-task breakdowns.
+   them with jiwer, keeping the per-language and per-task breakdowns (each
+   emitted only when the eval set actually spans more than one bucket).
 
 Generating from `inputs_embeds` returns only the newly generated tokens, so
 there is no prompt to strip.
