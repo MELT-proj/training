@@ -201,6 +201,7 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         langs = []
         src_langs = []
         tgt_langs = []
+        durations = []
         for idx, cut in enumerate(cuts):
             # Load audio
             audio = self._load_audio(cut)
@@ -230,6 +231,7 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
             langs.append(lang)
             src_langs.append(src_lang)
             tgt_langs.append(tgt_lang)
+            durations.append(float(cut.duration))
 
         if not audios:
             logger.warning("All %d cuts in this batch were skipped.", len(cuts))
@@ -342,10 +344,15 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
                     labels[mask] = -100
                 inputs["labels"] = labels
 
-            # Attach per-sample language codes (evaluation only) so metrics
-            # can compute a per-language WER/CER breakdown.
+            # Attach per-sample task/language codes and durations so eval can
+            # compute a per-language WER/CER breakdown, and training can track
+            # cumulative audio hours seen per task/language.
             if self.return_langs:
                 inputs["langs"] = langs
+                inputs["tasks"] = tasks
+                inputs["src_langs"] = src_langs
+                inputs["tgt_langs"] = tgt_langs
+                inputs["durations"] = durations
 
             return inputs
 
