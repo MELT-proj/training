@@ -315,8 +315,10 @@ def test_buffers_are_cleared_between_evaluations(evaluator):
 def test_per_task_metrics_split_asr_from_st(evaluator):
     """`wer_asr`/`wer_st` each count only their own samples.
 
-    The language split still reports the mixed bucket (the samples all share
-    one language), so the task keys are what separates the two groups.
+    All samples share one language, so the language split has a single
+    bucket and would only restate `wer` under a `wer_de` key -- exactly the
+    redundancy a named, homogeneous eval set (e.g. `asr_es`) would produce.
+    It must be skipped; the task keys are what separates the two groups.
     """
     batches = [[(1, True), (2, False)], [(3, True), (4, False)]]
     langs_per_batch = [["de", "de"], ["de", "de"]]
@@ -327,7 +329,7 @@ def test_per_task_metrics_split_asr_from_st(evaluator):
     assert result["wer_asr"] == 0.0
     assert result["wer_st"] == 1.0
     assert result["wer"] == 0.5
-    assert result["wer_de"] == 0.5
+    assert "wer_de" not in result
 
 
 def test_task_codes_pair_with_the_right_batch(evaluator):
@@ -373,3 +375,55 @@ def test_no_task_keys_when_no_task_codes_are_available(evaluator):
     assert not [k for k in result if k in ("wer_asr", "wer_st", "cer_asr", "cer_st")]
     assert result["wer_de"] == 0.0
     assert result["wer_fr"] == 1.0
+
+
+def test_single_language_breakdown_is_skipped_as_redundant(evaluator):
+    """A homogeneous eval set gets only `wer`/`cer`, nothing per-bucket.
+
+    This is the shape a campaign config's named validation source produces
+    (e.g. `asr_es`, all samples lang `es` and task `asr`): every cut shares
+    the same language and task, so `wer_es`/`wer_asr` would just restate
+    `wer` under a different key. W&B should see one series, not four.
+    """
+    batches = [[(1, True), (2, False)]]
+    langs_per_batch = [["es", "es"]]
+    tasks_per_batch = [["asr", "asr"]]
+
+    result = _feed(evaluator, batches, langs_per_batch, tasks_per_batch)
+
+    assert set(result) == {"wer", "cer"}
+
+
+def test_two_languages_one_task_gets_language_split_not_task_split(evaluator):
+    """Only the split that actually distinguishes samples is reported.
+
+    Two languages but a single shared task is the mirror image of
+    `test_per_task_metrics_split_asr_from_st`: the language keys carry
+    information the task key would not.
+    """
+    batches = [[(1, True), (2, False)]]
+    langs_per_batch = [["de", "fr"]]
+    tasks_per_batch = [["asr", "asr"]]
+
+    result = _feed(evaluator, batches, langs_per_batch, tasks_per_batch)
+
+    assert result["wer_de"] == 0.0
+    assert result["wer_fr"] == 1.0
+    assert "wer_asr" not in result
+
+
+def test_single_language_plus_unknown_still_emits_both(evaluator):
+    """An `unknown` bucket alongside one real language is not collapsed away.
+
+    Two buckets is two buckets even when one of them is `unknown`: that
+    bucket is a misalignment signal, not padding, so silencing it here would
+    hide the exact kind of plumbing break the `unknown` handling exists to
+    surface.
+    """
+    batches = [[(1, True), (2, False)]]
+    langs_per_batch = [["es", ""]]
+
+    result = _feed(evaluator, batches, langs_per_batch)
+
+    assert result["wer_es"] == 0.0
+    assert result["wer_unknown"] == 1.0

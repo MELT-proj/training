@@ -33,6 +33,16 @@ class TrainingEvaluator:
     teacher-forced forward pass, so what is scored here is what the model would
     actually emit at inference.
 
+    A breakdown is only worth reporting when it distinguishes something the
+    overall `wer`/`cer` does not -- i.e. when the evaluated samples span more
+    than one language (or task) bucket, counting `unknown` as a bucket of its
+    own. A campaign config that names a validation source (e.g. `asr_es`)
+    hands the evaluator a homogeneous set -- one language, one task -- so its
+    per-language and per-task splits would just restate `wer`/`cer` under a
+    different key; the legacy unnamed path, which mixes every language and
+    task into one set, is unaffected since it always has more than one
+    bucket. See `__call__` for where this is decided.
+
     Args:
         config: Evaluation configuration (``enable_whisper_normalization``,
             ``log_num_samples``).
@@ -172,12 +182,11 @@ class TrainingEvaluator:
                     len(preds),
                 )
 
-            # With no codes at all the single bucket just restates the overall
-            # numbers, so skip it.
+            # Log the split's sizes whenever at least one sample carried a
+            # language code, even if the breakdown below ends up skipped: for
+            # a named eval set this count is the check against the manifest
+            # that the set holds the number of samples it is supposed to.
             if list(lang_to_preds) != ["unknown"]:
-                # Log the split's sizes, not just its scores: they are what you
-                # check against the manifest to know the breakdown is counting
-                # the samples you think it is.
                 logger.info(
                     "Per-language eval samples: %s",
                     ", ".join(
@@ -185,6 +194,11 @@ class TrainingEvaluator:
                         for lang in sorted(lang_to_preds)
                     ),
                 )
+
+            # A single bucket -- one language, or nothing but `unknown` --
+            # means the split can't tell you anything the overall wer/cer
+            # doesn't, so skip emitting it.
+            if len(lang_to_preds) > 1:
                 for lang in sorted(lang_to_preds):
                     lp = lang_to_preds[lang]
                     lr = lang_to_refs[lang]
@@ -220,6 +234,12 @@ class TrainingEvaluator:
                         for task in sorted(task_to_preds)
                     ),
                 )
+
+            # Same rule as the language split: a single task bucket (or an
+            # `unknown`-only one) restates the overall metric, so skip it.
+            # `{"asr", "unknown"}` is still two buckets and does get a split,
+            # even though the `unknown` half is never itself emitted below.
+            if len(task_to_preds) > 1:
                 for task in sorted(task_to_preds):
                     if task == "unknown":
                         continue
