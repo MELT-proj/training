@@ -10,9 +10,16 @@
 # gpfs_scratch, which was filling up (projects was at 35.7 TB of a 48.8 TB group
 # quota). `shar` and `tmp` stayed behind, so only some of these paths changed --
 # check where a thing actually is before assuming this file is right.
+# 2026-08-20: LOCAL_DATASETS_DIR default switched from `shar` to `shar-indexed`.
+# `shar` stopped getting resynced after backfills (e.g. voxpopuli's PNC pass) and
+# was stuck at its 2026-01-21 ingest -- every voxpopuli cut there is missing
+# `custom.pnc_text`, which crashes any run with `strict_text_field: true` as soon
+# as it draws a voxpopuli batch. `shar-indexed` is the tree that's actually kept
+# current (verified against nyx's source of truth: matching pnc_text coverage
+# across cv22_sidon/mls_sidon/voxpopuli/yodas-granary as of this date).
 export HF_HOME="${HF_HOME:-/gpfs/scratch/epor48/hf_cache}"
 export OUTPUT_DIR="${OUTPUT_DIR:-/gpfs/scratch/epor48/outputs}"
-export LOCAL_DATASETS_DIR="${LOCAL_DATASETS_DIR:-/gpfs/projects/epor48/melt-data/shar}"
+export LOCAL_DATASETS_DIR="${LOCAL_DATASETS_DIR:-/gpfs/projects/epor48/melt-data/shar-indexed}"
 export TMPDIR_HOST="${TMPDIR_HOST:-/gpfs/projects/epor48/melt-data/tmp}"
 
 # --- container mode -------------------------------------------------------
