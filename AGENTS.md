@@ -48,6 +48,11 @@ pytest tests/test_librispeech_lhotse.py
 pytest tests/test_peoples_speech_lhotse.py
 ```
 
+Tests that need something from the HuggingFace Hub carry `@pytest.mark.hub`.
+GitHub CI deselects them with `-m "not hub"` and runs with `HF_HUB_OFFLINE=1`,
+so **a new test that reaches the Hub without the marker fails CI** with a
+"couldn't connect" error. Add the marker rather than removing the guard.
+
 
 ## Development Setup
 

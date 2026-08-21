@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from melt.modeling.configuration_melt import MELTAdapterConfig, MELTConfig
 from transformers import AutoConfig
 
@@ -47,6 +49,7 @@ class TestMELTAdapterConfig:
         assert config.window_size == 21
 
 
+@pytest.mark.hub
 class TestMELTConfig:
     def test_initialization_with_model_names(self):
         config = MELTConfig(

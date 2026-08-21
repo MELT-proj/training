@@ -18,6 +18,10 @@ import torch
 from omegaconf import OmegaConf
 from transformers.feature_extraction_utils import FeatureExtractionMixin
 
+# Every test here builds a real tokenizer/processor, so the whole module
+# needs the HuggingFace Hub (or a warm cache). GitHub CI deselects it.
+pytestmark = pytest.mark.hub
+
 _TOKENIZER_NAME = "Qwen/Qwen3-1.7B"
 
 AUDIO_TOKEN = "<|audio|>"

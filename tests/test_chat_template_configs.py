@@ -9,7 +9,6 @@ fixture. The Qwen 3 `<think>` case in particular is invisible to any test that
 does not render with the genuine template.
 """
 
-import os
 
 import pytest
 
@@ -122,11 +121,17 @@ def test_masking_is_inclusive_of_the_boundaries():
     )
 
 
+@pytest.mark.hub
 @pytest.mark.parametrize("model_id,config_name", REAL_CASES)
 def test_boundaries_match_the_real_tokenizer(model_id, config_name):
     transformers = pytest.importorskip("transformers")
-    os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
+    # NB: this used to `os.environ.setdefault("HF_HUB_OFFLINE", "1")` here to
+    # keep the test cache-only. That never worked -- huggingface_hub reads the
+    # variable once, at import time, and transformers is already imported by
+    # then -- so the test downloaded anyway, and the stray variable leaked
+    # offline mode into every later test in the process. The `hub` marker is
+    # what keeps this off the network in CI now.
     try:
         tok = transformers.AutoTokenizer.from_pretrained(model_id)
     except Exception as exc:  # noqa: BLE001
