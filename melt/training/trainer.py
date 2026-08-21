@@ -31,6 +31,7 @@ from transformers.trainer_utils import (
 from .. import ddp
 from ..logging_utils import _is_global_master, force_print, get_logger
 from ..modeling import MELTProcessor
+from .duration_tracker import DurationTracker
 from .data.audio.lhotse import (
     FallbackDataset,
     MELTDataCollator,
@@ -353,6 +354,10 @@ class MELTTrainer(Seq2SeqTrainer):
         self._eval_langs_buffer: list[str] = []
         self._eval_tasks_buffer: list[str] = []
 
+        # Cumulative training audio seconds seen, broken down by task/language.
+        # Rank-local until reduced_hours() gathers it across ranks for logging.
+        self._duration_tracker = DurationTracker()
+
         # Which named eval set is currently running; set by evaluation_loop and
         # used to key the logged sample table.
         self._eval_metric_key_prefix: str = "eval"
@@ -545,6 +550,7 @@ class MELTTrainer(Seq2SeqTrainer):
             config=self.config.data,
             is_train=True,
             return_labels=True,
+            return_langs=True,
         )
 
         # Wrap with fallback for fault tolerance
@@ -875,6 +881,12 @@ class MELTTrainer(Seq2SeqTrainer):
         of where each worker's iterator actually is. It is collected from inside
         the workers, which is the only place that position exists once
         ``num_workers > 0``.
+
+        Also carries this rank's ``DurationTracker`` state. If either early
+        return below is taken (no dataloader reference, or a loader with no
+        ``state_dict()``), tracker state is not saved either -- the same
+        condition under which data resumption already doesn't work, so
+        cumulative hours restart from zero exactly when the data stream does.
         """
         dataloader = self._train_dataloader_ref
         if dataloader is None:
@@ -901,6 +913,10 @@ class MELTTrainer(Seq2SeqTrainer):
             "gradient_accumulation_steps": self.args.gradient_accumulation_steps,
             "num_workers": getattr(dataloader, "num_workers", 0),
             "world_size": self._world_size,
+            # Rank-local seconds only -- reduced_hours() sums across ranks at
+            # log time, so saving the already-reduced value here would double
+            # (or world_size-multiply) it on the next reduction after resume.
+            "duration_tracker": self._duration_tracker.state_dict(),
         }
 
         save_path = os.path.join(
@@ -959,6 +975,10 @@ class MELTTrainer(Seq2SeqTrainer):
             f"Restored dataloader state (num_workers={now_workers}, "
             f"world_size={self._world_size}) — each worker resumes at its own position."
         )
+
+        # Restore this rank's rank-local cumulative hours. Replaces, rather
+        # than adds to, the tracker's (empty, at this point) contents.
+        self._duration_tracker.load_state_dict(state.get("duration_tracker") or {})
 
         # The dataloader now handles data positioning internally, so we
         # disable HF Trainer's own batch-skipping to avoid double-skipping.
@@ -1275,6 +1295,17 @@ class MELTTrainer(Seq2SeqTrainer):
         num_items_in_batch: int | None = None,
     ) -> torch.Tensor:
         """Override to run memory preallocation on the first step and log OOM diagnostics."""
+        # Pop duration/task/language metadata before anything else touches
+        # `inputs`. MELTMultiModalModel.forward accepts **kwargs, so leftover
+        # keys would be silently swallowed into the model instead of raising —
+        # worse than a crash. Mirrors prediction_step's langs/tasks pop.
+        durations = inputs.pop("durations", None)
+        tasks = inputs.pop("tasks", None)
+        langs = inputs.pop("langs", None)
+        src_langs = inputs.pop("src_langs", None)
+        tgt_langs = inputs.pop("tgt_langs", None)
+        self._duration_tracker.update(durations, tasks, langs, src_langs, tgt_langs)
+
         if not self._preallocation_done:
             self._run_preallocation(model)
             self._preallocation_done = True
@@ -1286,6 +1317,22 @@ class MELTTrainer(Seq2SeqTrainer):
             if self._memory_profiling:
                 self._dump_memory_snapshot()
             raise
+
+    def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
+        """Merge cumulative per-task/language training hours into *logs*.
+
+        ``reduced_hours()`` performs an ``all_gather_object`` collective, so it
+        must run unconditionally on every rank on every call — ``Trainer.log()``
+        itself has no rank guard (transformers trainer.py), and skipping the
+        collective on some ranks (e.g. because the tracker looked empty) would
+        deadlock the others. Only the merge into ``logs`` is conditional, and
+        is gated on ``"loss" in logs`` so the series only appears on training
+        rows, not eval rows.
+        """
+        hours = self._duration_tracker.reduced_hours()
+        if hours and "loss" in logs:
+            logs.update(hours)
+        super().log(logs, start_time)
 
     def _log_oom_batch_info(self, inputs: dict) -> None:
         """Log tensor shapes, model info, and GPU memory state on OOM to identify the offending batch.
