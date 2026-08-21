@@ -89,6 +89,34 @@ HOST_HF_TOKEN="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-}}"
 [[ -z "${HOST_HF_TOKEN}" && -f "${HOME}/.cache/huggingface/token" ]] \
     && HOST_HF_TOKEN="$(cat "${HOME}/.cache/huggingface/token")"
 
+# --- open-file limit ------------------------------------------------------
+# lhotse's indexed Shar reader caches one IndexedTarReader per shard it touches
+# and never evicts it (lhotse/shar/readers/indexed.py, _ensure_indexed_readers:
+# a plain dict, no LRU and no close), and each reader holds its tar handle open
+# for the life of the process. Any scattered access pattern therefore parks one
+# fd per distinct shard: a shuffled training stream, and -- far more abruptly --
+# restoring a dynamic-bucketing checkpoint, which re-fetches every cut buffered
+# in the sampler (buffer_size, commonly tens of thousands) by random access the
+# moment iteration starts. Both blow through the default soft limit of 1024:
+#
+#   lhotse/indexing.py read_index -> OSError: [Errno 24] Too many open files
+#
+# See issue #76. Observed cold-start on artemis jobs 327837/327839, and on
+# resume in job 328205, where it killed the job seconds after the sampler state
+# was restored. Raising the soft limit is a ceiling, not a reservation --
+# nothing is allocated when the readers are not open -- so it is safe to apply
+# unconditionally. Set MELT_NOFILE to override; the hard limit is the cap.
+MELT_NOFILE="${MELT_NOFILE:-65536}"
+_nofile_hard="$(ulimit -Hn)"
+if [[ "${_nofile_hard}" != "unlimited" && "${MELT_NOFILE}" -gt "${_nofile_hard}" ]]; then
+    MELT_NOFILE="${_nofile_hard}"
+fi
+if ulimit -Sn "${MELT_NOFILE}" 2>/dev/null; then
+    echo "[container] nofile:   soft=$(ulimit -Sn) hard=$(ulimit -Hn)"
+else
+    echo "[container] WARNING: could not raise nofile to ${MELT_NOFILE} (soft=$(ulimit -Sn), hard=${_nofile_hard}); indexed-Shar runs may hit issue #76" >&2
+fi
+
 mkdir -p "${HOST_TMPDIR}" "${SUBMIT_DIR}/logs" "${HOST_OUTPUT_DIR}/wandb"
 [[ -n "${HOST_HF_HOME}" ]] && mkdir -p "${HOST_HF_HOME}"
 
