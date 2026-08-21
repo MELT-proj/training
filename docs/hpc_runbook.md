@@ -1159,6 +1159,7 @@ from the eval metrics in §B4.
 | Job dies at a `--qos` / `--partition` error | submitted from a `glogin` node; use `alogin1` |
 | Sampler state not restored on resume | `(nodes × GPUs × num_workers)` changed since the original run (§B4b) |
 | `max_tokens` appears to do nothing | the source has no `custom.num_tokens` — inert by design, see the data note |
+| `OSError: [Errno 24] Too many open files` in `lhotse/indexing.py` | indexed Shar parks one never-evicted tar handle per shard touched, so a shuffled stream — or a resume, which re-fetches the whole sampler buffer by random access — exhausts the default 1024 fds. The sbatch wrapper now raises the soft limit to 65536 (`MELT_NOFILE` to override). On an older branch, `ulimit -n 65536` in the submitting shell works too: SLURM propagates it. Issue #76 |
 
 If something here does not match what you observe, check the repository's open
 issues before debugging from scratch — known rough edges are tracked there.
