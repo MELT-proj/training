@@ -112,8 +112,32 @@ def prepare_model(
         logger.info(f"Loading model, config, and processor from checkpoint: {ckpt_dir}")
 
         config = MELTConfig.from_pretrained(ckpt_dir)
+
+        # A checkpoint's config.json records no attention implementation: the
+        # sub-configs are serialised without `_attn_implementation`, so loading
+        # one falls back to transformers' default of sdpa and the YAML's
+        # `model.decoder.attn_implementation` is silently ignored.  On an H100
+        # torch dispatches sdpa to the cuDNN backend, whose per-call CPU
+        # planning cost dominates incremental decoding -- profiled at 65 ms of
+        # CPU per attention call against 13 us of GPU, which put generate() at
+        # ~2.3 s per token and one eval batch at ~100 s (artemis job 328287)
+        # where the same evaluation on a from-scratch run took ~8.6 s.
+        #
+        # MELTConfig deliberately does not propagate `_attn_implementation` to
+        # its sub-configs (see configuration_melt.py), so passing
+        # `attn_implementation=` to from_pretrained would not reach the
+        # decoder.  Set it on the sub-config directly -- the same one
+        # prepare_melt_config configures through `decoder_kwargs` on the
+        # from-scratch path -- and hand the config to from_pretrained.
+        requested_attn = decoder_cfg.get("attn_implementation", None)
+        if requested_attn:
+            config.text_decoder_config._attn_implementation = requested_attn
+            logger.info(
+                f"Text decoder attention implementation from config: {requested_attn}"
+            )
+
         processor = MELTProcessor.from_pretrained(ckpt_dir)
-        model = MELTForCausalLM.from_pretrained(ckpt_dir)
+        model = MELTForCausalLM.from_pretrained(ckpt_dir, config=config)
     else:
         config = prepare_melt_config(cfg, processor)
         model = MELTForCausalLM(config)

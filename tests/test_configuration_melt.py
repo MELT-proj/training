@@ -124,6 +124,48 @@ class TestMELTConfig:
         assert config.adapter_config._type == "qformer"
         assert config.adapter_config.downsample_rate == 7
 
+    def test_saved_config_does_not_carry_the_attn_implementation(self, tmp_path):
+        """A round-tripped config loses the decoder's attention implementation.
+
+        This is why train.py re-applies `model.decoder.attn_implementation`
+        from the YAML on the `model.ckpt` path: without it the reloaded config
+        falls back to transformers' sdpa default, which on an H100 dispatches
+        to the cuDNN backend and makes generation ~2 s per token (artemis job
+        328287). If transformers ever starts persisting the value this test
+        fails, and that re-application can go.
+        """
+        config = MELTConfig(
+            audio_encoder=AUDIO_ENCODER,
+            text_decoder=TEXT_DECODER,
+            adapter_config={"_type": "mlp"},
+            decoder_kwargs={"attn_implementation": "flash_attention_2"},
+        )
+        assert config.text_decoder_config._attn_implementation == "flash_attention_2"
+
+        config.save_pretrained(tmp_path)
+        reloaded = MELTConfig.from_pretrained(tmp_path)
+
+        assert reloaded.text_decoder_config._attn_implementation != "flash_attention_2"
+
+    def test_attn_implementation_can_be_set_on_the_decoder_sub_config(self, tmp_path):
+        """The re-application train.py performs has to actually stick.
+
+        MELTConfig overrides the `_attn_implementation` setter so the parent
+        class cannot broadcast one value over every sub-config, so the decoder
+        has to be addressed directly rather than through the parent.
+        """
+        config = MELTConfig(
+            audio_encoder=AUDIO_ENCODER,
+            text_decoder=TEXT_DECODER,
+            adapter_config={"_type": "mlp"},
+        )
+        config.save_pretrained(tmp_path)
+        reloaded = MELTConfig.from_pretrained(tmp_path)
+
+        reloaded.text_decoder_config._attn_implementation = "flash_attention_2"
+
+        assert reloaded.text_decoder_config._attn_implementation == "flash_attention_2"
+
     def test_save_pretrained_writes_config_json(self, tmp_path):
         config = MELTConfig(
             audio_encoder=AUDIO_ENCODER,
