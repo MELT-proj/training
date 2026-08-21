@@ -16,6 +16,7 @@ import inspect
 import math
 import os
 import sys
+import time
 from typing import Any, Optional, Union
 
 import torch
@@ -61,6 +62,47 @@ def _one_line(text: str) -> str:
     breaks the REF/HYP pairing that makes it readable in the first place.
     """
     return " ".join(text.split())
+
+
+def _eval_profile_batches() -> int:
+    """How many eval batches to profile.  0 (the default) disables it entirely.
+
+    Env-gated rather than config-gated so a diagnostic run needs no config edit
+    and a normal run pays one int() per eval batch.  Set MELT_EVAL_PROFILE=N to
+    profile the first N generate() calls of every evaluation.
+    """
+    try:
+        return int(os.environ.get("MELT_EVAL_PROFILE", "0") or 0)
+    except ValueError:
+        return 0
+
+
+@contextlib.contextmanager
+def _eval_profiler(enabled: bool):
+    """Yield a torch profiler around one generate() call, or None when off.
+
+    CPU+CUDA activities with no stacks or shapes: the question this answers is
+    "which op owns the wall clock", and stack collection would add its own.
+    """
+    if not enabled:
+        yield None
+        return
+    from torch.profiler import ProfilerActivity, profile
+
+    with profile(
+        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+        record_shapes=False,
+        with_stack=False,
+    ) as prof:
+        yield prof
+
+
+def _profile_table(prof, sort_by: str, row_limit: int = 25) -> str:
+    """`key_averages().table()`, tolerating the CUDA->device rename in torch 2.x."""
+    try:
+        return prof.key_averages().table(sort_by=sort_by, row_limit=row_limit)
+    except (KeyError, AssertionError, ValueError) as exc:  # pragma: no cover
+        return f"<could not sort by {sort_by}: {exc}>"
 
 
 def _fsdp2_module_class():
@@ -1524,6 +1566,50 @@ class MELTTrainer(Seq2SeqTrainer):
             {f"{prefix}/samples": table}, step=max(step, wandb.run.step)
         )
 
+    def _report_eval_profile(
+        self,
+        prof,
+        *,
+        unshard_s: float,
+        generate_s: float,
+        gen_kwargs: dict,
+        generated_tokens,
+        prompt_input_ids,
+        input_features,
+    ) -> None:
+        """Dump where one eval batch's wall clock went.
+
+        Printed per rank, not just on the global master: the symptom that
+        prompted this is one rank busy while the other waits, which a
+        master-only dump would hide.
+        """
+        new_tokens = (
+            generated_tokens.shape[-1] if generated_tokens is not None else None
+        )
+        budget = gen_kwargs.get("max_new_tokens")
+        per_token_ms = (generate_s / new_tokens * 1000) if new_tokens else float("nan")
+        feature_frames = (
+            tuple(input_features.shape) if input_features is not None else None
+        )
+
+        force_print(
+            f"[eval-profile rank={ddp.get_global_rank()}] "
+            f"unshard={unshard_s:.2f}s generate={generate_s:.2f}s "
+            f"new_tokens={new_tokens}/{budget} "
+            f"({per_token_ms:.1f} ms/token) "
+            f"prompt={tuple(prompt_input_ids.shape)} features={feature_frames} "
+            f"gen_kwargs={ {k: v for k, v in gen_kwargs.items()} }"
+        )
+        if prof is None:
+            return
+        for sort_by in ("self_cpu_time_total", "self_device_time_total", "self_cuda_time_total"):
+            table = _profile_table(prof, sort_by)
+            if table.startswith("<could not sort"):
+                continue
+            force_print(
+                f"[eval-profile rank={ddp.get_global_rank()}] top ops by {sort_by}:\n{table}"
+            )
+
     def _generation_kwargs(self, gen_kwargs: dict) -> dict:
         """Build the ``generate()`` kwargs for one evaluation batch.
 
@@ -1677,6 +1763,14 @@ class MELTTrainer(Seq2SeqTrainer):
                 "instead would feed the model the target transcript."
             )
 
+        # Diagnostic instrumentation: off unless MELT_EVAL_PROFILE is set.  See
+        # _eval_profile_batches.  The counter is per-process and never reset, so
+        # `MELT_EVAL_PROFILE=2` profiles the first two batches of the run rather
+        # than two per eval set.
+        self._eval_profiled = getattr(self, "_eval_profiled", 0)
+        profile_this_batch = self._eval_profiled < _eval_profile_batches()
+
+        entered_at = time.perf_counter()
         with torch.no_grad(), unsharded_for_generation(self.model, model):
             # The same pre-forward hook that all-gathers also applies
             # MixedPrecisionPolicy.cast_forward_inputs, so bypassing forward
@@ -1685,16 +1779,31 @@ class MELTTrainer(Seq2SeqTrainer):
             # (artemis job 327826).  Read the dtype *inside* this block: a
             # sharded parameter keeps its storage dtype and only the
             # all-gathered copy follows param_dtype.
+            unsharded_at = time.perf_counter()
             input_features = self._cast_to_audio_dtype(inputs.get("input_features"))
 
             # `self.model` rather than `model`: under DDP the latter is the
             # wrapper, whose forward is the training forward, not generate().
-            generated_tokens = self.model.generate(
-                input_ids=prompt_input_ids,
-                attention_mask=prompt_attention_mask,
+            with _eval_profiler(profile_this_batch) as prof:
+                generated_tokens = self.model.generate(
+                    input_ids=prompt_input_ids,
+                    attention_mask=prompt_attention_mask,
+                    input_features=input_features,
+                    features_attention_mask=inputs.get("features_attention_mask"),
+                    **gen_kwargs,
+                )
+            generated_at = time.perf_counter()
+
+        if profile_this_batch:
+            self._eval_profiled += 1
+            self._report_eval_profile(
+                prof,
+                unshard_s=unsharded_at - entered_at,
+                generate_s=generated_at - unsharded_at,
+                gen_kwargs=gen_kwargs,
+                generated_tokens=generated_tokens,
+                prompt_input_ids=prompt_input_ids,
                 input_features=input_features,
-                features_attention_mask=inputs.get("features_attention_mask"),
-                **gen_kwargs,
             )
 
         # Generating from `inputs_embeds` returns only the new tokens, so there
