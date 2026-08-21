@@ -1,8 +1,12 @@
 """Tests for :class:`melt.training.duration_tracker.DurationTracker`.
 
-Pure-CPU, no distributed process group and no processor/tokenizer: these
-tests exercise the key-building and accumulation logic in isolation.
+Pure-CPU and no distributed process group.  Most tests exercise the
+key-building and accumulation logic in isolation; the two at the bottom run a
+real batch through ``SpeechToTextDataset`` to pin which batches the duration
+metadata is allowed to appear on, and skip if the tokenizer is unavailable.
 """
+
+import pytest
 
 from melt.training.duration_tracker import DurationTracker
 
@@ -135,3 +139,67 @@ def test_genericity_unknown_task_and_language_get_their_own_key():
 
     hours = tracker.reduced_hours()
     assert hours["train_hours/sqa/sw"] == 42.0 / 3600.0
+
+
+# ---------------------------------------------------------------------------
+# The hours instrumentation must stay off the evaluation batch.
+#
+# Today only the training dataloader builds a SpeechToTextDataset (evaluation
+# goes through MELTMapDataset + MELTDataCollator), so these keys never reach
+# an eval batch.  The gate is on ``is_train`` rather than on that fact, and
+# these tests pin it there so a future eval use of this class cannot start
+# carrying duration metadata into model(**inputs).
+# ---------------------------------------------------------------------------
+
+_HOURS_KEYS = ("durations", "tasks", "src_langs", "tgt_langs")
+
+
+def _speech_to_text_batch(is_train: bool):
+    """Build a one-cut batch through the real dataset, or skip if unavailable."""
+    pytest.importorskip("lhotse")
+    from lhotse import CutSet
+    from omegaconf import OmegaConf
+
+    from melt.training.data.audio.lhotse.dataset import SpeechToTextDataset
+
+    try:
+        from tests.test_prompt_template_labels import _build_processor, _make_cut
+    except ImportError:  # pragma: no cover - layout-dependent import
+        from test_prompt_template_labels import _build_processor, _make_cut
+
+    try:
+        processor = _build_processor()
+    except Exception as exc:  # pragma: no cover - no network / no hub cache
+        pytest.skip(f"tokenizer unavailable: {exc}")
+
+    dataset = SpeechToTextDataset(
+        processor=processor,
+        config=OmegaConf.create({
+            "apply_chat_template": False,
+            "prompt_template": "{audio_token}{lang}: {t}",
+            "sample_rate": 16000,
+        }),
+        is_train=is_train,
+        return_labels=True,
+        return_langs=True,
+    )
+    return dataset[CutSet.from_cuts([_make_cut("en-1", "hello world", "en")])]
+
+
+def test_eval_batch_carries_no_duration_metadata():
+    batch = _speech_to_text_batch(is_train=False)
+    assert batch is not None
+    for key in _HOURS_KEYS:
+        assert key not in batch, f"{key!r} must not reach an eval batch"
+    # The pre-existing per-language eval breakdown is untouched.
+    assert batch["langs"] == ["en"]
+
+
+def test_train_batch_carries_duration_metadata():
+    batch = _speech_to_text_batch(is_train=True)
+    assert batch is not None
+    for key in _HOURS_KEYS:
+        assert key in batch, f"{key!r} missing from the train batch"
+    assert batch["durations"] == [pytest.approx(1.0)]
+    assert batch["tasks"] == ["asr"]
+    assert batch["langs"] == ["en"]
