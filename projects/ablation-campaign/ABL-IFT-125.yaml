@@ -1,30 +1,37 @@
 # ABL-IFT-125 — ablation campaign, stage 2 (instruction fine-tuning).
 #
-# Stage 1 is ABL-MA-125-asr.yaml (modality alignment, ASR only, bare
-# "{audio_token}{t}" format). This stage differs from it in four ways:
+# Rendered by build_campaign_config.py from config/train/SFT-v1.4.0.yaml:
 #
-#   1. ASR *and* ST. Ten groups at 125 h each -- five ASR languages
-#      (en/de/fr/es/it) and five ST directions (de/fr/es/it -> en, plus the
-#      en -> de probe) -- for 1250 h total. Same language set as stage 1; the
-#      held-out languages (nl/pt/pl/uk) stay held out.
-#   2. Chat template on, with ONE fixed prompt per task instead of a random
-#      draw over TASK_TEMPLATES, so prompt wording is not a source of variance.
-#   3. A different seed (1337, not 42), so stage 2 does not simply replay the
-#      cuts stage 1 already saw. See the note on data.train_ds.seed -- the
-#      launcher overrides shard_seed from $MELT_SEED, so the submit command has
-#      to pass it too.
-#   4. model.ckpt points at the finished stage-1 model.
-#
-# Regenerate the mixture (not the edits above) with:
 #   python projects/ablation-campaign/build_campaign_config.py \
-#     --template projects/ablation-campaign/ABL-MA-125-asr.yaml \
+#     --template config/train/SFT-v1.4.0.yaml \
 #     --datasets-root $LOCAL_DATASETS_DIR \
 #     --cache projects/ablation-campaign/campaign_hours.json \
 #     --budget-hours 125 --tasks both --exclude-corpus fleurs \
 #     --out projects/ablation-campaign/ABL-IFT-125.yaml
 #
-# Validated with: infra/check_training_config.py --config <this file>
-#   -> 22 passed, 1 warning (C3, benign), 0 failed.
+# Ten groups at 125 h each -- ASR for en/de/fr/es/it and ST for
+# de/fr/es/it -> en plus the en -> de probe -- 1250 h total, over the same
+# language set stage 1 (ABL-MA-125-asr.yaml) trained on. nl/pt/pl/uk stay
+# held out.
+#
+# Hand-applied on top of the render (everything else is the generator's):
+#
+#   1. apply_chat_template: true. The generator hard-codes it to false because
+#      it is written for modality-alignment renders and says to flip it on the
+#      run; for a stage-2 config it belongs in the file.
+#   2. One fixed prompt per task instead of a random draw over TASK_TEMPLATES,
+#      so instruction wording is not a source of variance across arms.
+#   3. seed/shard_seed 1337 rather than 42, so stage 2 does not replay the cuts
+#      stage 1 streamed.
+#   4. model.ckpt -> the consolidated stage-1 model.
+#   5. adapter._type: mlp, matching the campaign baseline and the stage-1
+#      checkpoint. Inert while model.ckpt is set (the architecture is read from
+#      the checkpoint) but wrong if this config is ever run without it.
+#   6. max_steps pinned rather than derived from the unreliable epoch estimate.
+#
+# NOTE the stage-1/stage-2 split, which comes from the SFT template and is the
+# point of this stage: the ADAPTER IS FROZEN and the DECODER IS TRAINED, the
+# reverse of ABL-MA-125-asr.yaml. Encoder stays frozen throughout.
 
 # =============================================================================
 # Run Configuration (non-TrainingArguments settings)
@@ -45,7 +52,7 @@ model:
   decoder:
     name: Qwen/Qwen3-1.7B
     attn_implementation: flash_attention_2
-    freeze: true
+    freeze: false
     bos_token: <|startoftext|>
     eos_token: <|endoftext|>
     pad_token: <|text_pad|> # used if not specified in tokenizer
@@ -54,26 +61,26 @@ model:
     audio_eos_token: <|audio_eos|>
   
   adapter:
-    freeze: false
+    # Frozen here: stage 1 trained it, stage 2 tunes the decoder on top.
+    freeze: true
+    # The campaign baseline is the simplest adapter available, and the stage-1
+    # checkpoint was trained with it. While model.ckpt is set this field is
+    # inert -- MELTConfig is read from the checkpoint, so the architecture is
+    # whatever stage 1 used -- but leaving the template's `conformer` here
+    # would silently build the wrong model if the checkpoint were ever removed.
     _type: mlp
-#   num_adapter_layers: 2
-#   adapter_kernel_size: 3
-#   adapter_stride: 2
-  
-  # Stage 2 (IFT) initialises from the stage-1 (MA) model. This must be a
-  # directory `MELTForCausalLM.from_pretrained` can read -- config.json,
-  # preprocessor_config.json and consolidated weights -- which is what
-  # train.py writes into the OUTPUT DIR ROOT when a run finishes
-  # (trainer.save_model() + processor/config.save_pretrained()).
+
+  # Stage 2 initialises from the stage-1 (MA) model. This must be a directory
+  # MELTForCausalLM.from_pretrained can read: config.json,
+  # preprocessor_config.json and consolidated weights.
   #
-  # It is NOT a `checkpoint-N/` directory: those hold sharded FSDP state
-  # (pytorch_model_fsdp_0/) with no config.json, and from_pretrained cannot
-  # read them. To start from an intermediate checkpoint instead, consolidate
-  # it first with utils/merge_fsdp_weight.py and copy the config/processor
-  # files next to the merged weights.
+  # A raw checkpoint-N/ directory is NOT loadable -- it holds sharded FSDP
+  # state (pytorch_model_fsdp_0/) and no config. The path below is
+  # checkpoint-3000 consolidated with utils/merge_fsdp_weight.py plus the
+  # config/processor files rebuilt from the run's resolved_config.json.
   #
   # Container path: OUTPUT_DIR is bound to /workspace/outputs.
-  ckpt: /workspace/outputs/ABL-MA-125-asr-v060
+  ckpt: /workspace/outputs/ABL-MA-125-asr-v060-ckpt3000
 
 # =============================================================================
 # Data Configuration
@@ -82,32 +89,32 @@ data:
   sample_rate: 16000
   strict_text_field: true
 
-  # -- Instruction formatting (stage 2) -------------------------------------
-  # Stage 1 (MA) trained on the bare "{audio_token}{t}" format. Stage 2 wraps
-  # every example in the decoder's chat template so the model learns the
-  # instruction-following interface it will be prompted with at eval time.
+  # -- Instruction formatting ----------------------------------------------
+  # build_campaign_config.py writes `false` here unconditionally (it renders
+  # modality-alignment configs and expects the run to override it). Stage 2
+  # wants it on, so it is set in the file rather than on the command line.
   apply_chat_template: true
 
-  # Qwen3 emits plain ChatML, so `chatml` is the right boundary config. There
-  # is deliberately no separate qwen3 entry: the empty <think></think> block
-  # Qwen3 opens the assistant turn with lands inside the kept span either way,
-  # because mask_non_assistant_tokens treats the boundaries as inclusive. See
-  # melt/training/data/chat_templates.py.
+  # Qwen3 emits plain ChatML. There is deliberately no separate qwen3 entry in
+  # chat_templates.py: the empty <think></think> block Qwen3 opens the
+  # assistant turn with lands inside the kept span either way, because the
+  # masking treats the boundaries as inclusive. Consequence for downstream:
+  # decoded hypotheses carry that prefix and EVAL MUST STRIP IT.
   chat_template_config: chatml
 
   # One fixed prompt per task rather than the default random draw over all
-  # TASK_TEMPLATES entries, so the instruction wording is a constant and not a
-  # source of variance across the ablation arms. These are the first template
-  # listed for each task in melt/training/data/audio/lhotse/helpers.py.
+  # TASK_TEMPLATES entries, so instruction wording is a constant. These are the
+  # first template listed for each task in
+  # melt/training/data/audio/lhotse/helpers.py.
   #
   # {lang} resolves to the TARGET language for st (get_tags_from_cut collapses
-  # `lang` to tgt_lang for translation), so the st prompt reads "Translate this
-  # audio to English." for the X->en directions and "... to German." for the
-  # en-de probe.
+  # `lang` to tgt_lang), so the st prompt reads "Translate this audio to
+  # English." for the X->en directions and "... to German." for the en-de probe.
   prompt_template_selection: custom
   prompt_template:
     asr: "{audio_token} Transcribe this audio in {lang}."
     st: "{audio_token} Translate this audio to {lang}."
+
 
   train_ds:
     # Data sources - list of datasets to load
@@ -407,40 +414,27 @@ data:
 
     # Duration filtering
     min_duration: 0.5
-    max_duration: 90.0
+    max_duration: 120.0
     
     # Batch settings
     batch_size: null  # Use batch_duration instead for dynamic batching
-    # 120 s, up from 90: measured +52% throughput on artemis (2x H100,
-    # job 327902 vs 327899).  The other ABL configs already run at 480 s
-    # and are NOT covered by that measurement -- do not copy 120 onto them.
-    batch_duration: 120  # seconds of audio per batch
+    batch_duration: 90  # seconds of audio per batch
     quadratic_duration: 30 # see https://lhotse.readthedocs.io/en/latest/datasets.html#lhotse.dataset.sampling.TimeConstraint
 
     # Bucketing for efficient batching
     lhotse_sampler_type: dynamic_bucketing  # One among: dynamic_bucketing, dynamic, bucketing
     num_buckets: 30
-    # Raised from 10000 after throughput benchmarking on artemis (2x H100,
-    # 300 steps each, one knob per job -- jobs 327899/327913).  buffer_size is
-    # the DynamicBucketingSampler pool; it trades I/O locality for batch
-    # diversity, and the cost is real: 10000 ran 1.74x slower per step than
-    # 2000, plus a one-time fill of ~460 s vs ~47 s.  Cross-dataset and
-    # cross-language mixing comes from CutSet.mux *upstream* of this buffer, so
-    # this knob only controls local reordering; past roughly 30-50x the batch
-    # size per bucket it buys nothing measurable.  50000 keeps a wide pool
-    # (~1600 cuts/bucket) while staying far from the regime where the fill cost
-    # is measured in hours.
-    buffer_size: 50000
-    bucket_duration_bins: [2.6, 4.0, 5.0, 6.0, 7.02, 8.18, 9.54, 10.56, 11.38, 12.16, 12.94, 13.68, 14.41, 15.14, 15.86, 16.59, 17.32, 18.05, 18.81, 19.58, 21.18, 23.78, 26.32, 28.9, 33.18, 35.62, 36.98, 38.08, 39.08]
+    buffer_size: 10000
+    bucket_duration_bins: [2.4, 3.54, 4.46, 5.34, 6.19, 7.12, 8.17, 9.4, 10.58, 11.62, 12.65, 13.67, 14.56, 15.08, 16.12, 17.19, 18.28, 19.41, 21.12, 23.3, 25.4, 27.5, 29.58, 33.52, 35.54, 36.78, 37.78, 38.58, 39.3]
 
     # Sampling
     shuffle: true
     drop_last: false
-    # Stage 2 deliberately draws a different slice of each source than stage 1
-    # (MA) did. Both stages stream the same corpora, so reusing seed 42 would
-    # replay much of the audio the model has already seen. NOTE: the launcher
-    # overrides shard_seed from $MELT_SEED, so pass MELT_SEED=1337 at submit
-    # time -- the value below is only what a bare `python train.py` would use.
+    # Stage 2 draws a different slice of each source than stage 1 did: both
+    # stages stream the same corpora, so reusing 42 would replay audio the
+    # model has already seen. NOTE the launcher overrides shard_seed from
+    # $MELT_SEED, so the submit command must pass MELT_SEED=1337 as well --
+    # the value here is only what a bare `python train.py` would use.
     seed: 1337
     # A fixed scalar, not 'randomized': with indexed sources the partitioning
     # already separates the per-(rank, worker) streams, and the loader ignores
@@ -460,7 +454,7 @@ data:
     # instead of a single forward, so the full validation set is not affordable.
     #
     # NOTE this cap is applied PER NAMED EVAL SET, not per config: here
-    # 5 named eval sets x 200 = ~1000 utterances per eval.
+    # 7 named eval sets x 140 = ~980 utterances per eval.
     #
     # Measured on an H100 (artemis job 327830): ~2.2 s/utterance at
     # generation_max_length 64, and the cost is roughly linear in the token
@@ -470,7 +464,7 @@ data:
     #
     # materialize_cuts_for_eval applies the cap with a seeded shuffle, so every
     # run scores the same subset.
-    max_samples: 200
+    max_samples: 140
     input_cfg:
       # ASR en validation: full cv22_sidon/mls_sidon/voxpopuli sets
       - type: lhotse_shar
@@ -657,19 +651,17 @@ trainer:
 
   # Duration
   # One pass over the 1250 h mixture = 125 h per group (5 ASR languages +
-  # 5 ST directions), which is the stage-2 budget. max_steps is set rather
-  # than derived: the epoch estimate is computed from the config's (stale)
-  # total_cuts and is unreliable -- see issue #46.
+  # 5 ST directions). max_steps is pinned rather than derived: the epoch
+  # estimate comes from the config's stale total_cuts and is unreliable (#46).
   #
   #   max_steps = total_hours * 3600 / (batch_duration * world_size * grad_accum)
-  #             = 1250 * 3600 / (120 * 2 * 4) = 4687.5 -> 4688
+  #             = 1250 * 3600 / (90 * 2 * 4) = 6250
   #
-  # This is the nominal figure. Measured throughput on the MA run was lower
-  # (~0.15 h/step against the 0.27 h/step this formula assumes), so confirm
-  # the real exposure against the train_hours/* series in W&B and extend
-  # max_steps if 125 h per group is meant to be reached exactly.
+  # Nominal. Measured throughput on the stage-1 run came in below the figure
+  # this formula assumes, so check the train_hours/* series in W&B and extend
+  # if 125 h per group has to be reached exactly.
   num_train_epochs: 1
-  max_steps: 4688
+  max_steps: 6250
 
   # Logging
   logging_strategy: steps
@@ -678,7 +670,10 @@ trainer:
 
   # Evaluation
   eval_strategy: steps # "no" # steps
-  eval_steps: 100
+  # 6 named eval sets x 140 samples at ~0.86 samples/s is ~16 min per pass.
+  # At the template's 100 this would be 62 passes -- more wall-clock than
+  # the training itself. 500 matches what the stage-1 run actually used.
+  eval_steps: 500
   batch_eval_metrics: true
 
   # Evaluation decodes with generate() -- greedy, at most this many *new*
