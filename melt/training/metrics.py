@@ -62,6 +62,7 @@ class TrainingEvaluator:
 
         self._predictions: list[str] = []
         self._references: list[str] = []
+        self._scaffold_ids: list[int] | None = None
         self._langs: list[str] = []
         self._tasks: list[str] = []
 
@@ -75,6 +76,95 @@ class TrainingEvaluator:
 
     def _normalize_text(self, text: str) -> str:
         return self.normalizer(text).strip()
+
+    def _assistant_scaffold_ids(self) -> list[int]:
+        """Token ids the chat template inserts between the prompt and the answer.
+
+        With `apply_chat_template`, references and hypotheses do not start at
+        the same place.  The generation prompt is built with
+        `add_generation_prompt=True`, so it already contains the assistant
+        header -- and, for Qwen3, the empty reasoning block it emits even under
+        `enable_thinking=False`.  `generate()` returns only what comes after,
+        so the hypothesis is the bare answer.  The reference, though, is the
+        label span, and `mask_non_assistant_tokens` keeps its boundaries
+        *inclusive*, so it still carries that scaffolding: every REF read
+        `assistant <think> </think> <the actual target>` while no HYP could.
+        Scoring them against each other charges the model insertions it had no
+        opportunity to produce -- on a ten-word target those three tokens alone
+        move WER by tens of points.
+
+        Derived from the tokenizer rather than from a ChatTemplateConfig so it
+        stays correct for any template: the difference between templating the
+        user turn with and without a generation prompt *is* the scaffolding,
+        whatever it happens to contain.
+
+        Returns an empty list when the tokenizer has no chat template, which is
+        also the right answer for runs with `apply_chat_template: false` --
+        their references never carried the scaffolding in the first place.
+        """
+        if self._scaffold_ids is not None:
+            return self._scaffold_ids
+
+        tokenizer = self.processor.tokenizer
+        probe = [{"role": "user", "content": ""}]
+        try:
+            without = tokenizer.apply_chat_template(
+                probe,
+                tokenize=False,
+                add_generation_prompt=False,
+                enable_thinking=False,
+            )
+            with_prompt = tokenizer.apply_chat_template(
+                probe,
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=False,
+            )
+        except Exception:  # no chat template, or one that rejects the probe
+            self._scaffold_ids = []
+            return self._scaffold_ids
+
+        scaffold = with_prompt[len(without):] if with_prompt.startswith(without) else ""
+        self._scaffold_ids = (
+            tokenizer(scaffold, add_special_tokens=False)["input_ids"]
+            if scaffold
+            else []
+        )
+        return self._scaffold_ids
+
+    def _strip_assistant_scaffold(self, token_ids):
+        """Blank the chat scaffolding leading each reference row.
+
+        Rewrites it to ``-100`` rather than slicing so the tensor keeps its
+        shape and `_decode` -- which already maps ``-100`` to the pad id and
+        lets `skip_special_tokens` drop it -- needs no special case.
+
+        Only strips at the start of the *kept* span (labels open with a run of
+        ``-100`` over the masked prompt), and only when the ids match exactly,
+        so a reference that genuinely begins some other way is left alone.
+        """
+        scaffold = self._assistant_scaffold_ids()
+        if not scaffold:
+            return token_ids
+
+        if isinstance(token_ids, torch.Tensor):
+            token_ids = token_ids.detach().cpu().clone()
+        else:
+            token_ids = torch.as_tensor(token_ids).clone()
+
+        width = len(scaffold)
+        flat = token_ids.reshape(-1, token_ids.shape[-1]) if token_ids.dim() > 1 else token_ids.reshape(1, -1)
+        scaffold_tensor = torch.tensor(scaffold, dtype=flat.dtype)
+        for row in flat:
+            kept = (row != -100).nonzero()
+            if kept.numel() == 0:
+                continue
+            start = int(kept[0])
+            if start + width > row.shape[0]:
+                continue
+            if torch.equal(row[start : start + width], scaffold_tensor):
+                row[start : start + width] = -100
+        return token_ids
 
     def _decode(self, token_ids) -> list[str]:
         """Decode a batch of token ids to strings.
@@ -112,7 +202,7 @@ class TrainingEvaluator:
         offset = len(self._langs)
 
         batch_predictions = self._decode(pred_ids)
-        batch_references = self._decode(label_ids)
+        batch_references = self._decode(self._strip_assistant_scaffold(label_ids))
 
         self._predictions.extend(batch_predictions)
         self._references.extend(batch_references)
