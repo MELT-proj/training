@@ -200,6 +200,10 @@ container_env OMP_SCHEDULE    "${OMP_SCHEDULE:-STATIC}"
 container_env SLURM_JOB_ID       "${SLURM_JOB_ID:-}"
 container_env SLURM_NNODES       "${SLURM_NNODES:-1}"
 container_env SLURM_GPUS_ON_NODE "${SLURM_GPUS_ON_NODE:-}"
+# Forward the *requested* GPU count when the caller pinned one. SLURM_GPUS_ON_NODE
+# above is the node's total, which on whole-node sites (MN5 `acc`) exceeds what
+# --gpus-per-node asked for; run_train.sh prefers this explicit value over it.
+[[ -n "${MELT_GPUS_PER_NODE:-}" ]] && container_env GPUS_PER_NODE "${MELT_GPUS_PER_NODE}"
 container_env SLURM_JOB_NODELIST "${SLURM_JOB_NODELIST:-}"
 
 # Multi-node: compute MASTER_ADDR on the host (scontrol is usually absent in the container).
