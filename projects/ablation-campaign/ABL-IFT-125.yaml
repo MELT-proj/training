@@ -419,6 +419,28 @@ data:
     # Batch settings
     batch_size: null  # Use batch_duration instead for dynamic batching
     batch_duration: 90  # seconds of audio per batch
+
+    # Drop cuts whose transcript is pathologically long for their audio.
+    #
+    # Batches are budgeted by *audio* seconds, so a cut with short audio and a
+    # runaway transcript passes the duration constraint and still sets the
+    # padded width of the whole batch. That is what ended artemis job 328290 at
+    # step 4292: 17 cuts, only 224 feature frames, but input_ids [17, 1158] and
+    # 77.45 GB allocated on an 80 GB H100. `input_ids` carries a single
+    # `<|audio|>` token per audio (the expansion is at model level, and the
+    # processor's own expansion path is commented out), so that 1158 was text.
+    #
+    # 400 is chosen to remove only the tail: measured over an 800-cut head
+    # sample of all 25 train sources, p99 num_tokens is <=195 and the largest
+    # single value is 291 (voxpopuli/de). Every source carries
+    # `custom.num_tokens`, MLS non-English included, so the filter is not blind
+    # anywhere in this mixture. Note the sample covers the head of each shar,
+    # not the tail the OOM came from, so this bounds the *cost* of the filter
+    # rather than proving what it removes.
+    #
+    # Cuts without `custom.num_tokens` are kept, not dropped (see
+    # dataloader.py's _token_filter), so this can never silently delete a source.
+    max_tokens: 400
     quadratic_duration: 30 # see https://lhotse.readthedocs.io/en/latest/datasets.html#lhotse.dataset.sampling.TimeConstraint
 
     # Bucketing for efficient batching
