@@ -440,6 +440,17 @@ SCAFFOLD_TEXT = "<assistant-header><think></think>"
 SCAFFOLD_IDS = [901, 902]
 
 
+#: The scaffolding each family's template actually puts between the generation
+#: prompt and the answer, measured with `AutoTokenizer` on 2026-08-22.  Qwen3
+#: and Qwen3.5 add the empty reasoning block; Llama 3.x and EuroLLM do not, but
+#: all four prepend an assistant header, so all four were affected.
+REAL_SCAFFOLDS = {
+    "qwen3": "<|im_start|>assistant\n<think>\n\n</think>\n\n",
+    "llama3": "<|start_header_id|>assistant<|end_header_id|>\n\n",
+    "eurollm": "<|im_start|>assistant\n",
+}
+
+
 class _ChatTokenizer:
     """Minimal tokenizer with a chat template shaped like Qwen3's.
 
@@ -553,3 +564,73 @@ def test_a_tokenizer_without_a_chat_template_is_a_no_op():
     )
 
     assert result["wer"] == 0.0
+
+
+@pytest.mark.parametrize("family", sorted(REAL_SCAFFOLDS))
+def test_strip_generalises_across_tokenizer_families(family):
+    """The scaffolding differs per family; the derivation must not assume one.
+
+    Shapes are the real ones: Qwen3/Qwen3.5 append an empty reasoning block,
+    Llama 3.x uses header markers instead of ChatML, EuroLLM is ChatML with no
+    reasoning block.  The derivation reads whatever the template appends, so
+    all three strip to the bare target.
+    """
+    scaffold_text = REAL_SCAFFOLDS[family]
+
+    class _FamilyTokenizer(_ChatTokenizer):
+        def apply_chat_template(
+            self,
+            messages,  # noqa: ARG002
+            tokenize=False,  # noqa: ARG002
+            add_generation_prompt=False,
+            enable_thinking=False,  # noqa: ARG002
+        ):
+            return "<user>" + (scaffold_text if add_generation_prompt else "")
+
+        def __call__(self, text, add_special_tokens=False):  # noqa: ARG002
+            assert text == scaffold_text
+            return {"input_ids": list(SCAFFOLD_IDS)}
+
+    class _FamilyProcessor(_StubProcessor):
+        tokenizer = _FamilyTokenizer()
+
+    evaluator = TrainingEvaluator(
+        config=SimpleNamespace(enable_whisper_normalization=False),
+        processor=_FamilyProcessor(),
+    )
+
+    result = _score(
+        evaluator,
+        labels=[SCAFFOLD_IDS + [11, 12, 13]],
+        predictions=[[11, 12, 13, PAD_TOKEN_ID, PAD_TOKEN_ID]],
+    )
+
+    assert result["wer"] == 0.0
+
+
+def test_a_template_that_does_not_extend_cleanly_warns(caplog):
+    """Silence would put the inflated WER back without anyone noticing."""
+
+    class _RewritingTokenizer(_ChatTokenizer):
+        def apply_chat_template(
+            self,
+            messages,  # noqa: ARG002
+            tokenize=False,  # noqa: ARG002
+            add_generation_prompt=False,
+            enable_thinking=False,  # noqa: ARG002
+        ):
+            # Rewrites the earlier turn instead of appending to it.
+            return "<gen-user>" if add_generation_prompt else "<user>"
+
+    class _RewritingProcessor(_StubProcessor):
+        tokenizer = _RewritingTokenizer()
+
+    evaluator = TrainingEvaluator(
+        config=SimpleNamespace(enable_whisper_normalization=False),
+        processor=_RewritingProcessor(),
+    )
+
+    with caplog.at_level("WARNING"):
+        evaluator._assistant_scaffold_ids()
+
+    assert "Could not derive the assistant scaffolding" in caplog.text
