@@ -427,3 +427,129 @@ def test_single_language_plus_unknown_still_emits_both(evaluator):
 
     assert result["wer_es"] == 0.0
     assert result["wer_unknown"] == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Chat-template scaffolding in the reference
+# ---------------------------------------------------------------------------
+
+#: What the stub's chat template puts between the prompt and the answer, and
+#: the ids it tokenises to — standing in for
+#: ``<|im_start|>assistant\n<think>\n\n</think>\n\n``.
+SCAFFOLD_TEXT = "<assistant-header><think></think>"
+SCAFFOLD_IDS = [901, 902]
+
+
+class _ChatTokenizer:
+    """Minimal tokenizer with a chat template shaped like Qwen3's.
+
+    ``add_generation_prompt=True`` appends the assistant header and an empty
+    reasoning block: the scaffolding the generation prompt already covers, so
+    the model never emits it and the reference must not carry it either.
+    """
+
+    pad_token_id = PAD_TOKEN_ID
+    eos_token_id = PAD_TOKEN_ID
+
+    def apply_chat_template(
+        self,
+        messages,  # noqa: ARG002
+        tokenize=False,  # noqa: ARG002
+        add_generation_prompt=False,
+        enable_thinking=False,  # noqa: ARG002
+    ):
+        return "<user>" + (SCAFFOLD_TEXT if add_generation_prompt else "")
+
+    def __call__(self, text, add_special_tokens=False):  # noqa: ARG002
+        assert text == SCAFFOLD_TEXT
+        return {"input_ids": list(SCAFFOLD_IDS)}
+
+
+class _ChatStubProcessor(_StubProcessor):
+    tokenizer = _ChatTokenizer()
+
+
+def _chat_evaluator():
+    return TrainingEvaluator(
+        config=SimpleNamespace(enable_whisper_normalization=False),
+        processor=_ChatStubProcessor(),
+    )
+
+
+def _score(evaluator, labels, predictions):
+    prediction = EvalPrediction(
+        predictions=torch.tensor(predictions, dtype=torch.long),
+        label_ids=torch.tensor(labels, dtype=torch.long),
+    )
+    return evaluator(prediction, compute_result=True)
+
+
+def test_reference_drops_the_chat_scaffolding():
+    """A hypothesis that matches the target exactly must score WER 0.
+
+    The label span keeps the assistant header and empty reasoning block
+    (`mask_non_assistant_tokens` is inclusive), while `generate()` returns only
+    what follows the generation prompt.  Left in, those tokens are counted as
+    deletions the model could not have avoided — here 2 of 5 reference words,
+    i.e. WER 0.4 for a perfect transcription.
+    """
+    result = _score(
+        _chat_evaluator(),
+        labels=[SCAFFOLD_IDS + [11, 12, 13]],
+        predictions=[[11, 12, 13, PAD_TOKEN_ID, PAD_TOKEN_ID]],
+    )
+
+    assert result["wer"] == 0.0
+
+
+def test_scaffolding_is_stripped_after_the_masked_prompt_region():
+    """Labels open with a run of -100 over the masked prompt.
+
+    The scaffolding starts where the kept span starts, not at index 0.
+    """
+    result = _score(
+        _chat_evaluator(),
+        labels=[[-100, -100] + SCAFFOLD_IDS + [11, 12, 13]],
+        predictions=[[11, 12, 13, PAD_TOKEN_ID, PAD_TOKEN_ID, PAD_TOKEN_ID]],
+    )
+
+    assert result["wer"] == 0.0
+
+
+def test_a_reference_without_the_scaffolding_is_left_alone():
+    """Only an exact leading match is stripped.
+
+    A target that genuinely begins with other tokens must survive intact, or
+    the strip would eat real words.
+    """
+    result = _score(
+        _chat_evaluator(),
+        labels=[[11, 12, 13]],
+        predictions=[[11, 12, 13]],
+    )
+    assert result["wer"] == 0.0
+
+    # And the words are really still there: a wrong hypothesis still scores 1.0
+    # rather than being compared against an emptied reference.
+    result = _score(
+        _chat_evaluator(),
+        labels=[[11, 12, 13]],
+        predictions=[[21, 22, 23]],
+    )
+    assert result["wer"] == 1.0
+
+
+def test_a_tokenizer_without_a_chat_template_is_a_no_op():
+    """Runs with `apply_chat_template: false` never had the scaffolding."""
+    evaluator = TrainingEvaluator(
+        config=SimpleNamespace(enable_whisper_normalization=False),
+        processor=_StubProcessor(),
+    )
+
+    result = _score(
+        evaluator,
+        labels=[[11, 12, 13]],
+        predictions=[[11, 12, 13]],
+    )
+
+    assert result["wer"] == 0.0
