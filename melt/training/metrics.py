@@ -124,7 +124,23 @@ class TrainingEvaluator:
             self._scaffold_ids = []
             return self._scaffold_ids
 
-        scaffold = with_prompt[len(without):] if with_prompt.startswith(without) else ""
+        if not with_prompt.startswith(without):
+            # The derivation assumes the generation prompt is the non-generation
+            # form plus a suffix.  Every template checked holds to that (Qwen3,
+            # Qwen3.5, Llama 3.x, EuroLLM), but a template that rewrote earlier
+            # turns would break it -- and the failure is invisible in the
+            # metrics, which would just quietly go back to scoring the
+            # scaffolding as part of the target.  Say so.
+            logger.warning(
+                "Could not derive the assistant scaffolding from the chat "
+                "template: the generation prompt does not extend the plain "
+                "form. Evaluation references may still contain the assistant "
+                "header, which inflates WER/CER."
+            )
+            self._scaffold_ids = []
+            return self._scaffold_ids
+
+        scaffold = with_prompt[len(without):]
         self._scaffold_ids = (
             tokenizer(scaffold, add_special_tokens=False)["input_ids"]
             if scaffold
