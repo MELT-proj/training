@@ -9,7 +9,11 @@ import torch
 
 from .....logging_utils import get_logger
 from .....modeling import MELTProcessor
-from ....data.chat_templates import ChatTemplateConfig, get_chat_template_config
+from ....data.chat_templates import (
+    ChatTemplateConfig,
+    get_chat_template_config,
+    validate_chat_template_config,
+)
 from .helpers import (
     LANGUAGE_ISO_TO_NAME,
     _get_config_value,
@@ -65,6 +69,14 @@ class MELTDataCollator:
                 _get_config_value(config, "chat_template_config", "chatml")
             )
             ct_cfg: ChatTemplateConfig = get_chat_template_config(ct_name)
+            # Validated here as well as on the training path, because the two
+            # can disagree: resolve_eval_data_config lets `validation_ds` win
+            # over the parent `data` block, so `validation_ds.chat_template_config`
+            # may name a different template than training uses -- and the
+            # training-side check would pass while eval's boundaries matched
+            # nothing. Masking would then blank every label, references would
+            # decode to the empty string, and the reported WER would be noise.
+            validate_chat_template_config(processor.tokenizer, ct_cfg, ct_name)
             self._assistant_start_ids: list[int] = processor.tokenizer.encode(
                 ct_cfg.assistant_start, add_special_tokens=False
             )
