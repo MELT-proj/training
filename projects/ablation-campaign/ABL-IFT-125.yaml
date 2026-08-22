@@ -702,7 +702,14 @@ trainer:
   # tokens (MELT's prompt is audio, so generation_max_length is read as a
   # new-token budget; see MELTTrainer._generation_kwargs).
   predict_with_generate: true
-  generation_max_length: 256
+  # 64, not the template's 256, and set here rather than on the command line.
+  # Stage 1 (ABL-MA-125) ran at 64 via `--trainer.generation_max_length 64`, so
+  # a config that says 256 does not describe the run that produced the numbers
+  # this stage is compared against -- which is exactly how a 4x eval-cost gap
+  # went unnoticed. Nothing in the targets teaches the model to stop (every
+  # sample hits the budget: profiled new_tokens=64/64), so cost is linear in
+  # this number and a longer budget only adds insertions.
+  generation_max_length: 64
   generation_num_beams: 1
 
   # Checkpointing
