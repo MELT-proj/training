@@ -40,6 +40,7 @@ from .config import (
     trainer_args_dict,
 )
 from .metrics import TrainingEvaluator
+from .save_checks import verify_saved_weights
 from .setup import prepare_melt_config, prepare_processor
 from .trainer import MELTTrainer, count_trainable_parameters
 
@@ -372,6 +373,13 @@ def main(cfg: DictConfig) -> None:
     # if trainer.is_fsdp_enabled:
     #     logger.info("Setting FSDP state dict type to FULL_STATE_DICT for saving...")
     #     trainer.accelerator.state.fsdp_plugin.set_state_dict_type("FULL_STATE_DICT")
+    #
+    # Left disabled on purpose, tracked in issue #91.  Enabling it is what would
+    # make save_model() below actually write weights under SHARDED_STATE_DICT:
+    # Trainer.save_model gates the FSDP save on the plugin reporting
+    # FULL_STATE_DICT, so today the call is a silent no-op for weights.  For now
+    # the weights are consolidated after the fact with utils/merge_fsdp_weight.py
+    # and verify_saved_weights() below makes sure that step is never forgotten.
 
     logger.info("Saving model, processor, and config...")
     trainer.save_model()
@@ -384,6 +392,12 @@ def main(cfg: DictConfig) -> None:
         config_path = str(Path(targs.output_dir) / "training_config.yaml")
         save_config(cfg, config_path)
         logger.info(f"Saved training config to {config_path}")
+
+        # Everything above writes regardless of whether the weights made it to
+        # disk, so a run that saved nothing still leaves a plausible-looking
+        # directory.  Check, and report loudly if the weights are missing --
+        # without failing the job, which really did complete.  See issue #91.
+        verify_saved_weights(targs.output_dir)
 
 
 if __name__ == "__main__":

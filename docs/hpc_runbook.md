@@ -917,14 +917,45 @@ If you only need the final model, the top-level processor/config files plus the
 last checkpoint are enough; skip the intermediate `checkpoint-*/` dirs with
 `--exclude 'checkpoint-*'` to save a lot of transfer.
 
-**Checkpoints are FSDP-sharded**, so merge before loading for inference:
+### There is no `model.safetensors` — not even after a run completes
+
+**Every run needs a manual consolidation step before the model can be loaded**,
+including one that finished cleanly with `ExitCode=0:0`. This is not a symptom
+of a crash and does not resolve itself on completion.
+
+The cause is [#91](https://github.com/MELT-proj/training/issues/91):
+`Trainer.save_model()` only writes weights when the accelerate plugin reports
+`FULL_STATE_DICT`, and `config/accelerate/fsdp2.yaml` ships
+`SHARDED_STATE_DICT`. The FSDP branch is taken, the inner condition is not, and
+the call returns having written nothing — no exception, no warning. The
+config/tokenizer files are written separately by `train.py`, so the directory
+still *looks* finished. The tell is the absence of a `Model weights saved in …`
+line in the log.
+
+Since #91, `train.py` checks for this after saving and prints a loud
+`NO MODEL WEIGHTS WERE SAVED` banner naming the checkpoint and the exact merge
+command. It does **not** fail the job: training genuinely succeeded and the
+sharded weights are intact, so failing would make `sacct` lie. **If you are not
+reading the log tail, check for the weights file yourself.**
 
 ```bash
-# [artemis]
+# [artemis] merge INTO the run root, which already holds config + tokenizer;
+# a separate --output_path gives you weights with no config next to them.
 python utils/merge_fsdp_weight.py \
   --checkpoint_dir .../outputs/$EXP/checkpoint-2000/pytorch_model_fsdp_0 \
-  --output_path   .../outputs/$EXP/merged
+  --output_path   .../outputs/$EXP
 ```
+
+**Run the merge as a batch job, never on an MN5 login node.** It holds the whole
+model in host RAM and the per-user cgroup will SIGKILL it (exit 137) with no
+useful message. `free -g` reports the *node's* memory and does not reflect the
+cap, so it gives false reassurance — do not use it to size this. The merge needs
+no GPU, so `sbatch -p gp -q gp_ehpc` does the job without spending GPU
+allocation.
+
+One trap when you wrap it in a script: slurm reports `State=COMPLETED
+ExitCode=0:0` when the *wrapper* succeeds even if the Python inside failed. End
+such scripts with an explicit `echo "PYTHON_EXIT=$?"` and read that, not `sacct`.
 
 ---
 
