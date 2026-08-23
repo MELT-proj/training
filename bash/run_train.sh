@@ -106,8 +106,18 @@ if [[ -n "${SLURM_JOB_ID:-}" ]]; then
     CONTEXT=slurm
 fi
 
+# An explicitly exported GPUS_PER_NODE wins over anything autodetected. On
+# sites that allocate nodes whole (MN5's `acc`), SLURM_GPUS_ON_NODE reports the
+# node's full GPU count regardless of what --gpus-per-node asked for, so
+# trusting it silently launched 4 ranks for a 2-GPU request. That is not merely
+# wasteful: world_size is baked into a resumed lhotse sampler's partitioning,
+# so the mismatch aborted the run at dataloader construction (MN5 job 44916904)
+# after the model had already loaded.
+_GPUS_PER_NODE_EXPLICIT="${GPUS_PER_NODE:-}"
 GPUS_PER_NODE="${GPUS_PER_NODE:-1}"
-if [[ "$RUNNING_UNDER_SLURM" -eq 1 ]]; then
+if [[ -n "$_GPUS_PER_NODE_EXPLICIT" ]]; then
+    :  # caller pinned it; keep it
+elif [[ "$RUNNING_UNDER_SLURM" -eq 1 ]]; then
     GPUS_PER_NODE="${SLURM_GPUS_ON_NODE:-$GPUS_PER_NODE}"
 elif command -v nvidia-smi >/dev/null 2>&1; then
     DETECTED_GPUS=$(nvidia-smi -L 2>/dev/null | wc -l | tr -d ' ' || true)
@@ -151,6 +161,7 @@ fi
 SEED_ARGS=(--data.train_ds.shard_seed "$MELT_SEED" --data.validation_ds.shard_seed "$MELT_SEED")
 
 log_master "[run_train] starting (context: $CONTEXT, nodes=$NUM_NODES, gpus/node=$GPUS_PER_NODE, world_size=$WORLD_SIZE)"
+log_master "[run_train] gpu signals: GPUS_PER_NODE=${_GPUS_PER_NODE_EXPLICIT:-<unset>} SLURM_GPUS_ON_NODE=${SLURM_GPUS_ON_NODE:-<unset>} SLURM_GPUS_PER_NODE=${SLURM_GPUS_PER_NODE:-<unset>} CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
 log_master "[run_train] accelerate config: $ACCELERATE_CONFIG | grad_accum: $GRAD_ACC_STEPS | master: $MASTER_ADDR:$MASTER_PORT"
 if is_master_node; then
     echo "[run_train] environment:"
