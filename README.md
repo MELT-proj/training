@@ -50,6 +50,30 @@ A `/test` run is not attached to the PR's head commit, so it appears under the
 [Actions tab](https://github.com/MELT-proj/training/actions) rather than as a
 check on the PR; the comment gets a 👀 reaction when it starts.
 
+### When the suite misbehaves rather than fails
+
+Tests that build a dataloader start worker subprocesses. Those workers now die
+with the process that forked them (`PR_SET_PDEATHSIG`, issue #97), so killing a
+hung `pytest` no longer strands them — but if you are on an older checkout,
+check for leftovers before blaming the suite:
+
+```bash
+ps -eo pid,etime,rss,cmd | grep "[p]ython -m pytest"
+```
+
+Scattered, shifting failures — especially `OSError: [Errno 12] Cannot allocate
+memory` — are usually the host rather than the code. On a box with strict commit
+accounting (`vm.overcommit_memory=2`) the kernel refuses on the commit ledger,
+not on free RAM, so `free -g` showing plenty available is misleading:
+
+```bash
+grep -E 'CommitLimit|Committed_AS' /proc/meminfo
+```
+
+If `Committed_AS` is near `CommitLimit`, wait for the box to quieten and re-run
+before investigating a change. `import torch` alone commits several GB, and each
+forked worker reserves another copy.
+
 ## Main Components
 - Training orchestrator: custom MELT Trainer built on HF Trainer
 - Modeling choices: Hugging Face encoder/decoder classes with adapter support

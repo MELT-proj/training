@@ -14,8 +14,11 @@ import copy
 import gzip
 import json
 import math
+import ctypes
 import os
 import random
+import signal
+import sys
 import warnings
 from functools import partial
 from glob import glob
@@ -90,6 +93,64 @@ def _harden_rng_setstate() -> None:
 
 
 _harden_rng_setstate()
+
+
+# prctl(2) option numbers; see <linux/prctl.h>. Hardcoded because ctypes has no
+# access to the C headers and these two are stable ABI.
+_PR_SET_PDEATHSIG = 1
+
+
+def _die_with_parent(signum: int = signal.SIGKILL) -> None:
+    """Ask the kernel to kill this worker if the process that forked it dies.
+
+    DataLoader workers are daemonic, but that only covers a *clean* interpreter
+    shutdown, where the parent's atexit hooks join them. Nothing runs when the
+    parent dies by SIGKILL -- an OOM kill, a scheduler hitting the wall clock, a
+    supervisor escalating past SIGTERM, a segfault -- so the workers are
+    reparented to init and stay resident forever, each holding its own copy of
+    the torch runtime (~500 MB measured). Nothing ever reaps them; they have to
+    be found and killed by hand.
+
+    That costs more than the memory. On a host with strict commit accounting
+    (``vm.overcommit_memory=2``) each orphan also holds its share of the commit
+    ledger, so the box starts refusing new allocations while ``free`` still
+    reports plenty available -- and the next thing to fail is unrelated to the
+    run that leaked. Under a scheduler the orphans sit on the allocated node for
+    as long as the allocation lasts. See issue #97.
+
+    ``PR_SET_PDEATHSIG`` is Linux-only and fires on the death of the *thread*
+    that forked this process rather than the whole parent. That is the right
+    trigger regardless: torch forks workers from whichever thread owns the
+    loader, and a worker whose owning thread is gone has nobody left to feed.
+
+    Best effort by design -- a platform without ``prctl`` simply keeps today's
+    behaviour, so nothing here raises.
+    """
+    if not sys.platform.startswith("linux"):
+        return
+
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        rc = libc.prctl(_PR_SET_PDEATHSIG, ctypes.c_ulong(signum), 0, 0, 0)
+    except (OSError, AttributeError, ValueError) as e:  # no libc, no prctl symbol
+        logger.debug(f"Could not set PR_SET_PDEATHSIG, worker may outlive its parent: {e}")
+        return
+
+    if rc != 0:
+        logger.debug(
+            "prctl(PR_SET_PDEATHSIG) failed with errno "
+            f"{ctypes.get_errno()}; worker may outlive its parent"
+        )
+        return
+
+    # The parent can die in the window between fork and the prctl call above, in
+    # which case the signal was never armed in time and this worker would be
+    # exactly the orphan the call exists to prevent. Being reparented to pid 1
+    # is the readable half of that: it misses the case where something else on
+    # the box is a subreaper and inherits us instead, so this narrows the race
+    # rather than closing it. PR_SET_PDEATHSIG covers everything after this line.
+    if os.getppid() == 1:
+        os._exit(1)
 
 
 def _maybe_attach_set_epoch(dataloader: torch.utils.data.DataLoader, sampler: CutSampler) -> None:
@@ -1098,6 +1159,10 @@ def get_lhotse_dataloader_from_config(
             # re-imports and would not -- and the restore that needs it happens
             # here, in the worker, not in the training process.
             _harden_rng_setstate()
+            # Arm here rather than at module import: PR_SET_PDEATHSIG is per
+            # process and would otherwise also be set on the training process
+            # itself, whose parent dying is not a reason for it to die.
+            _die_with_parent()
             lhotse_worker_init(worker_id)
 
         dloader_kwargs = {
