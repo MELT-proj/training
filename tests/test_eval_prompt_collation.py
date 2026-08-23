@@ -233,3 +233,54 @@ class TestGating:
 
         assert extractor.calls == before + len(_items())
         assert batch["prompt_input_ids"].shape[0] == batch["input_ids"].shape[0]
+
+
+class TestChatTemplateConfigPairing:
+    """The eval collator validates its own pairing, not training's.
+
+    `resolve_eval_data_config` lets `validation_ds` win over the parent `data`
+    block for the chat-template keys, so eval can be configured with a
+    different `chat_template_config` than training uses. The training-side
+    check in MELTMapDataset would pass on training's pairing and never see
+    eval's — and a mismatched one blanks every eval label, so references decode
+    to the empty string and the reported WER is noise rather than an error.
+    """
+
+    def test_a_mismatched_config_raises(self, processor):
+        # The processor is built on the real Qwen3 tokenizer, which renders
+        # ChatML; `llama3` boundaries appear nowhere in it.
+        with pytest.raises(ValueError, match="does not match this tokenizer"):
+            _collator(
+                processor,
+                {
+                    "apply_chat_template": True,
+                    "prompt_template_selection": "random",
+                    "chat_template_config": "llama3",
+                },
+            )
+
+    def test_the_matching_config_is_accepted(self, processor):
+        collator = _collator(
+            processor,
+            {
+                "apply_chat_template": True,
+                "prompt_template_selection": "random",
+                "chat_template_config": "chatml",
+            },
+        )
+
+        # Built, and with boundaries that masking can actually locate.
+        assert collator._assistant_start_ids
+        assert collator._assistant_end_ids
+
+    def test_the_error_names_the_alternatives(self, processor):
+        """Whoever hits this needs to know what to set instead."""
+        with pytest.raises(ValueError, match="chatml"):
+            _collator(
+                processor,
+                {
+                    "apply_chat_template": True,
+                    "prompt_template_selection": "random",
+                    "chat_template_config": "llama3",
+                },
+            )
