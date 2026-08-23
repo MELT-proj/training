@@ -43,28 +43,36 @@ export MELT_QOS="${MELT_QOS:-acc_ehpc}"
 export MELT_SEED=42
 
 # --- step budget -----------------------------------------------------------
-# 625 h of audio (5 x 125), batch_duration 120 s per rank, grad-accum 4:
-#   batches/epoch = ceil(625*3600 / 120)            = 18750
-#   steps/epoch   = ceil(18750 / world_size / 4)    =   586   at world_size 8
-#   2 epochs                                        =  1172
-# Set explicitly so the cosine schedule is defined up front and does not depend
-# on lhotse's epoch estimate.  Note this is 4x FEWER steps than the same two
-# epochs on 2 GPUs (4688) — same data, 4x the effective batch.
-MAX_STEPS=1172
+# Campaign convention (2026-08-23): every arm, MA and IFT alike, runs ONE epoch
+# and lets the trainer derive the step count.  No max_steps here on purpose --
+# pinning it per-arm is how two arms end up trained for different amounts.
+#
+# What the trainer derives, for reference (estimate_steps_per_epoch):
+#   batches/epoch = ceil(625*3600 / 120)         = 18750
+#   steps/epoch   = ceil(18750 / world_size / 4) =   586   at world_size 8
+#
+# CAVEAT, measured on job 44947472 over 55 consecutive steps: real throughput is
+# 0.571 h of audio per step, not the 1.067 h (= 120 s x 8 ranks x 4 accum) that
+# arithmetic implies.  quadratic_duration: 30 makes lhotse charge each cut
+# `d + d^2/30`, so a batch hits its budget well short of 120 s of actual audio,
+# and estimate_steps_per_epoch does not model that term.  So these 586 steps
+# cover ~335 h -- roughly 54% of a true pass over the 625 h mix -- and the
+# `epoch` field the trainer logs reads 1.0 when ~0.54 of the data has been seen.
+# A true single pass would be ~1094 steps.  Left as-is deliberately: the bias is
+# identical for every arm, so arms stay comparable step-for-step.
+NUM_TRAIN_EPOCHS=1
 
-# eval_steps scaled with the shorter run: 100 gives ~12 eval rounds (plus
-# eval_on_start), the same curve resolution the 6250-step IFT run got from
-# eval_steps=500.  Leaving it at a value tuned for a 2-GPU run would have
-# evaluated 4x more often on a 4x shorter run.  Each round decodes 5 named eval
-# sets x 200 utterances = 1000 generations; measured worst case (before the
-# model learns to emit <|eot_id|>) is ~14 min/round at world_size 8.
-EVAL_STEPS=100
+# eval_steps 50 gives ~12 rounds over the ~586 steps, plus eval_on_start.
+# Affordable because a round is cheap and gets cheaper: measured on 44947472 at
+# world_size 8, a full 5-set round (5 x 200 = 1000 generations) took 240 s at
+# step 0 and fell to 131 s by step 300 as the model learned to emit <|eot_id|>
+# and stopped spending the whole 256-token budget on every sample.
+EVAL_STEPS=50
 
-# save_steps must shrink with the run too: the shipped 1000 would have produced
-# a single mid-run checkpoint. 200 gives 5 + the final one, and it is a multiple
-# of EVAL_STEPS so saves land on eval boundaries.
+# save_steps scaled to the run: 100 gives ~5 saves plus the final one, and is a
+# multiple of EVAL_STEPS so saves land on eval boundaries.
 # save_total_limit=2 keeps the two most recent (NOT the best-scoring) ones.
-SAVE_STEPS=200
+SAVE_STEPS=100
 SAVE_TOTAL_LIMIT=2
 
 # --- launch ----------------------------------------------------------------
@@ -104,7 +112,7 @@ infra/runners/submit-container.sh mn5 config/accelerate/fsdp2.yaml \
     --data.chat_template_config llama3 \
     --data.prompt_template_selection custom \
     --data.prompt_template "'{audio_token}'" \
-    --trainer.max_steps "${MAX_STEPS}" \
+    --trainer.num_train_epochs "${NUM_TRAIN_EPOCHS}" \
     --trainer.eval_steps "${EVAL_STEPS}" \
     --trainer.save_steps "${SAVE_STEPS}" \
     --trainer.save_total_limit "${SAVE_TOTAL_LIMIT}" \
