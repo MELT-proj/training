@@ -319,6 +319,98 @@ def compute_dataset_duration(
     return total_duration, num_cuts
 
 
+def _effective_duration_inflation(config: DictConfig) -> float:
+    """How many more batches an epoch holds than ``total_duration / batch_duration``.
+
+    ``batch_duration`` is handed to lhotse as ``max_duration``, which budgets
+    *effective* seconds, not audio seconds. With ``quadratic_duration`` set,
+    lhotse charges a cut of length ``d``::
+
+        cost(d) = d + d**2 / quadratic_duration        # sampling/base.py
+
+    (the term that doubles the charge when ``d == quadratic_duration``, sized so
+    that peak attention memory stays roughly flat across buckets). Summed over an
+    epoch the sampler therefore spends ``sum(d) + sum(d^2)/q`` of budget to emit
+    ``sum(d)`` of audio, so the batch count is inflated by::
+
+        1 + (sum(d^2) / sum(d)) / q  =  1 + mean_weighted_duration / q
+
+    where the mean is **duration-weighted** (``sum(d^2)/sum(d)``), not the plain
+    mean -- long cuts carry proportionally more of the total hours.
+
+    ``sum(d^2)`` is not in the config, but ``bucket_duration_bins`` is, and
+    ``infra/bucket_bins.py`` builds those boundaries by *dividing total duration
+    equally among the buckets*. Equal duration mass per bucket is exactly the
+    weighting this mean needs, so averaging the bucket midpoints approximates
+    ``sum(d^2)/sum(d)`` without touching the manifests.
+
+    It is an approximation, and a known-low one: on ABL-MA-125-asr it returns
+    1.63 where the run's own ``train_hours`` counter measured 1.87 (job
+    44947472), because midpoints under-represent the mass in each bucket's upper
+    half and because the shipped bins were estimated on a wider mixture than the
+    125 h subset. Under-correcting is the safe direction -- it shortens an epoch
+    rather than overrunning one -- but do not read the result as exact.
+
+    Args:
+        config: A ``train_ds``-style config. Read: ``quadratic_duration``,
+            ``bucket_duration_bins``, ``min_duration``, ``max_duration``.
+
+    Returns:
+        Multiplier >= 1.0 for ``batches_per_epoch``. Exactly 1.0 when
+        ``quadratic_duration`` is unset (no penalty, so no inflation).
+    """
+    quadratic_duration = _get_config_value(config, "quadratic_duration", None)
+    if quadratic_duration is None or float(quadratic_duration) <= 0:
+        return 1.0
+    quadratic_duration = float(quadratic_duration)
+
+    bins = _get_config_value(config, "bucket_duration_bins", None)
+    if not bins:
+        # Correction impossible, and silently returning 1.0 is what caused the
+        # problem in the first place -- say so.
+        logger.warning(
+            "quadratic_duration=%.3g is set but bucket_duration_bins is not, so the "
+            "steps-per-epoch estimate cannot be corrected for it. lhotse charges each cut "
+            "d + d^2/%.3g, so batches hold LESS audio than batch_duration and this estimate "
+            "is optimistic -- an epoch will cover less data than it claims, and a max_steps "
+            "derived from it will rescale the LR schedule to match. Add bucket_duration_bins "
+            "(infra/estimate_bucket_bins.py) to get a corrected estimate.",
+            quadratic_duration,
+            quadratic_duration,
+        )
+        return 1.0
+
+    lo = float(_get_config_value(config, "min_duration", 0.0) or 0.0)
+    hi = float(_get_config_value(config, "max_duration", 0.0) or 0.0)
+    edges = [lo] + [float(b) for b in bins]
+    # The open top bucket needs a right edge; max_duration is the only principled
+    # one available, and the sampler will not emit anything longer anyway.
+    if hi > edges[-1]:
+        edges.append(hi)
+    if len(edges) < 2:
+        return 1.0
+
+    midpoints = [(edges[i] + edges[i + 1]) / 2.0 for i in range(len(edges) - 1)]
+    mean_weighted_duration = sum(midpoints) / len(midpoints)
+    inflation = 1.0 + mean_weighted_duration / quadratic_duration
+
+    logger.info(
+        "quadratic_duration=%.3g inflates the epoch's batch count by ~%.3fx "
+        "(duration-weighted mean cut ~%.1f s over %d buckets): lhotse charges each cut "
+        "d + d^2/%.3g, so a batch holds only ~%.0f%% of batch_duration in real audio. "
+        "Steps per epoch are scaled up accordingly. This correction is approximate "
+        "(measured ~13%% low on the ablation mix), so treat the step count as a close "
+        "estimate rather than an exact epoch boundary.",
+        quadratic_duration,
+        inflation,
+        mean_weighted_duration,
+        len(midpoints),
+        quadratic_duration,
+        100.0 / inflation,
+    )
+    return inflation
+
+
 def estimate_steps_per_epoch(
     config: DictConfig,
     gradient_accumulation_steps: int = 1,
@@ -369,7 +461,15 @@ def estimate_steps_per_epoch(
     if batch_size is not None and batch_size > 0:
         batches_per_epoch = math.ceil(total_cuts / batch_size)
     elif batch_duration is not None and batch_duration > 0:
-        batches_per_epoch = math.ceil(total_duration / batch_duration)
+        # `batch_duration` is a budget of *effective* seconds, not audio seconds:
+        # under `quadratic_duration` lhotse charges each cut `d + d^2/q`, so a
+        # batch fills up well before it holds `batch_duration` seconds of audio.
+        # Dividing total_duration by batch_duration therefore under-counts the
+        # batches in an epoch -- by 87% on ABL-MA-125-asr, which is enough to
+        # make a "1 epoch" run cover barely half the data and to rescale the LR
+        # schedule with it. See _effective_duration_inflation for the factor.
+        inflation = _effective_duration_inflation(config)
+        batches_per_epoch = math.ceil(total_duration / batch_duration * inflation)
     else:
         logger.warning("Neither batch_size nor batch_duration is set; cannot estimate steps per epoch")
         return -1, 0.0, 0, 0, 0

@@ -441,7 +441,7 @@ data:
     # Cuts without `custom.num_tokens` are kept, not dropped (see
     # dataloader.py's _token_filter), so this can never silently delete a source.
     max_tokens: 400
-    quadratic_duration: 30 # see https://lhotse.readthedocs.io/en/latest/datasets.html#lhotse.dataset.sampling.TimeConstraint
+    quadratic_duration: 35 # see https://lhotse.readthedocs.io/en/latest/datasets.html#lhotse.dataset.sampling.TimeConstraint
 
     # Bucketing for efficient batching
     lhotse_sampler_type: dynamic_bucketing  # One among: dynamic_bucketing, dynamic, bucketing

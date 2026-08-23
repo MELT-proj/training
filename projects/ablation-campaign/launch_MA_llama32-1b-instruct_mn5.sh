@@ -47,32 +47,36 @@ export MELT_SEED=42
 # and lets the trainer derive the step count.  No max_steps here on purpose --
 # pinning it per-arm is how two arms end up trained for different amounts.
 #
-# What the trainer derives, for reference (estimate_steps_per_epoch):
-#   batches/epoch = ceil(625*3600 / 120)         = 18750
-#   steps/epoch   = ceil(18750 / world_size / 4) =   586   at world_size 8
+# What the trainer derives, at world_size 8 with quadratic_duration 35:
+#   batches/epoch = ceil(625*3600 / 120 * 1.540) = 28879
+#   steps/epoch   = ceil(28879 / world_size / 4) =   903
 #
-# CAVEAT, measured on job 44947472 over 55 consecutive steps: real throughput is
-# 0.571 h of audio per step, not the 1.067 h (= 120 s x 8 ranks x 4 accum) that
-# arithmetic implies.  quadratic_duration: 30 makes lhotse charge each cut
-# `d + d^2/30`, so a batch hits its budget well short of 120 s of actual audio,
-# and estimate_steps_per_epoch does not model that term.  So these 586 steps
-# cover ~335 h -- roughly 54% of a true pass over the 625 h mix -- and the
-# `epoch` field the trainer logs reads 1.0 when ~0.54 of the data has been seen.
-# A true single pass would be ~1094 steps.  Left as-is deliberately: the bias is
-# identical for every arm, so arms stay comparable step-for-step.
+# The 1.540 is estimate_steps_per_epoch's correction for quadratic_duration:
+# lhotse charges each cut `d + d^2/q`, so batch_duration budgets *effective*
+# seconds and a batch holds less than 120 s of real audio.  Before that
+# correction existed this config derived 586 steps, which covered only ~57% of
+# the 625 h mix while the trainer logged `epoch: 1.0`.  903 steps covers ~88%.
+#
+# The residual ~12% is the correction's known bias: it reads the duration
+# distribution off bucket_duration_bins via midpoints, which under-reads the
+# mass in each bucket's upper half.  Measured truth at q=35 is 0.612 h/step, so
+# a true single pass is ~1022 steps.  Under-correcting is the safe direction and
+# the bias is identical for every arm, so arms stay comparable step-for-step.
 NUM_TRAIN_EPOCHS=1
 
-# eval_steps 50 gives ~12 rounds over the ~586 steps, plus eval_on_start.
-# Affordable because a round is cheap and gets cheaper: measured on 44947472 at
-# world_size 8, a full 5-set round (5 x 200 = 1000 generations) took 240 s at
-# step 0 and fell to 131 s by step 300 as the model learned to emit <|eot_id|>
-# and stopped spending the whole 256-token budget on every sample.
-EVAL_STEPS=50
+# eval_steps 100 gives ~9 rounds over the ~903 steps, plus eval_on_start.
+# A round is cheap and gets cheaper: measured on 44947472 at world_size 8, a
+# full 5-set round (5 x 200 = 1000 generations) took 240 s at step 0 and fell to
+# 131 s by step 300 as the model learned to emit <|eot_id|> and stopped spending
+# the whole 256-token budget on every sample.  So ~10 rounds costs ~25 min
+# against a ~3.5 h run.  Halving this to 50 would double that overhead for
+# resolution the WER curve does not need.
+EVAL_STEPS=100
 
-# save_steps scaled to the run: 100 gives ~5 saves plus the final one, and is a
+# save_steps scaled to the run: 200 gives 4 saves plus the final one, and is a
 # multiple of EVAL_STEPS so saves land on eval boundaries.
 # save_total_limit=2 keeps the two most recent (NOT the best-scoring) ones.
-SAVE_STEPS=100
+SAVE_STEPS=200
 SAVE_TOTAL_LIMIT=2
 
 # --- launch ----------------------------------------------------------------

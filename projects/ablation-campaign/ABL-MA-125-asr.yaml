@@ -277,7 +277,17 @@ data:
     # job 327902 vs 327899).  The other ABL configs already run at 480 s
     # and are NOT covered by that measurement -- do not copy 120 onto them.
     batch_duration: 120  # seconds of audio per batch
-    quadratic_duration: 30 # see https://lhotse.readthedocs.io/en/latest/datasets.html#lhotse.dataset.sampling.TimeConstraint
+    # 35, up from 30 (2026-08-23), to let more audio into a batch.
+    # This is a PENALTY divisor, so bigger = weaker penalty = larger batches:
+    # lhotse charges each cut `d + d^2/quadratic_duration`, so batch_duration is
+    # a budget of *effective* seconds and a batch holds less than 120 s of real
+    # audio.  Measured on job 44947472 at q=30: 0.571 h/step against the 1.067 h
+    # the arithmetic implies, i.e. batches were 54% full.  q=35 lifts that to
+    # ~57%.  Not raised further: the 2-node soak (test3_mixed_task_soak.yaml,
+    # jobs 44433073/44459397, 20 h each on 2x4 H100) is proven at q=35 with
+    # batch_duration 160, so 35 here is inside known-good territory; 40 is at
+    # the top of lhotse's recommended 15-40 range with no local precedent.
+    quadratic_duration: 35 # see https://lhotse.readthedocs.io/en/latest/datasets.html#lhotse.dataset.sampling.TimeConstraint
 
     # Bucketing for efficient batching
     lhotse_sampler_type: dynamic_bucketing  # One among: dynamic_bucketing, dynamic, bucketing

@@ -148,7 +148,7 @@ data:
     # Batch settings
     batch_size: null  # Use batch_duration instead for dynamic batching
     batch_duration: 480  # seconds of audio per batch
-    quadratic_duration: 20 # see https://lhotse.readthedocs.io/en/latest/datasets.html#lhotse.dataset.sampling.TimeConstraint
+    quadratic_duration: 35 # see https://lhotse.readthedocs.io/en/latest/datasets.html#lhotse.dataset.sampling.TimeConstraint
 
     # Bucketing for efficient batching
     lhotse_sampler_type: dynamic_bucketing  # One among: dynamic_bucketing, dynamic, bucketing
