@@ -1677,7 +1677,23 @@ class MELTTrainer(Seq2SeqTrainer):
                 "instead would feed the model the target transcript."
             )
 
-        with torch.no_grad(), unsharded_for_generation(self.model, model):
+        # `self.accelerator.autocast()` and not a bare torch.autocast: it honours
+        # whatever mixed precision the accelerate config asked for and is a
+        # no-op under `mixed_precision: no`.
+        #
+        # Training forwards get autocast from the Trainer; generation did not,
+        # and under FSDP that never showed, because MixedPrecisionPolicy had
+        # already cast the *parameters* to bf16 and every activation followed.
+        # Under DDP the parameters stay fp32 -- accelerate implements bf16 as
+        # autocast alone -- so generation ran the whole model in fp32 and
+        # flash-attention refused the inputs outright:
+        #   RuntimeError: FlashAttention only support fp16 and bf16 data type
+        # (MN5 job 44990706, at eval_on_start, before a single training step).
+        # So `attn_implementation: flash_attention_2` only ever worked because
+        # FSDP was silently supplying the dtype. Ask for it explicitly here.
+        with torch.no_grad(), self.accelerator.autocast(), unsharded_for_generation(
+            self.model, model
+        ):
             # The same pre-forward hook that all-gathers also applies
             # MixedPrecisionPolicy.cast_forward_inputs, so bypassing forward
             # leaves the float32 audio features to meet bf16 weights:
