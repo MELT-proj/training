@@ -322,7 +322,7 @@ data:
     # instead of a single forward, so the full validation set is not affordable.
     #
     # NOTE this cap is applied PER NAMED EVAL SET, not per config: here
-    # one eval set, so ~1000 utterances per eval.
+    # 5 named eval sets x 200 = ~1000 utterances per eval.
     #
     # Measured on an H100 (artemis job 327830): ~2.2 s/utterance at
     # generation_max_length 64, and the cost is roughly linear in the token
@@ -332,7 +332,7 @@ data:
     #
     # materialize_cuts_for_eval applies the cap with a seeded shuffle, so every
     # run scores the same subset.
-    max_samples: 1000
+    max_samples: 200
     total_hours: 186.03
     total_cuts: 86243  # measured by infra/check_training_config.py
     force_estimate: false
