@@ -917,14 +917,45 @@ If you only need the final model, the top-level processor/config files plus the
 last checkpoint are enough; skip the intermediate `checkpoint-*/` dirs with
 `--exclude 'checkpoint-*'` to save a lot of transfer.
 
-**Checkpoints are FSDP-sharded**, so merge before loading for inference:
+### There is no `model.safetensors` — not even after a run completes
+
+**Every run needs a manual consolidation step before the model can be loaded**,
+including one that finished cleanly with `ExitCode=0:0`. This is not a symptom
+of a crash and does not resolve itself on completion.
+
+The cause is [#91](https://github.com/MELT-proj/training/issues/91):
+`Trainer.save_model()` only writes weights when the accelerate plugin reports
+`FULL_STATE_DICT`, and `config/accelerate/fsdp2.yaml` ships
+`SHARDED_STATE_DICT`. The FSDP branch is taken, the inner condition is not, and
+the call returns having written nothing — no exception, no warning. The
+config/tokenizer files are written separately by `train.py`, so the directory
+still *looks* finished. The tell is the absence of a `Model weights saved in …`
+line in the log.
+
+Since #91, `train.py` checks for this after saving and prints a loud
+`NO MODEL WEIGHTS WERE SAVED` banner naming the checkpoint and the exact merge
+command. It does **not** fail the job: training genuinely succeeded and the
+sharded weights are intact, so failing would make `sacct` lie. **If you are not
+reading the log tail, check for the weights file yourself.**
 
 ```bash
-# [artemis]
+# [artemis] merge INTO the run root, which already holds config + tokenizer;
+# a separate --output_path gives you weights with no config next to them.
 python utils/merge_fsdp_weight.py \
   --checkpoint_dir .../outputs/$EXP/checkpoint-2000/pytorch_model_fsdp_0 \
-  --output_path   .../outputs/$EXP/merged
+  --output_path   .../outputs/$EXP
 ```
+
+**Run the merge as a batch job, never on an MN5 login node.** It holds the whole
+model in host RAM and the per-user cgroup will SIGKILL it (exit 137) with no
+useful message. `free -g` reports the *node's* memory and does not reflect the
+cap, so it gives false reassurance — do not use it to size this. The merge needs
+no GPU, so `sbatch -p gp -q gp_ehpc` does the job without spending GPU
+allocation.
+
+One trap when you wrap it in a script: slurm reports `State=COMPLETED
+ExitCode=0:0` when the *wrapper* succeeds even if the Python inside failed. End
+such scripts with an explicit `echo "PYTHON_EXIT=$?"` and read that, not `sacct`.
 
 ---
 
@@ -1010,9 +1041,36 @@ Existing configs to copy from: `MA-VP-only-v1.0.yaml` (4 VoxPopuli languages),
 | `data.train_ds.max_tokens` / `max_tps` | either | **silently inert on any source without `custom.num_tokens`** — see the data note below |
 | `data.train_ds.num_workers` | YAML | must stay fixed across a resume chain (§B4b) |
 | `data.apply_chat_template` | YAML | declared at `data.`; since 0.5.1 `validation_ds` inherits it, so train and eval format text the same way |
-| `data.prompt_template` | YAML | e.g. `"{audio_token}{lang}"` |
+| `data.prompt_template` | YAML | e.g. `"{audio_token}{lang}"`. **On the CLI the braces need inner quotes** — see below |
 | `optimization.{encoder,decoder,adapter}_lr` | either | per-component LRs |
 | `trainer.max_steps`, `eval_steps`, `save_steps`, `warmup_steps` | CLI | schedule |
+
+#### A braced override needs inner quotes
+
+CLI overrides become an OmegaConf dotlist, and that parser reads a bare `{...}`
+as YAML flow-mapping syntax rather than as text. So this does **not** set a
+string:
+
+```bash
+--data.prompt_template '{audio_token}'      # -> {'audio_token': None}, a dict
+```
+
+The shell strips the outer quotes, OmegaConf sees bare braces, and the value
+arrives as a task→template mapping with no templates in it. Quote it twice, so
+a literal quote survives into the dotlist value:
+
+```bash
+--data.prompt_template "'{audio_token}'"    # -> '{audio_token}', a string
+```
+
+The first form now raises at startup with a message naming the cause and
+printing the quoted form (issue #94). It used to run for several minutes — past
+model load and the sampler's buffer fill — and then die at the first batch with
+`Task 'asr' not found in prompt_template dict`, which names the symptom rather
+than the cause.
+
+Only braces are affected — `<|eot_id|>`, `<|begin_of_text|>` and
+`<|finetune_right_pad_id|>` all parse as strings without help.
 
 ### Know your data before you put it in a mix
 
