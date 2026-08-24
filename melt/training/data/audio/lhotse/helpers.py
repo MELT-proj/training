@@ -28,6 +28,48 @@ def _get_config_value(config, key: str, default=None):
     return default
 
 
+def _reject_brace_parse_artifact(template: dict) -> None:
+    """Raise if *template* is what an unquoted braced CLI override parses into.
+
+    CLI overrides become an OmegaConf dotlist, whose parser reads a bare
+    ``{audio_token}`` as YAML flow-mapping syntax rather than as text::
+
+        >>> OmegaConf.from_dotlist(["data.prompt_template={audio_token}"])
+        {'data': {'prompt_template': {'audio_token': None}}}
+
+    So the value arrives here as a task->template dict with no templates in it.
+    Without this check the run got as far as the first batch before
+    ``resolve_custom_template`` reported ``Task 'asr' not found`` -- which names
+    the symptom and not the cause, and only after model load and the sampler's
+    buffer fill have burned several minutes of a multi-node allocation.
+
+    The signature is that *every* value is ``None``: a real task->template
+    mapping has strings. A dict that mixes strings and ``None`` is a different
+    mistake and is left to the existing error, since blaming quoting for it
+    would be a guess.
+
+    Deliberately not repaired into ``"{audio_token}"``. The parse has already
+    lost information -- nothing here can distinguish the string the user meant
+    from a mapping they typed wrongly -- so this reports and stops instead of
+    guessing. Issue #94.
+    """
+    if not template or not all(v is None for v in template.values()):
+        return
+
+    literal = "{" + ",".join(str(k) for k in template) + "}"
+    raise ValueError(
+        f"prompt_template parsed as a dict with no values:\n"
+        f"  {template}\n\n"
+        "This usually means a braced override reached OmegaConf unquoted, and "
+        "was read as YAML flow-mapping syntax.\n\n"
+        f"If you meant the literal string '{literal}', quote it so the dotlist "
+        "parser sees a string:\n"
+        f"    --data.prompt_template \"'{literal}'\"\n\n"
+        "If you meant a task->template mapping, give each task a string value, "
+        "e.g. {asr: 'Transcribe: {audio_token}'}."
+    )
+
+
 def _normalize_prompt_template(value) -> str | dict[str, str] | None:
     """Normalize prompt_template config value to ``str``, ``dict``, or ``None``.
 
@@ -48,7 +90,9 @@ def _normalize_prompt_template(value) -> str | dict[str, str] | None:
         return value
     # OmegaConf DictConfig / plain dict
     if isinstance(value, (dict, _DictConfig)):
-        return dict(value)  # shallow copy, normalise to plain dict
+        template = dict(value)  # shallow copy, normalise to plain dict
+        _reject_brace_parse_artifact(template)
+        return template
     # Plain list, tuple, or OmegaConf ListConfig
     if isinstance(value, (list, tuple, _ListConfig)):
         result: dict[str, str] = {}
@@ -59,6 +103,8 @@ def _normalize_prompt_template(value) -> str | dict[str, str] | None:
                 raise TypeError(
                     f"Expected dict-like item in prompt_template list, got {type(item)}"
                 )
+        # `- asr:` with the value left off lands here with the same empty shape.
+        _reject_brace_parse_artifact(result)
         return result
     raise TypeError(f"Unexpected type for prompt_template: {type(value)}")
 

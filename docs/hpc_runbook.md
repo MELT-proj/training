@@ -1041,9 +1041,36 @@ Existing configs to copy from: `MA-VP-only-v1.0.yaml` (4 VoxPopuli languages),
 | `data.train_ds.max_tokens` / `max_tps` | either | **silently inert on any source without `custom.num_tokens`** — see the data note below |
 | `data.train_ds.num_workers` | YAML | must stay fixed across a resume chain (§B4b) |
 | `data.apply_chat_template` | YAML | declared at `data.`; since 0.5.1 `validation_ds` inherits it, so train and eval format text the same way |
-| `data.prompt_template` | YAML | e.g. `"{audio_token}{lang}"` |
+| `data.prompt_template` | YAML | e.g. `"{audio_token}{lang}"`. **On the CLI the braces need inner quotes** — see below |
 | `optimization.{encoder,decoder,adapter}_lr` | either | per-component LRs |
 | `trainer.max_steps`, `eval_steps`, `save_steps`, `warmup_steps` | CLI | schedule |
+
+#### A braced override needs inner quotes
+
+CLI overrides become an OmegaConf dotlist, and that parser reads a bare `{...}`
+as YAML flow-mapping syntax rather than as text. So this does **not** set a
+string:
+
+```bash
+--data.prompt_template '{audio_token}'      # -> {'audio_token': None}, a dict
+```
+
+The shell strips the outer quotes, OmegaConf sees bare braces, and the value
+arrives as a task→template mapping with no templates in it. Quote it twice, so
+a literal quote survives into the dotlist value:
+
+```bash
+--data.prompt_template "'{audio_token}'"    # -> '{audio_token}', a string
+```
+
+The first form now raises at startup with a message naming the cause and
+printing the quoted form (issue #94). It used to run for several minutes — past
+model load and the sampler's buffer fill — and then die at the first batch with
+`Task 'asr' not found in prompt_template dict`, which names the symptom rather
+than the cause.
+
+Only braces are affected — `<|eot_id|>`, `<|begin_of_text|>` and
+`<|finetune_right_pad_id|>` all parse as strings without help.
 
 ### Know your data before you put it in a mix
 
