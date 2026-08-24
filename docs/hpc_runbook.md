@@ -423,6 +423,34 @@ mkdir -p /gpfs/scratch/epor48/$USER/{outputs,tmp}
 **Smoke test first** — 10 steps on `acc_debug`, catches config errors in
 minutes rather than after a queue wait:
 
+#### Choosing an accelerate config
+
+The second argument to `submit-container.sh` is the accelerate config, and
+nothing in `run_train.sh` interprets it — it is passed straight to
+`accelerate launch --config_file`, so the configs are interchangeable.
+
+| config | use when |
+| --- | --- |
+| `config/accelerate/ddp.yaml` | the model fits on one GPU. One full replica per rank, no sharding, **no activation checkpointing** |
+| `config/accelerate/fsdp2.yaml` | the model does not fit, or optimizer/gradient state is large enough to be worth sharding |
+| `config/accelerate/zero1.yaml`, `zero3.yaml` | DeepSpeed equivalents |
+
+For the ablation-campaign MA arms, `ddp.yaml` measured **2.28x** the throughput
+of `fsdp2.yaml` (MN5 job 44992666). Only the adapter trains there — 6.3 M of
+~1.8 B parameters — so the gradients and optimizer moments FSDP would shard come
+to ~75 MB, while sharding the frozen backbones costs an all-gather every forward
+for ~5% of a 64 GB card. The larger half of that win is `ddp.yaml` not enabling
+activation checkpointing.
+
+**A precision trap when you switch.** `setup.py` sets no model dtype, so
+parameters load in fp32. FSDP's `MixedPrecisionPolicy` used to cast them to
+bf16, which is the only reason `attn_implementation: flash_attention_2` worked.
+DDP implements `mixed_precision: bf16` as autocast alone, so generation — which
+the Trainer does not autocast — handed fp32 to flash-attention and every rank
+died with `FlashAttention only support fp16 and bf16 data type`. Fixed by
+autocasting the generation path explicitly; if you see a dtype error only after
+changing `distributed_type`, this is why.
+
 ```bash
 # [mn5] from ~/training
 EXP=MA-VP3-smoke
@@ -919,9 +947,14 @@ last checkpoint are enough; skip the intermediate `checkpoint-*/` dirs with
 
 ### There is no `model.safetensors` — not even after a run completes
 
-**Every run needs a manual consolidation step before the model can be loaded**,
-including one that finished cleanly with `ExitCode=0:0`. This is not a symptom
-of a crash and does not resolve itself on completion.
+**Applies to FSDP runs only.** Under `config/accelerate/ddp.yaml` the weights
+are written normally and none of this section applies — that is one of the
+reasons to prefer it where the model fits on one GPU (see "Choosing an
+accelerate config" above).
+
+**Every FSDP run needs a manual consolidation step before the model can be
+loaded**, including one that finished cleanly with `ExitCode=0:0`. This is not a
+symptom of a crash and does not resolve itself on completion.
 
 The cause is [#91](https://github.com/MELT-proj/training/issues/91):
 `Trainer.save_model()` only writes weights when the accelerate plugin reports
