@@ -27,7 +27,13 @@ infra/runners/submit-container.sh mn5 config/accelerate/fsdp2.yaml …
 ```
 
 That is how each account on a shared cluster gets a writable output and tmp
-directory without editing the file. `SBATCH_ARGS` is an array, not an env var —
+directory without editing the file.
+
+The accelerate config is passed straight through to `accelerate launch
+--config_file` and is never interpreted here, so any of
+`config/accelerate/{ddp,fsdp2,zero1,zero3}.yaml` is a drop-in swap. Prefer
+`ddp.yaml` when the model fits on one GPU — see "Choosing an accelerate config"
+in `docs/hpc_runbook.md`. `SBATCH_ARGS` is an array, not an env var —
 change the QoS or wall time by editing the site file.
 
 **Experiment args live on the CLI** (and model/data config in `config/train/*.yaml`) —

@@ -513,7 +513,13 @@ def _generating_trainer(model):
     trainer._prepare_inputs = lambda inputs: inputs
     trainer.compute_loss_context_manager = contextlib.nullcontext
     trainer.accelerator = SimpleNamespace(
-        gather_for_metrics=lambda values, use_gather_object=False: values
+        gather_for_metrics=lambda values, use_gather_object=False: values,
+        # prediction_step wraps generation in accelerator.autocast(): under DDP
+        # the parameters stay fp32 and generation is the one path the Trainer
+        # does not autocast for us, which flash-attention rejects outright.
+        # nullcontext keeps these tests precision-agnostic while still
+        # exercising the call.
+        autocast=contextlib.nullcontext,
     )
     return trainer
 

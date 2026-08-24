@@ -26,7 +26,6 @@ model:
     name: Qwen/Qwen3-1.7B
     attn_implementation: flash_attention_2
     freeze: false
-    bos_token: <|startoftext|>
     eos_token: <|endoftext|>
     pad_token: <|text_pad|> # used if not specified in tokenizer
     audio_token: <|audio|>
@@ -963,7 +962,7 @@ data:
     # instead of a single forward, so the full validation set is not affordable.
     #
     # NOTE this cap is applied PER NAMED EVAL SET, not per config: here
-    # one eval set, so ~1000 utterances per eval.
+    # one eval set, so ~200 utterances per eval.
     #
     # Measured on an H100 (artemis job 327830): ~2.2 s/utterance at
     # generation_max_length 64, and the cost is roughly linear in the token
@@ -973,7 +972,7 @@ data:
     #
     # materialize_cuts_for_eval applies the cap with a seeded shuffle, so every
     # run scores the same subset.
-    max_samples: 1000
+    max_samples: 200
     input_cfg:
       # English Validation
       - type: lhotse_shar
