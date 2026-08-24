@@ -15,6 +15,62 @@ from ..modeling.configuration_melt import MELT_REQUIRED_SPECIAL_TOKENS
 logger = get_logger(__name__)
 
 
+def borrow_chat_template(tokenizer, source_name: str, decoder_name: str) -> None:
+    """Copy the chat template of *source_name* onto *tokenizer*, in place.
+
+    A *base* checkpoint ships no chat template of its own -- verified:
+    ``meta-llama/Llama-3.2-1B`` has none, while its Instruct sibling carries
+    3,827 bytes of Jinja -- so ``data.apply_chat_template: true`` against one
+    has nothing to render with, and
+    :func:`~melt.training.data.chat_templates.validate_chat_template_config`
+    rejects it when the dataset is built.
+
+    Naming a checkpoint to copy the template from lets a base and an instruct
+    arm render byte-identical text, which is what makes the pair a controlled
+    comparison of the *backbone* rather than of the input format.
+
+    Only the template string is copied, never the tokenizer itself: borrowing a
+    whole tokenizer would pair one vocabulary with another checkpoint's weights,
+    and nothing downstream would notice.
+
+    Args:
+        tokenizer: The decoder's tokenizer, mutated in place.
+        source_name: Checkpoint (hub id or local path) to copy the template
+            from. Must share *tokenizer*'s vocabulary; nothing here can check
+            that, because the special-token ids are only resolved later.
+        decoder_name: The decoder's own name, for the log lines.
+
+    Raises:
+        ValueError: If *source_name* has no chat template either.
+    """
+    borrowed = getattr(
+        AutoTokenizer.from_pretrained(source_name, use_fast=True),
+        "chat_template",
+        None,
+    )
+    if not borrowed:
+        raise ValueError(
+            f"model.decoder.chat_template_from is {source_name!r}, but that checkpoint "
+            "has no chat template either, so there is nothing to copy. Point it at an "
+            "instruction-tuned checkpoint that shares this vocabulary -- typically the "
+            "Instruct sibling of the decoder."
+        )
+    if getattr(tokenizer, "chat_template", None):
+        logger.warning(
+            "%s already has a chat template; overwriting it with the one from %s. "
+            "Drop model.decoder.chat_template_from if that was not intended.",
+            decoder_name,
+            source_name,
+        )
+    else:
+        logger.info(
+            "%s ships no chat template; borrowing the one from %s.",
+            decoder_name,
+            source_name,
+        )
+    tokenizer.chat_template = borrowed
+
+
 def prepare_processor(cfg: DictConfig) -> MELTProcessor:
     """Build a MELTProcessor from a training config.
 
@@ -27,6 +83,8 @@ def prepare_processor(cfg: DictConfig) -> MELTProcessor:
         cfg: Full training configuration. Must contain ``model.encoder.name``,
             ``model.decoder.name``, and token definitions (``audio_token``,
             ``audio_bos_token``, ``audio_eos_token``) under ``model.decoder``.
+            ``model.decoder.chat_template_from`` is optional; see
+            :func:`borrow_chat_template` for when a base backbone needs it.
 
     Returns:
         A configured :class:`MELTProcessor` instance.
@@ -48,6 +106,10 @@ def prepare_processor(cfg: DictConfig) -> MELTProcessor:
         use_fast=True,
         extra_special_tokens=extra_special_tokens,
     )
+
+    chat_template_from = decoder_cfg.get("chat_template_from", None)
+    if chat_template_from:
+        borrow_chat_template(tokenizer, chat_template_from, decoder_cfg.name)
 
     # Add all special tokens to the vocabulary in a single call.
     # ``extra_special_tokens`` only registers attribute names; calling

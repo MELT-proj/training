@@ -25,6 +25,14 @@ model:
   decoder:
     name: meta-llama/Llama-3.2-1B-Instruct
     attn_implementation: flash_attention_2
+    # The BASE arm runs from this same config, overriding only:
+    #   --model.decoder.name meta-llama/Llama-3.2-1B \
+    #   --model.decoder.chat_template_from meta-llama/Llama-3.2-1B-Instruct
+    # (see launch_MA_700_llama32-1b-base_mn5.sh).  A base checkpoint ships no
+    # chat template, so it has to borrow one or `apply_chat_template: true`
+    # cannot render; with it borrowed, the two arms produce byte-identical
+    # input_ids.  Do not set chat_template_from here -- this decoder has its
+    # own template, and setting it would only overwrite it with a copy.
     # No bos_token here: melt/training/setup.py reads only eos_token and
     # pad_token from this block, so setting it configured nothing.  Llama's
     # tokenizer already supplies <|begin_of_text|>.
