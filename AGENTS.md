@@ -197,3 +197,7 @@ operator's job, not the library's.
 This codebase is an academic-driven effort. Hence, we will likely stop updating the files related to past projects. For those files, avoid updating the code and adapting to new conventions. The following list of projects is now stale:
 
 - `projects/iwslt26-metric/`
+
+## Rules
+
+- Avoid running `find` on the file system root "\". If you need to find a file, a venv, or else, just a path to who issued the command.
