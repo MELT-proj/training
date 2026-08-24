@@ -265,12 +265,17 @@ data:
             # 78.0 h of voxpopuli
     # Batch settings
     batch_size: null  # Use batch_duration instead for dynamic batching
-    # Held at 120 deliberately.  Dropping quadratic_duration below already
-    # roughly doubles the cuts per batch in the mid-length buckets, and running
-    # without activation checkpointing (config/accelerate/ddp.yaml) raises
-    # activation memory again.  batch_duration is the headroom knob to turn
-    # once the smoke run reports real peak memory -- not before.
-    batch_duration: 120  # seconds of audio per batch
+    # Raised 120 -> 180 on the smoke run's measurement, not a guess.  MN5 job
+    # 44991596 reported peak GPU 32.0 GB of 64 at batch_duration 120 (7.29 GB
+    # resident model + 24.68 GB transient).  The transient part is activations
+    # and scales roughly linearly with audio seconds per batch, so 180 projects
+    # to ~44 GB -- comfortable.  240 projects to ~57 GB of 64 and would leave a
+    # batch of long cuts nowhere to go, so that is the ceiling to respect.
+    #
+    # Re-measure before raising this again: without quadratic_duration a batch
+    # is 180 s of *real* audio, and without activation checkpointing every
+    # layer's activations are kept.
+    batch_duration: 180  # seconds of audio per batch
     # Deliberately unset.  lhotse charges each cut `d + d^2/quadratic_duration`,
     # so with it set batch_duration budgets *effective* seconds and a "1 epoch"
     # run silently covers less audio than it claims -- the whole subject of #96.

@@ -34,16 +34,17 @@ export MELT_GPUS_PER_NODE=4          # -> world_size 8
 export MELT_QOS="${MELT_QOS:-acc_ehpc}"
 export MELT_SEED=42
 
-# This arm does NOT fit in one allocation. At batch_duration 120, world_size 8
+# This arm does NOT fit in one allocation. At batch_duration 180, world_size 8
 # and gradient_accumulation_steps 4, one epoch over 3500 h is
-#   ceil(3500 * 3600 / 120 / 8 / 4) = 3282 steps
-# and the 125 h arm measured ~160 audio-hours per wall-clock hour on FSDP with
-# activation checkpointing, i.e. ~22 h. DDP without checkpointing should beat
-# that, but plan on resuming: submit, let it hit the wall clock, resubmit with
+#   ceil(3500 * 3600 / 180 / 8 / 4) = 2188 steps
+# each carrying 180 * 8 * 4 = 5760 audio-seconds. The 125 h arm on FSDP with
+# activation checkpointing managed ~210 audio-seconds per wall-second, so this
+# beats it only if a step lands under ~27.5 s. Plan on resuming either way:
+# submit, let it hit the wall clock, resubmit with
 # --trainer.resume_from_checkpoint pointed at the RUN DIRECTORY (never at a
 # checkpoint-N subdir -- train.py calls get_last_checkpoint on what it is
-# given). Raising batch_duration once the smoke run reports peak memory is the
-# lever that shortens this.
+# given). batch_duration has already been raised to the measured ceiling; the
+# remaining levers are train num_workers (still 1) and eval batch size.
 export MELT_TIME="${MELT_TIME:-12:00:00}"
 
 # --- step budget -----------------------------------------------------------
@@ -52,14 +53,14 @@ export MELT_TIME="${MELT_TIME:-12:00:00}"
 #
 # quadratic_duration is unset in this config, so batch_duration budgets real
 # audio seconds and estimate_steps_per_epoch's inflation factor is exactly 1.0
-# -- the derived 3282 is the true number of batches, not an approximation.
+# -- the derived 2188 is the true number of batches, not an approximation.
 NUM_TRAIN_EPOCHS=1
 
-# ~11 eval rounds over 3282 steps, plus eval_on_start. Each round decodes
+# ~11 eval rounds over 2188 steps, plus eval_on_start. Each round decodes
 # max_samples per named eval set, so it is not free; do not shrink this without
 # a reason.
-EVAL_STEPS=300
-SAVE_STEPS=300
+EVAL_STEPS=200
+SAVE_STEPS=200
 SAVE_TOTAL_LIMIT=2
 
 # --- launch ----------------------------------------------------------------
