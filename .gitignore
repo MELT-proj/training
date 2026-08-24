@@ -217,3 +217,8 @@ infra/.config_check_cache.json
 # original default location) so a generated file never looks like part of the
 # config a reviewer is meant to read.
 infra/.bucket_info/
+# ...and wherever else --output lands it: the tool defaults to writing
+# beside the config it was pointed at, which for projects/ configs is not
+# under infra/.
+*_bucket_info.json
+*_bucket_info.csv

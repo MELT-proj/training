@@ -88,8 +88,9 @@ SAVE_TOTAL_LIMIT=2
 # turn terminator Llama 3 actually uses, and it lands inside the loss under the
 # llama3 boundary config, so the model learns to stop.  <|finetune_right_pad_id|>
 # is the pad slot Meta reserved for exactly this, so nothing has to grow the
-# vocabulary.  bos_token is inert in the current code path but is set correctly
-# so resolved_config.json does not record a Qwen token for a Llama run.
+# vocabulary.  bos_token is NOT set: setup.py reads only eos_token and pad_token
+# from model.decoder, so the key configured nothing and only looked as if it
+# did.  Llama's own tokenizer already supplies <|begin_of_text|>.
 #
 # Chat template: the campaign runs MA on *instruct* backbones through the chat
 # template with NO task instruction — the user turn carries only the audio
@@ -100,16 +101,16 @@ SAVE_TOTAL_LIMIT=2
 # The inner single quotes around {audio_token} are load-bearing.  CLI overrides
 # become an OmegaConf dotlist, whose parser reads a bare {audio_token} as YAML
 # flow-mapping syntax -- i.e. the dict {audio_token: None} -- not as a string.
-# resolve_custom_template then rejects it ("Task 'asr' not found in
-# prompt_template dict"), so the run dies at the first batch rather than
-# training on something wrong.  Quoting forces a string.  NOTE this means the
-# command printed in history/16-ablation-campaign.md §7 does not work as written.
+# Since #94 (PR #100) that shape is rejected at startup with a message naming
+# the cause and printing this quoted form, instead of dying at the first batch
+# with "Task 'asr' not found in prompt_template dict".  The quoting is still
+# required -- #94 deliberately changed no parsing.  NOTE the command printed in
+# history/16-ablation-campaign.md §7 still does not work as written.
 infra/runners/submit-container.sh mn5 config/accelerate/fsdp2.yaml \
     --config projects/ablation-campaign/ABL-MA-125-asr.yaml \
     --run.exp_name "${EXP_NAME}" \
     --trainer.output_dir "/workspace/outputs/${EXP_NAME}" \
     --model.decoder.name meta-llama/Llama-3.2-1B-Instruct \
-    --model.decoder.bos_token '<|begin_of_text|>' \
     --model.decoder.eos_token '<|eot_id|>' \
     --model.decoder.pad_token '<|finetune_right_pad_id|>' \
     --data.apply_chat_template true \
