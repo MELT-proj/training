@@ -169,14 +169,19 @@ Everything except `model.decoder.name`:
 | Schedule | 1 epoch, `max_steps: -1`, `adapter_lr: 2e-5`, `warmup_steps: 20` |
 | Eval | `predict_with_generate`, `generation_max_length: 256`, 200 samples **per named eval set** (5 sets ⇒ ~1000 utterances/round) |
 
-One epoch is **2188 steps**:
+`max_steps` stays `-1` and `num_train_epochs` is `1`, so **the trainer derives
+the step count** — nothing here pins it:
 
 ```
-ceil(3500 h × 3600 s/h / 180 s / 8 ranks / 4 accum) = 2188
+ceil(total_hours × 3600 / batch_duration / world_size / grad_accum)
 ```
 
-`quadratic_duration` is unset in this config, so `batch_duration` budgets real
-audio seconds and the step count is exact rather than an estimate.
+At the config's current `batch_duration: 150`, world_size 8 and
+`gradient_accumulation_steps: 4`, that is **2625 steps** over 3500 h, each
+carrying 4800 audio-seconds. `quadratic_duration` is unset, so `batch_duration`
+budgets real audio seconds and the derived count is exact rather than an
+estimate. Change `batch_duration` and the count follows automatically — pinning
+it per arm is how two arms end up trained for different amounts.
 
 ## Why DDP and not FSDP2
 
@@ -212,7 +217,8 @@ transient).
 
 ## Resuming
 
-At 6.81 s/it, one epoch of 2188 steps is **~4.1 h of training** plus ~9 min
+At the 6.81 s/it measured on the 180 s configuration, one epoch is **~4.1 h
+of training** plus ~9 min
 of startup, so stage 1 *does* fit in a single 12 h allocation — an earlier
 revision of this file said it did not, on the strength of the inflated
 s/it above. A 6 h request is the better ask: it fits with room to spare and
@@ -309,12 +315,12 @@ model the very cuts it has already seen.
 | Init | `meta-llama/Llama-3.2-1B-Instruct` | stage 1's output dir |
 | Data | 5 ASR langs, 3500 h | 5 ASR + 5 ST, **6,729.9 h** |
 | Prompt | `"{audio_token}"`, no instruction | per-task instruction |
-| `batch_duration` | 180 s | 120 s |
+| `batch_duration` | 150 s | 120 s |
 | `max_duration` | 60 s | 60 s |
 | `max_tokens` | 400 | 400 |
 | Seed | 42 | 1337 |
 | LR | `adapter_lr: 2e-5` | `decoder_lr: 2e-5` |
-| One epoch | 2188 steps | **6310 steps** |
+| One epoch | derived (2625 at bd 150) | derived (6310 at bd 120) |
 
 The prompt difference is the stage's whole point. Stage 1 trains on a bare
 `{audio_token}` because modality alignment has one task and no instruction to

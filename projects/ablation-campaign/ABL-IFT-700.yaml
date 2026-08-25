@@ -38,9 +38,13 @@
 #      An earlier revision of this file used 90 while stage 1 ran at an
 #      unintended 30; both were corrected to 60 together, and the stage-1
 #      run was redone rather than reused.
-#   7. quadratic_duration null and batch_duration 180 -> 120.
-#   8. run.memory_preallocation: true -- a worst-case warmup pass on step 1.
-#   9. adapter._type: mlp, matching the stage-1 checkpoint. Inert while
+#   7. quadratic_duration null, and batch_duration 120 (stage 1 runs at 150;
+#      stage 2 is lower because the trainable decoder adds ~14.8 GB of
+#      resident gradients and optimizer state).
+#   8. bucket_duration_bins re-measured for the 60 s cap -- see the comment
+#      on them. A stale set is an OOM, not a throughput nuisance.
+#   9. run.memory_preallocation: true -- a worst-case warmup pass on step 1.
+#  10. adapter._type: mlp, matching the stage-1 checkpoint. Inert while
 #      model.ckpt is set (the architecture is read from the checkpoint) but
 #      wrong if this config is ever run without it.
 
@@ -493,16 +497,19 @@ data:
     lhotse_sampler_type: dynamic_bucketing  # One among: dynamic_bucketing, dynamic, bucketing
     num_buckets: 30
     buffer_size: 10000
-    # Inherited from ABL-MA-700-asr.yaml, not from the template: the template's
-    # bins were measured on a mixture batched at quadratic_duration 35 and do
-    # not describe this one. These came off the stage-1 ASR mixture, which is
-    # five of the ten groups here; the ST half (yodas-granary `ast`, covost2)
-    # draws the same underlying audio as sources already in that mixture, so
-    # the fit is close but not measured. Note both sets were measured under a
-    # 30 s cap, so neither describes the 30-60 s tail this config now admits --
-    # those cuts all land in the final bucket. Bucketing costs padding
-    # efficiency, not correctness; re-measure if throughput disappoints.
-    bucket_duration_bins: [3.42, 3.88, 4.18, 4.44, 4.68, 4.87, 5.06, 5.23, 5.4, 5.58, 5.76, 5.9, 6.08, 6.24, 6.41, 6.6, 6.8, 7.01, 7.22, 7.46, 7.75, 8.09, 8.5, 9.1, 10.1, 12.67, 14.12, 15.06, 15.9]
+    # Re-measured against the max_duration 60 distribution (see the identical
+    # comment in ABL-MA-700-asr.yaml for why the previous 15.9 s-topped bins
+    # OOM'd job 45025274 at step 700).
+    #
+    # Measured on the stage-1 ASR mixture, which is five of the ten groups
+    # here. The ST half (yodas-granary `ast`, covost2) draws the same
+    # underlying audio as sources already in that mixture -- yodas `ast` is the
+    # same YODAS segments as `asr_only`, covost2 is CommonVoice audio -- so the
+    # fit is close, but it is inherited rather than measured for this exact
+    # mixture.
+    #
+    # RE-MEASURE THESE WHENEVER max_duration CHANGES.
+    bucket_duration_bins: [2.6, 4.0, 5.0, 6.0, 7.02, 8.18, 9.54, 10.56, 11.38, 12.16, 12.94, 13.68, 14.41, 15.14, 15.86, 16.59, 17.32, 18.05, 18.81, 19.58, 21.18, 23.78, 26.32, 28.9, 33.18, 35.62, 36.98, 38.08, 39.08]
 
     # Drop cuts whose transcript is pathologically long for their audio.
     #
