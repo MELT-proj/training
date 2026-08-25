@@ -12,6 +12,12 @@
 run:
   exp_name: ABL-MA-700-asr
   dry_run: false
+  # Run a worst-case forward+backward at max_duration and another at
+  # min_duration before step 1, logging peak CUDA memory for each. Cheap
+  # insurance now that max_duration is 60 s: it reports the real peak in the
+  # first minute instead of leaving an OOM to surface mid-run. An OOM in the
+  # warmup pass is caught and warned about rather than fatal.
+  memory_preallocation: true
 
 # =============================================================================
 # Model Configuration
@@ -290,10 +296,13 @@ data:
     # Unset, the charge is exactly `d`, batch_duration means audio seconds, and
     # estimate_steps_per_epoch's inflation factor is exactly 1.0.
     #
-    # Safe here because max_duration is 30 s: the encoder chunks at
-    # max_audio_seq_len=1500 frames (30 s) via _unfold_tensor, so attention
-    # never sees a longer window and cost stays close to linear in audio
-    # seconds.  Re-examine this if max_duration is ever raised.
+    # Still safe at max_duration 60 s.  The encoder chunks at
+    # max_audio_seq_len=1500 frames (30 s) via _unfold_tensor, so its
+    # attention never sees a longer window however long the cut is, and the
+    # decoder runs flash_attention_2, whose memory is linear in sequence
+    # length -- a 60 s cut costs ~2x a 30 s one rather than ~4x.  Compute
+    # still grows quadratically in the decoder, which is a throughput cost,
+    # not an OOM risk.  Re-examine if max_duration is raised much further.
     quadratic_duration: null
 
     # Bucketing for efficient batching
@@ -309,8 +318,31 @@ data:
     shard_seed: 42
 
     # Duration filtering
+    # 60 s.  The earlier 30 s was not deliberate -- it silently dropped every
+    # cut longer than 30 s from training AND validation, which is not the
+    # mixture this config claims to train.  batch_duration still budgets the
+    # batch, so admitting longer cuts changes which audio is seen, not how
+    # much per step.
     min_duration: 0.5
-    max_duration: 30.0
+    max_duration: 60.0
+
+    # Drop cuts whose transcript is pathologically long for their audio.
+    #
+    # Batches are budgeted by *audio* seconds, so a cut with short audio and
+    # a runaway transcript passes the duration constraint and still sets the
+    # padded width of the whole batch.  That is what ended artemis job 328290
+    # at step 4292: 17 cuts, only 224 feature frames, but input_ids
+    # [17, 1158] and 77.45 GB allocated on an 80 GB H100.
+    #
+    # 400 removes only the tail: over an 800-cut head sample of all train
+    # sources, p99 num_tokens is <=195 and the largest single value is 291
+    # (voxpopuli/de).
+    #
+    # Cuts without `custom.num_tokens` are KEPT, not dropped (dataloader's
+    # _token_filter), so this can never silently delete a source -- but note
+    # MLS non-English carries neither num_tokens nor pnc_text, so the filter
+    # is blind on four of this mixture's sources.
+    max_tokens: 400
 
     # DataLoader settings
     num_workers: 1
@@ -479,7 +511,8 @@ data:
     shuffle: false
     drop_last: false
     min_duration: 0.5
-    max_duration: 30.0
+    # Matches train, for the same reason.
+    max_duration: 60.0
     num_workers: 1
     pin_memory: true
     prefetch_factor: 1

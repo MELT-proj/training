@@ -1,7 +1,13 @@
-# Ablation campaign — launching MA at 700 h/language
+# Ablation campaign — the 700 h/language arms on MN5
 
-How to run stage 1 (MA, modality alignment) of the campaign on MN5, with
-Llama 3.2 1B in **both** variants — Base and Instruct — on DDP.
+How to run the campaign's two stages on MN5 with Llama 3.2 1B, on DDP:
+
+- **Stage 1 — MA** (modality alignment): adapter trains, everything else
+  frozen. Two arms, **Base** and **Instruct**. Everything up to
+  *Pre-launch check* is about this stage.
+- **Stage 2 — IFT** (instruction fine-tuning): decoder trains, everything
+  else frozen, initialised from stage 1's weights. See
+  [Stage 2 — IFT](#stage-2--ift) at the end.
 
 Both arms run from **one** config, `ABL-MA-700-asr.yaml`. The Base arm is two
 command-line overrides on top of it, not a second file. That is deliberate: it
@@ -57,8 +63,8 @@ Both launchers wrap `infra/runners/submit-container.sh`, which submits an
 ```bash
 infra/runners/submit-container.sh mn5 config/accelerate/ddp.yaml \
     --config projects/ablation-campaign/ABL-MA-700-asr.yaml \
-    --run.exp_name "MA-700asr-w2vbF-llama1bInsF-mlpT-s42-8g" \
-    --trainer.output_dir "/workspace/outputs/MA-700asr-w2vbF-llama1bInsF-mlpT-s42-8g" \
+    --run.exp_name "MA-700asr-w2vbF-llama1bInsF-mlpT-s42-8g-md60" \
+    --trainer.output_dir "/workspace/outputs/MA-700asr-w2vbF-llama1bInsF-mlpT-s42-8g-md60" \
     --trainer.num_train_epochs 1 \
     --trainer.eval_steps 200 \
     --trainer.save_steps 200 \
@@ -69,6 +75,12 @@ infra/runners/submit-container.sh mn5 config/accelerate/ddp.yaml \
 The decoder, its tokens and the whole chat-template block come from the YAML.
 Nothing about the prompt format is overridden.
 
+> **The `-md60` suffix.** A first pass at this arm ran with an unintended
+> `max_duration: 30` and no `max_tokens` filter, and was discarded. Its output
+> directory still exists under the unsuffixed name; do not point a new run at
+> it, or HF will resume from its `checkpoint-2188` instead of training from
+> scratch. Delete it when you no longer want it — nothing here does.
+
 ### Base
 
 ```bash
@@ -76,8 +88,8 @@ infra/runners/submit-container.sh mn5 config/accelerate/ddp.yaml \
     --config projects/ablation-campaign/ABL-MA-700-asr.yaml \
     --model.decoder.name meta-llama/Llama-3.2-1B \
     --model.decoder.chat_template_from meta-llama/Llama-3.2-1B-Instruct \
-    --run.exp_name "MA-700asr-w2vbF-llama1bBaseF-mlpT-s42-8g" \
-    --trainer.output_dir "/workspace/outputs/MA-700asr-w2vbF-llama1bBaseF-mlpT-s42-8g" \
+    --run.exp_name "MA-700asr-w2vbF-llama1bBaseF-mlpT-s42-8g-md60" \
+    --trainer.output_dir "/workspace/outputs/MA-700asr-w2vbF-llama1bBaseF-mlpT-s42-8g-md60" \
     --trainer.num_train_epochs 1 \
     --trainer.eval_steps 200 \
     --trainer.save_steps 200 \
@@ -95,7 +107,7 @@ Set the topology through the environment, the same for both arms:
 export MELT_NODES=2
 export MELT_GPUS_PER_NODE=4        # -> world_size 8
 export MELT_QOS=acc_ehpc
-export MELT_TIME=12:00:00
+export MELT_TIME=6:00:00
 export MELT_SEED=42
 ```
 
@@ -187,14 +199,30 @@ Two consequences:
   `model.safetensors` rather than the sharded no-op of issue #91, so a completed
   run needs no consolidation step.
 
-Measured: **12.05 s/it at `batch_duration: 180`** = 478 audio-s per wall-s,
-against 209.7 for the FSDP2 configuration — a 2.28× speedup. Peak GPU was
-32.0 GB of 64 at `batch_duration: 120`.
+Measured over the completed Instruct arm: **6.81 s/it at
+`batch_duration: 180`** in steady state = 846 audio-s per wall-s, against
+209.7 for the FSDP2 configuration — a **4.0× speedup**. Peak GPU was
+32.0 GB of 64 at `batch_duration: 120` (7.29 GB resident + 24.68 GB
+transient).
+
+> An earlier revision of this file quoted 12.05 s/it. That number was taken
+> from a window that still included the one-time 8 min 50 s startup
+> (dataloader construction and `eval_on_start`), so it described the first
+> few minutes rather than the run. The steady-state figure is 6.81.
 
 ## Resuming
 
-Neither arm fits in one 12 h allocation. Submit, let it hit the wall clock,
-then resubmit with:
+At 6.81 s/it, one epoch of 2188 steps is **~4.1 h of training** plus ~9 min
+of startup, so stage 1 *does* fit in a single 12 h allocation — an earlier
+revision of this file said it did not, on the strength of the inflated
+s/it above. A 6 h request is the better ask: it fits with room to spare and
+MN5's backfill scheduler starts it sooner (all three stage-1 allocations
+queued ~5 min at that length).
+
+Resume anyway, because infrastructure will interrupt you — the Instruct arm
+needed three allocations for its one epoch, losing the first to a
+`NODE_FAIL` at step 894 and the second to an NCCL collective timeout at
+step 1862. Submit, and if it dies, resubmit with:
 
 ```bash
     --trainer.resume_from_checkpoint "/workspace/outputs/<EXP_NAME>"
@@ -238,3 +266,175 @@ prints a `measured:` line byte-identical to the config's own. C4 reports a
 top bin that is not the top bin in the list it prints. Tracked in issue #101 —
 the bins are confirmed correct by `infra/estimate_bucket_bins.py`. Do not
 "fix" the config to satisfy B3.
+
+
+---
+
+# Stage 2 — IFT
+
+Instruction fine-tuning, initialised from stage 1's weights. **The freeze
+pattern is the mirror image of stage 1**: the decoder trains, the encoder and
+adapter do not.
+
+```bash
+bash projects/ablation-campaign/launch_IFT_700_llama32-1b_mn5.sh
+```
+
+which expands to:
+
+```bash
+infra/runners/submit-container.sh mn5 config/accelerate/ddp.yaml \
+    --config projects/ablation-campaign/ABL-IFT-700.yaml \
+    --run.exp_name "IFT-700both-w2vbF-llama1bInsT-mlpF-s1337-8g" \
+    --trainer.output_dir "/workspace/outputs/IFT-700both-w2vbF-llama1bInsT-mlpF-s1337-8g" \
+    --trainer.num_train_epochs 1 \
+    --trainer.eval_steps 500 \
+    --trainer.save_steps 500 \
+    --trainer.save_total_limit 2 \
+    --trainer.seed 1337
+```
+
+with `MELT_NODES=2`, `MELT_GPUS_PER_NODE=4`, `MELT_SEED=1337`,
+`MELT_TIME=6:00:00`. Note the seed: `run_train.sh` feeds `MELT_SEED` to
+`--data.*.shard_seed`, so leaving it at stage 1's 42 would replay against the
+model the very cuts it has already seen.
+
+## What changes between the stages
+
+| | Stage 1 (MA) | Stage 2 (IFT) |
+|---|---|---|
+| Encoder | frozen | frozen |
+| Adapter | **trainable** (6.3 M) | frozen |
+| Decoder | frozen | **trainable** (~1.24 B) |
+| Init | `meta-llama/Llama-3.2-1B-Instruct` | stage 1's output dir |
+| Data | 5 ASR langs, 3500 h | 5 ASR + 5 ST, **6,729.9 h** |
+| Prompt | `"{audio_token}"`, no instruction | per-task instruction |
+| `batch_duration` | 180 s | 120 s |
+| `max_duration` | 60 s | 60 s |
+| `max_tokens` | 400 | 400 |
+| Seed | 42 | 1337 |
+| LR | `adapter_lr: 2e-5` | `decoder_lr: 2e-5` |
+| One epoch | 2188 steps | **6310 steps** |
+
+The prompt difference is the stage's whole point. Stage 1 trains on a bare
+`{audio_token}` because modality alignment has one task and no instruction to
+give; stage 2 introduces the instructions:
+
+```yaml
+prompt_template_selection: custom
+prompt_template:
+  asr: "{audio_token} Transcribe this audio in {lang}."
+  st:  "{audio_token} Translate this audio to {lang}."
+```
+
+`{lang}` resolves to the **target** language for `st` (`get_tags_from_cut`
+collapses `lang` to `tgt_lang`), so the X→en directions read "Translate this
+audio to English."
+
+## No consolidation step
+
+`model.ckpt` points at stage 1's **run directory**, not a `checkpoint-N/`
+subdirectory. Stage 1 ran on DDP, so `Trainer.save_model` wrote consolidated
+`model-0000N-of-00002.safetensors` alongside `config.json`,
+`preprocessor_config.json`, the tokenizer and `chat_template.jinja` — exactly
+what `MELTForCausalLM.from_pretrained` needs.
+
+This is the difference from `ABL-IFT-125.yaml`, whose stage 1 ran on FSDP and
+left sharded state that had to be merged with `utils/merge_fsdp_weight.py`
+first (#91).
+
+`model.decoder.attn_implementation` is still read from the YAML and pushed onto
+the checkpoint's sub-config: a checkpoint's `config.json` records no attention
+implementation, and letting it fall back to sdpa costs ~12× on generation (#86).
+
+## Memory: why `batch_duration` drops 180 → 120
+
+Stage 2 adds resident state that stage 1 never carried. For the 1.24 B
+trainable decoder:
+
+| | |
+|---|---|
+| resident model (1.82 B params, fp32) | 7.29 GB |
+| **+ fp32 gradients** | ~4.9 GB |
+| **+ AdamW's two moments** | ~9.9 GB |
+| transient activations @ 120 s | 24.68 GB *(measured, job 44991596)* |
+| **projected peak** | **~46.8 GB of 64** |
+
+Activations barely change between the stages — stage 1 already backpropagated
+through every decoder layer to reach the adapter, so those tensors were already
+being kept. What is new is ~14.8 GB of resident state that does not depend on
+batch size at all.
+
+Holding `batch_duration` at 120 means the transient term is the one that was
+*measured*, so the projection extrapolates nothing. 180 would put the peak near
+59 GB and leave a batch of long cuts nowhere to go.
+
+`run.memory_preallocation: true` is set in this config: before step 1 it runs a
+forward+backward at `max_duration` and another at `min_duration`, logging peak
+CUDA memory for each. An OOM there is caught and warned about rather than fatal.
+It turns "we might OOM at step 4000" into a number printed in the first minute:
+
+```
+[Preallocation/max_duration] rank=0 — pass complete. Peak CUDA memory: X → Y GB
+```
+
+## Step budget
+
+```
+6729.85 h × 3600 s/h / (120 s × 8 ranks × 4 accum) = 6310 steps
+```
+
+each carrying 3840 audio-seconds. `quadratic_duration` is null, so
+`batch_duration` budgets *real* audio seconds and this is exact rather than an
+estimate (#96). `max_steps` stays `-1` and the trainer derives it — pinning it
+per arm is how two arms end up trained for different amounts.
+
+Checkpoints are much larger here: a trainable decoder means AdamW's moments are
+saved with the weights, so budget **~22 GB each**, ~45 GB for the two kept.
+
+## `max_duration` and `max_tokens`: why the first MA run was discarded
+
+The first pass at stage 1 filtered at `max_duration: 30` with no `max_tokens`,
+which was not intended. MN5 job 45013277's `resolved_config.json`:
+
+```
+train.max_duration = 30.0      train.max_tokens = None
+  val.max_duration = 30.0        val.max_tokens = None
+```
+
+That silently dropped every cut longer than 30 s from training *and*
+validation. The intended 3500 h were still consumed — `batch_duration` budgets
+the batch regardless — but drawn entirely from shorter cuts, so it was not the
+mixture the config claimed to train.
+
+**Both stages now run at `max_duration: 60` and `max_tokens: 400`**, and the
+MA arm was re-run from scratch rather than reused. Re-running rather than
+patching matters because the Base arm had not started: had the config been
+corrected while keeping the finished Instruct weights, the two stage-1 arms
+would have differed in their data filter, and any Base-vs-Instruct difference
+would no longer have been attributable to the backbone.
+
+Nothing about the frozen modules objects to the longer cuts: the `mlp` adapter
+maps frames pointwise and carries no length dependence, and w2v-bert chunks at
+`max_audio_seq_len=1500` frames (30 s) via `_unfold_tensor`, so encoder
+attention never sees a longer window. The decoder runs `flash_attention_2`,
+whose footprint is linear in sequence length, so a 60 s cut costs ~2× a 30 s cut
+in decoder memory rather than ~4×. Compute still grows quadratically, which is a
+throughput cost rather than an OOM risk.
+
+`run.memory_preallocation` is now on in **both** configs, so each run reports
+its true worst-case peak at the new cap before step 1.
+
+## Resuming stage 2
+
+6310 steps does not fit in one 6 h allocation. The launcher forwards extra
+arguments, so:
+
+```bash
+bash projects/ablation-campaign/launch_IFT_700_llama32-1b_mn5.sh \
+    --trainer.resume_from_checkpoint True
+```
+
+`True` (a bool) makes HF scan `output_dir` for the last checkpoint itself.
+Keep `MELT_GPUS_PER_NODE` pinned across the resume or the run dies on a
+`world_size` mismatch.

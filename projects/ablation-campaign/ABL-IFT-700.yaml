@@ -1,0 +1,824 @@
+# ABL-IFT-700 - ablation campaign, stage 2 (instruction fine-tuning) at 700 h
+# per language, initialised from the stage-1 (MA) Llama 3.2 1B Instruct arm.
+#
+# Rendered by build_campaign_config.py from config/train/SFT-v1.4.0.yaml:
+#
+#   python projects/ablation-campaign/build_campaign_config.py \
+#     --template config/train/SFT-v1.4.0.yaml \
+#     --datasets-root $LOCAL_DATASETS_DIR \
+#     --cache projects/ablation-campaign/campaign_hours.json \
+#     --budget-hours 700 --tasks both --exclude-corpus fleurs \
+#     --out projects/ablation-campaign/ABL-IFT-700.yaml
+#
+# Ten groups -- ASR for en/de/fr/es/it and ST for de/fr/es/it -> en plus the
+# en -> de probe -- at 700 h each except en->de, which holds only 429.9 h and
+# draws all of it. 6,729.9 h total, over the same language set stage 1
+# (ABL-MA-700-asr.yaml) trained on. nl/pt/pl/uk stay held out.
+#
+# THE STAGE SPLIT, which is the point of this config: the ENCODER AND ADAPTER
+# ARE FROZEN and the DECODER IS TRAINED -- the reverse of ABL-MA-700-asr.yaml,
+# where only the adapter moved. ~1.24 B parameters are trainable here against
+# 6.3 M there, and that ratio drives every batching and memory choice below.
+#
+# Hand-applied on top of the render (everything else is the generator's):
+#
+#   1. model.ckpt -> the stage-1 run directory. Stage 1 ran on DDP, so it saved
+#      consolidated weights and this is loadable as-is -- no merge step, unlike
+#      ABL-IFT-125, whose FSDP stage-1 checkpoint had to be consolidated first.
+#   2. The decoder block: Llama 3.2 1B Instruct and its tokens, replacing the
+#      template's Qwen3.
+#   3. apply_chat_template: true + chat_template_config: llama3, matching what
+#      stage 1 rendered, so the prompt format does not change under the model.
+#   4. One fixed prompt per task instead of a random draw over TASK_TEMPLATES,
+#      so instruction wording is not a source of variance across arms.
+#   5. seed/shard_seed 1337 rather than stage 1's 42, so stage 2 does not
+#      replay the cuts stage 1 streamed.
+#   6. max_duration 60 and max_tokens 400 -- the same values stage 1 now
+#      carries, so the two stages filter their (shared) ASR corpora alike.
+#      An earlier revision of this file used 90 while stage 1 ran at an
+#      unintended 30; both were corrected to 60 together, and the stage-1
+#      run was redone rather than reused.
+#   7. quadratic_duration null and batch_duration 180 -> 120.
+#   8. run.memory_preallocation: true -- a worst-case warmup pass on step 1.
+#   9. adapter._type: mlp, matching the stage-1 checkpoint. Inert while
+#      model.ckpt is set (the architecture is read from the checkpoint) but
+#      wrong if this config is ever run without it.
+
+# =============================================================================
+# Run Configuration (non-TrainingArguments settings)
+# =============================================================================
+run:
+  exp_name: ABL-IFT-700
+  dry_run: false
+  # Run one forward+backward at max_duration and one at min_duration before
+  # step 1 and log peak CUDA memory for each. Stage 2 holds ~15 GB more
+  # resident state than stage 1 did, so this is what turns "we might OOM at
+  # step 4000" into a number printed in the first minute. Two extra passes,
+  # once, and an OOM in them is caught and warned about rather than fatal.
+  memory_preallocation: true
+
+# =============================================================================
+# Model Configuration
+# =============================================================================
+model:
+  encoder:
+    name: facebook/w2v-bert-2.0
+    freeze: true
+    max_audio_seq_len: 1500 # for frames of 20ms, this is 30s
+
+  decoder:
+    # The stage-1 backbone. While model.ckpt is set, `name` does not build the
+    # model -- MELTConfig and the processor both come from the checkpoint --
+    # but attn_implementation below IS read from here and pushed onto the
+    # checkpoint's sub-config, so this block is not decorative. A checkpoint's
+    # config.json records no attention implementation, and letting it fall back
+    # to sdpa costs ~12x on generation (#86).
+    name: meta-llama/Llama-3.2-1B-Instruct
+    attn_implementation: flash_attention_2
+    # THE stage-2 switch: the decoder trains here, the adapter does not.
+    freeze: false
+    eos_token: <|eot_id|>
+    pad_token: <|finetune_right_pad_id|>
+    audio_token: <|audio|>
+    audio_bos_token: <|audio_bos|>
+    audio_eos_token: <|audio_eos|>
+
+  adapter:
+    # Frozen here: stage 1 trained it, stage 2 tunes the decoder on top.
+    freeze: true
+    # The campaign baseline, and what the stage-1 checkpoint was trained with.
+    # Inert while model.ckpt is set, but leaving the template's `conformer`
+    # here would silently build the wrong model if the checkpoint were removed.
+    _type: mlp
+
+  # Stage 2 initialises from the stage-1 (MA) model: the one-epoch run over
+  # ABL-MA-700-asr.yaml at max_duration 60 / max_tokens 400.
+  #
+  # The `-md60` suffix distinguishes it from the first MA run, which reached
+  # WER 1.10-1.16 but filtered at an unintended max_duration 30 with no token
+  # filter, and was discarded rather than reused. That run's directory is
+  # left in place (no suffix) and is NOT what this points at.
+  #
+  # That run used DDP, so its output directory already holds consolidated
+  # model-0000N-of-00002.safetensors plus config.json, preprocessor_config.json,
+  # the tokenizer and chat_template.jinja -- exactly what
+  # MELTForCausalLM.from_pretrained needs. Point this at the RUN directory, not
+  # at a checkpoint-N/ subdirectory.
+  #
+  # Container path: OUTPUT_DIR is bound to /workspace/outputs.
+  ckpt: /workspace/outputs/MA-700asr-w2vbF-llama1bInsF-mlpT-s42-8g-md60
+
+# =============================================================================
+# Data Configuration
+# =============================================================================
+data:
+  sample_rate: 16000
+  strict_text_field: true
+
+  # -- Instruction formatting ----------------------------------------------
+  # build_campaign_config.py writes `false` here unconditionally (it renders
+  # modality-alignment configs and expects the run to override it). Stage 2
+  # wants it on, so it is set in the file rather than on the command line.
+  apply_chat_template: true
+
+  # Llama 3's header format -- exactly what stage 1 rendered, so the special
+  # tokens around the assistant turn are the ones this checkpoint was aligned
+  # on. assistant_end is <|eot_id|> and the masking treats the boundaries as
+  # inclusive, so <|eot_id|> is IN the loss: the model is taught to stop, and
+  # the saved generation_config's eos_token_id list contains it (128009).
+  chat_template_config: llama3
+
+  # One fixed prompt per task rather than the default random draw over all
+  # TASK_TEMPLATES entries, so instruction wording is a constant. These are the
+  # first template listed for each task in
+  # melt/training/data/audio/lhotse/helpers.py.
+  #
+  # NOTE this is the prompt difference between the stages: stage 1 trained on a
+  # bare "{audio_token}" with no instruction, because modality alignment has
+  # one task and no instruction to give. Stage 2 is where the instructions
+  # arrive -- that is what "instruction fine-tuning" means here.
+  #
+  # {lang} resolves to the TARGET language for st (get_tags_from_cut collapses
+  # `lang` to tgt_lang), so the st prompt reads "Translate this audio to
+  # English." for the X->en directions and "... to German." for the en-de probe.
+  prompt_template_selection: custom
+  prompt_template:
+    asr: "{audio_token} Transcribe this audio in {lang}."
+    st: "{audio_token} Translate this audio to {lang}."
+
+  train_ds:
+    # Data sources - list of datasets to load
+    # Generated by infra/compute_mix_weights.py — do not hand-edit.
+    # Two-tier language/corpus balancing, Section 3.3.1 of arXiv:2509.14128,
+    # with alpha=0.5 (corpus within language) and beta=0.5 (across languages).
+    #
+    # Group weight   = p_l, the language entry's share of the mix.
+    # Child weight   = p_c, the corpus's share within its language entry.
+    # The two levels are muxed separately, so the sampling probability of a
+    # corpus is the product p_l * p_c. Do not pre-multiply them.
+    #
+    # Do NOT set `reweight_temperature` alongside this file (NeMo only).
+    # alpha/beta are already baked into the weights below; NeMo would raise
+    # them to a further power. Both levels already sum to 1, so the
+    # normalisation itself is a no-op.
+    #
+    # 130 corpora, 65 language entries, 319,054.7 h total.
+    input_cfg:
+      # ASR en: 700.0 h, reference-matched mix
+      - type: group
+        weight: 0.10401420
+        tags:
+          task: asr
+          lang: en
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/en/train
+            weight: 0.36361689
+            tags:
+              task: asr
+              lang: en
+              text_field: custom.metadata.sentence
+            # 254.5 h of cv22_sidon
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/english/train
+            weight: 0.35322971
+            tags:
+              task: asr
+              lang: en
+              text_field: custom.pnc_text
+            # 247.3 h of mls_sidon
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/English/asr_only
+            weight: 0.17169225
+            tags:
+              task: asr
+              lang: en
+            # 120.2 h of yodas-granary
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/en/train
+            weight: 0.11146115
+            tags:
+              task: asr
+              lang: en
+              text_field: custom.pnc_text
+            # 78.0 h of voxpopuli
+      # ASR de: 700.0 h, reference-matched mix
+      - type: group
+        weight: 0.10401420
+        tags:
+          task: asr
+          lang: de
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/de/train
+            weight: 0.36361689
+            tags:
+              task: asr
+              lang: de
+              text_field: custom.metadata.sentence
+            # 254.5 h of cv22_sidon
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/german/train
+            weight: 0.35322971
+            tags:
+              task: asr
+              lang: de
+              text_field: custom.pnc_text
+            # 247.3 h of mls_sidon
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/German/asr_only
+            weight: 0.17169225
+            tags:
+              task: asr
+              lang: de
+            # 120.2 h of yodas-granary
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/de/train
+            weight: 0.11146115
+            tags:
+              task: asr
+              lang: de
+              text_field: custom.pnc_text
+            # 78.0 h of voxpopuli
+      # ASR fr: 700.0 h, reference-matched mix
+      - type: group
+        weight: 0.10401420
+        tags:
+          task: asr
+          lang: fr
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/fr/train
+            weight: 0.36361689
+            tags:
+              task: asr
+              lang: fr
+              text_field: custom.metadata.sentence
+            # 254.5 h of cv22_sidon
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/french/train
+            weight: 0.35322971
+            tags:
+              task: asr
+              lang: fr
+              text_field: custom.pnc_text
+            # 247.3 h of mls_sidon
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/French/asr_only
+            weight: 0.17169225
+            tags:
+              task: asr
+              lang: fr
+            # 120.2 h of yodas-granary
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/fr/train
+            weight: 0.11146115
+            tags:
+              task: asr
+              lang: fr
+              text_field: custom.pnc_text
+            # 78.0 h of voxpopuli
+      # ASR es: 700.0 h, reference-matched mix
+      - type: group
+        weight: 0.10401420
+        tags:
+          task: asr
+          lang: es
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/es/train
+            weight: 0.36361689
+            tags:
+              task: asr
+              lang: es
+              text_field: custom.metadata.sentence
+            # 254.5 h of cv22_sidon
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/spanish/train
+            weight: 0.35322971
+            tags:
+              task: asr
+              lang: es
+              text_field: custom.pnc_text
+            # 247.3 h of mls_sidon
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Spanish/asr_only
+            weight: 0.17169225
+            tags:
+              task: asr
+              lang: es
+            # 120.2 h of yodas-granary
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/es/train
+            weight: 0.11146115
+            tags:
+              task: asr
+              lang: es
+              text_field: custom.pnc_text
+            # 78.0 h of voxpopuli
+      # ASR it: 700.0 h, reference-matched mix
+      - type: group
+        weight: 0.10401420
+        tags:
+          task: asr
+          lang: it
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/it/train
+            weight: 0.36361689
+            tags:
+              task: asr
+              lang: it
+              text_field: custom.metadata.sentence
+            # 254.5 h of cv22_sidon
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/italian/train
+            weight: 0.35322971
+            tags:
+              task: asr
+              lang: it
+              text_field: custom.pnc_text
+            # 247.3 h of mls_sidon
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Italian/asr_only
+            weight: 0.17169225
+            tags:
+              task: asr
+              lang: it
+            # 120.2 h of yodas-granary
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/it/train
+            weight: 0.11146115
+            tags:
+              task: asr
+              lang: it
+              text_field: custom.pnc_text
+            # 78.0 h of voxpopuli
+      # ST de->en: 700.0 h (7,429.1 h available)
+      - type: group
+        weight: 0.10401420
+        tags:
+          task: st
+          src_lang: de
+          tgt_lang: en
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/German/ast
+            weight: 1.00000000
+            tags:
+              task: st
+              src_lang: de
+              tgt_lang: en
+              text_field: custom.translation_en
+      # ST fr->en: 700.0 h (11,511.7 h available)
+      - type: group
+        weight: 0.10401420
+        tags:
+          task: st
+          src_lang: fr
+          tgt_lang: en
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/French/ast
+            weight: 1.00000000
+            tags:
+              task: st
+              src_lang: fr
+              tgt_lang: en
+              text_field: custom.translation_en
+      # ST es->en: 700.0 h (25,833.3 h available)
+      - type: group
+        weight: 0.10401420
+        tags:
+          task: st
+          src_lang: es
+          tgt_lang: en
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Spanish/ast
+            weight: 1.00000000
+            tags:
+              task: st
+              src_lang: es
+              tgt_lang: en
+              text_field: custom.translation_en
+      # ST it->en: 700.0 h (6,024.7 h available)
+      - type: group
+        weight: 0.10401420
+        tags:
+          task: st
+          src_lang: it
+          tgt_lang: en
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Italian/ast
+            weight: 1.00000000
+            tags:
+              task: st
+              src_lang: it
+              tgt_lang: en
+              text_field: custom.translation_en
+      # ST en->de: 429.9 h (429.9 h available)
+      - type: group
+        weight: 0.06387217
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: de
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_de/train
+            weight: 1.00000000
+            tags:
+              task: st
+              src_lang: en
+              tgt_lang: de
+    # Stats
+    # total_hours is overwritten by infra/compute_mix_weights.py from its own
+    # measurement; total_cuts is not (see docs/mixture_weights.md), so it is
+    # maintained here. Both count the 22 yodas-granary ast leaves twice, once
+    # per task, because the mixture draws from each of those leaves twice.
+    total_hours: 6729.85
+    total_cuts: 120949122
+    force_estimate: false
+
+    # Duration filtering
+    # 60 s, matching stage 1 -- both stages stream the same ASR corpora, so
+    # filtering them differently would make a stage-to-stage comparison partly
+    # about which cuts each one was allowed to see.
+    #
+    # Safe for the frozen adapter: `mlp` maps frames pointwise, so it carries
+    # no length dependence and a longer cut is not out of its distribution.
+    # Safe for the encoder: w2v-bert chunks at max_audio_seq_len=1500 frames
+    # (30 s) via _unfold_tensor, so attention never sees a longer window.
+    # Safe for memory: the decoder runs flash_attention_2, whose footprint is
+    # linear in sequence length, so a single 60 s cut costs ~2x a 30 s cut in
+    # decoder memory rather than ~4x. Compute still grows quadratically, which
+    # is a throughput cost, not an OOM risk.
+    min_duration: 0.5
+    max_duration: 60.0
+
+    # Batch settings
+    batch_size: null  # Use batch_duration instead for dynamic batching
+    # 120, down from stage 1's 180, because stage 2 also carries the decoder's
+    # gradients and optimizer state. Sized from measurement, not a guess: MN5
+    # job 44991596 profiled this model at batch_duration 120 and reported peak
+    # 32.0 GB of 64 -- 7.29 GB resident (1.82 B params, fp32) plus 24.68 GB
+    # transient activations.
+    #
+    # Stage 2 adds, for the 1.24 B trainable decoder, fp32 gradients (~4.9 GB)
+    # and AdamW's two moments (~9.9 GB): ~14.8 GB of new RESIDENT state, none
+    # of it dependent on batch size. Activations barely move -- stage 1 already
+    # backpropagated through every decoder layer to reach the adapter, so those
+    # tensors were already being kept; what is new is the weight-gradient
+    # computation, not the stored activations.
+    #
+    #   projected peak at 120 = 7.29 + 14.8 + 24.68 = ~46.8 GB of 64
+    #
+    # Holding batch_duration at the value the transient term was MEASURED at
+    # means that projection extrapolates nothing. 180 would put it near 59 GB
+    # and leave a batch of long cuts nowhere to go. run.memory_preallocation
+    # checks the real number on step 1 rather than trusting this arithmetic.
+    batch_duration: 120  # seconds of audio per batch
+    # Deliberately unset, as in stage 1. lhotse charges each cut
+    # `d + d^2/quadratic_duration`, so with it set batch_duration budgets
+    # *effective* seconds and a "1 epoch" run silently covers less audio than
+    # it claims -- the whole subject of #96. Unset, the charge is exactly `d`,
+    # batch_duration means real audio seconds, and estimate_steps_per_epoch's
+    # inflation factor is exactly 1.0, which is what makes the derived step
+    # count the true number of batches.
+    quadratic_duration: null
+
+    # Bucketing for efficient batching
+    lhotse_sampler_type: dynamic_bucketing  # One among: dynamic_bucketing, dynamic, bucketing
+    num_buckets: 30
+    buffer_size: 10000
+    # Inherited from ABL-MA-700-asr.yaml, not from the template: the template's
+    # bins were measured on a mixture batched at quadratic_duration 35 and do
+    # not describe this one. These came off the stage-1 ASR mixture, which is
+    # five of the ten groups here; the ST half (yodas-granary `ast`, covost2)
+    # draws the same underlying audio as sources already in that mixture, so
+    # the fit is close but not measured. Note both sets were measured under a
+    # 30 s cap, so neither describes the 30-60 s tail this config now admits --
+    # those cuts all land in the final bucket. Bucketing costs padding
+    # efficiency, not correctness; re-measure if throughput disappoints.
+    bucket_duration_bins: [3.42, 3.88, 4.18, 4.44, 4.68, 4.87, 5.06, 5.23, 5.4, 5.58, 5.76, 5.9, 6.08, 6.24, 6.41, 6.6, 6.8, 7.01, 7.22, 7.46, 7.75, 8.09, 8.5, 9.1, 10.1, 12.67, 14.12, 15.06, 15.9]
+
+    # Drop cuts whose transcript is pathologically long for their audio.
+    #
+    # Batches are budgeted by *audio* seconds, so a cut with short audio and a
+    # runaway transcript passes the duration constraint and still sets the
+    # padded width of the whole batch. That is what ended artemis job 328290 at
+    # step 4292: 17 cuts, only 224 feature frames, but input_ids [17, 1158] and
+    # 77.45 GB allocated on an 80 GB H100. Stage 1 ran without this filter
+    # (max_tokens null) and got away with it; it is set here as intended.
+    #
+    # 400 removes only the tail: measured over an 800-cut head sample of all
+    # train sources, p99 num_tokens is <=195 and the largest single value is
+    # 291 (voxpopuli/de).
+    #
+    # Cuts without `custom.num_tokens` are kept, not dropped (see dataloader's
+    # _token_filter), so this can never silently delete a source -- but note
+    # that MLS non-English carries neither num_tokens nor pnc_text, so the
+    # filter is blind on four of this mixture's sources.
+    max_tokens: 400
+
+    # Sampling
+    shuffle: true
+    drop_last: false
+    # Stage 2 draws a different slice of each source than stage 1 did: both
+    # stages stream the same ASR corpora, so reusing 42 would replay audio the
+    # model has already seen. NOTE the launcher overrides shard_seed from
+    # $MELT_SEED, so the submit command must pass MELT_SEED=1337 as well --
+    # the value here is only what a bare `python train.py` would use.
+    seed: 1337
+    # A fixed scalar, not 'randomized': with indexed sources the partitioning
+    # already separates the per-(rank, worker) streams, and the loader ignores
+    # 'randomized' and falls back to `seed` with a warning anyway.
+    shard_seed: 1337
+
+    # DataLoader settings
+    num_workers: 1
+    pin_memory: true
+    prefetch_factor: 32
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+  validation_ds:
+    # Generation-based evaluation costs ~N sequential decoder steps per sample
+    # instead of a single forward, so the full validation set is not affordable.
+    #
+    # NOTE this cap is applied PER NAMED EVAL SET, not per config: here
+    # 7 named eval sets x 200 = ~1400 utterances per eval.
+    #
+    # Measured on an H100 (artemis job 327830): ~2.2 s/utterance at
+    # generation_max_length 64, and the cost is roughly linear in the token
+    # budget because nothing in the training targets teaches the model to stop
+    # (see docs/generation_eval.md) -- so every sample spends the whole budget.
+    # Budget the eval against eval_steps before raising either number.
+    #
+    # materialize_cuts_for_eval applies the cap with a seeded shuffle, so every
+    # run scores the same subset.
+    max_samples: 200
+    input_cfg:
+      # ASR en validation: full cv22_sidon/mls_sidon/voxpopuli sets
+      - type: lhotse_shar
+        name: asr_en
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/en/validation
+        tags:
+          task: asr
+          lang: en
+          text_field: custom.metadata.sentence
+        # 27.3 h of cv22_sidon (validation split)
+      - type: lhotse_shar
+        name: asr_en
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/english/dev
+        tags:
+          task: asr
+          lang: en
+          text_field: custom.pnc_text
+        # 15.8 h of mls_sidon (dev split)
+      - type: lhotse_shar
+        name: asr_en
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/en/validation
+        tags:
+          task: asr
+          lang: en
+          text_field: custom.pnc_text
+        # 5.0 h of voxpopuli (validation split)
+      # ASR de validation: full cv22_sidon/mls_sidon/voxpopuli sets
+      - type: lhotse_shar
+        name: asr_de
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/de/validation
+        tags:
+          task: asr
+          lang: de
+          text_field: custom.metadata.sentence
+        # 2.5 h of cv22_sidon (validation split)
+      - type: lhotse_shar
+        name: asr_de
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/german/dev
+        tags:
+          task: asr
+          lang: de
+          text_field: custom.pnc_text
+        # 14.3 h of mls_sidon (dev split)
+      - type: lhotse_shar
+        name: asr_de
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/de/validation
+        tags:
+          task: asr
+          lang: de
+          text_field: custom.pnc_text
+        # 5.0 h of voxpopuli (validation split)
+      # ASR fr validation: full cv22_sidon/mls_sidon/voxpopuli sets
+      - type: lhotse_shar
+        name: asr_fr
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/fr/validation
+        tags:
+          task: asr
+          lang: fr
+          text_field: custom.metadata.sentence
+        # 24.3 h of cv22_sidon (validation split)
+      - type: lhotse_shar
+        name: asr_fr
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/french/dev
+        tags:
+          task: asr
+          lang: fr
+          text_field: custom.pnc_text
+        # 10.1 h of mls_sidon (dev split)
+      - type: lhotse_shar
+        name: asr_fr
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/fr/validation
+        tags:
+          task: asr
+          lang: fr
+          text_field: custom.pnc_text
+        # 5.0 h of voxpopuli (validation split)
+      # ASR es validation: full cv22_sidon/mls_sidon/voxpopuli sets
+      - type: lhotse_shar
+        name: asr_es
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/es/validation
+        tags:
+          task: asr
+          lang: es
+          text_field: custom.metadata.sentence
+        # 26.8 h of cv22_sidon (validation split)
+      - type: lhotse_shar
+        name: asr_es
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/spanish/dev
+        tags:
+          task: asr
+          lang: es
+          text_field: custom.pnc_text
+        # 10.0 h of mls_sidon (dev split)
+      - type: lhotse_shar
+        name: asr_es
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/es/validation
+        tags:
+          task: asr
+          lang: es
+          text_field: custom.pnc_text
+        # 5.1 h of voxpopuli (validation split)
+      # ASR it validation: full cv22_sidon/mls_sidon/voxpopuli sets
+      - type: lhotse_shar
+        name: asr_it
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/it/validation
+        tags:
+          task: asr
+          lang: it
+          text_field: custom.metadata.sentence
+        # 25.4 h of cv22_sidon (validation split)
+      - type: lhotse_shar
+        name: asr_it
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/italian/dev
+        tags:
+          task: asr
+          lang: it
+          text_field: custom.pnc_text
+        # 5.2 h of mls_sidon (dev split)
+      - type: lhotse_shar
+        name: asr_it
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/it/validation
+        tags:
+          task: asr
+          lang: it
+          text_field: custom.pnc_text
+        # 4.5 h of voxpopuli (validation split)
+      # ST en->de validation (dev split): 26.0 h. No X->en probe: yodas-granary's `ast` sets have no held-out split.
+      - type: lhotse_shar
+        name: st_en_de
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_de/dev
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: de
+    # Statistics
+    total_hours: 212.08
+    total_cuts: 28815
+    force_estimate: true
+
+    # data.strict_text_field is not inherited by eval (resolve_eval_data_config
+    # only carries apply_chat_template/prompt_template/*/chat_template_config,
+    # dataloader.py:1226-1231), so it is set explicitly here to match training.
+    strict_text_field: true
+
+    # Batch composition
+    batch_size: 16
+    batch_duration: null
+
+    buffer_size: 20000
+    shuffle: false
+    drop_last: true
+    min_duration: 0.5
+    # Matches train, and matches what stage 1 validates on.
+    max_duration: 60.0
+    num_workers: 0
+    pin_memory: true
+    prefetch_factor: null
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+# =============================================================================
+# Trainer Configuration
+# =============================================================================
+trainer:
+  output_dir: ${oc.env:OUTPUT_DIR}
+  overwrite_output_dir: false
+  resume_from_checkpoint: null
+  # Stage 2, so 1337 rather than stage 1's 42. See data.train_ds.seed.
+  seed: 1337
+  do_train: true
+  do_eval: true
+  eval_on_start: true
+  average_tokens_across_devices: true
+
+  # Batch and accumulation
+  per_device_train_batch_size: -1  # Handled by Lhotse, set to 1
+  # Eval does NOT go through Lhotse -- it uses a plain DataLoader, and -1 here
+  # crashes the first eval. 4 is known-good; 16 OOMs on 64 GB H100s. Do not
+  # raise it in this stage: eval runs while the optimizer state is resident.
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 4
+
+  # LR schedule
+  lr_scheduler_type: cosine
+  # 20 steps of a ~6300-step run. Inherited from the campaign recipe rather
+  # than tuned for this stage; it is short for a run that unfreezes 1.24 B
+  # parameters, so watch the first ~50 logged losses for a spike.
+  warmup_steps: 20
+
+  # Duration
+  # One epoch, steps DERIVED rather than pinned, per the campaign convention:
+  # pinning max_steps per arm is how two arms end up trained for different
+  # amounts. quadratic_duration is null, so the derivation is exact:
+  #
+  #   steps = total_hours * 3600 / (batch_duration * world_size * grad_accum)
+  #         = 6729.85 * 3600 / (120 * 8 * 4) = 6310
+  #
+  # each step carrying 120 * 8 * 4 = 3840 audio-seconds.
+  num_train_epochs: 1
+  max_steps: -1
+
+  # Logging
+  logging_strategy: steps
+  logging_steps: 5
+  report_to: wandb
+
+  # Evaluation
+  eval_strategy: steps # "no" # steps
+  # ~12 rounds over 6310 steps, plus eval_on_start. Each round decodes
+  # max_samples per named eval set -- 6 sets x 200 = 1200 utterances -- so it
+  # is not free; stage 1 measured a round at roughly 3 min on 8 GPUs.
+  eval_steps: 500
+  batch_eval_metrics: true
+
+  # Evaluation decodes with generate() -- greedy, at most this many *new*
+  # tokens (MELT's prompt is audio, so generation_max_length is read as a
+  # new-token budget; see MELTTrainer._generation_kwargs).
+  predict_with_generate: true
+  # 256, matching stage 1, so stage-2 WER is comparable with the 1.10-1.16 the
+  # MA run ended at. ABL-IFT-125 used 64 for cost reasons; that number is not
+  # comparable with either. Cost is bounded well below the budget here because
+  # <|eot_id|> is in the loss, so the model does stop on its own.
+  generation_max_length: 256
+  generation_num_beams: 1
+
+  # Checkpointing
+  save_strategy: steps
+  # NOTE these checkpoints are far larger than stage 1's. A trainable decoder
+  # means the optimizer state is saved too: ~7.3 GB of weights plus ~14.8 GB of
+  # AdamW moments, so budget ~22 GB per checkpoint and ~45 GB for the two kept.
+  save_steps: 500
+  save_total_limit: 2
+
+  # Performance
+  bf16: true
+  group_by_length: false
+  dataloader_num_workers: 4  # Eval-only knob (train workers come from data.train_ds.num_workers)
+  remove_unused_columns: false
+  # False is correct here even though the decoder is now trainable: every
+  # decoder parameter participates in every forward. Setting it true would add
+  # an unused-parameter scan to each step for nothing.
+  ddp_find_unused_parameters: false
+
+  max_grad_norm: 1.0
+
+evaluation:
+  compute_metrics: true
+  enable_whisper_normalization: true
+  # Reference/hypothesis pairs printed to stdout and logged to W&B each eval.
+  # 0 disables.
+  log_num_samples: 10
+
+optimization:
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  # encoder_lr: 6e-6 # Not used since it's frozen
+  # adapter_lr: 2e-4 # Not used since it's frozen
+  # The only learning rate that does anything in this stage.
+  decoder_lr: 2e-5
+  min_lr_scale: 0.1

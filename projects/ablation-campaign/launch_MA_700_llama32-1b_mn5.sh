@@ -22,7 +22,12 @@ set -euo pipefail
 # --- run identity ----------------------------------------------------------
 # stage - hours+task - encoder - decoder - adapter - seed - world size.
 # Trailing F = frozen, T = trainable.
-EXP_NAME="MA-700asr-w2vbF-llama1bInsF-mlpT-s42-8g"
+# The `-md60` suffix marks this as the re-run at max_duration 60 / max_tokens
+# 400. The first MA run filtered at an unintended max_duration 30 with no token
+# filter; its output directory (same name without the suffix) is left in place
+# and must NOT be reused -- pointing a new run at it would make HF resume from
+# its checkpoint-2188 rather than train from scratch.
+EXP_NAME="MA-700asr-w2vbF-llama1bInsF-mlpT-s42-8g-md60"
 
 # --- topology --------------------------------------------------------------
 # MELT_GPUS_PER_NODE is pinned, not autodetected: MN5 allocates `acc` nodes
@@ -34,18 +39,24 @@ export MELT_GPUS_PER_NODE=4          # -> world_size 8
 export MELT_QOS="${MELT_QOS:-acc_ehpc}"
 export MELT_SEED=42
 
-# This arm does NOT fit in one allocation. At batch_duration 180, world_size 8
-# and gradient_accumulation_steps 4, one epoch over 3500 h is
+# This arm DOES fit in one allocation. At batch_duration 180, world_size 8 and
+# gradient_accumulation_steps 4, one epoch over 3500 h is
 #   ceil(3500 * 3600 / 180 / 8 / 4) = 2188 steps
-# each carrying 180 * 8 * 4 = 5760 audio-seconds. The 125 h arm on FSDP with
-# activation checkpointing managed ~210 audio-seconds per wall-second, so this
-# beats it only if a step lands under ~27.5 s. Plan on resuming either way:
-# submit, let it hit the wall clock, resubmit with
-# --trainer.resume_from_checkpoint pointed at the RUN DIRECTORY (never at a
-# checkpoint-N subdir -- train.py calls get_last_checkpoint on what it is
-# given). batch_duration has already been raised to the measured ceiling; the
-# remaining levers are train num_workers (still 1) and eval batch size.
-export MELT_TIME="${MELT_TIME:-12:00:00}"
+# each carrying 180 * 8 * 4 = 5760 audio-seconds. The completed run measured
+# 6.81 s/it in steady state (846 audio-s per wall-second, 4.0x the FSDP
+# configuration's 209.7), so one epoch is ~4.1 h of training plus ~9 min of
+# one-time startup.
+#
+# 6 h rather than 12: it fits with room to spare, and MN5's backfill scheduler
+# starts short jobs sooner -- every allocation at this length has queued for
+# under 7 minutes.
+#
+# Resume anyway, because infrastructure will interrupt you: the first attempt
+# at this arm needed three allocations, losing one to a NODE_FAIL and one to an
+# NCCL collective timeout. Resubmit with --trainer.resume_from_checkpoint
+# pointed at the RUN DIRECTORY, never at a checkpoint-N subdir (train.py calls
+# get_last_checkpoint on whatever it is given).
+export MELT_TIME="${MELT_TIME:-6:00:00}"
 
 # --- step budget -----------------------------------------------------------
 # One epoch, steps derived, per the campaign convention: pinning max_steps per
