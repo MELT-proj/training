@@ -33,11 +33,11 @@
 #      so instruction wording is not a source of variance across arms.
 #   5. seed/shard_seed 1337 rather than stage 1's 42, so stage 2 does not
 #      replay the cuts stage 1 streamed.
-#   6. max_duration 90 and max_tokens 400 (see both). NOTE this is a DIVERGENCE
-#      from the stage-1 run, which was intended to carry the same two settings
-#      and did not: MN5 job 45013277's resolved_config.json records
-#      max_duration 30.0 and max_tokens null, so stage 1 was trained and
-#      validated on a strictly shorter slice of each source than stage 2 sees.
+#   6. max_duration 60 and max_tokens 400 -- the same values stage 1 now
+#      carries, so the two stages filter their (shared) ASR corpora alike.
+#      An earlier revision of this file used 90 while stage 1 ran at an
+#      unintended 30; both were corrected to 60 together, and the stage-1
+#      run was redone rather than reused.
 #   7. quadratic_duration null and batch_duration 180 -> 120.
 #   8. run.memory_preallocation: true -- a worst-case warmup pass on step 1.
 #   9. adapter._type: mlp, matching the stage-1 checkpoint. Inert while
@@ -91,9 +91,13 @@ model:
     # here would silently build the wrong model if the checkpoint were removed.
     _type: mlp
 
-  # Stage 2 initialises from the stage-1 (MA) model: the one-epoch, 2188-step
-  # run over ABL-MA-700-asr.yaml (MN5 jobs 45001628 -> 45010617 -> 45013277),
-  # which ended at eval WER 1.10-1.16 across en/de/fr/es/it.
+  # Stage 2 initialises from the stage-1 (MA) model: the one-epoch run over
+  # ABL-MA-700-asr.yaml at max_duration 60 / max_tokens 400.
+  #
+  # The `-md60` suffix distinguishes it from the first MA run, which reached
+  # WER 1.10-1.16 but filtered at an unintended max_duration 30 with no token
+  # filter, and was discarded rather than reused. That run's directory is
+  # left in place (no suffix) and is NOT what this points at.
   #
   # That run used DDP, so its output directory already holds consolidated
   # model-0000N-of-00002.safetensors plus config.json, preprocessor_config.json,
@@ -102,7 +106,7 @@ model:
   # at a checkpoint-N/ subdirectory.
   #
   # Container path: OUTPUT_DIR is bound to /workspace/outputs.
-  ckpt: /workspace/outputs/MA-700asr-w2vbF-llama1bInsF-mlpT-s42-8g
+  ckpt: /workspace/outputs/MA-700asr-w2vbF-llama1bInsF-mlpT-s42-8g-md60
 
 # =============================================================================
 # Data Configuration
@@ -439,20 +443,20 @@ data:
     force_estimate: false
 
     # Duration filtering
-    # 90 s, not the template's 120 s and not stage 1's 30 s. Stage 1 was
-    # intended to run at 90 and did not (its resolved_config.json records
-    # 30.0), so this config is the first in the campaign to actually apply it.
+    # 60 s, matching stage 1 -- both stages stream the same ASR corpora, so
+    # filtering them differently would make a stage-to-stage comparison partly
+    # about which cuts each one was allowed to see.
     #
     # Safe for the frozen adapter: `mlp` maps frames pointwise, so it carries
     # no length dependence and a longer cut is not out of its distribution.
     # Safe for the encoder: w2v-bert chunks at max_audio_seq_len=1500 frames
     # (30 s) via _unfold_tensor, so attention never sees a longer window.
     # Safe for memory: the decoder runs flash_attention_2, whose footprint is
-    # linear in sequence length, so a single 90 s cut costs ~3x a 30 s cut in
-    # decoder memory rather than ~9x. Compute still grows quadratically, which
+    # linear in sequence length, so a single 60 s cut costs ~2x a 30 s cut in
+    # decoder memory rather than ~4x. Compute still grows quadratically, which
     # is a throughput cost, not an OOM risk.
     min_duration: 0.5
-    max_duration: 90.0
+    max_duration: 60.0
 
     # Batch settings
     batch_size: null  # Use batch_duration instead for dynamic batching
@@ -495,7 +499,7 @@ data:
     # five of the ten groups here; the ST half (yodas-granary `ast`, covost2)
     # draws the same underlying audio as sources already in that mixture, so
     # the fit is close but not measured. Note both sets were measured under a
-    # 30 s cap, so neither describes the 30-90 s tail this config now admits --
+    # 30 s cap, so neither describes the 30-60 s tail this config now admits --
     # those cuts all land in the final bucket. Bucketing costs padding
     # efficiency, not correctness; re-measure if throughput disappoints.
     bucket_duration_bins: [3.42, 3.88, 4.18, 4.44, 4.68, 4.87, 5.06, 5.23, 5.4, 5.58, 5.76, 5.9, 6.08, 6.24, 6.41, 6.6, 6.8, 7.01, 7.22, 7.46, 7.75, 8.09, 8.5, 9.1, 10.1, 12.67, 14.12, 15.06, 15.9]
@@ -709,9 +713,8 @@ data:
     shuffle: false
     drop_last: true
     min_duration: 0.5
-    # Matches train. Stage 1 validated at 30.0, so eval scores are
-    # over a different (shorter) subset than this config's.
-    max_duration: 90.0
+    # Matches train, and matches what stage 1 validates on.
+    max_duration: 60.0
     num_workers: 0
     pin_memory: true
     prefetch_factor: null

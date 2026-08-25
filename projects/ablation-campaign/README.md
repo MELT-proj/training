@@ -63,8 +63,8 @@ Both launchers wrap `infra/runners/submit-container.sh`, which submits an
 ```bash
 infra/runners/submit-container.sh mn5 config/accelerate/ddp.yaml \
     --config projects/ablation-campaign/ABL-MA-700-asr.yaml \
-    --run.exp_name "MA-700asr-w2vbF-llama1bInsF-mlpT-s42-8g" \
-    --trainer.output_dir "/workspace/outputs/MA-700asr-w2vbF-llama1bInsF-mlpT-s42-8g" \
+    --run.exp_name "MA-700asr-w2vbF-llama1bInsF-mlpT-s42-8g-md60" \
+    --trainer.output_dir "/workspace/outputs/MA-700asr-w2vbF-llama1bInsF-mlpT-s42-8g-md60" \
     --trainer.num_train_epochs 1 \
     --trainer.eval_steps 200 \
     --trainer.save_steps 200 \
@@ -75,6 +75,12 @@ infra/runners/submit-container.sh mn5 config/accelerate/ddp.yaml \
 The decoder, its tokens and the whole chat-template block come from the YAML.
 Nothing about the prompt format is overridden.
 
+> **The `-md60` suffix.** A first pass at this arm ran with an unintended
+> `max_duration: 30` and no `max_tokens` filter, and was discarded. Its output
+> directory still exists under the unsuffixed name; do not point a new run at
+> it, or HF will resume from its `checkpoint-2188` instead of training from
+> scratch. Delete it when you no longer want it — nothing here does.
+
 ### Base
 
 ```bash
@@ -82,8 +88,8 @@ infra/runners/submit-container.sh mn5 config/accelerate/ddp.yaml \
     --config projects/ablation-campaign/ABL-MA-700-asr.yaml \
     --model.decoder.name meta-llama/Llama-3.2-1B \
     --model.decoder.chat_template_from meta-llama/Llama-3.2-1B-Instruct \
-    --run.exp_name "MA-700asr-w2vbF-llama1bBaseF-mlpT-s42-8g" \
-    --trainer.output_dir "/workspace/outputs/MA-700asr-w2vbF-llama1bBaseF-mlpT-s42-8g" \
+    --run.exp_name "MA-700asr-w2vbF-llama1bBaseF-mlpT-s42-8g-md60" \
+    --trainer.output_dir "/workspace/outputs/MA-700asr-w2vbF-llama1bBaseF-mlpT-s42-8g-md60" \
     --trainer.num_train_epochs 1 \
     --trainer.eval_steps 200 \
     --trainer.save_steps 200 \
@@ -101,7 +107,7 @@ Set the topology through the environment, the same for both arms:
 export MELT_NODES=2
 export MELT_GPUS_PER_NODE=4        # -> world_size 8
 export MELT_QOS=acc_ehpc
-export MELT_TIME=12:00:00
+export MELT_TIME=6:00:00
 export MELT_SEED=42
 ```
 
@@ -304,8 +310,8 @@ model the very cuts it has already seen.
 | Data | 5 ASR langs, 3500 h | 5 ASR + 5 ST, **6,729.9 h** |
 | Prompt | `"{audio_token}"`, no instruction | per-task instruction |
 | `batch_duration` | 180 s | 120 s |
-| `max_duration` | 30 s *(see below)* | 90 s |
-| `max_tokens` | unset *(see below)* | 400 |
+| `max_duration` | 60 s | 60 s |
+| `max_tokens` | 400 | 400 |
 | Seed | 42 | 1337 |
 | LR | `adapter_lr: 2e-5` | `decoder_lr: 2e-5` |
 | One epoch | 2188 steps | **6310 steps** |
@@ -386,38 +392,38 @@ per arm is how two arms end up trained for different amounts.
 Checkpoints are much larger here: a trainable decoder means AdamW's moments are
 saved with the weights, so budget **~22 GB each**, ~45 GB for the two kept.
 
-## Known divergence from stage 1: `max_duration` and `max_tokens`
+## `max_duration` and `max_tokens`: why the first MA run was discarded
 
-Stage 1 was **intended** to run with `max_duration: 90` and a `max_tokens`
-filter, and did not. MN5 job 45013277's `resolved_config.json` records:
+The first pass at stage 1 filtered at `max_duration: 30` with no `max_tokens`,
+which was not intended. MN5 job 45013277's `resolved_config.json`:
 
 ```
 train.max_duration = 30.0      train.max_tokens = None
   val.max_duration = 30.0        val.max_tokens = None
 ```
 
-So the stage-1 model was aligned, and validated, on a strictly shorter slice of
-each source than stage 2 sees. Two things follow:
+That silently dropped every cut longer than 30 s from training *and*
+validation. The intended 3500 h were still consumed — `batch_duration` budgets
+the batch regardless — but drawn entirely from shorter cuts, so it was not the
+mixture the config claimed to train.
 
-1. **The practical loss is small.** That mixture's measured bucket bins top out
-   at 15.9 s, so cuts beyond 30 s are a thin tail, and the hours actually
-   consumed still add up to the intended 3500 — drawn from shorter cuts.
-2. **The Base arm has not run yet.** If `ABL-MA-700-asr.yaml` is corrected to
-   90 now, the two stage-1 arms differ in their data filter and a Base-vs-Instruct
-   difference stops being attributable to the backbone. Either both arms stay at
-   30, or the Instruct arm is re-run at 90 (~4.1 h). **This is an open
-   decision** — the MA config has deliberately not been changed.
-
-`ABL-IFT-700.yaml` applies both settings as intended, which is why the table
-above shows them differing across the stages.
+**Both stages now run at `max_duration: 60` and `max_tokens: 400`**, and the
+MA arm was re-run from scratch rather than reused. Re-running rather than
+patching matters because the Base arm had not started: had the config been
+corrected while keeping the finished Instruct weights, the two stage-1 arms
+would have differed in their data filter, and any Base-vs-Instruct difference
+would no longer have been attributable to the backbone.
 
 Nothing about the frozen modules objects to the longer cuts: the `mlp` adapter
 maps frames pointwise and carries no length dependence, and w2v-bert chunks at
 `max_audio_seq_len=1500` frames (30 s) via `_unfold_tensor`, so encoder
 attention never sees a longer window. The decoder runs `flash_attention_2`,
-whose footprint is linear in sequence length, so a 90 s cut costs ~3× a 30 s cut
-in decoder memory rather than ~9×. Compute still grows quadratically, which is a
+whose footprint is linear in sequence length, so a 60 s cut costs ~2× a 30 s cut
+in decoder memory rather than ~4×. Compute still grows quadratically, which is a
 throughput cost rather than an OOM risk.
+
+`run.memory_preallocation` is now on in **both** configs, so each run reports
+its true worst-case peak at the new cap before step 1.
 
 ## Resuming stage 2
 

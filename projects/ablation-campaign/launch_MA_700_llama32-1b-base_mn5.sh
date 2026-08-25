@@ -35,18 +35,24 @@ set -euo pipefail
 # --- run identity ----------------------------------------------------------
 # stage - hours+task - encoder - decoder - adapter - seed - world size.
 # Trailing F = frozen, T = trainable.
-EXP_NAME="MA-700asr-w2vbF-llama1bBaseF-mlpT-s42-8g"
+# The `-md60` suffix marks this as the re-run at max_duration 60 / max_tokens
+# 400. The first MA run filtered at an unintended max_duration 30 with no token
+# filter; its output directory (same name without the suffix) is left in place
+# and must NOT be reused -- pointing a new run at it would make HF resume from
+# its checkpoint-2188 rather than train from scratch.
+EXP_NAME="MA-700asr-w2vbF-llama1bBaseF-mlpT-s42-8g-md60"
 
 # --- topology --------------------------------------------------------------
 # Identical to the instruct arm, deliberately: same data, same batch_duration,
 # same 2188-step epoch. See launch_MA_700_llama32-1b_mn5.sh for why
 # MELT_GPUS_PER_NODE is pinned rather than autodetected (PR #90), and for the
-# resume procedure -- this arm does not fit in one allocation either.
+# resume procedure. One epoch is ~4.1 h of training, so it fits in the 6 h
+# requested below; resume only if infrastructure interrupts it.
 export MELT_NODES=2
 export MELT_GPUS_PER_NODE=4          # -> world_size 8
 export MELT_QOS="${MELT_QOS:-acc_ehpc}"
 export MELT_SEED=42
-export MELT_TIME="${MELT_TIME:-12:00:00}"
+export MELT_TIME="${MELT_TIME:-6:00:00}"
 
 # --- step budget -----------------------------------------------------------
 NUM_TRAIN_EPOCHS=1
