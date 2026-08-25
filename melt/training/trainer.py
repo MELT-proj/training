@@ -1192,7 +1192,13 @@ class MELTTrainer(Seq2SeqTrainer):
         features_attention_mask = torch.ones(n_utts, max_audio_frames, device=device, dtype=torch.long)
         # Place the audio token in the synthetic batch so the audio-injection path
         # (and its CUDA memory) is exercised during preallocation.
-        audio_token_id = model.config.audio_token_id
+        # `model` is whatever the training loop was handed, which under DDP is a
+        # DistributedDataParallel wrapper. That proxies forward() but NOT
+        # attribute access, so `model.config` raises AttributeError and takes
+        # the whole run down with it (MN5 job 45024395). Unwrap for the attribute
+        # read only -- compute_loss below must still be called with the wrapper,
+        # or the gradient sync this pass is meant to exercise would not happen.
+        audio_token_id = self.accelerator.unwrap_model(model).config.audio_token_id
         input_ids             = torch.full((n_utts, max_text_len), fill_value=0, device=device, dtype=torch.long)
         input_ids[:, 1]       = audio_token_id
         attention_mask        = torch.ones(n_utts, max_text_len, device=device, dtype=torch.long)
