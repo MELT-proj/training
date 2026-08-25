@@ -279,17 +279,25 @@ data:
             # 78.0 h of voxpopuli
     # Batch settings
     batch_size: null  # Use batch_duration instead for dynamic batching
-    # Raised 120 -> 180 on the smoke run's measurement, not a guess.  MN5 job
-    # 44991596 reported peak GPU 32.0 GB of 64 at batch_duration 120 (7.29 GB
-    # resident model + 24.68 GB transient).  The transient part is activations
-    # and scales roughly linearly with audio seconds per batch, so 180 projects
-    # to ~44 GB -- comfortable.  240 projects to ~57 GB of 64 and would leave a
-    # batch of long cuts nowhere to go, so that is the ceiling to respect.
+    # 150, down from 180, for headroom at max_duration 60.
     #
-    # Re-measure before raising this again: without quadratic_duration a batch
-    # is 180 s of *real* audio, and without activation checkpointing every
-    # layer's activations are kept.
-    batch_duration: 180  # seconds of audio per batch
+    # History, because the number matters and the reasoning was wrong once:
+    # 120 profiled at peak 32.0 GB of 64 (MN5 job 44991596: 7.29 GB resident
+    # model + 24.68 GB transient), which made 180 look comfortable at ~44 GB.
+    # It was, under the 30 s cap that run used.  At max_duration 60 it was not:
+    # job 45025274 OOM'd at step 700 on a batch of input_features
+    # [8, 2880, 160] -- 8 cuts totalling ~180 s of real audio, but PADDED to
+    # 8 x 57.6 s = 461 s of frames, 2.5x the budget, peaking at 61.59 GB.
+    #
+    # The padding came from stale bucket_duration_bins, fixed below, not from
+    # batch_duration.  With homogeneous buckets the worst case falls to roughly
+    # 1.3x the budget; 150 buys margin on top of that rather than relying on
+    # the bins alone.  Both fixes are deliberate: the bins remove the blow-up,
+    # this absorbs what is left.
+    #
+    # Without quadratic_duration a batch is 150 s of *real* audio, and without
+    # activation checkpointing every layer's activations are kept.
+    batch_duration: 150  # seconds of audio per batch
     # Deliberately unset.  lhotse charges each cut `d + d^2/quadratic_duration`,
     # so with it set batch_duration budgets *effective* seconds and a "1 epoch"
     # run silently covers less audio than it claims -- the whole subject of #96.
@@ -309,7 +317,24 @@ data:
     lhotse_sampler_type: dynamic_bucketing  # One among: dynamic_bucketing, dynamic, bucketing
     num_buckets: 30
     buffer_size: 10000
-    bucket_duration_bins: [3.42, 3.88, 4.18, 4.44, 4.68, 4.87, 5.06, 5.23, 5.4, 5.58, 5.76, 5.9, 6.08, 6.24, 6.41, 6.6, 6.8, 7.01, 7.22, 7.46, 7.75, 8.09, 8.5, 9.1, 10.1, 12.67, 14.12, 15.06, 15.9]
+    # Re-measured with infra/estimate_bucket_bins.py against the actual
+    # max_duration 60 distribution (train sources only, on nyx).
+    #
+    # The previous bins were measured under the old 30 s cap and topped out at
+    # 15.9 s. Once max_duration became 60, every cut from 15.9-60 s fell into
+    # ONE final bucket: lhotse filled a batch to batch_duration of *real* audio
+    # from that bucket and then padded every item to the longest, so 8 cuts
+    # totalling ~180 s became 8 x 57.6 s = 461 s of padded frames. That is what
+    # OOM'd job 45025274 at step 700, peaking at 61.59 GB of 63.29.
+    #
+    # The new top edge is 39.08, so the final bucket spans [39.08, 60] -- a
+    # 1.54x spread instead of 3.8x, bounding padding waste at roughly 1.2x the
+    # budget. Longest cut in the mixture is 59.5 s.
+    #
+    # RE-MEASURE THESE WHENEVER max_duration CHANGES. They are a property of
+    # the duration distribution under that filter, and a stale set is not a
+    # throughput nuisance -- it is an OOM.
+    bucket_duration_bins: [2.6, 4.0, 5.0, 6.0, 7.02, 8.18, 9.54, 10.56, 11.38, 12.16, 12.94, 13.68, 14.41, 15.14, 15.86, 16.59, 17.32, 18.05, 18.81, 19.58, 21.18, 23.78, 26.32, 28.9, 33.18, 35.62, 36.98, 38.08, 39.08]
 
     # Sampling
     shuffle: true

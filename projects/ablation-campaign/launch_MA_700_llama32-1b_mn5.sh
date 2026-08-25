@@ -39,13 +39,18 @@ export MELT_GPUS_PER_NODE=4          # -> world_size 8
 export MELT_QOS="${MELT_QOS:-acc_ehpc}"
 export MELT_SEED=42
 
-# This arm DOES fit in one allocation. At batch_duration 180, world_size 8 and
-# gradient_accumulation_steps 4, one epoch over 3500 h is
-#   ceil(3500 * 3600 / 180 / 8 / 4) = 2188 steps
-# each carrying 180 * 8 * 4 = 5760 audio-seconds. The completed run measured
-# 6.81 s/it in steady state (846 audio-s per wall-second, 4.0x the FSDP
-# configuration's 209.7), so one epoch is ~4.1 h of training plus ~9 min of
-# one-time startup.
+# This arm fits in one allocation. Steps are NOT set here -- max_steps stays
+# -1 and the trainer derives one epoch from the config:
+#   ceil(total_hours * 3600 / batch_duration / world_size / grad_accum)
+# which at the config's current batch_duration 150, world_size 8 and
+# gradient_accumulation_steps 4 comes to 2625 steps over 3500 h, each carrying
+# 150 * 8 * 4 = 4800 audio-seconds. Change batch_duration and that number moves
+# on its own; do not pin it back.
+#
+# Throughput measured on the 180 s configuration was 6.81 s/it (846 audio-s per
+# wall-second, 4.0x the FSDP configuration's 209.7). Audio per wall-second is
+# the comparable quantity, so at 150 expect a proportionally shorter step and a
+# similar ~4 h epoch, plus ~9 min of one-time startup.
 #
 # 6 h rather than 12: it fits with room to spare, and MN5's backfill scheduler
 # starts short jobs sooner -- every allocation at this length has queued for
@@ -64,10 +69,10 @@ export MELT_TIME="${MELT_TIME:-6:00:00}"
 #
 # quadratic_duration is unset in this config, so batch_duration budgets real
 # audio seconds and estimate_steps_per_epoch's inflation factor is exactly 1.0
-# -- the derived 2188 is the true number of batches, not an approximation.
+# -- the derived count is the true number of batches, not an approximation.
 NUM_TRAIN_EPOCHS=1
 
-# ~11 eval rounds over 2188 steps, plus eval_on_start. Each round decodes
+# ~13 eval rounds over the derived epoch, plus eval_on_start. Each round decodes
 # max_samples per named eval set, so it is not free; do not shrink this without
 # a reason.
 EVAL_STEPS=200

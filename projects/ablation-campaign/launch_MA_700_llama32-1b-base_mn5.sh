@@ -44,7 +44,7 @@ EXP_NAME="MA-700asr-w2vbF-llama1bBaseF-mlpT-s42-8g-md60"
 
 # --- topology --------------------------------------------------------------
 # Identical to the instruct arm, deliberately: same data, same batch_duration,
-# same 2188-step epoch. See launch_MA_700_llama32-1b_mn5.sh for why
+# same derived one-epoch budget. See launch_MA_700_llama32-1b_mn5.sh for why
 # MELT_GPUS_PER_NODE is pinned rather than autodetected (PR #90), and for the
 # resume procedure. One epoch is ~4.1 h of training, so it fits in the 6 h
 # requested below; resume only if infrastructure interrupts it.
