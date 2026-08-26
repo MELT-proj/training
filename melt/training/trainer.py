@@ -31,6 +31,7 @@ from transformers.trainer_utils import (
 from .. import ddp
 from ..logging_utils import _is_global_master, force_print, get_logger
 from ..modeling import MELTProcessor
+from ..modeling.encoder_specs import get_encoder_spec_for_feature_extractor
 from .duration_tracker import DurationTracker
 from .data.audio.lhotse import (
     FallbackDataset,
@@ -1163,6 +1164,15 @@ class MELTTrainer(Seq2SeqTrainer):
             )
 
         max_audio_frames = int(duration_per_utt / effective_frame_duration_s)
+
+        # An encoder with a fixed input window (Whisper) sees whole windows however
+        # short the clip is, so the real worst case for the min_duration pass is a full
+        # window, not `duration_per_utt` of frames. Round up or preallocation
+        # under-reports by the padding ratio -- 60x for a 0.5 s clip against a 30 s window.
+        window_frames = get_encoder_spec_for_feature_extractor(fe).window_frames
+        if window_frames is not None:
+            max_audio_frames = max(1, -(-max_audio_frames // window_frames)) * window_frames
+
         n_utts           = max(1, int(batch_duration / duration_per_utt))
         # batch_size in config maps to Lhotse's max_cuts: a hard cap on items per batch.
         max_cuts = getattr(train_ds_cfg, "batch_size", None)

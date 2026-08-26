@@ -24,6 +24,7 @@ from transformers.utils import TransformersKwargs
 
 from ..logging_utils import get_logger
 from .configuration_melt import MELTConfig
+from .encoder_specs import get_encoder_spec_for_config
 
 
 logger = get_logger(__name__)
@@ -34,20 +35,38 @@ logger = get_logger(__name__)
 # =============================================================================
 
 
+# The attribute naming the encoder's output width, in preference order. w2v-BERT carries
+# both `hidden_size` and `output_hidden_size` (they differ when its own adapter is
+# active); Whisper carries neither under those names, only `d_model`.
+_ENCODER_HIDDEN_SIZE_ATTRS = ("output_hidden_size", "hidden_size", "d_model")
+
+
+def _get_encoder_hidden_size(encoder_config) -> int:
+    """Return the width of the encoder's last hidden state.
+
+    Raises:
+        AttributeError: if the config names its output width in none of the known ways,
+            which is a signal to add the encoder to ``_ENCODER_HIDDEN_SIZE_ATTRS``
+            rather than something to paper over with a default.
+    """
+    for attr in _ENCODER_HIDDEN_SIZE_ATTRS:
+        size = getattr(encoder_config, attr, None)
+        if size is not None:
+            return size
+    raise AttributeError(
+        f"{type(encoder_config).__name__} exposes none of "
+        f"{_ENCODER_HIDDEN_SIZE_ATTRS}, so the adapter cannot size its input "
+        "projection. Add the attribute this encoder uses to "
+        "_ENCODER_HIDDEN_SIZE_ATTRS in melt/modeling/modeling_melt.py."
+    )
+
+
 class MELTMLPAdapter(nn.Module):
     """2-layer MLP projector with normalization for stable LLM injection."""
 
     def __init__(self, config: MELTConfig):
         super().__init__()
-        audio_hidden_size = getattr(
-            config.audio_encoder_config,
-            "output_hidden_size",
-            getattr(
-                config.audio_encoder_config,
-                "hidden_size",
-                config.audio_encoder_config.output_hidden_size,
-            ),
-        )
+        audio_hidden_size = _get_encoder_hidden_size(config.audio_encoder_config)
         out = config.text_decoder_config.hidden_size
         adapter_cfg = getattr(config, "adapter_config", None)
         mid = (
@@ -68,22 +87,25 @@ class MELTMLPAdapter(nn.Module):
 
     def _get_output_features_shape(
         self,
-        input_features: torch.Tensor,
+        input_shape: tuple[int, int, int],
         features_attention_mask: torch.Tensor | None = None,
+        device: torch.device | None = None,
     ) -> tuple[tuple[int, int, int], torch.Tensor | None]:
         """
         Compute the expected output shape after passing through this adapter.
 
         Args:
-            input_features: Input tensor of shape (batch_size, seq_len, hidden_size)
+            input_shape: Shape of the adapter's input, (batch_size, seq_len, hidden_size).
+                This is the *encoder output* shape, not the raw feature shape.
             features_attention_mask: Optional attention mask of shape (batch_size, seq_len)
+            device: Device to build any new mask on.
 
         Returns:
             Tuple of (output_shape, output_attention_mask):
                 - output_shape: (batch_size, output_seq_len, output_hidden_size)
                 - output_attention_mask: Same as input (MLP preserves sequence length)
         """
-        batch_size, seq_len, _ = input_features.shape
+        batch_size, seq_len, _ = input_shape
         output_shape = (batch_size, seq_len, self.output_hidden_size)
         return output_shape, features_attention_mask
 
@@ -133,28 +155,31 @@ class MELTQFormerAdapter(nn.Module):
 
     def _get_output_features_shape(
         self,
-        input_features: torch.Tensor,
+        input_shape: tuple[int, int, int],
         features_attention_mask: torch.Tensor | None = None,
+        device: torch.device | None = None,
     ) -> tuple[tuple[int, int, int], torch.Tensor | None]:
         """
         Compute the expected output shape after passing through this adapter.
 
         Args:
-            input_features: Input tensor of shape (batch_size, seq_len, hidden_size)
+            input_shape: Shape of the adapter's input, (batch_size, seq_len, hidden_size).
+                This is the *encoder output* shape, not the raw feature shape.
             features_attention_mask: Optional attention mask of shape (batch_size, seq_len)
+            device: Device to build the output mask on.
 
         Returns:
             Tuple of (output_shape, output_attention_mask):
                 - output_shape: (batch_size, output_seq_len, output_hidden_size)
                 - output_attention_mask: All ones since Q-Former doesn't use input mask
         """
-        batch_size, seq_len, _ = input_features.shape
+        batch_size, seq_len, _ = input_shape
         nblocks = math.ceil(seq_len / self.window_size)
         output_seq_len = nblocks * self.num_queries
         output_shape = (batch_size, output_seq_len, self.output_hidden_size)
         # Q-Former doesn't propagate the attention mask; output is always valid
         output_attention_mask = torch.ones(
-            batch_size, output_seq_len, device=input_features.device
+            batch_size, output_seq_len, device=device
         )
         return output_shape, output_attention_mask
 
@@ -260,22 +285,25 @@ class MELTConformerAdapter(nn.Module):
 
     def _get_output_features_shape(
         self,
-        input_features: torch.Tensor,
+        input_shape: tuple[int, int, int],
         features_attention_mask: torch.Tensor | None = None,
+        device: torch.device | None = None,
     ) -> tuple[tuple[int, int, int], torch.Tensor | None]:
         """
         Compute the expected output shape after passing through this adapter.
 
         Args:
-            input_features: Input tensor of shape (batch_size, seq_len, hidden_size)
+            input_shape: Shape of the adapter's input, (batch_size, seq_len, hidden_size).
+                This is the *encoder output* shape, not the raw feature shape.
             features_attention_mask: Optional attention mask of shape (batch_size, seq_len)
+            device: Device to build the output mask on. Defaults to the mask's own device.
 
         Returns:
             Tuple of (output_shape, output_attention_mask):
                 - output_shape: (batch_size, output_seq_len, output_hidden_size)
                 - output_attention_mask: Subsampled attention mask matching output_seq_len
         """
-        batch_size, seq_len, _ = input_features.shape
+        batch_size, seq_len, _ = input_shape
         output_seq_len = self._compute_output_seq_len(seq_len)
         output_shape = (batch_size, output_seq_len, self.output_hidden_size)
 
@@ -293,18 +321,21 @@ class MELTConformerAdapter(nn.Module):
                     out_lengths
                 )
 
-            out_lengths = out_lengths.to(torch.long).clamp(min=0, max=output_seq_len)
+            mask_device = device if device is not None else features_attention_mask.device
+            out_lengths = (
+                out_lengths.to(torch.long).clamp(min=0, max=output_seq_len).to(mask_device)
+            )
 
             # Build boolean prefix mask of shape (B, output_seq_len)
             output_attention_mask = torch.zeros(
                 (batch_size, output_seq_len),
                 dtype=torch.bool,
-                device=input_features.device,
+                device=mask_device,
             )
             valid = out_lengths > 0
             if valid.any():
                 output_attention_mask[
-                    torch.arange(batch_size, device=input_features.device)[valid],
+                    torch.arange(batch_size, device=mask_device)[valid],
                     out_lengths[valid] - 1,
                 ] = True
                 output_attention_mask = (
@@ -383,8 +414,9 @@ class MELTAudioAdapter(nn.Module):
 
     def _get_output_features_shape(
         self,
-        input_features: torch.Tensor,
+        input_shape: tuple[int, int, int],
         features_attention_mask: torch.Tensor | None = None,
+        device: torch.device | None = None,
     ) -> tuple[tuple[int, int, int], torch.Tensor | None]:
         """
         Compute the expected output shape after passing through this adapter.
@@ -392,8 +424,10 @@ class MELTAudioAdapter(nn.Module):
         Delegates to the underlying adapter implementation.
 
         Args:
-            input_features: Input tensor of shape (batch_size, seq_len, hidden_size)
+            input_shape: Shape of the adapter's input, (batch_size, seq_len, hidden_size).
+                This is the *encoder output* shape, not the raw feature shape.
             features_attention_mask: Optional attention mask of shape (batch_size, seq_len)
+            device: Device to build any new mask on.
 
         Returns:
             Tuple of (output_shape, output_attention_mask):
@@ -401,7 +435,7 @@ class MELTAudioAdapter(nn.Module):
                 - output_attention_mask: Adapter-specific output attention mask
         """
         return self.adapter._get_output_features_shape(
-            input_features, features_attention_mask
+            input_shape, features_attention_mask, device=device
         )
 
     def freeze(self):
@@ -458,27 +492,52 @@ class MELTAudioEncoder(nn.Module):
     def __init__(self, config: MELTConfig, load_pretrained: bool = True):
         super().__init__()
         self.config = config
+        self.spec = get_encoder_spec_for_config(config.audio_encoder_config)
 
         # Maximum sequence length for chunking (default 500 like Phi4)
         self.max_seq_len = getattr(
             config.audio_encoder_config, "max_audio_seq_len", 500
         )
 
+        # An encoder with a fixed input window (Whisper) rejects any other length
+        # outright, so the chunk size is not a free parameter -- it must be the window.
+        window = self.spec.window_frames
+        if window is not None and self.max_seq_len != window:
+            raise ValueError(
+                f"Encoder '{config.audio_encoder}' only accepts inputs of exactly "
+                f"{window} frames, so model.encoder.max_audio_seq_len must be {window} "
+                f"(got {self.max_seq_len}). Longer audio is folded into whole windows "
+                "by the chunking below."
+            )
+
         # Initialize the audio encoder – when loading from a checkpoint the
         # pretrained weights are unnecessary (the checkpoint will overwrite
         # everything), so we use ``from_config`` which is much faster.
         if load_pretrained:
-            self.model = AutoModel.from_pretrained(
+            model = AutoModel.from_pretrained(
                 config.audio_encoder, config=config.audio_encoder_config
             )
         else:
-            self.model = AutoModel.from_config(config.audio_encoder_config)
+            model = AutoModel.from_config(config.audio_encoder_config)
+
+        # Encoder-decoder checkpoints (Whisper) resolve to the full model under
+        # AutoModel; keep only the encoder.
+        self.model = self.spec.unwrap(model)
 
         # Validate that the encoder doesn't have an LM head
         if self.model.get_output_embeddings() is not None:
             raise ValueError(
                 f"The audio encoder {self.model} should not have a LM Head. Please use a model without LM Head."
             )
+
+    def output_lengths(self, input_lengths):
+        """Map input frame counts to output frame counts for this encoder.
+
+        The encoder half of the shape contract that adapters expose through
+        ``_get_output_features_shape``. Identity for frame-synchronous encoders such as
+        w2v-BERT; halves the length for Whisper's strided conv frontend.
+        """
+        return self.spec.output_lengths(input_lengths)
 
     def forward(
         self,
@@ -537,6 +596,12 @@ class MELTAudioEncoder(nn.Module):
         else:
             chunk_mask = features_attention_mask
 
+        # Encoders whose HF implementation takes (batch, features, time) -- Whisper --
+        # are fed transposed here, so everything else in MELT keeps working in
+        # (batch, time, features). Their output is already time-major.
+        if self.spec.is_channel_major:
+            hidden_states = hidden_states.transpose(1, 2)
+
         # Pass through the encoder
         encoder_outputs = self.model(
             hidden_states,
@@ -552,7 +617,13 @@ class MELTAudioEncoder(nn.Module):
         if unfolded:
             hidden_states = hidden_states.reshape(bs, -1, hidden_states.shape[-1])
             if chunk_pad_size > 0:
-                hidden_states = hidden_states[:, :-chunk_pad_size, :]
+                # chunk_pad_size counts *input* frames; a downsampling encoder emits
+                # proportionally fewer, so trimming it verbatim would cut into real
+                # output. (Zero in practice for fixed-window encoders, whose processor
+                # already pads to whole windows.)
+                output_pad_size = self.output_lengths(chunk_pad_size)
+                if output_pad_size > 0:
+                    hidden_states = hidden_states[:, :-output_pad_size, :]
 
         return hidden_states
 
@@ -594,7 +665,63 @@ class MELTAudioStack(nn.Module):
             return_dict=return_dict,
             **kwargs,
         )
-        return self.adapter(hidden_states, attention_mask=features_attention_mask)
+        # The adapter sees the ENCODER's mask, not the raw one: for a downsampling
+        # encoder the two have different lengths, and handing over the raw one would
+        # silently disagree with what _get_output_features_shape below predicts.
+        encoder_mask = self._encoder_output_mask(features_attention_mask, hidden_states.shape[1])
+        return self.adapter(hidden_states, attention_mask=encoder_mask)
+
+    def _encoder_output_mask(
+        self,
+        features_attention_mask: torch.Tensor | None,
+        encoder_seq_len: int,
+    ) -> torch.Tensor | None:
+        """Map a mask over raw feature frames to one over encoder output frames.
+
+        Real audio always occupies a prefix of the frames -- of the whole input for an
+        unchunked encoder, and of each window for a chunked one -- so mapping the
+        lengths and rebuilding a prefix mask is exact either way.
+        """
+        if features_attention_mask is None:
+            return None
+        in_lengths = features_attention_mask.to(torch.long).sum(dim=-1)
+        out_lengths = self.encoder.output_lengths(in_lengths).clamp(min=0, max=encoder_seq_len)
+        positions = torch.arange(encoder_seq_len, device=features_attention_mask.device)
+        mask = positions.unsqueeze(0) < out_lengths.unsqueeze(-1)
+        return mask.to(features_attention_mask.dtype)
+
+    def _get_output_features_shape(
+        self,
+        input_features: torch.Tensor,
+        features_attention_mask: torch.Tensor | None = None,
+    ) -> tuple[tuple[int, int, int], torch.Tensor | None]:
+        """
+        Compute the shape and validity mask of what this stack emits, without running it.
+
+        Composes the two halves of the shape contract: the encoder's frame-rate change
+        first, then the adapter's. Callers pass the *raw feature extractor* output, which
+        is why the encoder half cannot be skipped -- assuming the encoder is
+        length-preserving injects the wrong number of audio placeholder embeddings for
+        anything with a strided frontend.
+
+        Args:
+            input_features: Raw features of shape (batch_size, seq_len, feature_dim)
+            features_attention_mask: Optional mask of shape (batch_size, seq_len)
+
+        Returns:
+            Tuple of (output_shape, output_attention_mask).
+        """
+        batch_size, seq_len, _ = input_features.shape
+        device = input_features.device
+
+        encoder_seq_len = self.encoder.output_lengths(seq_len)
+        encoder_shape = (batch_size, encoder_seq_len, input_features.shape[-1])
+
+        encoder_mask = self._encoder_output_mask(features_attention_mask, encoder_seq_len)
+
+        return self.adapter._get_output_features_shape(
+            encoder_shape, encoder_mask, device=device
+        )
 
     def freeze(self):
         """Freeze all stack parameters (encoder + adapter)."""
@@ -1033,7 +1160,7 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
             # - output_shape: (batch_size, output_seq_len, output_hidden_size)
             # - output_attention_mask: Subsampled attention mask matching output_seq_len
             output_shape, encoder_outputs_mask = (
-                self.audio_stack.adapter._get_output_features_shape(
+                self.audio_stack._get_output_features_shape(
                     input_features, features_attention_mask
                 )
             )
@@ -1545,7 +1672,7 @@ class MELTForSequenceClassification(MELTPreTrainedModel):
 
         if features_attention_mask is not None:
             output_shape, encoder_outputs_mask = (
-                self.audio_stack.adapter._get_output_features_shape(
+                self.audio_stack._get_output_features_shape(
                     input_features, features_attention_mask
                 )
             )

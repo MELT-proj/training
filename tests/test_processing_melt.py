@@ -4,6 +4,7 @@ import tempfile
 import urllib.request
 
 import librosa
+import torch
 import pytest
 
 from melt.modeling import MELT_REQUIRED_SPECIAL_TOKENS, MELTProcessor
@@ -558,3 +559,109 @@ class TestMELTProcessorSaveLoad:
         loaded_out = loaded(text=[text], audio=audio, return_tensors="pt")
 
         assert (original_out["input_ids"] == loaded_out["input_ids"]).all()
+
+
+# ============================================================================
+# Fixed-window encoders (Whisper)
+# ============================================================================
+
+
+@pytest.fixture(scope="module")
+def whisper_processor(tokenizer):
+    """A MELTProcessor wired to Whisper's feature extractor.
+
+    Whisper differs from w2v-BERT in every way the audio path cares about: it emits
+    (B, F, T) rather than (B, T, F), it runs at 100 Hz rather than 50 Hz, and its
+    encoder only accepts whole 30 s windows.
+    """
+    fe = AutoFeatureExtractor.from_pretrained("openai/whisper-large-v3")
+    return MELTProcessor(feature_extractor=fe, tokenizer=tokenizer)
+
+
+WHISPER_WINDOW_FRAMES = 3000
+WHISPER_MEL_BINS = 128
+
+
+def _tone(seconds: float, sr: int = 16000):
+    import numpy as np
+
+    t = np.arange(int(seconds * sr), dtype=np.float32) / sr
+    return (0.1 * np.sin(2 * np.pi * 220.0 * t)).astype(np.float32)
+
+
+class TestWhisperFixedWindowFeatures:
+    def test_spec_is_resolved_from_the_feature_extractor(self, whisper_processor):
+        assert whisper_processor.encoder_spec.window_frames == WHISPER_WINDOW_FRAMES
+        assert whisper_processor.encoder_spec.is_channel_major is True
+
+    @pytest.mark.parametrize(
+        "seconds, expected_windows",
+        [(0.5, 1), (3.0, 1), (29.9, 1), (30.0, 1), (30.1, 2), (45.0, 2), (60.0, 2)],
+    )
+    def test_features_are_time_major_and_a_whole_number_of_windows(
+        self, whisper_processor, seconds, expected_windows
+    ):
+        """Short clips pad up to one window; long ones fold into several."""
+        result = whisper_processor(text="<|audio|>", audio=_tone(seconds), return_tensors="pt")
+
+        features = result["input_features"]
+        assert features.shape == (
+            1,
+            expected_windows * WHISPER_WINDOW_FRAMES,
+            WHISPER_MEL_BINS,
+        )
+
+    @pytest.mark.parametrize("seconds", [0.5, 3.0, 12.0, 45.0])
+    def test_mask_counts_real_frames_at_100_hz(self, whisper_processor, seconds):
+        """The mask, not the tensor width, is what audio_lengths is derived from."""
+        result = whisper_processor(text="<|audio|>", audio=_tone(seconds), return_tensors="pt")
+
+        mask = result["features_attention_mask"]
+        assert mask.shape[:2] == result["input_features"].shape[:2]
+        # hop_length 160 at 16 kHz -> one mel frame per 10 ms.
+        assert int(mask.sum()) == pytest.approx(seconds * 100, abs=1)
+
+    def test_mask_is_a_prefix(self, whisper_processor):
+        """Real audio must occupy a prefix, or mapping lengths through the encoder
+        downsampling would not describe where the valid outputs are."""
+        result = whisper_processor(text="<|audio|>", audio=_tone(12.0), return_tensors="pt")
+
+        mask = result["features_attention_mask"][0].to(torch.bool)
+        n_valid = int(mask.sum())
+        assert mask[:n_valid].all()
+        assert not mask[n_valid:].any()
+
+    def test_batch_pads_on_the_time_axis(self, whisper_processor):
+        """Regression: the old path concatenated and padded on dim 1, which for
+        Whisper's channel-major output is the mel-bin axis."""
+        result = whisper_processor(
+            text=["<|audio|>", "<|audio|>"],
+            audio=[[_tone(3.0)], [_tone(40.0)]],
+            return_tensors="pt",
+        )
+
+        features = result["input_features"]
+        assert features.shape[0] == 2
+        assert features.shape[1] == 2 * WHISPER_WINDOW_FRAMES  # the longer sample
+        assert features.shape[2] == WHISPER_MEL_BINS
+        # The short sample keeps its own valid frames and is zero-padded beyond them.
+        masks = result["features_attention_mask"]
+        assert int(masks[0].sum()) == pytest.approx(300, abs=1)
+        assert int(masks[1].sum()) == pytest.approx(4000, abs=1)
+
+    def test_whisper_encoder_accepts_what_the_processor_produces(self, whisper_processor):
+        """The end of the contract: one window of processor output, transposed the way
+        MELTAudioEncoder transposes it, must be exactly what WhisperEncoder demands."""
+        from transformers import AutoConfig, AutoModel
+
+        result = whisper_processor(text="<|audio|>", audio=_tone(3.0), return_tensors="pt")
+        features = result["input_features"]
+
+        config = AutoConfig.from_pretrained("openai/whisper-large-v3")
+        config.encoder_layers = 1
+        config.decoder_layers = 1
+        encoder = AutoModel.from_config(config).get_encoder().float()
+
+        out = encoder(features.transpose(1, 2).float())[0]
+
+        assert out.shape == (1, config.max_source_positions, config.d_model)

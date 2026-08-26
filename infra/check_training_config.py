@@ -120,6 +120,25 @@ FAIL_CHECKS = {"W1", "W2", "W3", "W4", "N1", "N2", "H1", "H2", "H3", "B1", "B2",
 # hard ceiling in seconds on what the encoder can see.
 ENCODER_FRAME_SECONDS = 0.02
 
+# Encoders whose input frame rate differs from that default, keyed by a substring of
+# ``model.encoder.name``. This deliberately duplicates the ``frame_seconds`` field of
+# ``melt/modeling/encoder_specs.py`` rather than importing it: this script is
+# constrained to PyYAML and numpy so it stays runnable in the lhotse 2 venv, which is
+# the only environment with the data mounted. Keep the two in step.
+ENCODER_FRAME_SECONDS_BY_NAME = {
+    "whisper": 0.01,  # log-mel at hop_length 160 / 16 kHz, no stride-stacking
+}
+
+
+def encoder_frame_seconds(encoder_name: str | None) -> float:
+    """Seconds of audio per encoder *input* frame, for the named encoder."""
+    if encoder_name:
+        lowered = str(encoder_name).lower()
+        for key, seconds in ENCODER_FRAME_SECONDS_BY_NAME.items():
+            if key in lowered:
+                return seconds
+    return ENCODER_FRAME_SECONDS
+
 HIST_RESOLUTION = 0.01
 
 
@@ -1764,8 +1783,9 @@ def check_runtime(
 
     encoder = ((cfg.get("model") or {}).get("encoder") or {})
     max_frames = encoder.get("max_audio_seq_len")
+    frame_seconds = encoder_frame_seconds(encoder.get("name"))
     if max_frames:
-        window = float(max_frames) * ENCODER_FRAME_SECONDS
+        window = float(max_frames) * frame_seconds
         for where in ("train_ds", "validation_ds"):
             split = data.get(where) or {}
             max_duration = split.get("max_duration")
@@ -1775,7 +1795,7 @@ def check_runtime(
                     "C3", where,
                     f"max_duration is {float(max_duration):g} s, above the encoder's "
                     f"{window:g} s window ({max_frames} frames x "
-                    f"{ENCODER_FRAME_SECONDS * 1000:g} ms) -- expected, not a truncation risk",
+                    f"{frame_seconds * 1000:g} ms) -- expected, not a truncation risk",
                     line=line_index.get(f"data.{where}.max_duration"),
                     fix=[f"MELTAudioStack.encoder chunks any sequence longer than {max_frames} "
                          "frames instead of truncating it (modeling_melt.py:509-555): a "

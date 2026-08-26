@@ -15,6 +15,7 @@ from transformers.video_utils import VideoInput
 
 from ..logging_utils import get_logger
 from .configuration_melt import MELT_REQUIRED_SPECIAL_TOKENS
+from .encoder_specs import get_encoder_spec_for_feature_extractor
 
 
 logger = get_logger(__name__)
@@ -96,6 +97,10 @@ class MELTProcessor(ProcessorMixin):
 
         super().__init__(feature_extractor, tokenizer)  # , image_processor, video_processor)
         self.image_processor = None
+
+        # Derived from the feature extractor class, not stored, so it survives
+        # save_pretrained/from_pretrained round-trips without extra serialized state.
+        self.encoder_spec = get_encoder_spec_for_feature_extractor(feature_extractor)
 
         # Verify that the tokenizer has a pad_token and all required MELT special tokens
         self._validate_required_special_tokens(tokenizer)
@@ -345,6 +350,53 @@ class MELTProcessor(ProcessorMixin):
             - audio_lengths is a list of lists for batched input, or a single int/list for single input.
         """
 
+        def _extract_windowed(audio_array):
+            """Extract features for an encoder that only accepts a fixed input window.
+
+            Whisper's encoder rejects anything that is not exactly ``window_frames`` mel
+            frames and ignores the attention mask, so the audio is cut into whole
+            windows and the *waveform* of the last one is zero-padded. Padding the
+            waveform rather than the mel matters: zero is not silence in log-mel space,
+            and since the mask is ignored, mel padding would leak into every valid
+            output through self-attention. Letting the feature extractor see a
+            zero-padded waveform reproduces exactly what Whisper saw in pretraining,
+            per window, including its own dynamic-range normalisation.
+
+            Returns ``(features, mask)`` in MELT's ``(1, T, F)`` convention, where T is
+            a whole multiple of ``window_frames``.
+            """
+            spec = self.encoder_spec
+            window_samples = int(round(spec.window_seconds() * self.feature_extractor.sampling_rate))
+
+            audio_array = torch.as_tensor(audio_array, dtype=torch.float32).reshape(-1).numpy()
+            n_samples = len(audio_array)
+            n_windows = max(1, -(-n_samples // window_samples))  # ceil
+            # Cut on window boundaries and leave the tail SHORT: the extractor's own
+            # "pad each item to one window" default then zero-pads the waveform and
+            # reports a mask counting only the real frames. Pre-padding here instead
+            # would hand it a full window and lose that distinction.
+            windows = [audio_array[i * window_samples : (i + 1) * window_samples] for i in range(n_windows)]
+
+            window_kwargs = dict(audio_kwargs)
+            # Do not let a caller's `padding`/`pad_to_multiple_of` shorten a window --
+            # the encoder rejects anything but a full one.
+            window_kwargs.pop("padding", None)
+            window_kwargs.pop("pad_to_multiple_of", None)
+            window_kwargs["truncation"] = False
+            window_kwargs["return_attention_mask"] = True
+            # Explicit rather than relying on the extractor's own default matching the
+            # spec's window, so the two can never drift apart silently.
+            window_kwargs["max_length"] = window_samples
+            window_kwargs["padding"] = "max_length"
+
+            out = self.feature_extractor(windows, **window_kwargs)
+            features = out["input_features"]  # (n_windows, F, window_frames)
+            if spec.is_channel_major:
+                features = features.transpose(1, 2)  # -> (n_windows, window_frames, F)
+            features = features.reshape(1, -1, features.shape[-1])
+            mask = out["attention_mask"].reshape(1, -1)
+            return features, mask
+
         def _get_features_from_sample(audio):
             """Extract input features, attention mask, and lengths for a single sample."""
 
@@ -361,7 +413,15 @@ class MELTProcessor(ProcessorMixin):
             # A better solution would be to have the feature extractor return the exact length after all processing
             audio_kwargs["return_attention_mask"] = True
             audio_kwargs["pad_to_multiple_of"] = 8
+            windowed = self.encoder_spec.window_frames is not None
             for audio_array in audio:
+                if windowed:
+                    features, mask = _extract_windowed(audio_array)
+                    all_features.append(features)
+                    all_masks.append(mask)
+                    audio_lengths_output.append(int(mask.sum(-1).item()))
+                    continue
+
                 audio_out = self.feature_extractor([audio_array], **audio_kwargs)
                 all_features.append(audio_out["input_features"])
                 mask = audio_out.get("attention_mask")

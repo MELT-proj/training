@@ -12,6 +12,7 @@ mkdir -p "${HF_HOME}"
 # Models to download
 MODELS=(
   "facebook/w2v-bert-2.0"
+  "openai/whisper-large-v3"  # speech-encoder ablation arm; only the encoder is used
   "Qwen/Qwen2.5-0.5B"
 
   # Ablation campaign backbones (base vs instruct). MN5 compute nodes run
