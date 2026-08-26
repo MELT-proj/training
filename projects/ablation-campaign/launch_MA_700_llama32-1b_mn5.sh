@@ -92,4 +92,6 @@ infra/runners/submit-container.sh mn5 config/accelerate/ddp.yaml \
     --trainer.eval_steps "${EVAL_STEPS}" \
     --trainer.save_steps "${SAVE_STEPS}" \
     --trainer.save_total_limit "${SAVE_TOTAL_LIMIT}" \
-    --trainer.seed 42
+    --trainer.seed 42 \
+    "$@"   # extra args pass through, e.g.
+           #   --trainer.resume_from_checkpoint /workspace/outputs/<EXP_NAME>
