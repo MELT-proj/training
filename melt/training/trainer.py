@@ -1201,7 +1201,9 @@ class MELTTrainer(Seq2SeqTrainer):
         logger.warning(
             f"[Preallocation] rank={self._global_rank} — synthetic batch: "
             f"n_utts={n_utts}, max_audio_frames={max_audio_frames} "
-            f"({duration_per_utt:.1f}s / {effective_frame_duration_s*1000:.0f}ms output frame), "
+            # .3g, not .0f: a raw-waveform encoder's frame is 0.0625 ms, which
+            # rounds to a uselessly bare "0ms".
+            f"({duration_per_utt:.1f}s / {effective_frame_duration_s*1000:.3g}ms output frame), "
             f"feature_dim={feature_dim}, max_text_len={max_text_len}, dtype={dtype}"
         )
 
