@@ -510,6 +510,23 @@ class MELTAudioEncoder(nn.Module):
                 "by the chunking below."
             )
 
+        # For a raw-waveform encoder `max_audio_seq_len` counts SAMPLES, not frames:
+        # the conv frontend lives inside the encoder, so the chunking below cuts the
+        # waveform itself. Left at a frame-sized default (1500) it would slice a 10 s
+        # clip into ~100 chunks of 94 ms and hand each to the encoder separately --
+        # wrong, but an error nowhere downstream. Hence the loud check here.
+        if self.spec.is_waveform:
+            stride = self.spec.total_stride
+            sample_rate = round(1 / self.spec.frame_seconds)
+            if self.max_seq_len < sample_rate or self.max_seq_len % stride != 0:
+                raise ValueError(
+                    f"Encoder '{config.audio_encoder}' consumes a raw waveform, so "
+                    "model.encoder.max_audio_seq_len is a number of SAMPLES at "
+                    f"{sample_rate} Hz (got {self.max_seq_len}). It must be at least "
+                    f"one second ({sample_rate}) and a multiple of the encoder's total "
+                    f"conv stride ({stride}) -- e.g. {sample_rate * 60} for 60 s."
+                )
+
         # Initialize the audio encoder – when loading from a checkpoint the
         # pretrained weights are unnecessary (the checkpoint will overwrite
         # everything), so we use ``from_config`` which is much faster.
@@ -536,8 +553,19 @@ class MELTAudioEncoder(nn.Module):
         The encoder half of the shape contract that adapters expose through
         ``_get_output_features_shape``. Identity for frame-synchronous encoders such as
         w2v-BERT; halves the length for Whisper's strided conv frontend.
+
+        Chunk-aware, because ``forward`` folds anything longer than ``max_seq_len``
+        into whole chunks and runs the encoder on each *separately*: the total is a
+        sum of per-chunk lengths, not one pass over the whole sequence. Those two
+        differ under a floor-rounding conv frontend -- HuBERT emits 2999 frames for
+        960 000 samples but 2 x 1499 = 2998 for the same audio in two chunks -- and a
+        one-frame disagreement with the real forward misaligns every audio embedding
+        after it.
         """
-        return self.spec.output_lengths(input_lengths)
+        per_chunk = self.spec.output_lengths(self.max_seq_len)
+        full_chunks = input_lengths // self.max_seq_len
+        remainder = input_lengths - full_chunks * self.max_seq_len
+        return full_chunks * per_chunk + self.spec.output_lengths(remainder)
 
     def forward(
         self,
@@ -602,10 +630,21 @@ class MELTAudioEncoder(nn.Module):
         if self.spec.is_channel_major:
             hidden_states = hidden_states.transpose(1, 2)
 
+        # A raw waveform travels through MELT as (batch, n_samples, 1) so the (B, T, F)
+        # contract holds everywhere else; the encoder wants (batch, n_samples).
+        if self.spec.is_waveform:
+            hidden_states = hidden_states.squeeze(-1)
+
+        # Group-norm wav2vec2-family checkpoints declare `return_attention_mask: false`
+        # and are documented as degrading when masked -- they were pretrained on
+        # zero-padded batches with no mask. MELT still needs a mask of its own to count
+        # audio embeddings, so the mask is computed but stops here.
+        encoder_attention_mask = chunk_mask if self.spec.passes_attention_mask else None
+
         # Pass through the encoder
         encoder_outputs = self.model(
             hidden_states,
-            attention_mask=chunk_mask,
+            attention_mask=encoder_attention_mask,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
@@ -618,10 +657,14 @@ class MELTAudioEncoder(nn.Module):
             hidden_states = hidden_states.reshape(bs, -1, hidden_states.shape[-1])
             if chunk_pad_size > 0:
                 # chunk_pad_size counts *input* frames; a downsampling encoder emits
-                # proportionally fewer, so trimming it verbatim would cut into real
-                # output. (Zero in practice for fixed-window encoders, whose processor
-                # already pads to whole windows.)
-                output_pad_size = self.output_lengths(chunk_pad_size)
+                # fewer, so trimming it verbatim would cut into real output. Take the
+                # difference the padding makes to the last chunk rather than scaling
+                # the pad -- the only form that is exact for a floor-rounding conv
+                # frontend. (Zero in practice for fixed-window encoders, whose
+                # processor already pads to whole windows.)
+                output_pad_size = self.spec.output_lengths(
+                    self.max_seq_len
+                ) - self.spec.output_lengths(self.max_seq_len - chunk_pad_size)
                 if output_pad_size > 0:
                     hidden_states = hidden_states[:, :-output_pad_size, :]
 

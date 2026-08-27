@@ -127,6 +127,17 @@ ENCODER_FRAME_SECONDS = 0.02
 # the only environment with the data mounted. Keep the two in step.
 ENCODER_FRAME_SECONDS_BY_NAME = {
     "whisper": 0.01,  # log-mel at hop_length 160 / 16 kHz, no stride-stacking
+    # The wav2vec2 family (HuBERT, mHuBERT-147, WavLM, ...) eats the raw waveform, so
+    # its "frames" are audio samples and max_audio_seq_len is a sample count.
+    "hubert": 1 / 16_000,
+    "wavlm": 1 / 16_000,
+    "data2vec-audio": 1 / 16_000,
+    "wav2vec2": 1 / 16_000,
+    # ...but w2v-BERT only *looks* like that family. It is frame-based, and the
+    # longest-key-first match below is what keeps a checkpoint named
+    # "wav2vec2-bert-something" off the waveform branch.
+    "wav2vec2-bert": ENCODER_FRAME_SECONDS,
+    "w2v-bert": ENCODER_FRAME_SECONDS,
 }
 
 
@@ -134,9 +145,10 @@ def encoder_frame_seconds(encoder_name: str | None) -> float:
     """Seconds of audio per encoder *input* frame, for the named encoder."""
     if encoder_name:
         lowered = str(encoder_name).lower()
-        for key, seconds in ENCODER_FRAME_SECONDS_BY_NAME.items():
+        # Longest key first: "wav2vec2-bert" must beat "wav2vec2", and they disagree.
+        for key in sorted(ENCODER_FRAME_SECONDS_BY_NAME, key=len, reverse=True):
             if key in lowered:
-                return seconds
+                return ENCODER_FRAME_SECONDS_BY_NAME[key]
     return ENCODER_FRAME_SECONDS
 
 HIST_RESOLUTION = 0.01

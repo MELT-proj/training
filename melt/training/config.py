@@ -70,7 +70,10 @@ model:
   encoder:
     name: facebook/w2v-bert-2.0
     freeze: true
-    max_audio_seq_len: 1500  # for frames of 20ms, this is 30s
+    max_audio_seq_len: 1500  # for frames of 20ms, this is 30s.
+    # Counts SAMPLES, not frames, for a raw-waveform encoder (HuBERT and the
+    # rest of the wav2vec2 family, whose conv frontend is inside the encoder):
+    # 960000 there is 60 s. MELTAudioEncoder rejects a frame-sized value.
 
   decoder:
     name: Qwen/Qwen2.5-0.5B

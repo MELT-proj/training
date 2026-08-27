@@ -20,6 +20,7 @@ from melt.modeling.encoder_specs import (
     get_encoder_spec_for_feature_extractor,
 )
 from melt.modeling.modeling_melt import (
+    MELTAudioEncoder,
     MELTAudioStack,
     MELTMLPAdapter,
     _get_encoder_hidden_size,
@@ -139,14 +140,19 @@ class TestEncoderHiddenSize:
 # ============================================================================
 
 
-def _stack_with(spec, adapter):
+def _stack_with(spec, adapter, max_seq_len=None):
     """A stand-in for MELTAudioStack that skips loading a real encoder.
 
     ``_get_output_features_shape`` only reads ``self.encoder.output_lengths`` and
     ``self.adapter``, so this exercises the real composition without pulling 635 M
     parameters off the Hub.
     """
-    encoder = types.SimpleNamespace(output_lengths=spec.output_lengths)
+    if max_seq_len is None:
+        encoder = types.SimpleNamespace(output_lengths=spec.output_lengths)
+    else:
+        # The chunk-aware mapping, which is what the real encoder exposes.
+        encoder = types.SimpleNamespace(spec=spec, max_seq_len=max_seq_len)
+        encoder.output_lengths = types.MethodType(MELTAudioEncoder.output_lengths, encoder)
     stack = types.SimpleNamespace(encoder=encoder, adapter=adapter)
     # _get_output_features_shape delegates the mask mapping to this sibling method.
     stack._encoder_output_mask = types.MethodType(MELTAudioStack._encoder_output_mask, stack)
@@ -218,6 +224,205 @@ class TestStackOutputFeaturesShape:
 
 
 # ============================================================================
+# Raw-waveform encoders (the wav2vec2 / HuBERT family)
+# ============================================================================
+
+
+def _tiny_hubert_config(**overrides):
+    """A HuBERT config small enough to instantiate, with the real conv frontend.
+
+    The frontend is what the length arithmetic is about, so its kernels and strides
+    are left at HuBERT's own defaults; only the transformer on top is shrunk.
+    """
+    from transformers import HubertConfig
+
+    cfg = HubertConfig(
+        hidden_size=32,
+        num_hidden_layers=1,
+        num_attention_heads=2,
+        intermediate_size=64,
+        conv_dim=(8,) * 7,
+        num_feat_extract_layers=7,
+        feat_extract_norm="group",
+        layerdrop=0.0,
+        # Off so a forward is deterministic. Production keeps whatever the checkpoint
+        # ships -- mHuBERT-147 ships it on.
+        apply_spec_augment=False,
+    )
+    for key, value in overrides.items():
+        setattr(cfg, key, value)
+    return cfg
+
+
+def _audio_encoder(max_audio_seq_len, cfg=None):
+    """A real MELTAudioEncoder around a randomly-initialised tiny HuBERT."""
+    cfg = cfg if cfg is not None else _tiny_hubert_config()
+    cfg.max_audio_seq_len = max_audio_seq_len
+    melt_config = types.SimpleNamespace(audio_encoder_config=cfg, audio_encoder="tiny-hubert")
+    return MELTAudioEncoder(melt_config, load_pretrained=False)
+
+
+class TestWaveformSpecTable:
+    @pytest.mark.parametrize(
+        "model_type", ["hubert", "wav2vec2", "wavlm", "data2vec-audio", "unispeech-sat"]
+    )
+    def test_the_whole_family_resolves_to_the_waveform_spec(self, model_type):
+        spec = get_encoder_spec(model_type)
+        assert spec.is_waveform is True
+        assert spec.feature_key == "input_values"
+        # Group-norm checkpoints declare return_attention_mask: false.
+        assert spec.passes_attention_mask is False
+        # "Frames" are samples: 1/16 kHz, not 20 ms.
+        assert spec.frame_seconds == pytest.approx(1 / 16_000)
+        assert spec.window_frames is None
+
+    def test_w2v_bert_is_not_swept_up_by_the_family(self):
+        """`wav2vec2-bert` is a different model_type and a frame-based encoder."""
+        assert get_encoder_spec("wav2vec2-bert") is DEFAULT_ENCODER_SPEC
+        assert get_encoder_spec("wav2vec2-bert").is_waveform is False
+
+    def test_lookup_by_feature_extractor_class(self):
+        fe = type("Wav2Vec2FeatureExtractor", (), {})()
+        assert get_encoder_spec_for_feature_extractor(fe).is_waveform is True
+
+    def test_for_config_reads_the_conv_frontend_off_the_checkpoint(self):
+        cfg = _tiny_hubert_config()
+        spec = get_encoder_spec_for_config(cfg)
+        assert spec.conv_kernels == tuple(cfg.conv_kernel)
+        assert spec.conv_strides == tuple(cfg.conv_stride)
+        assert spec.total_stride == 320
+
+    def test_for_config_raises_when_the_frontend_is_undescribed(self):
+        cfg = types.SimpleNamespace(model_type="hubert")
+        with pytest.raises(ValueError, match="conv_kernel"):
+            get_encoder_spec_for_config(cfg)
+
+    def test_for_config_is_a_no_op_for_spectral_encoders(self):
+        cfg = types.SimpleNamespace(model_type="whisper")
+        assert get_encoder_spec_for_config(cfg) is get_encoder_spec("whisper")
+
+    @pytest.mark.parametrize(
+        "n_samples", [0, 100, 399, 400, 401, 8000, 12345, 16000, 480_000, 960_000]
+    )
+    def test_output_lengths_match_hf_exactly(self, n_samples):
+        """The whole point: a ratio is not good enough.
+
+        HuBERT's frontend rounds *down* seven times over, so 960 000 samples give 2999
+        frames where ``ceil(960000 / 320)`` says 3000. One frame of disagreement here
+        misaligns every audio embedding after it.
+        """
+        from transformers import HubertModel
+
+        cfg = _tiny_hubert_config()
+        model = HubertModel(cfg)
+        expected = max(int(model._get_feat_extract_output_lengths(n_samples)), 0)
+        assert get_encoder_spec_for_config(cfg).output_lengths(n_samples) == expected
+
+    def test_a_ratio_would_have_been_wrong(self):
+        spec = get_encoder_spec_for_config(_tiny_hubert_config())
+        assert spec.output_lengths(960_000) == 2999
+        assert -(-960_000 // spec.total_stride) == 3000  # what ceil-division would say
+
+    def test_output_lengths_accepts_tensors(self):
+        spec = get_encoder_spec_for_config(_tiny_hubert_config())
+        lengths = torch.tensor([0, 100, 400, 16_000, 480_000])
+        assert spec.output_lengths(lengths).tolist() == [0, 0, 1, 49, 1499]
+
+
+class TestWaveformAudioEncoder:
+    @pytest.mark.parametrize("max_len", [1500, 500, 16_001, 320])
+    def test_frame_sized_max_audio_seq_len_is_rejected(self, max_len):
+        """Left at the frame-based default this would slice a clip into ~100 chunks."""
+        with pytest.raises(ValueError, match="SAMPLES"):
+            _audio_encoder(max_len)
+
+    def test_a_sample_sized_window_is_accepted(self):
+        encoder = _audio_encoder(16_000)
+        assert encoder.max_seq_len == 16_000
+        assert encoder.spec.is_waveform
+
+    @pytest.mark.parametrize("n_samples", [8000, 16_000, 16_320, 40_000, 48_000])
+    def test_predicted_lengths_match_a_real_chunked_forward(self, n_samples):
+        """The contract that matters: what the stack predicts is what the encoder emits.
+
+        ``forward`` runs the encoder once per chunk, so the total is a sum of
+        per-chunk lengths. Under floor-rounding that is not the same as one pass over
+        the whole sequence -- 2 x out(16000) is 98, out(32000) is 99 -- and the
+        prediction has to follow the chunking, not the ideal.
+        """
+        encoder = _audio_encoder(16_000).eval()
+        waveform = torch.randn(2, n_samples, 1)
+        mask = torch.ones(2, n_samples, dtype=torch.long)
+
+        with torch.no_grad():
+            out = encoder(waveform, features_attention_mask=mask)
+
+        assert out.shape[1] == encoder.output_lengths(n_samples)
+
+    def test_chunking_really_is_the_reason_the_naive_formula_fails(self):
+        encoder = _audio_encoder(16_000)
+        assert encoder.output_lengths(32_000) == 2 * encoder.spec.output_lengths(16_000)
+        # ...which is one frame short of what a single unchunked pass would give.
+        assert encoder.spec.output_lengths(32_000) == encoder.output_lengths(32_000) + 1
+
+    def test_the_encoder_never_sees_the_attention_mask(self):
+        """mHuBERT declares return_attention_mask: false; MELT keeps its own copy."""
+        encoder = _audio_encoder(16_000).eval()
+        seen = {}
+        inner = encoder.model.forward
+
+        def spy(input_values, attention_mask=None, **kwargs):
+            seen["mask"] = attention_mask
+            seen["shape"] = tuple(input_values.shape)
+            return inner(input_values, attention_mask=attention_mask, **kwargs)
+
+        encoder.model.forward = spy
+        mask = torch.ones(2, 8000, dtype=torch.long)
+        mask[1, 4000:] = 0
+        with torch.no_grad():
+            encoder(torch.randn(2, 8000, 1), features_attention_mask=mask)
+
+        assert seen["mask"] is None
+        # And the trailing feature axis MELT carries a waveform on is gone by then.
+        assert seen["shape"] == (2, 8000)
+
+    def test_a_masked_encoder_still_gets_its_mask(self):
+        """The flag is per-spec, not a blanket "drop the mask"."""
+        assert DEFAULT_ENCODER_SPEC.passes_attention_mask is True
+        assert get_encoder_spec("whisper").passes_attention_mask is True
+
+
+class TestWaveformStackShape:
+    def test_sample_lengths_become_frame_lengths(self):
+        spec = get_encoder_spec_for_config(_tiny_hubert_config())
+        stack = _stack_with(spec, _mlp_adapter(hidden_size=32), max_seq_len=16_000)
+        # 1 s of waveform, the second item holding 0.5 s of real audio.
+        waveform = torch.randn(2, 16_000, 1)
+        mask = torch.zeros(2, 16_000, dtype=torch.long)
+        mask[0, :] = 1
+        mask[1, :8000] = 1
+
+        shape, out_mask = MELTAudioStack._get_output_features_shape(stack, waveform, mask)
+
+        assert shape == (2, 49, 2048)
+        # ~50 audio tokens per second of real audio, the same rate as w2v-BERT.
+        assert out_mask.sum(-1).tolist() == [49, 24]
+        assert out_mask[1, :24].all() and not out_mask[1, 24:].any()
+
+    def test_a_chunked_waveform_agrees_with_the_chunked_forward(self):
+        spec = get_encoder_spec_for_config(_tiny_hubert_config())
+        stack = _stack_with(spec, _mlp_adapter(hidden_size=32), max_seq_len=16_000)
+        waveform = torch.randn(1, 32_000, 1)
+        mask = torch.ones(1, 32_000, dtype=torch.long)
+
+        shape, out_mask = MELTAudioStack._get_output_features_shape(stack, waveform, mask)
+
+        # 98, not the 99 a single unchunked pass would emit.
+        assert shape == (1, 98, 2048)
+        assert int(out_mask.sum()) == 98
+
+
+# ============================================================================
 # Against the real checkpoints
 # ============================================================================
 
@@ -238,3 +443,15 @@ class TestRealConfigs:
 
         cfg = AutoConfig.from_pretrained("facebook/w2v-bert-2.0")
         assert get_encoder_spec_for_config(cfg) is DEFAULT_ENCODER_SPEC
+
+    def test_mhubert_147_resolves_to_the_waveform_spec(self):
+        from transformers import AutoConfig
+
+        cfg = AutoConfig.from_pretrained("utter-project/mHuBERT-147")
+        spec = get_encoder_spec_for_config(cfg)
+        assert spec.is_waveform is True
+        assert spec.conv_strides == tuple(cfg.conv_stride)
+        assert spec.total_stride == 320  # 16 kHz in, 50 Hz out
+        assert _get_encoder_hidden_size(cfg) == 768
+        # 60 s of audio, the campaign's max_duration, at the launcher's window.
+        assert spec.output_lengths(60 * 16_000) == 2999

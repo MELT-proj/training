@@ -665,3 +665,127 @@ class TestWhisperFixedWindowFeatures:
         out = encoder(features.transpose(1, 2).float())[0]
 
         assert out.shape == (1, config.max_source_positions, config.d_model)
+
+
+# ============================================================================
+# Raw-waveform encoders (mHuBERT / the wav2vec2 family)
+# ============================================================================
+
+
+@pytest.fixture(scope="module")
+def mhubert_processor(tokenizer):
+    """A MELTProcessor wired to mHuBERT-147's feature extractor.
+
+    Only the tiny preprocessor_config.json is fetched -- no model weights. This
+    extractor differs from every other one MELT uses: it emits a raw waveform under
+    `input_values`, has no feature axis at all, and declares
+    `return_attention_mask: false`.
+    """
+    fe = AutoFeatureExtractor.from_pretrained("utter-project/mHuBERT-147")
+    return MELTProcessor(feature_extractor=fe, tokenizer=tokenizer)
+
+
+@pytest.mark.hub
+class TestWaveformFeatures:
+    def test_spec_is_resolved_from_the_feature_extractor(self, mhubert_processor):
+        spec = mhubert_processor.encoder_spec
+        assert spec.is_waveform is True
+        assert spec.feature_key == "input_values"
+        assert spec.window_frames is None
+
+    @pytest.mark.parametrize("seconds", [0.5, 3.0, 12.0])
+    def test_features_carry_the_waveform_with_a_trailing_axis(
+        self, mhubert_processor, seconds
+    ):
+        """MELT is written against (B, T, F); a waveform travels as (B, n_samples, 1)."""
+        result = mhubert_processor(
+            text="<|audio|>", audio=_tone(seconds), return_tensors="pt"
+        )
+
+        features = result["input_features"]
+        n_samples = int(seconds * 16000)
+        assert features.ndim == 3
+        assert features.shape[0] == 1
+        assert features.shape[2] == 1
+        # pad_to_multiple_of 8 can round the sample count up, never down.
+        assert n_samples <= features.shape[1] <= n_samples + 8
+
+    def test_the_extractor_key_is_renamed_not_passed_through(self, mhubert_processor):
+        """Wav2Vec2FeatureExtractor says `input_values`; MELT always says
+        `input_features`, and model_input_names has to agree with that."""
+        result = mhubert_processor(text="<|audio|>", audio=_tone(1.0), return_tensors="pt")
+
+        assert "input_features" in result
+        assert "input_values" not in result
+        assert "input_features" in mhubert_processor.model_input_names
+        assert "input_values" not in mhubert_processor.model_input_names
+
+    @pytest.mark.parametrize("seconds", [0.5, 3.0, 12.0])
+    def test_mask_counts_real_samples(self, mhubert_processor, seconds):
+        """A mask is requested even though the checkpoint says not to return one:
+        MELT needs the real length to count audio embeddings."""
+        result = mhubert_processor(
+            text="<|audio|>", audio=_tone(seconds), return_tensors="pt"
+        )
+
+        mask = result["features_attention_mask"]
+        assert mask.shape == result["input_features"].shape[:2]
+        assert int(mask.sum()) == int(seconds * 16000)
+
+    def test_batch_pads_on_the_sample_axis_and_masks_the_pad(self, mhubert_processor):
+        result = mhubert_processor(
+            text=["<|audio|>", "<|audio|>"],
+            audio=[[_tone(1.0)], [_tone(3.0)]],
+            return_tensors="pt",
+        )
+
+        features = result["input_features"]
+        masks = result["features_attention_mask"]
+        assert features.shape[0] == 2
+        assert features.shape[2] == 1
+        assert masks.sum(-1).tolist() == [16000, 48000]
+        # The short item is zero-padded, and the pad is a suffix.
+        assert features[0, 16000:].abs().max() == 0
+
+    def test_normalisation_is_per_utterance_not_per_batch(self, mhubert_processor):
+        """`do_normalize: true` means zero-mean/unit-variance over whatever the
+        extractor is handed. Featurising one utterance at a time -- before the batch
+        pad -- is what keeps the padding out of the statistics."""
+        result = mhubert_processor(
+            text=["<|audio|>", "<|audio|>"],
+            audio=[[_tone(1.0)], [_tone(3.0)]],
+            return_tensors="pt",
+        )
+
+        short = result["input_features"][0, :16000, 0]
+        assert float(short.mean()) == pytest.approx(0.0, abs=1e-4)
+        assert float(short.std()) == pytest.approx(1.0, abs=1e-3)
+
+    def test_hubert_accepts_what_the_processor_produces(self, mhubert_processor):
+        """The end of the contract: squeeze the axis MELT added, and the raw HF
+        encoder must take it and emit the number of frames the spec predicts."""
+        from transformers import HubertConfig, HubertModel
+
+        from melt.modeling.encoder_specs import get_encoder_spec_for_config
+
+        result = mhubert_processor(text="<|audio|>", audio=_tone(3.0), return_tensors="pt")
+        features = result["input_features"]
+
+        config = HubertConfig(
+            hidden_size=32,
+            num_hidden_layers=1,
+            num_attention_heads=2,
+            intermediate_size=64,
+            conv_dim=(8,) * 7,
+            num_feat_extract_layers=7,
+            feat_extract_norm="group",
+            layerdrop=0.0,
+            apply_spec_augment=False,
+        )
+        encoder = HubertModel(config).eval()
+
+        with torch.no_grad():
+            out = encoder(features.squeeze(-1))[0]
+
+        expected = get_encoder_spec_for_config(config).output_lengths(features.shape[1])
+        assert out.shape == (1, expected, 32)

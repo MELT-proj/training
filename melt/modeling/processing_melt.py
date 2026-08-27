@@ -390,7 +390,7 @@ class MELTProcessor(ProcessorMixin):
             window_kwargs["padding"] = "max_length"
 
             out = self.feature_extractor(windows, **window_kwargs)
-            features = out["input_features"]  # (n_windows, F, window_frames)
+            features = out[spec.feature_key]  # (n_windows, F, window_frames)
             if spec.is_channel_major:
                 features = features.transpose(1, 2)  # -> (n_windows, window_frames, F)
             features = features.reshape(1, -1, features.shape[-1])
@@ -400,6 +400,7 @@ class MELTProcessor(ProcessorMixin):
         def _get_features_from_sample(audio):
             """Extract input features, attention mask, and lengths for a single sample."""
 
+            spec = self.encoder_spec
             if not isinstance(audio, list):
                 audio = [audio]
 
@@ -411,9 +412,13 @@ class MELTProcessor(ProcessorMixin):
             # TODO: the length estimation does not consider any reduction due to adapters after the speech encoder.
             # Hence, we are now adding potentially more token placeholders than needed.
             # A better solution would be to have the feature extractor return the exact length after all processing
+            # Asked for unconditionally, including from extractors whose own config
+            # says `return_attention_mask: false` (the group-norm wav2vec2 family):
+            # MELT needs the real length to count audio embeddings even when the
+            # encoder itself is never handed the mask.
             audio_kwargs["return_attention_mask"] = True
             audio_kwargs["pad_to_multiple_of"] = 8
-            windowed = self.encoder_spec.window_frames is not None
+            windowed = spec.window_frames is not None
             for audio_array in audio:
                 if windowed:
                     features, mask = _extract_windowed(audio_array)
@@ -422,14 +427,23 @@ class MELTProcessor(ProcessorMixin):
                     audio_lengths_output.append(int(mask.sum(-1).item()))
                     continue
 
+                # One call per utterance, never per batch: an extractor with
+                # `do_normalize` computes zero-mean/unit-variance statistics over
+                # whatever it is given, so normalising here -- before the batch pad
+                # below -- is what keeps padding out of the statistics.
                 audio_out = self.feature_extractor([audio_array], **audio_kwargs)
-                all_features.append(audio_out["input_features"])
+                features = audio_out[spec.feature_key]
+                if spec.is_waveform:
+                    # (1, n_samples) -> (1, n_samples, 1). A waveform has no feature
+                    # axis; everything downstream of here indexes one.
+                    features = features.unsqueeze(-1)
+                all_features.append(features)
                 mask = audio_out.get("attention_mask")
                 if mask is not None:
                     all_masks.append(mask)
                     audio_lengths_output.append(int(mask.sum(-1).item()))
                 else:
-                    audio_lengths_output.append(audio_out["input_features"].shape[-1])
+                    audio_lengths_output.append(features.shape[1])
 
             input_features = torch.cat(all_features, dim=1)
             attention_mask = torch.cat(all_masks, dim=-1) if all_masks else None
@@ -599,9 +613,12 @@ class MELTProcessor(ProcessorMixin):
     @property
     def model_input_names(self):
         tokenizer_input_names = self.tokenizer.model_input_names
-        feature_extractor_input_names = self.feature_extractor.model_input_names
+        # Deliberately NOT the feature extractor's own names: MELT always emits its
+        # audio tensor as `input_features`, whatever the extractor called it
+        # (`Wav2Vec2FeatureExtractor` says `input_values`), so reporting the
+        # extractor's name here would advertise a key `_process_audio` never returns.
         names = list(
-            dict.fromkeys(tokenizer_input_names + feature_extractor_input_names + ["features_attention_mask"])
+            dict.fromkeys(tokenizer_input_names + ["input_features", "features_attention_mask"])
         )
 
         if getattr(self, "image_processor", None) is not None:

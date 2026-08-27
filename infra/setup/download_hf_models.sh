@@ -13,6 +13,7 @@ mkdir -p "${HF_HOME}"
 MODELS=(
   "facebook/w2v-bert-2.0"
   "openai/whisper-large-v3"  # speech-encoder ablation arm; only the encoder is used
+  "utter-project/mHuBERT-147"  # speech-encoder ablation arm; raw-waveform encoder
   "Qwen/Qwen2.5-0.5B"
 
   # Ablation campaign backbones (base vs instruct). MN5 compute nodes run

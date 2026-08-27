@@ -32,6 +32,9 @@ def _make_melt_config(**kwargs):
     defaults.update(kwargs)
     config = MELTConfig(**defaults)
     config.audio_bos_token_id = 100
+    # wav2vec2-base eats a raw waveform, so max_audio_seq_len is a SAMPLE count and
+    # MELTAudioEncoder rejects a frame-sized one. 1 s of audio keeps these tiny.
+    config.audio_encoder_config.max_audio_seq_len = 16_000
     return config
 
 

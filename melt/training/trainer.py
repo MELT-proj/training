@@ -1154,13 +1154,20 @@ class MELTTrainer(Seq2SeqTrainer):
         # - The fallback 0.02 s is already the effective output frame duration for
         #   wav2vec-bert-2.0 (raw hop 10 ms × stride 2); do NOT multiply by fe_stride
         #   again or the frame count will be halved.
+        spec = get_encoder_spec_for_feature_extractor(fe)
         if hop_length is not None:
             effective_frame_duration_s = (hop_length / sampling_rate) * fe_stride
         else:
-            effective_frame_duration_s = 0.02  # 20 ms effective output frame (wav2vec-bert-2.0 default)
+            # No hop_length means no spectrogram. For a raw-waveform encoder the
+            # "frames" are audio samples -- `Wav2Vec2FeatureExtractor` exposes neither
+            # hop_length nor stride, and feature_size is 1 -- so the spec's frame
+            # duration is the only thing that gets the time axis right. The old
+            # hardcoded 20 ms under-reserved the audio tensor by 320x.
+            effective_frame_duration_s = spec.frame_seconds
             logger.warning(
                 "[Preallocation] feature_extractor has no hop_length attribute; "
-                "falling back to 20 ms effective output frame duration."
+                "using the encoder spec's %g s input frame instead.",
+                effective_frame_duration_s,
             )
 
         max_audio_frames = int(duration_per_utt / effective_frame_duration_s)
@@ -1169,7 +1176,7 @@ class MELTTrainer(Seq2SeqTrainer):
         # short the clip is, so the real worst case for the min_duration pass is a full
         # window, not `duration_per_utt` of frames. Round up or preallocation
         # under-reports by the padding ratio -- 60x for a 0.5 s clip against a 30 s window.
-        window_frames = get_encoder_spec_for_feature_extractor(fe).window_frames
+        window_frames = spec.window_frames
         if window_frames is not None:
             max_audio_frames = max(1, -(-max_audio_frames // window_frames)) * window_frames
 

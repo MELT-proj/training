@@ -778,6 +778,36 @@ class TestRuntimeTraps:
         assert report.status("C3") == ctc.WARN
         assert "30" in next(f for f in report.findings if f.check == "C3").message
 
+    def test_encoder_window_is_read_at_the_encoder_s_own_frame_rate(self):
+        """`max_audio_seq_len` means samples for a raw-waveform encoder.
+
+        Judged at the default 20 ms it would look like a 5.3-hour window and C3 would
+        never fire; at mHuBERT's 1/16 kHz it is the 60 s it really is.
+        """
+        report = ctc.Report(Path("cfg.yaml"))
+        cfg = self._cfg(max_duration=120.0)
+        cfg["model"] = {"encoder": {"name": "utter-project/mHuBERT-147",
+                                    "max_audio_seq_len": 960_000}}
+        ctc.check_runtime(report, cfg, {"train_ds": []}, {"train_ds": False}, {})
+        assert report.status("C3") == ctc.WARN
+        assert "60" in next(f for f in report.findings if f.check == "C3").message
+
+    def test_a_60_s_waveform_window_is_not_flagged_at_60_s_max_duration(self):
+        report = ctc.Report(Path("cfg.yaml"))
+        cfg = self._cfg(max_duration=60.0)
+        cfg["model"] = {"encoder": {"name": "utter-project/mHuBERT-147",
+                                    "max_audio_seq_len": 960_000}}
+        ctc.check_runtime(report, cfg, {"train_ds": []}, {"train_ds": False}, {})
+        assert report.status("C3") != ctc.WARN
+
+    def test_w2v_bert_is_not_mistaken_for_the_wav2vec2_family(self):
+        """Longest-key-first matching: "wav2vec2-bert" must beat "wav2vec2"."""
+        assert ctc.encoder_frame_seconds("hf-audio/wav2vec2-bert-CV16-en") == 0.02
+        assert ctc.encoder_frame_seconds("facebook/w2v-bert-2.0") == 0.02
+        assert ctc.encoder_frame_seconds("utter-project/mHuBERT-147") == 1 / 16_000
+        assert ctc.encoder_frame_seconds("openai/whisper-large-v3") == 0.01
+        assert ctc.encoder_frame_seconds(None) == 0.02
+
     def test_strict_text_field_not_inherited_by_eval_is_reported(self):
         report = ctc.Report(Path("cfg.yaml"))
         leaf = ctc.Leaf(
