@@ -799,6 +799,27 @@ class TestRuntimeTraps:
 # ---------------------------------------------------------------------------
 
 class TestEndToEnd:
+    @pytest.fixture(autouse=True)
+    def _reap_stray_child_processes(self):
+        """`ctc.main()` measures via a `ProcessPoolExecutor` (up to 16 workers).
+
+        Its `with` block shuts the pool down cleanly on a normal Python
+        exception, but a worker dying mid-measure from resource exhaustion
+        doesn't always surface that way, and can leave siblings behind for
+        __del__ -- the same class of leak as issue #63, just via
+        concurrent.futures instead of a DataLoader. Belt and braces: kill
+        anything this test forked that outlived it.
+        """
+        import psutil
+
+        yield
+
+        for child in psutil.Process().children(recursive=True):
+            try:
+                child.kill()
+            except psutil.NoSuchProcess:
+                pass
+
     def _config_text(self, root: Path, *, total_hours, total_cuts, names: bool) -> str:
         name_a = "\n        name: asr_en" if names else ""
         name_b = "\n        name: asr_de" if names else ""

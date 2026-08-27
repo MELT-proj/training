@@ -602,7 +602,7 @@ def measure_sources(
     done = 0
     started = time.time()
 
-    with ProcessPoolExecutor(max_workers=jobs) as pool:
+    with ProcessPoolExecutor(max_workers=min(jobs, len(tasks))) as pool:
         # pool.map preserves input order and tasks are grouped by source, so a
         # source is finished as soon as its last shard comes back.  Writing then
         # rather than at the end makes an interrupted pass resumable, which
