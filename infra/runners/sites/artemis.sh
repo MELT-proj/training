@@ -18,7 +18,12 @@ export REMOTE_SSH="${REMOTE_SSH:-artemis}"
 export REMOTE_REPO="${REMOTE_REPO:-melt-proj/training}"
 
 # --- native mode ----------------------------------------------------------
-export VENV_PATH=/mnt/scratch-artemis/giuseppe/venvs/melt-312/bin/activate
+# melt-312 pins torchdata 0.10.0 (repo requires >=0.11, see pyproject.toml);
+# lhotse2 has the matching stack (torch 2.9.1+cu126, torchdata 0.11.0,
+# lhotse 2.0.0a3, transformers 4.57.1) and its `melt` editable install has
+# been repointed at this checkout (it previously resolved to a stale,
+# disconnected copy at melt-data-adjacent lhotse2-repo).
+export VENV_PATH="${VENV_PATH:-/mnt/scratch-artemis/giuseppe/venvs/lhotse2/bin/activate}"
 
 # --- misc -----------------------------------------------------------------
 export WANDB_MODE=online
@@ -38,8 +43,10 @@ export MELT_SEED="${MELT_SEED:-42}"
 
 # --- scheduler ------------------------------------------------------------
 # MELT_NODES/MELT_QOS/MELT_TIME/MELT_PARTITION/MELT_GPUS_PER_NODE are overridable
-# the same way as on mn5:
-#   MELT_QOS=gpu-debug MELT_PARTITION=a6000 infra/runners/submit-container.sh artemis …
+# the same way as on mn5. a6000 nodes cannot run containers (Singularity fails
+# with "starter-suid doesn't have setuid bit set" -- confirmed via job 328945),
+# so submit-native.sh (not submit-container.sh) is the only option there:
+#   MELT_QOS=gpu-debug MELT_PARTITION=a6000 infra/runners/submit-native.sh artemis …
 SBATCH_ARGS=(--time="${MELT_TIME:-01:00:00}" --nodes="${MELT_NODES:-1}" --gpus-per-node="${MELT_GPUS_PER_NODE:-2}" --qos="${MELT_QOS:-gpu-h100}" --partition="${MELT_PARTITION:-h100}")
-# a6000 debug alternative:
+# a6000 debug alternative (native mode only -- see above):
 # SBATCH_ARGS=(--time=01:00:00 --nodes=1 --gpus-per-node=2 --qos=gpu-debug --partition=a6000)
