@@ -51,12 +51,18 @@ SAVE_TOTAL_LIMIT="${SAVE_TOTAL_LIMIT:-2}"
 # One encoder override carries the whole arm, and its UNITS are the thing to
 # read twice:
 #
-#   max_audio_seq_len 960000 -- for a raw-waveform encoder this counts SAMPLES,
+#   max_audio_seq_len 1440000 -- for a raw-waveform encoder this counts SAMPLES,
 #   not frames. mHuBERT's conv frontend lives inside the encoder, so what MELT
-#   chunks is the waveform itself: 960000 = 60 s x 16 kHz, exactly the data's
-#   max_duration, so nothing is ever chunked. MELTAudioEncoder rejects a
-#   frame-sized value (the 1500 the other arms use) rather than silently
-#   slicing every clip into 94 ms fragments.
+#   chunks is the waveform itself: 1440000 = 90 s x 16 kHz, exactly the data's
+#   max_duration, so nothing is ever chunked and the encoder contextualises over
+#   the whole cut. KEEP THIS EQUAL TO data.train_ds.max_duration x 16000: set it
+#   lower and long cuts get chunked, which throws away the wider receptive field
+#   that is the point of picking this encoder over Whisper (fixed at 30 s).
+#   MELTAudioEncoder rejects a frame-sized value (the 1500 the other arms use)
+#   rather than silently slicing every clip into 94 ms fragments.
+#
+#   Measured at this setting on 2 x H100 (job 329301): the max_duration warmup
+#   pass peaks at 23.4 GB of 80, and 30 real steps ran with no OOM.
 #
 # batch_duration is left alone, unlike the Whisper arm: there is no fixed
 # encoder window here, so seconds of audio are again a truthful budget and the
@@ -70,7 +76,7 @@ SAVE_TOTAL_LIMIT="${SAVE_TOTAL_LIMIT:-2}"
 infra/runners/submit-container.sh artemis config/accelerate/ddp.yaml \
     --config projects/ablation-campaign/ABL-MA-700-asr.yaml \
     --model.encoder.name utter-project/mHuBERT-147 \
-    --model.encoder.max_audio_seq_len 960000 \
+    --model.encoder.max_audio_seq_len 1440000 \
     --run.exp_name "${EXP_NAME}" \
     --trainer.output_dir "/workspace/outputs/${EXP_NAME}" \
     --trainer.max_steps "${MAX_STEPS}" \
