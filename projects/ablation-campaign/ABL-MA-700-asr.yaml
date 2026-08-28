@@ -14,7 +14,7 @@ run:
   dry_run: false
   # Run a worst-case forward+backward at max_duration and another at
   # min_duration before step 1, logging peak CUDA memory for each. Cheap
-  # insurance now that max_duration is 60 s: it reports the real peak in the
+  # insurance now that max_duration is 90 s: it reports the real peak in the
   # first minute instead of leaving an OOM to surface mid-run. An OOM in the
   # warmup pass is caught and warned about rather than fatal.
   memory_preallocation: true
@@ -279,7 +279,9 @@ data:
             # 78.0 h of voxpopuli
     # Batch settings
     batch_size: null  # Use batch_duration instead for dynamic batching
-    # 150, down from 180, for headroom at max_duration 60.
+    # 150, down from 180, for headroom at max_duration 90. The number was
+    # chosen for a 60 s cap and is kept: raising the cap to 90 admits 78 cuts
+    # (1.51 h of 153,591 h), so the worst case it was sized against is the same.
     #
     # History, because the number matters and the reasoning was wrong once:
     # 120 profiled at peak 32.0 GB of 64 (MN5 job 44991596: 7.29 GB resident
@@ -304,11 +306,11 @@ data:
     # Unset, the charge is exactly `d`, batch_duration means audio seconds, and
     # estimate_steps_per_epoch's inflation factor is exactly 1.0.
     #
-    # Still safe at max_duration 60 s.  The encoder chunks at
+    # Still safe at max_duration 90 s.  The encoder chunks at
     # max_audio_seq_len=1500 frames (30 s) via _unfold_tensor, so its
     # attention never sees a longer window however long the cut is, and the
     # decoder runs flash_attention_2, whose memory is linear in sequence
-    # length -- a 60 s cut costs ~2x a 30 s one rather than ~4x.  Compute
+    # length -- a 90 s cut costs ~3x a 30 s one rather than ~9x.  Compute
     # still grows quadratically in the decoder, which is a throughput cost,
     # not an OOM risk.  Re-examine if max_duration is raised much further.
     quadratic_duration: null
@@ -334,6 +336,12 @@ data:
     # RE-MEASURE THESE WHENEVER max_duration CHANGES. They are a property of
     # the duration distribution under that filter, and a stale set is not a
     # throughput nuisance -- it is an OOM.
+    #
+    # Cap raised 60 -> 90: re-checked, and they are UNCHANGED. Only 78 cuts
+    # (1.51 h of 153,591 h, 0.001%) lie in the 60-90 s band, so the filtered
+    # distribution -- and every boundary derived from it -- is identical to
+    # three decimals. This is a record that the rule above was applied, not
+    # an exemption from it.
     bucket_duration_bins: [2.6, 4.0, 5.0, 6.0, 7.02, 8.18, 9.54, 10.56, 11.38, 12.16, 12.94, 13.68, 14.41, 15.14, 15.86, 16.59, 17.32, 18.05, 18.81, 19.58, 21.18, 23.78, 26.32, 28.9, 33.18, 35.62, 36.98, 38.08, 39.08]
 
     # Sampling
@@ -349,7 +357,7 @@ data:
     # batch, so admitting longer cuts changes which audio is seen, not how
     # much per step.
     min_duration: 0.5
-    max_duration: 60.0
+    max_duration: 90.0
 
     # Drop cuts whose transcript is pathologically long for their audio.
     #
@@ -532,7 +540,7 @@ data:
     batch_duration: 300.0
     lhotse_sampler_type: dynamic_bucketing
     num_buckets: 30
-    bucket_duration_bins: [2.86, 3.28, 3.64, 3.94, 4.22, 4.46, 4.7, 4.92, 5.14, 5.33, 5.52, 5.71, 5.9, 6.08, 6.26, 6.43, 6.62, 6.82, 7.01, 7.22, 7.42, 7.67, 7.94, 8.21, 8.57, 8.93, 9.4, 10.04, 13.2]
+    bucket_duration_bins: [3.74, 4.32, 4.7, 5.04, 5.33, 5.59, 5.86, 6.1, 6.34, 6.58, 6.84, 7.1, 7.39, 7.72, 8.1, 8.54, 9.14, 10.0, 10.85, 11.87, 12.88, 13.84, 14.76, 15.62, 16.52, 17.37, 18.23, 19.1, 19.97]
     shuffle: false
     drop_last: false
     min_duration: 0.5

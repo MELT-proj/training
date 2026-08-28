@@ -41,7 +41,7 @@
 #   7. quadratic_duration null, and batch_duration 120 (stage 1 runs at 150;
 #      stage 2 is lower because the trainable decoder adds ~14.8 GB of
 #      resident gradients and optimizer state).
-#   8. bucket_duration_bins re-measured for the 60 s cap -- see the comment
+#   8. bucket_duration_bins re-measured for the 90 s cap -- see the comment
 #      on them. A stale set is an OOM, not a throughput nuisance.
 #   9. run.memory_preallocation: true -- a worst-case warmup pass on step 1.
 #  10. adapter._type: mlp, matching the stage-1 checkpoint. Inert while
@@ -456,11 +456,11 @@ data:
     # Safe for the encoder: w2v-bert chunks at max_audio_seq_len=1500 frames
     # (30 s) via _unfold_tensor, so attention never sees a longer window.
     # Safe for memory: the decoder runs flash_attention_2, whose footprint is
-    # linear in sequence length, so a single 60 s cut costs ~2x a 30 s cut in
-    # decoder memory rather than ~4x. Compute still grows quadratically, which
+    # linear in sequence length, so a single 90 s cut costs ~3x a 30 s cut in
+    # decoder memory rather than ~9x. Compute still grows quadratically, which
     # is a throughput cost, not an OOM risk.
     min_duration: 0.5
-    max_duration: 60.0
+    max_duration: 90.0
 
     # Batch settings
     batch_size: null  # Use batch_duration instead for dynamic batching
@@ -497,19 +497,23 @@ data:
     lhotse_sampler_type: dynamic_bucketing  # One among: dynamic_bucketing, dynamic, bucketing
     num_buckets: 30
     buffer_size: 10000
-    # Re-measured against the max_duration 60 distribution (see the identical
+    # Measured against THIS mixture at the max_duration 90 cap (see the bins
     # comment in ABL-MA-700-asr.yaml for why the previous 15.9 s-topped bins
     # OOM'd job 45025274 at step 700).
     #
-    # Measured on the stage-1 ASR mixture, which is five of the ten groups
-    # here. The ST half (yodas-granary `ast`, covost2) draws the same
-    # underlying audio as sources already in that mixture -- yodas `ast` is the
-    # same YODAS segments as `asr_only`, covost2 is CommonVoice audio -- so the
-    # fit is close, but it is inherited rather than measured for this exact
-    # mixture.
+    # These used to be the stage-1 ASR bins, inherited rather than measured:
+    # close, because the ST half draws the same underlying audio (yodas `ast`
+    # is the same segments as `asr_only`, covost2 is CommonVoice audio), but
+    # off by 3.92 s (13.8%) at index 23 against all ten groups, with the top
+    # bucket spanning [39.08, 90] over a mixture whose longest cut is 89.90 s.
+    # Now measured over the full 204,820 h.
+    #
+    # Byte-identical to ABL-IFT-125.yaml's on purpose: the two share an
+    # input_cfg, so they share a duration distribution. The C5 'copied rather
+    # than measured' warning is a false positive for that pair.
     #
     # RE-MEASURE THESE WHENEVER max_duration CHANGES.
-    bucket_duration_bins: [2.6, 4.0, 5.0, 6.0, 7.02, 8.18, 9.54, 10.56, 11.38, 12.16, 12.94, 13.68, 14.41, 15.14, 15.86, 16.59, 17.32, 18.05, 18.81, 19.58, 21.18, 23.78, 26.32, 28.9, 33.18, 35.62, 36.98, 38.08, 39.08]
+    bucket_duration_bins: [2.58, 3.9, 4.96, 5.92, 6.92, 8.0, 9.22, 10.4, 11.31, 12.19, 13.06, 13.92, 14.77, 15.62, 16.46, 17.32, 18.19, 19.08, 20.0, 22.32, 24.56, 26.8, 29.02, 32.82, 35.28, 36.6, 37.64, 38.5, 39.26]
 
     # Drop cuts whose transcript is pathologically long for their audio.
     #
