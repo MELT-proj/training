@@ -111,9 +111,12 @@ SAVE_TOTAL_LIMIT="${SAVE_TOTAL_LIMIT:-2}"
 #   requires grad, so no encoder activations are stored -- the windows are a
 #   transient forward under flash_attention_2.
 #
-#   The validation cap is the same value. batch_duration is 300 there, so the
-#   cap binds harder, but eval metrics are per-sample: the cap costs eval
-#   WALL TIME, not comparability.
+#   The validation cap is set to the same value only for symmetry with the
+#   train override -- it does NOT govern eval. get_eval_dataloader builds a
+#   stock PyTorch DataLoader from MELTMapDataset, not a Lhotse sampler, so eval
+#   batching is per_device_eval_batch_size (4 in this config) and eval memory
+#   is unaffected by this cap. On 64 GB H100s 4 is known-good and 16 OOMs --
+#   see the guard in trainer.py that refuses the -1 sentinel for eval.
 #
 #   NOTE: the preallocation warmup will log an OOM warning at this cap. It is
 #   the synthetic batch -- every utterance at max_tokens+32 = 432 text tokens,
