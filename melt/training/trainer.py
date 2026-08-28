@@ -1309,6 +1309,14 @@ class MELTTrainer(Seq2SeqTrainer):
         if min_duration < max_duration:
             self._run_preallocation_pass(model, duration_per_utt=min_duration, label="min_duration")
 
+        # These passes are synthetic worst cases and routinely allocate more --
+        # or OOM outright -- than any real batch will.  Leaving their high-water
+        # mark in place would make the FIRST `gpu_peak_gb` row report the warmup
+        # rather than training (measured: 66.8 GB, against 33 GB steady state on
+        # the very next row), so start the training series from a clean counter.
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+
     # ------------------------------------------------------------------
     # OOM diagnostics
     # ------------------------------------------------------------------
@@ -1353,10 +1361,23 @@ class MELTTrainer(Seq2SeqTrainer):
         deadlock the others. Only the merge into ``logs`` is conditional, and
         is gated on ``"loss" in logs`` so the series only appears on training
         rows, not eval rows.
+
+        ``gpu_peak_gb`` rides along on the same gate.  Without it the only GPU
+        memory numbers a run produces are the preallocation passes -- synthetic,
+        and deliberately pessimistic: every utterance there carries
+        ``max_tokens + 32`` text tokens, which no real batch can hit because
+        ``max_tokens`` is a per-cut filter (dataloader.py ``_token_filter``), not
+        a batch budget -- and the OOM handler, which by definition reports too
+        late to size anything.  The counter is reset after reading so each row
+        reports the window since the previous log, not a run-long high-water
+        mark that stops moving after the first few steps.
         """
         hours = self._duration_tracker.reduced_hours()
         if hours and "loss" in logs:
             logs.update(hours)
+        if "loss" in logs and torch.cuda.is_available():
+            logs["gpu_peak_gb"] = torch.cuda.max_memory_allocated() / 1024 ** 3
+            torch.cuda.reset_peak_memory_stats()
         super().log(logs, start_time)
 
     def _log_oom_batch_info(self, inputs: dict) -> None:
