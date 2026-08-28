@@ -413,7 +413,7 @@ data:
 
     # Duration filtering
     min_duration: 0.5
-    max_duration: 120.0
+    max_duration: 60.0
     
     # Batch settings
     batch_size: null  # Use batch_duration instead for dynamic batching
@@ -447,10 +447,10 @@ data:
     num_buckets: 30
     buffer_size: 10000
     # Measured against this mixture's real duration distribution; the previous
-    # set was off by 1.12 s (11.4%) at index 18. Byte-identical to
-    # ABL-IFT-700.yaml's because the two share an input_cfg and therefore a
-    # duration distribution -- C5's 'copied rather than measured' warning is a
-    # false positive for that pair, not a stale set.
+    # set was off by 1.12 s at index 18 (21.12 where the data says 20.0).
+    # Byte-identical to ABL-IFT-700.yaml's, not by copying: the two share an
+    # input_cfg, so they share a duration distribution and the same estimator
+    # run answers both.
     #
     # RE-MEASURE THESE WHENEVER max_duration CHANGES.
     bucket_duration_bins: [2.58, 3.9, 4.96, 5.92, 6.92, 8.0, 9.22, 10.4, 11.31, 12.19, 13.06, 13.92, 14.77, 15.62, 16.46, 17.32, 18.19, 19.08, 20.0, 22.32, 24.56, 26.8, 29.02, 32.82, 35.28, 36.6, 37.64, 38.5, 39.26]
@@ -645,7 +645,7 @@ data:
     shuffle: false
     drop_last: true
     min_duration: 0.5
-    max_duration: 120.0
+    max_duration: 60.0
     num_workers: 0
     pin_memory: true
     prefetch_factor: null

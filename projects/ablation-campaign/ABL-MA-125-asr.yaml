@@ -268,7 +268,7 @@ data:
 
     # Duration filtering
     min_duration: 0.5
-    max_duration: 90.0
+    max_duration: 60.0
     
     # Batch settings
     batch_size: null  # Use batch_duration instead for dynamic batching
@@ -481,7 +481,7 @@ data:
     shuffle: false
     drop_last: true
     min_duration: 0.5
-    max_duration: 120.0
+    max_duration: 60.0
     num_workers: 0
     pin_memory: true
     prefetch_factor: null

@@ -14,7 +14,7 @@ run:
   dry_run: false
   # Run a worst-case forward+backward at max_duration and another at
   # min_duration before step 1, logging peak CUDA memory for each. Cheap
-  # insurance now that max_duration is 90 s: it reports the real peak in the
+  # insurance now that max_duration is 60 s: it reports the real peak in the
   # first minute instead of leaving an OOM to surface mid-run. An OOM in the
   # warmup pass is caught and warned about rather than fatal.
   memory_preallocation: true
@@ -279,9 +279,7 @@ data:
             # 78.0 h of voxpopuli
     # Batch settings
     batch_size: null  # Use batch_duration instead for dynamic batching
-    # 150, down from 180, for headroom at max_duration 90. The number was
-    # chosen for a 60 s cap and is kept: raising the cap to 90 admits 78 cuts
-    # (1.51 h of 153,591 h), so the worst case it was sized against is the same.
+    # 150, down from 180, for headroom at max_duration 60.
     #
     # History, because the number matters and the reasoning was wrong once:
     # 120 profiled at peak 32.0 GB of 64 (MN5 job 44991596: 7.29 GB resident
@@ -306,11 +304,11 @@ data:
     # Unset, the charge is exactly `d`, batch_duration means audio seconds, and
     # estimate_steps_per_epoch's inflation factor is exactly 1.0.
     #
-    # Still safe at max_duration 90 s.  The encoder chunks at
+    # Still safe at max_duration 60 s.  The encoder chunks at
     # max_audio_seq_len=1500 frames (30 s) via _unfold_tensor, so its
     # attention never sees a longer window however long the cut is, and the
     # decoder runs flash_attention_2, whose memory is linear in sequence
-    # length -- a 90 s cut costs ~3x a 30 s one rather than ~9x.  Compute
+    # length -- a 60 s cut costs ~2x a 30 s one rather than ~4x.  Compute
     # still grows quadratically in the decoder, which is a throughput cost,
     # not an OOM risk.  Re-examine if max_duration is raised much further.
     quadratic_duration: null
@@ -337,11 +335,11 @@ data:
     # the duration distribution under that filter, and a stale set is not a
     # throughput nuisance -- it is an OOM.
     #
-    # Cap raised 60 -> 90: re-checked, and they are UNCHANGED. Only 78 cuts
-    # (1.51 h of 153,591 h, 0.001%) lie in the 60-90 s band, so the filtered
-    # distribution -- and every boundary derived from it -- is identical to
-    # three decimals. This is a record that the rule above was applied, not
-    # an exemption from it.
+    # Measured note, so nobody re-does the pass: these are identical under a
+    # 90 s cap as well. Only 78 cuts (1.51 h of 153,591 h, 0.001%) lie in the
+    # 60-90 s band, so the filtered distribution -- and every boundary derived
+    # from it -- does not move. The rule above still applies to any OTHER
+    # change of max_duration; 60 and 90 simply happen to coincide here.
     bucket_duration_bins: [2.6, 4.0, 5.0, 6.0, 7.02, 8.18, 9.54, 10.56, 11.38, 12.16, 12.94, 13.68, 14.41, 15.14, 15.86, 16.59, 17.32, 18.05, 18.81, 19.58, 21.18, 23.78, 26.32, 28.9, 33.18, 35.62, 36.98, 38.08, 39.08]
 
     # Sampling
@@ -357,7 +355,7 @@ data:
     # batch, so admitting longer cuts changes which audio is seen, not how
     # much per step.
     min_duration: 0.5
-    max_duration: 90.0
+    max_duration: 60.0
 
     # Drop cuts whose transcript is pathologically long for their audio.
     #
