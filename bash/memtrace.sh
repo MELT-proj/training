@@ -31,6 +31,7 @@ set -u
 
 interval="${1:-30}"
 out="${2:-/dev/stderr}"
+procout="${out%.tsv}.proc.tsv"
 
 kb_field() { awk -v k="$1:" '$1==k {print $2; exit}' /proc/meminfo; }
 
@@ -55,6 +56,8 @@ cg_field() {
     printf 'time\tused\tavail\tcached\tshmem\tdevshm\tcg_anon\tcg_file\tcg_shmem\tnproc\ttop_rss\n'
 } >>"${out}"
 
+printf 'time\tpid\tppid\tanon_gb\tfile_gb\tshmem_gb\n' >>"${procout}"
+
 g() { awk -v v="${1:-0}" 'BEGIN{printf "%.1f", v/1048576}'; }   # KiB -> GiB
 gb() { awk -v v="${1:-0}" 'BEGIN{printf "%.1f", v/1073741824}'; } # bytes -> GiB
 
@@ -71,6 +74,26 @@ while :; do
     top=$(ps -eo rss=,comm= 2>/dev/null | awk '$2 ~ /python|pt_|pt_data/ {print $1}' \
           | sort -rn | head -8 | awk '{printf "%.0f ", $1/1024}')
     nproc=$(pgrep -c python 2>/dev/null || echo 0)
+
+    # Per-process detail beside the totals. `top_rss` alone cannot say which
+    # process is which -- a training rank and its DataLoader worker are both
+    # "python" with the same cmdline -- and the answer decides where to look:
+    # a rank growing implicates the model/optimizer or pinned batches, a worker
+    # growing implicates the Lhotse input pipeline. ppid resolves it (a worker's
+    # parent is a rank), and RssAnon/RssFile/RssShmem say what kind of memory it
+    # is, which /proc/meminfo can only report node-wide.
+    for pid in $(pgrep python 2>/dev/null); do
+        st="/proc/${pid}/status"
+        [[ -r "${st}" ]] || continue
+        awk -v t="$(date +%H:%M:%S)" -v p="${pid}" '
+            $1=="PPid:"      {ppid=$2}
+            $1=="RssAnon:"   {anon=$2}
+            $1=="RssFile:"   {file=$2}
+            $1=="RssShmem:"  {shm=$2}
+            END {printf "%s\t%s\t%s\t%.1f\t%.1f\t%.1f\n",
+                 t, p, ppid, anon/1048576, file/1048576, shm/1048576}
+        ' "${st}" >>"${procout}" 2>/dev/null
+    done
 
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$(date +%H:%M:%S)" \
