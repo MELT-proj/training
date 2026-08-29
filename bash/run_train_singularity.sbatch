@@ -275,9 +275,26 @@ echo "[container] launching: bash/run_train.sh ${ACCELERATE_CONFIG} ${TRAIN_ARGS
 # SLURM_PROCID/NODEID/LOCALID/STEP_ID are set by srun per task and stripped by
 # --cleanenv, so they are forwarded with --env inside the step. Train args are
 # passed as positional parameters, which is quoting-safe (args with spaces survive).
-export SINGULARITY_BIN SINGULARITY_IMG BIND_ARGS
+export SINGULARITY_BIN SINGULARITY_IMG BIND_ARGS SUBMIT_DIR
+
+# Opt-in host-memory tracer, one per node, outside the container. See
+# bash/memtrace.sh for why: MN5 caps the job at ReqMem with NoOverMemoryKill, so
+# exhausting node memory surfaces as a DataLoader SIGBUS, a munged timeout or a
+# NODE_FAIL rather than an OOM, and sacct only keeps the peak. Set MELT_MEMTRACE
+# to a sampling interval in seconds to record the shape and the owner instead.
+MELT_MEMTRACE="${MELT_MEMTRACE:-0}"
+export MELT_MEMTRACE
+if [[ "${MELT_MEMTRACE}" != "0" ]]; then
+    echo "[container] memtrace: every ${MELT_MEMTRACE}s -> logs/memtrace.${SLURM_JOB_ID}.<node>.tsv"
+fi
 
 srun --kill-on-bad-exit=1 --wait=60 bash -c '
+    if [[ "${MELT_MEMTRACE:-0}" != "0" ]]; then
+        # Backgrounded before the exec below replaces this shell; it is reaped
+        # with the step, so there is nothing to clean up.
+        bash "${SUBMIT_DIR}/bash/memtrace.sh" "${MELT_MEMTRACE}" \
+            "${SUBMIT_DIR}/logs/memtrace.${SLURM_JOB_ID}.$(hostname -s).tsv" &
+    fi
     exec "$SINGULARITY_BIN" exec --nv \
         --bind "$BIND_ARGS" \
         --pwd /workspace/training \
