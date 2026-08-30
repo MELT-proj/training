@@ -201,12 +201,17 @@ def _maybe_start_worker_tracemalloc(worker_id: int) -> None:
     import threading
     import tracemalloc
 
-    # 12 frames: deep enough to see through lhotse's iterator chain (mux ->
-    # repeat -> indexed reader) to the actual allocation, without the tracebacks
-    # becoming unreadable in a log.
-    tracemalloc.start(12)
+    # Frame depth is the throughput/detail trade-off, and it is severe: at 12
+    # frames artemis job 329639 ran at 639 s/step against ~9 s/step for the same
+    # config untraced -- a ~70x slowdown that made the run useless for measuring
+    # the growth *rate* (it never got past step 1, so its apparent plateau was
+    # just the run not progressing). Deep frames are worth it once, to identify
+    # the allocating line; after that, 1-2 frames give the same attribution at a
+    # fraction of the cost. Default low and let the caller opt into depth.
+    depth = int(os.environ.get("MELT_WORKER_TRACEMALLOC_FRAMES", "2"))
+    tracemalloc.start(depth)
     logger.warning(
-        "[wtrace] worker %d — tracemalloc started, dumping every %.0fs", worker_id, every
+        "[wtrace] worker %d — tracemalloc started (%d frames), dumping every %.0fs", worker_id, depth, every
     )
 
     def _dump() -> None:
