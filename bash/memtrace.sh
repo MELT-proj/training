@@ -53,13 +53,33 @@ cg_field() {
     echo "# memtrace on $(hostname -s), interval ${interval}s, cgroup=${cg:-<none>}"
     echo "# sizes GiB except top_rss, which is per-process MiB, largest first."
     echo "# used = MemTotal-MemAvailable."
-    printf 'time\tused\tavail\tcached\tshmem\tdevshm\tcg_anon\tcg_file\tcg_shmem\tnproc\ttop_rss\n'
+    echo "# job_anon/job_nproc cover ONLY this job's own process tree. Node-wide"
+    echo "# columns and the cgroup columns are unreliable where the node is shared"
+    echo "# (artemis hades) or where the cgroup path does not resolve, so job_anon"
+    echo "# is the column to trust for attributing growth to this run."
+    printf 'time\tused\tavail\tcached\tshmem\tdevshm\tcg_anon\tcg_file\tcg_shmem\tnproc\tjob_nproc\tjob_anon\ttop_rss\n'
 } >>"${out}"
 
-printf 'time\tpid\tppid\tanon_gb\tfile_gb\tshmem_gb\n' >>"${procout}"
+printf 'time\tpid\tppid\trole\tanon_gb\tfile_gb\tshmem_gb\n' >>"${procout}"
 
 g() { awk -v v="${1:-0}" 'BEGIN{printf "%.1f", v/1048576}'; }   # KiB -> GiB
 gb() { awk -v v="${1:-0}" 'BEGIN{printf "%.1f", v/1073741824}'; } # bytes -> GiB
+
+# This job's own processes: the training ranks (matched on the module they were
+# launched with) plus their DataLoader workers. Needed because a shared node
+# (artemis hades runs several users' jobs at once) makes both /proc/meminfo and
+# a list of every python process on the box useless for attribution -- most of
+# what they report belongs to somebody else.
+job_pids() {
+    local roots kids
+    roots=$(pgrep -f "melt.training.train" 2>/dev/null)
+    [[ -z "${roots}" ]] && return
+    kids=""
+    for r in ${roots}; do
+        kids="${kids} $(pgrep -P "${r}" 2>/dev/null)"
+    done
+    echo ${roots} ${kids} | tr ' ' '\n' | sort -u | grep -E '^[0-9]+$'
+}
 
 while :; do
     total=$(kb_field MemTotal)
@@ -82,26 +102,46 @@ while :; do
     # growing implicates the Lhotse input pipeline. ppid resolves it (a worker's
     # parent is a rank), and RssAnon/RssFile/RssShmem say what kind of memory it
     # is, which /proc/meminfo can only report node-wide.
-    for pid in $(pgrep python 2>/dev/null); do
+    now=$(date +%H:%M:%S)
+    job_anon_kb=0
+    job_nproc=0
+    for pid in $(job_pids); do
         st="/proc/${pid}/status"
         [[ -r "${st}" ]] || continue
-        awk -v t="$(date +%H:%M:%S)" -v p="${pid}" '
-            $1=="PPid:"      {ppid=$2}
-            $1=="RssAnon:"   {anon=$2}
-            $1=="RssFile:"   {file=$2}
-            $1=="RssShmem:"  {shm=$2}
-            END {printf "%s\t%s\t%s\t%.1f\t%.1f\t%.1f\n",
-                 t, p, ppid, anon/1048576, file/1048576, shm/1048576}
-        ' "${st}" >>"${procout}" 2>/dev/null
+        read -r ppid anon file shm < <(awk '
+            $1=="PPid:"     {ppid=$2}
+            $1=="RssAnon:"  {anon=$2}
+            $1=="RssFile:"  {file=$2}
+            $1=="RssShmem:" {shm=$2}
+            END {print ppid+0, anon+0, file+0, shm+0}
+        ' "${st}" 2>/dev/null)
+        [[ -z "${anon:-}" ]] && continue
+        job_anon_kb=$((job_anon_kb + anon))
+        job_nproc=$((job_nproc + 1))
+        # `is_worker` is the distinction top_rss cannot make: a training rank and
+        # its DataLoader worker are both "python" with the same cmdline, and which
+        # one grows decides where to look -- a rank implicates the model, optimizer
+        # or pinned batches; a worker implicates the Lhotse input pipeline.
+        if pgrep -f "melt.training.train" 2>/dev/null | grep -qx "${pid}"; then
+            role="rank"
+        else
+            role="worker"
+        fi
+        printf '%s\t%s\t%s\t%s\t%.1f\t%.1f\t%.1f\n' \
+            "${now}" "${pid}" "${ppid}" "${role}" \
+            "$(awk -v v="${anon}" 'BEGIN{print v/1048576}')" \
+            "$(awk -v v="${file}" 'BEGIN{print v/1048576}')" \
+            "$(awk -v v="${shm}" 'BEGIN{print v/1048576}')" >>"${procout}"
     done
 
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$(date +%H:%M:%S)" \
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "${now}" \
         "$(g $((total - avail)))" "$(g "${avail}")" "$(g "${cached}")" \
         "$(g "${shmem}")" "$(g "${devshm:-0}")" \
         "$(gb "$(cg_field anon)")" "$(gb "$(cg_field file)")" \
         "$(gb "$(cg_field shmem)")" \
-        "${nproc}" "${top:-none}" >>"${out}"
+        "${nproc}" "${job_nproc}" "$(g "${job_anon_kb}")" \
+        "${top:-none}" >>"${out}"
 
     sleep "${interval}"
 done
