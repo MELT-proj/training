@@ -60,7 +60,7 @@ cg_field() {
     printf 'time\tused\tavail\tcached\tshmem\tdevshm\tcg_anon\tcg_file\tcg_shmem\tnproc\tjob_nproc\tjob_anon\ttop_rss\n'
 } >>"${out}"
 
-printf 'time\tpid\tppid\trole\tanon_gb\tfile_gb\tshmem_gb\n' >>"${procout}"
+printf 'time\tpid\tppid\trole\tanon_gb\tfile_gb\tshmem_gb\tfds\n' >>"${procout}"
 
 g() { awk -v v="${1:-0}" 'BEGIN{printf "%.1f", v/1048576}'; }   # KiB -> GiB
 gb() { awk -v v="${1:-0}" 'BEGIN{printf "%.1f", v/1073741824}'; } # bytes -> GiB
@@ -127,11 +127,19 @@ while :; do
         else
             role="worker"
         fi
-        printf '%s\t%s\t%s\t%s\t%.1f\t%.1f\t%.1f\n' \
+        # Open file descriptors, tracked alongside memory because they
+        # discriminate between the two live suspects. LazyIndexedSharIterator
+        # caches one IndexedTarReader per touched shard in a plain dict with no
+        # eviction and no close (this is what issue #76 is about), so if that
+        # cache is what grows, fds climb in lockstep with memory. If memory
+        # climbs while fds stay flat, the shard cache is not the cause.
+        fds=$(ls "/proc/${pid}/fd" 2>/dev/null | wc -l)
+        printf '%s\t%s\t%s\t%s\t%.1f\t%.1f\t%.1f\t%s\n' \
             "${now}" "${pid}" "${ppid}" "${role}" \
             "$(awk -v v="${anon}" 'BEGIN{print v/1048576}')" \
             "$(awk -v v="${file}" 'BEGIN{print v/1048576}')" \
-            "$(awk -v v="${shm}" 'BEGIN{print v/1048576}')" >>"${procout}"
+            "$(awk -v v="${shm}" 'BEGIN{print v/1048576}')" \
+            "${fds}" >>"${procout}"
     done
 
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
