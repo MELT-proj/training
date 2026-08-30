@@ -105,6 +105,9 @@ while :; do
     now=$(date +%H:%M:%S)
     job_anon_kb=0
     job_nproc=0
+    # The rank set, snapshotted once per sample so the role test below is
+    # consistent across the loop even if a worker respawns mid-pass.
+    roots_snapshot=$(pgrep -f "melt.training.train" 2>/dev/null | tr '\n' ' ')
     for pid in $(job_pids); do
         st="/proc/${pid}/status"
         [[ -r "${st}" ]] || continue
@@ -118,14 +121,16 @@ while :; do
         [[ -z "${anon:-}" ]] && continue
         job_anon_kb=$((job_anon_kb + anon))
         job_nproc=$((job_nproc + 1))
-        # `is_worker` is the distinction top_rss cannot make: a training rank and
-        # its DataLoader worker are both "python" with the same cmdline, and which
-        # one grows decides where to look -- a rank implicates the model, optimizer
-        # or pinned batches; a worker implicates the Lhotse input pipeline.
-        if pgrep -f "melt.training.train" 2>/dev/null | grep -qx "${pid}"; then
-            role="rank"
-        else
+        # Rank vs worker, decided by parentage rather than by cmdline. A
+        # DataLoader worker is forked from its rank and inherits the rank's
+        # cmdline verbatim, so matching on "melt.training.train" labels workers
+        # as ranks -- which it did, until the h100 run (329598) showed two
+        # 10 GB "ranks" whose ppid was itself a rank. A process whose parent is
+        # also in this job's matched set is a child of a rank: a worker.
+        if printf '%s\n' ${roots_snapshot} | grep -qx "${ppid}"; then
             role="worker"
+        else
+            role="rank"
         fi
         # Open file descriptors, tracked alongside memory because they
         # discriminate between the two live suspects. LazyIndexedSharIterator
