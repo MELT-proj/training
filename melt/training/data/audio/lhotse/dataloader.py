@@ -16,6 +16,7 @@ import json
 import math
 import os
 import random
+import time
 import warnings
 from functools import partial
 from glob import glob
@@ -164,6 +165,76 @@ class InfiniteIterableDatasetWrapper(IterableDatasetWrapper):
     def __len__(self) -> int:
         """Return estimated number of batches per epoch for progress bars."""
         return self._estimated_batches
+
+
+def _maybe_start_worker_tracemalloc(worker_id: int) -> None:
+    """Periodically dump the worker's top Python allocation sites. Opt-in.
+
+    Set ``MELT_WORKER_TRACEMALLOC`` to a dump interval in seconds.
+
+    Why this exists: a DataLoader worker in a real training run grows ~11 MB per
+    step without bound (measured on artemis h100 job 329598: 10.5 -> 16.7 GB over
+    578 steps), while the *same* dataloader driven standalone plateaus at 3.23 GB
+    and stays there -- identically at world_size 1 and 2. Everything structural
+    has been measured and ruled out: the per-shard reader cache (45 KB/shard),
+    per-cut audio loading (1,500 loads on one shard cost 3 MB), /dev/shm and page
+    cache (flat), StatefulDataLoader snapshots, and glibc arenas
+    (MALLOC_ARENA_MAX=2 reproduced the baseline curve exactly, job 329638).
+
+    Guessing has run out, so this asks Python directly which line is holding the
+    memory. tracemalloc costs real overhead, which is why it is opt-in and why
+    the interval is a knob: this is a diagnostic, not something to leave on.
+    """
+    interval = os.environ.get("MELT_WORKER_TRACEMALLOC", "")
+    if not interval or interval == "0":
+        return
+
+    try:
+        every = float(interval)
+    except ValueError:
+        logger.warning(
+            "MELT_WORKER_TRACEMALLOC=%r is not a number; worker tracemalloc not started.",
+            interval,
+        )
+        return
+
+    import threading
+    import tracemalloc
+
+    # 12 frames: deep enough to see through lhotse's iterator chain (mux ->
+    # repeat -> indexed reader) to the actual allocation, without the tracebacks
+    # becoming unreadable in a log.
+    tracemalloc.start(12)
+    logger.warning(
+        "[wtrace] worker %d — tracemalloc started, dumping every %.0fs", worker_id, every
+    )
+
+    def _dump() -> None:
+        baseline = tracemalloc.take_snapshot()
+        while True:
+            time.sleep(every)
+            try:
+                snap = tracemalloc.take_snapshot()
+                # Compare against the first snapshot rather than the previous
+                # one: the leak is a slow accumulation, so growth since start is
+                # the signal, while consecutive diffs are mostly per-batch churn.
+                stats = snap.compare_to(baseline, "traceback")[:5]
+                total = sum(s.size for s in snap.statistics("filename")) / 1048576
+                logger.warning(
+                    "[wtrace] worker %d — python-tracked total %.0f MB; top growth:",
+                    worker_id, total,
+                )
+                for i, stat in enumerate(stats, 1):
+                    where = stat.traceback.format()[-3:]
+                    logger.warning(
+                        "[wtrace]   #%d +%.1f MB (%d blocks) %s",
+                        i, stat.size_diff / 1048576, stat.count_diff,
+                        " | ".join(w.strip() for w in where),
+                    )
+            except Exception as exc:  # noqa: BLE001 - a diagnostic must not kill the run
+                logger.warning("[wtrace] worker %d — dump failed: %s", worker_id, exc)
+
+    threading.Thread(target=_dump, daemon=True, name=f"memtrace-{worker_id}").start()
 
 
 def _get_config_value(config: Any, key: str, default: Any = None) -> Any:
@@ -1199,6 +1270,7 @@ def get_lhotse_dataloader_from_config(
             # here, in the worker, not in the training process.
             _harden_rng_setstate()
             lhotse_worker_init(worker_id)
+            _maybe_start_worker_tracemalloc(worker_id)
 
         dloader_kwargs = {
             "dataset": wrapped_dataset,
