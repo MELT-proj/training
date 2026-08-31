@@ -92,7 +92,97 @@ def _harden_rng_setstate() -> None:
     random.Random.setstate = setstate
 
 
+def _bound_indexed_reader_handles() -> None:
+    """Cap how many Shar shard files stay open at once. This is the MN5 wall.
+
+    Lhotse's indexed Shar reader keeps one reader per shard touched and never
+    lets go: ``LazyIndexedSharIterator._indexed_readers`` is a plain dict with no
+    eviction, and ``_cuts_readers`` is a list covering every shard. Each reader
+    holds an open file (``_fh``) for the life of the process.
+
+    An open file is not free, and on a cluster filesystem it is not close to
+    free. CPython sizes a buffered reader from the file's ``st_blksize``, which
+    is 4 KiB on a local disk but **1 MiB over NFS** (measured: the same shard
+    reports 4096 on the nyx host and 1048576 through artemis's nfs4 mount) and
+    is megabytes on GPFS. So every shard touched costs ~1 MiB of host RAM that
+    is never returned.
+
+    Measured on artemis h100 job 329661: the DataLoader worker held
+    ``_io.BufferedReader = 8240 MB across 8241 objects`` -- 1.00 MiB apiece --
+    growing by ~9 readers per training step, which is the entire ~11 MB/step
+    growth that walls MN5 runs at 486 GB and kills them. It is not a leak in the
+    sense of lost references: every reader is legitimately reachable from the
+    cache. It is a cache with no bound.
+
+    This is why the effect hid for so long. The same pipeline driven on a local
+    filesystem grows 4 KiB per shard instead of 1 MiB, so a standalone harness
+    holding *the same number* of open shards looked flat -- the per-handle cost,
+    not the handle count, is what differs between a dev box and the cluster.
+
+    Patching ``_ensure_open`` rather than either cache is deliberate: it is the
+    single point both reader classes and both caches funnel through, so one
+    bound covers all of them, and it bounds open *file descriptors* too --
+    which is the other half of issue #76, where raising MELT_NOFILE to 65536
+    only converted an fd crash into this memory wall.
+
+    Eviction is cheap to get wrong and cheap to pay for: a closed reader keeps
+    its parsed offset index, so reopening is one ``open()`` syscall, and at ~9
+    new shards per step the reopen traffic is negligible. Set
+    ``MELT_SHAR_OPEN_SHARDS`` to tune the cap, or to 0 to restore lhotse's
+    unbounded behaviour. Report upstream.
+    """
+    try:
+        cap = int(os.environ.get("MELT_SHAR_OPEN_SHARDS", "256"))
+    except ValueError:
+        cap = 256
+    if cap <= 0:
+        return
+
+    try:
+        from lhotse.indexing import IndexedJsonlReader, IndexedTarReader
+    except ImportError:  # lhotse < 2.0 has no indexed reader at all
+        return
+
+    import threading
+    import weakref
+    from collections import OrderedDict
+
+    # Weak references: this cache decides when a handle is *closed*, and must
+    # never be the reason a reader stays alive.
+    lru: OrderedDict[int, weakref.ref] = OrderedDict()
+    lock = threading.Lock()
+
+    def _bind(cls: type) -> None:
+        original = cls._ensure_open
+        if getattr(original, "_melt_bounded", False):
+            return
+
+        def _ensure_open(self) -> None:
+            original(self)
+            key = id(self)
+            with lock:
+                lru.pop(key, None)
+                lru[key] = weakref.ref(self)
+                while len(lru) > cap:
+                    _, ref = lru.popitem(last=False)
+                    victim = ref()
+                    # Never close the reader just opened for this caller, which
+                    # is about to read from it.
+                    if victim is not None and victim is not self:
+                        try:
+                            victim.close()
+                        except Exception:  # noqa: BLE001 - eviction is best-effort
+                            pass
+
+        _ensure_open._melt_bounded = True
+        cls._ensure_open = _ensure_open
+
+    for reader_cls in (IndexedTarReader, IndexedJsonlReader):
+        _bind(reader_cls)
+
+
 _harden_rng_setstate()
+_bound_indexed_reader_handles()
 
 
 def _maybe_attach_set_epoch(dataloader: torch.utils.data.DataLoader, sampler: CutSampler) -> None:
@@ -1487,6 +1577,10 @@ def get_lhotse_dataloader_from_config(
             # re-imports and would not -- and the restore that needs it happens
             # here, in the worker, not in the training process.
             _harden_rng_setstate()
+            # Same reason: a spawned worker re-imports lhotse and would get the
+            # unbounded reader back, and the worker is where the shards are
+            # actually opened.
+            _bound_indexed_reader_handles()
             lhotse_worker_init(worker_id)
             _maybe_start_worker_tracemalloc(worker_id)
             _maybe_start_worker_memstats(worker_id)
