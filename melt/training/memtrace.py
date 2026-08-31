@@ -28,6 +28,36 @@ from ..logging_utils import get_logger
 logger = get_logger(__name__)
 
 
+def _env_interval(name: str) -> str:
+    """The raw value of an opt-in interval env var, or "" if unset or "0".
+
+    Shared by the ``*_requested`` predicates and the ``start_*`` functions
+    themselves, so a caller can check whether to bother calling ``start_*`` at
+    all without duplicating (and risking drifting from) what counts as "off".
+    """
+    value = os.environ.get(name, "")
+    return "" if value == "0" else value
+
+
+def tracemalloc_requested() -> bool:
+    """Whether ``MELT_WORKER_TRACEMALLOC`` asks for tracing.
+
+    Check this before calling :func:`start_worker_tracemalloc` in a hot path
+    (e.g. DataLoader worker init) to skip the call entirely rather than pay a
+    no-op function call on every worker spawn when tracing is off.
+    """
+    return bool(_env_interval("MELT_WORKER_TRACEMALLOC"))
+
+
+def memstats_requested() -> bool:
+    """Whether ``MELT_WORKER_MEMSTATS`` asks for memory-stats sampling.
+
+    Check this before calling :func:`start_worker_memstats` in a hot path for
+    the same reason as :func:`tracemalloc_requested`.
+    """
+    return bool(_env_interval("MELT_WORKER_MEMSTATS"))
+
+
 def start_worker_tracemalloc(worker_id: int) -> None:
     """Periodically dump the process's top Python allocation sites. Opt-in.
 
@@ -39,8 +69,8 @@ def start_worker_tracemalloc(worker_id: int) -> None:
     and should be cross-checked against :func:`start_worker_memstats` and
     :func:`heap_breakdown`, which see the whole process.
     """
-    interval = os.environ.get("MELT_WORKER_TRACEMALLOC", "")
-    if not interval or interval == "0":
+    interval = _env_interval("MELT_WORKER_TRACEMALLOC")
+    if not interval:
         return
 
     try:
@@ -145,8 +175,8 @@ def start_worker_memstats(worker_id: int) -> None:
         buffers stop being mmap'd and start fragmenting the heap instead.
     """
     global _memstats_pid
-    interval = os.environ.get("MELT_WORKER_MEMSTATS", "")
-    if not interval or interval == "0" or _memstats_pid == os.getpid():
+    interval = _env_interval("MELT_WORKER_MEMSTATS")
+    if not interval or _memstats_pid == os.getpid():
         return
 
     try:

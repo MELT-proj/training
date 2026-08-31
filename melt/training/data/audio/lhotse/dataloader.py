@@ -47,7 +47,12 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 
 
 from .....logging_utils import get_logger
-from ....memtrace import start_worker_memstats, start_worker_tracemalloc
+from ....memtrace import (
+    memstats_requested,
+    start_worker_memstats,
+    start_worker_tracemalloc,
+    tracemalloc_requested,
+)
 
 
 logger = get_logger(__name__)
@@ -1191,8 +1196,10 @@ def get_lhotse_dataloader_from_config(
     # -1 means "this is the training process, not a worker". Started here rather
     # than only in _worker_init so the num_workers=0 case -- where the pipeline
     # runs in the rank and there is no worker to instrument -- is still covered.
-    # It self-limits to one thread per process.
-    start_worker_memstats(-1)
+    # Gated so this is a no-op call, not even an env lookup inside memtrace.py,
+    # in the common case where MELT_WORKER_MEMSTATS is unset.
+    if memstats_requested():
+        start_worker_memstats(-1)
 
     # Set up CUDA expandable segments for better memory management
     _maybe_set_cuda_expandable_segments(enabled=True)
@@ -1321,8 +1328,12 @@ def get_lhotse_dataloader_from_config(
             # actually opened.
             _bound_indexed_reader_handles()
             lhotse_worker_init(worker_id)
-            start_worker_tracemalloc(worker_id)
-            start_worker_memstats(worker_id)
+            # Gated the same way as the -1 call site above: these are no-ops
+            # per worker spawn unless their env var is actually set.
+            if tracemalloc_requested():
+                start_worker_tracemalloc(worker_id)
+            if memstats_requested():
+                start_worker_memstats(worker_id)
 
         dloader_kwargs = {
             "dataset": wrapped_dataset,
