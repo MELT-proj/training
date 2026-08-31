@@ -799,7 +799,16 @@ trainer:
   # NOTE these checkpoints are far larger than stage 1's. A trainable decoder
   # means the optimizer state is saved too: ~7.3 GB of weights plus ~14.8 GB of
   # AdamW moments, so budget ~22 GB per checkpoint and ~45 GB for the two kept.
-  save_steps: 500
+  # 150, not 500, because of the MN5 host-RAM wall: a 2-node run saturates the
+  # 500 GB/node cgroup and dies somewhere around step 340-360 (see
+  # bash/memtrace.sh and issue #76). At 500 the first checkpoint sat *past* the
+  # wall, so every one of these runs restarted from zero. 150 banks two
+  # checkpoints before the wall and caps the work lost per crash at ~60 steps.
+  # Resuming also respawns the DataLoader workers, which resets the growth --
+  # the run makes forward progress even while the leak is unfixed. Revert to
+  # 500 once the leak is closed; save_total_limit keeps the disk cost flat
+  # either way.
+  save_steps: 150
   save_total_limit: 2
 
   # Performance
