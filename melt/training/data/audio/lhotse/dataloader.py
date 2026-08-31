@@ -340,6 +340,11 @@ def _maybe_start_worker_memstats(worker_id: int) -> None:
             pass
         return 0.0
 
+    # A full GC walk is far more expensive than the O(1) counters, so it gets
+    # its own (coarser) interval rather than running on every sample.
+    heap_every = float(os.environ.get("MELT_WORKER_HEAPDUMP", "0") or 0)
+    t_heap = [time.time()]
+
     def _dump() -> None:
         mb = 1048576.0
         while True:
@@ -353,6 +358,9 @@ def _maybe_start_worker_memstats(worker_id: int) -> None:
                     # memory we are trying to measure.
                     f"py_blocks={sys.getallocatedblocks()}",
                 ]
+                if heap_every and (time.time() - t_heap[0]) >= heap_every:
+                    t_heap[0] = time.time()
+                    logger.warning("[memstats] %s — heap: %s", who, heap_breakdown())
                 if libc is not None:
                     mi = libc.mallinfo2()
                     fields += [
@@ -368,6 +376,77 @@ def _maybe_start_worker_memstats(worker_id: int) -> None:
                 logger.warning("[memstats] %s — sample failed: %s", who, exc)
 
     threading.Thread(target=_dump, daemon=True, name=f"memstats-{worker_id}").start()
+
+
+def heap_breakdown(top_n: int = 12) -> str:
+    """Group every live Python object by type and report the biggest holders.
+
+    ``mallinfo2`` says *how much* memory is held and in what shape; this says
+    *what* is holding it. numpy arrays and torch tensors get their real payload
+    size (``nbytes``), since ``sys.getsizeof`` on either reports only the small
+    Python wrapper and would hide exactly the allocations worth finding --
+    ~12,000 live blocks of ~0.7 MB apiece is what the allocator counters show.
+
+    Walking the GC costs a list of one pointer per tracked object. At the ~4.3M
+    objects these workers carry that is ~35 MB and well under a second, which is
+    affordable as a periodic diagnostic (unlike ``tracemalloc``, which taxes
+    every allocation and slowed a run ~70x).
+    """
+    import gc
+    from collections import defaultdict
+
+    totals: dict[str, int] = defaultdict(int)
+    counts: dict[str, int] = defaultdict(int)
+
+    def _size(obj: Any) -> int:
+        nbytes = getattr(obj, "nbytes", None)
+        if isinstance(nbytes, int):
+            return nbytes  # numpy ndarray and anything else exposing a payload
+        if hasattr(obj, "element_size") and hasattr(obj, "nelement"):
+            return obj.element_size() * obj.nelement()  # torch.Tensor
+        return sys.getsizeof(obj)
+
+    def _record(obj: Any) -> None:
+        try:
+            cls = type(obj)
+            totals[f"{cls.__module__}.{cls.__qualname__}"] += _size(obj)
+            counts[f"{cls.__module__}.{cls.__qualname__}"] += 1
+        except Exception:  # noqa: BLE001 - a diagnostic must not kill the run
+            pass
+
+    # gc.get_objects() returns only GC-*tracked* objects, and a numeric numpy
+    # array holds no references so it is not tracked -- the walk would miss the
+    # exact allocations being hunted (a 1.4 GB array pile reported as 0 MB in
+    # testing). One hop through gc.get_referents() reaches them, since an array
+    # that is alive at all is reachable from some tracked list, dict or
+    # instance __dict__.
+    seen: set[int] = set()
+    # Attribute probing trips deprecation warnings on some module-level objects
+    # (torch.distributed.reduce_op); a diagnostic should not spam the log.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        tracked = gc.get_objects()
+        try:
+            for obj in tracked:
+                if id(obj) not in seen:
+                    seen.add(id(obj))
+                    _record(obj)
+                try:
+                    referents = gc.get_referents(obj)
+                except Exception:  # noqa: BLE001
+                    continue
+                for ref in referents:
+                    if id(ref) not in seen:
+                        seen.add(id(ref))
+                        _record(ref)
+        finally:
+            del tracked, seen
+
+    ranked = sorted(totals.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+    parts = [
+        f"{name}={total / 1048576:.0f}MB/{counts[name]}" for name, total in ranked
+    ]
+    return " ".join(parts)
 
 
 def _get_config_value(config: Any, key: str, default: Any = None) -> Any:
