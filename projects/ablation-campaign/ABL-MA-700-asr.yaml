@@ -591,11 +591,7 @@ trainer:
 
   # Checkpointing
   save_strategy: steps
-  # 150, not 1000, for the same reason as the IFT arm: the MN5 host-RAM wall
-  # kills a 2-node run a few hundred steps in, and at 1000 no MA run had ever
-  # written a checkpoint either -- the five NODE_FAILs between 2026-08-24 and
-  # 2026-08-27 all peaked at 486-489 GB and all restarted from zero.
-  save_steps: 150
+  save_steps: 1000
   save_total_limit: 5
 
   # Performance

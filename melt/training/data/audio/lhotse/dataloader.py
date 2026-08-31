@@ -11,15 +11,12 @@ Key functions:
 """
 
 import copy
-import ctypes
 import gzip
 import json
 import math
 import os
 import random
-import sys
 import threading
-import time
 import warnings
 import weakref
 from collections import OrderedDict
@@ -50,6 +47,7 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 
 
 from .....logging_utils import get_logger
+from ....memtrace import start_worker_memstats, start_worker_tracemalloc
 
 
 logger = get_logger(__name__)
@@ -125,8 +123,8 @@ def _bound_indexed_reader_handles() -> None:
     ~113 GB each: 113 GB / 16 MiB is ~7,000 open shards, and 4 x 113 GB = 452 GB
     against a 500 GB/node cgroup.
 
-    Measured on artemis h100 job 329661: the DataLoader worker held
-    ``_io.BufferedReader = 8240 MB across 8241 objects`` -- 1.00 MiB apiece --
+    Measured in a DataLoader worker on an h100 node: ``_io.BufferedReader =
+    8240 MB across 8241 objects`` -- 1.00 MiB apiece --
     growing by ~9 readers per training step, which is the entire ~11 MB/step
     growth that walls MN5 runs at 486 GB and kills them. It is not a leak in the
     sense of lost references: every reader is legitimately reachable from the
@@ -278,286 +276,6 @@ class InfiniteIterableDatasetWrapper(IterableDatasetWrapper):
     def __len__(self) -> int:
         """Return estimated number of batches per epoch for progress bars."""
         return self._estimated_batches
-
-
-def _maybe_start_worker_tracemalloc(worker_id: int) -> None:
-    """Periodically dump the worker's top Python allocation sites. Opt-in.
-
-    Set ``MELT_WORKER_TRACEMALLOC`` to a dump interval in seconds.
-
-    Why this exists: a DataLoader worker in a real training run grows ~11 MB per
-    step without bound (measured on artemis h100 job 329598: 10.5 -> 16.7 GB over
-    578 steps), while the *same* dataloader driven standalone plateaus at 3.23 GB
-    and stays there -- identically at world_size 1 and 2. Everything structural
-    has been measured and ruled out: the per-shard reader cache (45 KB/shard),
-    per-cut audio loading (1,500 loads on one shard cost 3 MB), /dev/shm and page
-    cache (flat), StatefulDataLoader snapshots, and glibc arenas
-    (MALLOC_ARENA_MAX=2 reproduced the baseline curve exactly, job 329638).
-
-    Guessing has run out, so this asks Python directly which line is holding the
-    memory. tracemalloc costs real overhead, which is why it is opt-in and why
-    the interval is a knob: this is a diagnostic, not something to leave on.
-    """
-    interval = os.environ.get("MELT_WORKER_TRACEMALLOC", "")
-    if not interval or interval == "0":
-        return
-
-    try:
-        every = float(interval)
-    except ValueError:
-        logger.warning(
-            "MELT_WORKER_TRACEMALLOC=%r is not a number; worker tracemalloc not started.",
-            interval,
-        )
-        return
-
-    import threading
-    import tracemalloc
-
-    # Frame depth is the throughput/detail trade-off, and it is severe: at 12
-    # frames artemis job 329639 ran at 639 s/step against ~9 s/step for the same
-    # config untraced -- a ~70x slowdown that made the run useless for measuring
-    # the growth *rate* (it never got past step 1, so its apparent plateau was
-    # just the run not progressing). Deep frames are worth it once, to identify
-    # the allocating line; after that, 1-2 frames give the same attribution at a
-    # fraction of the cost. Default low and let the caller opt into depth.
-    depth = int(os.environ.get("MELT_WORKER_TRACEMALLOC_FRAMES", "2"))
-    tracemalloc.start(depth)
-    logger.warning(
-        "[wtrace] worker %d — tracemalloc started (%d frames), dumping every %.0fs", worker_id, depth, every
-    )
-
-    def _dump() -> None:
-        baseline = tracemalloc.take_snapshot()
-        while True:
-            time.sleep(every)
-            try:
-                snap = tracemalloc.take_snapshot()
-                # Compare against the first snapshot rather than the previous
-                # one: the leak is a slow accumulation, so growth since start is
-                # the signal, while consecutive diffs are mostly per-batch churn.
-                stats = snap.compare_to(baseline, "traceback")[:5]
-                total = sum(s.size for s in snap.statistics("filename")) / 1048576
-                logger.warning(
-                    "[wtrace] worker %d — python-tracked total %.0f MB; top growth:",
-                    worker_id, total,
-                )
-                for i, stat in enumerate(stats, 1):
-                    where = stat.traceback.format()[-3:]
-                    logger.warning(
-                        "[wtrace]   #%d +%.1f MB (%d blocks) %s",
-                        i, stat.size_diff / 1048576, stat.count_diff,
-                        " | ".join(w.strip() for w in where),
-                    )
-            except Exception as exc:  # noqa: BLE001 - a diagnostic must not kill the run
-                logger.warning("[wtrace] worker %d — dump failed: %s", worker_id, exc)
-
-    threading.Thread(target=_dump, daemon=True, name=f"memtrace-{worker_id}").start()
-
-
-class _MallInfo2(ctypes.Structure):
-    """glibc's ``struct mallinfo2`` (malloc.h). All fields are ``size_t`` since
-    glibc 2.33; the older ``mallinfo`` used ``int`` and silently wrapped past
-    4 GB, which is useless here -- the numbers we care about are tens of GB."""
-
-    _fields_ = [
-        ("arena", ctypes.c_size_t),  # bytes obtained from sbrk (the main heap)
-        ("ordblks", ctypes.c_size_t),
-        ("smblks", ctypes.c_size_t),
-        ("hblks", ctypes.c_size_t),  # count of mmap'd regions
-        ("hblkhd", ctypes.c_size_t),  # bytes in mmap'd regions
-        ("usmblks", ctypes.c_size_t),
-        ("fsmblks", ctypes.c_size_t),
-        ("uordblks", ctypes.c_size_t),  # bytes currently allocated (in use)
-        ("fordblks", ctypes.c_size_t),  # bytes free inside the heap
-        ("keepcost", ctypes.c_size_t),  # releasable bytes at the top of the heap
-    ]
-
-
-# The pid that already has a sampler thread, not a bool: a DataLoader worker is
-# *forked*, so it inherits the parent's module globals but not the parent's
-# threads. A plain flag would be True in every worker and no worker would ever
-# start its own sampler -- exactly the processes being measured.
-_memstats_pid: int | None = None
-
-
-def _maybe_start_worker_memstats(worker_id: int) -> None:
-    """Periodically log where a process's memory actually lives. Opt-in, ~free.
-
-    Set ``MELT_WORKER_MEMSTATS`` to an interval in seconds. ``worker_id`` is -1
-    for the training process itself, so this also covers ``num_workers=0``.
-
-    Why this exists: the MN5 host-RAM wall is a DataLoader worker growing ~11 MB
-    per step without bound, and every structural explanation tried so far has
-    been ruled out by measurement. What was never measured is the *kind* of
-    growth, and there are three families with completely different fixes. Three
-    counters separate them, none of which costs anything to read:
-
-      - ``sys.getallocatedblocks()`` -- live CPython allocator blocks. Grows in
-        step with RSS only if Python *objects* are accumulating, i.e. something
-        is holding references. Then the fix is to find the container.
-      - ``mallinfo2().uordblks`` -- bytes malloc currently considers in use.
-        Grows while the block count stays flat when the leak is raw buffers
-        (numpy/torch allocate below CPython's allocator, so tracemalloc is
-        blind to them and reports a misleadingly clean picture).
-      - ``mallinfo2().arena`` vs ``uordblks`` -- if in-use is flat while arena
-        keeps growing, nothing is leaking at all: memory is freed but never
-        returned to the OS. That is heap fragmentation, and the fix is an
-        allocator knob (``MALLOC_MMAP_THRESHOLD_``, ``malloc_trim``), not a
-        code change. ``hblkhd`` distinguishes the usual cause: glibc raises its
-        mmap threshold dynamically up to 32 MB, after which large variable-size
-        buffers -- exactly what duration-bucketed audio batches are -- stop
-        being mmap'd and start fragmenting the heap instead.
-
-    tracemalloc can answer none of these: it only sees allocations made through
-    CPython's allocators, which is why its "83% in serialization.py open()"
-    reading could not be reconciled with a standalone harness that opens the
-    same files and stays flat.
-    """
-    global _memstats_pid
-    interval = os.environ.get("MELT_WORKER_MEMSTATS", "")
-    if not interval or interval == "0" or _memstats_pid == os.getpid():
-        return
-
-    try:
-        every = float(interval)
-    except ValueError:
-        logger.warning(
-            "MELT_WORKER_MEMSTATS=%r is not a number; memstats not started.", interval
-        )
-        return
-
-    import threading
-
-    try:
-        libc = ctypes.CDLL("libc.so.6", use_errno=True)
-        libc.mallinfo2.restype = _MallInfo2
-        libc.mallinfo2()  # probe now: glibc < 2.33 has no such symbol
-    except (OSError, AttributeError) as exc:
-        logger.warning("[memstats] mallinfo2 unavailable (%s); reporting RSS only.", exc)
-        libc = None
-
-    _memstats_pid = os.getpid()
-    who = "rank" if worker_id < 0 else f"worker {worker_id}"
-    logger.warning("[memstats] %s — sampling every %.0fs (pid %d)", who, every, os.getpid())
-
-    def _rss_anon_mb() -> float:
-        try:
-            with open(f"/proc/{os.getpid()}/status") as fh:
-                for line in fh:
-                    if line.startswith("RssAnon:"):
-                        return int(line.split()[1]) / 1024
-        except OSError:
-            pass
-        return 0.0
-
-    # A full GC walk is far more expensive than the O(1) counters, so it gets
-    # its own (coarser) interval rather than running on every sample.
-    heap_every = float(os.environ.get("MELT_WORKER_HEAPDUMP", "0") or 0)
-    t_heap = [time.time()]
-
-    def _dump() -> None:
-        mb = 1048576.0
-        while True:
-            time.sleep(every)
-            try:
-                fields = [
-                    f"rss_anon={_rss_anon_mb():.0f}MB",
-                    # O(1). Deliberately not len(gc.get_objects()), which would
-                    # materialise a list of every tracked object -- hundreds of
-                    # MB of transient allocation inside the very process whose
-                    # memory we are trying to measure.
-                    f"py_blocks={sys.getallocatedblocks()}",
-                ]
-                if heap_every and (time.time() - t_heap[0]) >= heap_every:
-                    t_heap[0] = time.time()
-                    logger.warning("[memstats] %s — heap: %s", who, heap_breakdown())
-                if libc is not None:
-                    mi = libc.mallinfo2()
-                    fields += [
-                        f"arena={mi.arena / mb:.0f}MB",
-                        f"in_use={mi.uordblks / mb:.0f}MB",
-                        f"heap_free={mi.fordblks / mb:.0f}MB",
-                        f"mmapped={mi.hblkhd / mb:.0f}MB",
-                        f"mmap_blocks={mi.hblks}",
-                        f"trimmable={mi.keepcost / mb:.0f}MB",
-                    ]
-                logger.warning("[memstats] %s — %s", who, " ".join(fields))
-            except Exception as exc:  # noqa: BLE001 - a diagnostic must not kill the run
-                logger.warning("[memstats] %s — sample failed: %s", who, exc)
-
-    threading.Thread(target=_dump, daemon=True, name=f"memstats-{worker_id}").start()
-
-
-def heap_breakdown(top_n: int = 12) -> str:
-    """Group every live Python object by type and report the biggest holders.
-
-    ``mallinfo2`` says *how much* memory is held and in what shape; this says
-    *what* is holding it. numpy arrays and torch tensors get their real payload
-    size (``nbytes``), since ``sys.getsizeof`` on either reports only the small
-    Python wrapper and would hide exactly the allocations worth finding --
-    ~12,000 live blocks of ~0.7 MB apiece is what the allocator counters show.
-
-    Walking the GC costs a list of one pointer per tracked object. At the ~4.3M
-    objects these workers carry that is ~35 MB and well under a second, which is
-    affordable as a periodic diagnostic (unlike ``tracemalloc``, which taxes
-    every allocation and slowed a run ~70x).
-    """
-    import gc
-    from collections import defaultdict
-
-    totals: dict[str, int] = defaultdict(int)
-    counts: dict[str, int] = defaultdict(int)
-
-    def _size(obj: Any) -> int:
-        nbytes = getattr(obj, "nbytes", None)
-        if isinstance(nbytes, int):
-            return nbytes  # numpy ndarray and anything else exposing a payload
-        if hasattr(obj, "element_size") and hasattr(obj, "nelement"):
-            return obj.element_size() * obj.nelement()  # torch.Tensor
-        return sys.getsizeof(obj)
-
-    def _record(obj: Any) -> None:
-        try:
-            cls = type(obj)
-            totals[f"{cls.__module__}.{cls.__qualname__}"] += _size(obj)
-            counts[f"{cls.__module__}.{cls.__qualname__}"] += 1
-        except Exception:  # noqa: BLE001 - a diagnostic must not kill the run
-            pass
-
-    # gc.get_objects() returns only GC-*tracked* objects, and a numeric numpy
-    # array holds no references so it is not tracked -- the walk would miss the
-    # exact allocations being hunted (a 1.4 GB array pile reported as 0 MB in
-    # testing). One hop through gc.get_referents() reaches them, since an array
-    # that is alive at all is reachable from some tracked list, dict or
-    # instance __dict__.
-    seen: set[int] = set()
-    # Attribute probing trips deprecation warnings on some module-level objects
-    # (torch.distributed.reduce_op); a diagnostic should not spam the log.
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        tracked = gc.get_objects()
-        try:
-            for obj in tracked:
-                if id(obj) not in seen:
-                    seen.add(id(obj))
-                    _record(obj)
-                try:
-                    referents = gc.get_referents(obj)
-                except Exception:  # noqa: BLE001
-                    continue
-                for ref in referents:
-                    if id(ref) not in seen:
-                        seen.add(id(ref))
-                        _record(ref)
-        finally:
-            del tracked, seen
-
-    ranked = sorted(totals.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
-    parts = [
-        f"{name}={total / 1048576:.0f}MB/{counts[name]}" for name, total in ranked
-    ]
-    return " ".join(parts)
 
 
 def _get_config_value(config: Any, key: str, default: Any = None) -> Any:
@@ -1474,7 +1192,7 @@ def get_lhotse_dataloader_from_config(
     # than only in _worker_init so the num_workers=0 case -- where the pipeline
     # runs in the rank and there is no worker to instrument -- is still covered.
     # It self-limits to one thread per process.
-    _maybe_start_worker_memstats(-1)
+    start_worker_memstats(-1)
 
     # Set up CUDA expandable segments for better memory management
     _maybe_set_cuda_expandable_segments(enabled=True)
@@ -1603,8 +1321,8 @@ def get_lhotse_dataloader_from_config(
             # actually opened.
             _bound_indexed_reader_handles()
             lhotse_worker_init(worker_id)
-            _maybe_start_worker_tracemalloc(worker_id)
-            _maybe_start_worker_memstats(worker_id)
+            start_worker_tracemalloc(worker_id)
+            start_worker_memstats(worker_id)
 
         dloader_kwargs = {
             "dataset": wrapped_dataset,

@@ -1262,11 +1262,11 @@ class MELTTrainer(Seq2SeqTrainer):
             model.zero_grad(set_to_none=True)
             # `loss`'s autograd graph (and the synthetic `batch` it was built from) can
             # hold reference cycles that plain refcounting won't collect. Confirmed by a
-            # CPU repro (nyx, 2026-08-29): RSS never dropped after "pass complete" below
-            # and the very next pass OOM'd on an allocation far smaller than what had
-            # just supposedly been freed. Python's generational GC is triggered by object
-            # count, not by how many GB a cycle is holding, so this explicit collect is
-            # what actually reclaims it before the next pass runs.
+            # CPU repro: RSS never dropped after "pass complete" below and the very next
+            # pass OOM'd on an allocation far smaller than what had just supposedly been
+            # freed. Python's generational GC is triggered by object count, not by how
+            # many GB a cycle is holding, so this explicit collect is what actually
+            # reclaims it before the next pass runs.
             del batch, loss
             gc.collect()
             if torch.cuda.is_available():
