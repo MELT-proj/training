@@ -70,10 +70,18 @@ NUM_TRAIN_EPOCHS=1
 # utterances for each of 6 named eval sets.
 EVAL_STEPS=500
 
-# Every 500 steps, keeping 2. These checkpoints are much larger than stage 1's:
+# Every 150 steps, keeping 2. These checkpoints are much larger than stage 1's:
 # a trainable decoder means AdamW's moments are saved alongside the weights,
 # so budget ~22 GB each, ~45 GB for the two kept.
-SAVE_STEPS=500
+#
+# 150 rather than 500 because every previous attempt at this arm died of the
+# host-RAM wall somewhere around step 340-360, which is *before* the first
+# checkpoint at 500 -- so not one of them ever wrote anything and every retry
+# restarted from zero. The wall itself is fixed now (the unbounded Shar reader
+# cache, see _bound_indexed_reader_handles), but this is the first run of the
+# arm since that landed, so the cheap insurance stays until it is proven at
+# MN5 scale. Raise it back to 500 once this arm completes an allocation.
+SAVE_STEPS=150
 SAVE_TOTAL_LIMIT=2
 
 # --- launch ----------------------------------------------------------------
