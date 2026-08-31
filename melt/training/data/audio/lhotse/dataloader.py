@@ -11,11 +11,13 @@ Key functions:
 """
 
 import copy
+import ctypes
 import gzip
 import json
 import math
 import os
 import random
+import sys
 import time
 import warnings
 from functools import partial
@@ -240,6 +242,132 @@ def _maybe_start_worker_tracemalloc(worker_id: int) -> None:
                 logger.warning("[wtrace] worker %d — dump failed: %s", worker_id, exc)
 
     threading.Thread(target=_dump, daemon=True, name=f"memtrace-{worker_id}").start()
+
+
+class _MallInfo2(ctypes.Structure):
+    """glibc's ``struct mallinfo2`` (malloc.h). All fields are ``size_t`` since
+    glibc 2.33; the older ``mallinfo`` used ``int`` and silently wrapped past
+    4 GB, which is useless here -- the numbers we care about are tens of GB."""
+
+    _fields_ = [
+        ("arena", ctypes.c_size_t),  # bytes obtained from sbrk (the main heap)
+        ("ordblks", ctypes.c_size_t),
+        ("smblks", ctypes.c_size_t),
+        ("hblks", ctypes.c_size_t),  # count of mmap'd regions
+        ("hblkhd", ctypes.c_size_t),  # bytes in mmap'd regions
+        ("usmblks", ctypes.c_size_t),
+        ("fsmblks", ctypes.c_size_t),
+        ("uordblks", ctypes.c_size_t),  # bytes currently allocated (in use)
+        ("fordblks", ctypes.c_size_t),  # bytes free inside the heap
+        ("keepcost", ctypes.c_size_t),  # releasable bytes at the top of the heap
+    ]
+
+
+# The pid that already has a sampler thread, not a bool: a DataLoader worker is
+# *forked*, so it inherits the parent's module globals but not the parent's
+# threads. A plain flag would be True in every worker and no worker would ever
+# start its own sampler -- exactly the processes being measured.
+_memstats_pid: int | None = None
+
+
+def _maybe_start_worker_memstats(worker_id: int) -> None:
+    """Periodically log where a process's memory actually lives. Opt-in, ~free.
+
+    Set ``MELT_WORKER_MEMSTATS`` to an interval in seconds. ``worker_id`` is -1
+    for the training process itself, so this also covers ``num_workers=0``.
+
+    Why this exists: the MN5 host-RAM wall is a DataLoader worker growing ~11 MB
+    per step without bound, and every structural explanation tried so far has
+    been ruled out by measurement. What was never measured is the *kind* of
+    growth, and there are three families with completely different fixes. Three
+    counters separate them, none of which costs anything to read:
+
+      - ``sys.getallocatedblocks()`` -- live CPython allocator blocks. Grows in
+        step with RSS only if Python *objects* are accumulating, i.e. something
+        is holding references. Then the fix is to find the container.
+      - ``mallinfo2().uordblks`` -- bytes malloc currently considers in use.
+        Grows while the block count stays flat when the leak is raw buffers
+        (numpy/torch allocate below CPython's allocator, so tracemalloc is
+        blind to them and reports a misleadingly clean picture).
+      - ``mallinfo2().arena`` vs ``uordblks`` -- if in-use is flat while arena
+        keeps growing, nothing is leaking at all: memory is freed but never
+        returned to the OS. That is heap fragmentation, and the fix is an
+        allocator knob (``MALLOC_MMAP_THRESHOLD_``, ``malloc_trim``), not a
+        code change. ``hblkhd`` distinguishes the usual cause: glibc raises its
+        mmap threshold dynamically up to 32 MB, after which large variable-size
+        buffers -- exactly what duration-bucketed audio batches are -- stop
+        being mmap'd and start fragmenting the heap instead.
+
+    tracemalloc can answer none of these: it only sees allocations made through
+    CPython's allocators, which is why its "83% in serialization.py open()"
+    reading could not be reconciled with a standalone harness that opens the
+    same files and stays flat.
+    """
+    global _memstats_pid
+    interval = os.environ.get("MELT_WORKER_MEMSTATS", "")
+    if not interval or interval == "0" or _memstats_pid == os.getpid():
+        return
+
+    try:
+        every = float(interval)
+    except ValueError:
+        logger.warning(
+            "MELT_WORKER_MEMSTATS=%r is not a number; memstats not started.", interval
+        )
+        return
+
+    import threading
+
+    try:
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        libc.mallinfo2.restype = _MallInfo2
+        libc.mallinfo2()  # probe now: glibc < 2.33 has no such symbol
+    except (OSError, AttributeError) as exc:
+        logger.warning("[memstats] mallinfo2 unavailable (%s); reporting RSS only.", exc)
+        libc = None
+
+    _memstats_pid = os.getpid()
+    who = "rank" if worker_id < 0 else f"worker {worker_id}"
+    logger.warning("[memstats] %s — sampling every %.0fs (pid %d)", who, every, os.getpid())
+
+    def _rss_anon_mb() -> float:
+        try:
+            with open(f"/proc/{os.getpid()}/status") as fh:
+                for line in fh:
+                    if line.startswith("RssAnon:"):
+                        return int(line.split()[1]) / 1024
+        except OSError:
+            pass
+        return 0.0
+
+    def _dump() -> None:
+        mb = 1048576.0
+        while True:
+            time.sleep(every)
+            try:
+                fields = [
+                    f"rss_anon={_rss_anon_mb():.0f}MB",
+                    # O(1). Deliberately not len(gc.get_objects()), which would
+                    # materialise a list of every tracked object -- hundreds of
+                    # MB of transient allocation inside the very process whose
+                    # memory we are trying to measure.
+                    f"py_blocks={sys.getallocatedblocks()}",
+                ]
+                if libc is not None:
+                    mi = libc.mallinfo2()
+                    fields += [
+                        f"arena={mi.arena / mb:.0f}MB",
+                        f"in_use={mi.uordblks / mb:.0f}MB",
+                        f"heap_free={mi.fordblks / mb:.0f}MB",
+                        f"mmapped={mi.hblkhd / mb:.0f}MB",
+                        f"mmap_blocks={mi.hblks}",
+                        f"trimmable={mi.keepcost / mb:.0f}MB",
+                    ]
+                logger.warning("[memstats] %s — %s", who, " ".join(fields))
+            except Exception as exc:  # noqa: BLE001 - a diagnostic must not kill the run
+                logger.warning("[memstats] %s — sample failed: %s", who, exc)
+
+    threading.Thread(target=_dump, daemon=True, name=f"memstats-{worker_id}").start()
 
 
 def _get_config_value(config: Any, key: str, default: Any = None) -> Any:
@@ -1152,6 +1280,12 @@ def get_lhotse_dataloader_from_config(
     """
     logger.info("Creating Lhotse DataLoader")
 
+    # -1 means "this is the training process, not a worker". Started here rather
+    # than only in _worker_init so the num_workers=0 case -- where the pipeline
+    # runs in the rank and there is no worker to instrument -- is still covered.
+    # It self-limits to one thread per process.
+    _maybe_start_worker_memstats(-1)
+
     # Set up CUDA expandable segments for better memory management
     _maybe_set_cuda_expandable_segments(enabled=True)
 
@@ -1276,6 +1410,7 @@ def get_lhotse_dataloader_from_config(
             _harden_rng_setstate()
             lhotse_worker_init(worker_id)
             _maybe_start_worker_tracemalloc(worker_id)
+            _maybe_start_worker_memstats(worker_id)
 
         dloader_kwargs = {
             "dataset": wrapped_dataset,
