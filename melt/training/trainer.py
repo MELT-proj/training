@@ -12,6 +12,7 @@ Key features:
 
 import contextlib
 import functools
+import gc
 import inspect
 import math
 import os
@@ -1223,6 +1224,8 @@ class MELTTrainer(Seq2SeqTrainer):
             torch.cuda.max_memory_allocated() / 1024 ** 3
             if torch.cuda.is_available() else 0.0
         )
+        batch = None
+        loss = None
         try:
             batch = self._build_max_length_batch(model, duration_per_utt=duration_per_utt)
             logger.warning(
@@ -1240,8 +1243,34 @@ class MELTTrainer(Seq2SeqTrainer):
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             return False
+        except RuntimeError as exc:
+            # The CUDA allocator raises torch.OutOfMemoryError (caught above); the CPU
+            # allocator raises a plain RuntimeError instead ("DefaultCPUAllocator: can't
+            # allocate memory ..."), which that CUDA-specific catch never sees. Only
+            # relevant to CPU-based dev/debugging -- production always runs on CUDA --
+            # but without this, a CPU OOM here crashes the run instead of being caught
+            # like its CUDA counterpart. Re-raise anything that isn't this specific
+            # allocator failure so unrelated RuntimeErrors still surface normally.
+            if torch.cuda.is_available() or "allocate memory" not in str(exc):
+                raise
+            logger.warning(
+                f"[Preallocation/{label}] rank={self._global_rank} — CPU OOM during warmup "
+                f"pass ({exc}). Training will proceed but may OOM later."
+            )
+            return False
         finally:
             model.zero_grad(set_to_none=True)
+            # `loss`'s autograd graph (and the synthetic `batch` it was built from) can
+            # hold reference cycles that plain refcounting won't collect. Confirmed by a
+            # CPU repro: RSS never dropped after "pass complete" below and the very next
+            # pass OOM'd on an allocation far smaller than what had just supposedly been
+            # freed. Python's generational GC is triggered by object count, not by how
+            # many GB a cycle is holding, so this explicit collect is what actually
+            # reclaims it before the next pass runs.
+            del batch, loss
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         mem_after_gb = (
             torch.cuda.max_memory_allocated() / 1024 ** 3
