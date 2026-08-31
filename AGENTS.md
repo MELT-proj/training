@@ -90,6 +90,60 @@ Common launch variables:
 - `SINGULARITY_IMG`: Path to the `.sif` image for container runs
 - `TMPDIR_HOST`: Host tmp directory to bind into container
 
+## Multi-cluster HPC guidance
+
+Three machines are available for building, testing, and running training jobs.
+Full topology (partitions, QOS limits, per-node hardware, storage quotas) lives
+in the private cross-project reference `g8a9/agents-info`, not here —
+`/home/giuseppe/agents-info/HPCs/sardine-and-marenostrum5.md` is the source of
+truth; read it before submitting anything non-trivial. This section is
+deliberately just a quick "which one do I want" summary. This project's own
+HPC procedures (image builds, syncing the repo, launcher conventions, dataset
+staging) live in `docs/hpc_runbook.md`.
+
+| | nyx | artemis (sardine) | marenostrum5 (mn5) |
+|---|---|---|---|
+| role | dev/build box | interactive GPU debugging, small-scale validation | production campaign runs |
+| GPUs | none (not a SLURM node) | 7x A6000, 4x H100, 8x H200 via `srun`/`sbatch` | 4x H100 per `acc` node, allocated whole-node only |
+| filesystem | local disk | NFS | GPFS |
+| internet | yes | yes | **no, none at all** |
+| typical queue wait | none (not SLURM) | seconds to minutes | `acc_debug`: fast; `acc_ehpc`: 12-13+ hours observed |
+
+**nyx** — storage box, not a SLURM node (no `sinfo`/`sbatch`/GPUs). Use it for
+CPU-heavy prep and the dev/test loop (see the testing section below). Runs
+`vm.overcommit_memory=2` (strict commit accounting): an `OSError: Cannot
+allocate memory` here is usually the commit ledger, not a real leak — check
+`Committed_AS` vs `CommitLimit` in `/proc/meminfo` before assuming a code bug.
+
+**artemis** — real GPUs for interactive debugging and small-scale validation
+before committing an MN5 allocation. QOS tiers that matter day to day:
+- `gpu-debug`: 1 h wall, 1 job/user — quick sanity checks.
+- `gpu-h100` / `gpu-h200`: up to 2 days, 4 GPUs, 2 jobs/user — real debugging
+  runs, e.g. reproducing a bug at controlled scale before chasing it on mn5.
+
+Always pass `--partition` and `--qos` explicitly — artemis has no default for
+either.
+
+**marenostrum5** — where campaign-scale runs actually happen (multi-node,
+whole `acc` nodes, GPFS). No outbound internet on any node, ever: code goes
+over via `infra/sync_repo.sh mn5`, never `git pull` on mn5 itself; datasets
+and HF checkpoints must be pre-staged too. Two QOS tiers:
+- `acc_debug`: 2 h wall, 1 job / 1 submission at a time, but very fast to get
+  since few people use it — the right tool for confirming a fix survives
+  MN5's actual filesystem/memory semantics (GPFS behaves very differently
+  from a dev box for some workloads) before committing to a long `acc_ehpc`
+  allocation.
+- `acc_ehpc`: the real campaign QOS, up to 3 days / 100 nodes, but much lower
+  scheduling priority than `acc_debug` — queue waits of 12-13+ hours have
+  been observed. Request the shortest walltime that covers the work: MN5's
+  backfill scheduler starts short jobs sooner, and billing is by elapsed
+  time, not requested time, so over-requesting only costs queue position.
+
+Rule of thumb: reproduce and fix on artemis (GPUs in seconds, has internet,
+small scale), confirm on mn5 via `acc_debug` (same filesystem/memory
+semantics as the real run, cheap and fast to get), then commit to `acc_ehpc`
+for the actual campaign work.
+
 ## artemis- or nyx- specific commands
 
 ### Python Environments
