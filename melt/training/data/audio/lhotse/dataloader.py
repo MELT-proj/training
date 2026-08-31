@@ -111,11 +111,19 @@ def _bound_indexed_reader_handles() -> None:
     holds an open file (``_fh``) for the life of the process.
 
     An open file is not free, and on a cluster filesystem it is not close to
-    free. CPython sizes a buffered reader from the file's ``st_blksize``, which
-    is 4 KiB on a local disk but **1 MiB over NFS** (measured: the same shard
-    reports 4096 on the nyx host and 1048576 through artemis's nfs4 mount) and
-    is megabytes on GPFS. So every shard touched costs ~1 MiB of host RAM that
-    is never returned.
+    free. CPython sizes a buffered reader from the file's ``st_blksize``, and
+    that number is a property of the filesystem, not of lhotse:
+
+        local disk (nyx)        4096  ->   4 KiB per open shard
+        artemis nfs4         1048576  ->   1 MiB per open shard
+        MN5 GPFS            16777216  ->  16 MiB per open shard
+
+    So the same cache costs 4 KiB per shard on a laptop and **16 MiB per shard
+    on MN5** -- a 4096x difference in the price of the identical code path.
+
+    That arithmetic is the whole wall. MN5's trace showed four processes at
+    ~113 GB each: 113 GB / 16 MiB is ~7,000 open shards, and 4 x 113 GB = 452 GB
+    against a 500 GB/node cgroup.
 
     Measured on artemis h100 job 329661: the DataLoader worker held
     ``_io.BufferedReader = 8240 MB across 8241 objects`` -- 1.00 MiB apiece --
@@ -137,9 +145,14 @@ def _bound_indexed_reader_handles() -> None:
 
     Eviction is cheap to get wrong and cheap to pay for: a closed reader keeps
     its parsed offset index, so reopening is one ``open()`` syscall, and at ~9
-    new shards per step the reopen traffic is negligible. Set
-    ``MELT_SHAR_OPEN_SHARDS`` to tune the cap, or to 0 to restore lhotse's
-    unbounded behaviour. Report upstream.
+    new shards per step the reopen traffic is negligible -- measured at 8.77-9.10
+    s/it with a cap of 64 against 8.70-9.08 s/it unbounded.
+
+    The default cap of 256 is chosen for the worst case: 256 x 16 MiB is ~4 GB
+    per process on MN5, comfortable against a 500 GB/node budget, while leaving
+    far more room than the ~25-source mux needs concurrently. Set
+    ``MELT_SHAR_OPEN_SHARDS`` to tune it, or to 0 to restore lhotse's unbounded
+    behaviour. Report upstream.
     """
     global _shar_handle_cap
     try:
