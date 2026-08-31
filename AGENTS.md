@@ -173,6 +173,42 @@ raises 18 errors of the form `RuntimeError: cannot cache function '__o_fold':
 no locator available for file`, because numba tries to write its cache next to
 a module inside the read-only image. With it, that file passes.
 
+### Running the suite as a CPU-only SLURM job (recommended over an interactive nyx run)
+
+The interactive command above works, but running the *whole* suite in parallel
+directly on nyx repeatedly runs into the overcommit-ledger problem described
+below — it is a shared, non-SLURM box with a strict memory ledger, not a real
+allocation. Prefer submitting a small CPU-only job on artemis instead: no GPU
+is needed for the unit suite, and a real SLURM allocation gives the run its
+own memory budget instead of sharing nyx's ledger with everyone else logged in.
+
+```bash
+cd ~/melt-proj/training   # wherever the repo checkout lives on artemis
+mkdir -p logs
+sbatch --partition=h100 --qos=cpu --cpus-per-task=16 --mem=64G --time=00:40:00 \
+       --job-name=melt-tests --output=logs/%x.%j.out <<'EOF'
+#!/bin/bash
+set -euo pipefail
+export SINGULARITYENV_LOCAL_DATASETS_DIR=/mnt/scratch-nyx/giuseppe/melt/melt-data/shar
+export SINGULARITYENV_HF_HOME=/mnt/scratch-artemis/giuseppe/melt-data/hf_cache
+export SINGULARITYENV_PYTHONPATH=/mnt/scratch-nyx/giuseppe/container-extras:/workspace/training
+export SINGULARITYENV_NUMBA_CACHE_DIR=/tmp/numba
+export SINGULARITYENV_WANDB_MODE=disabled
+singularity exec \
+  --bind "$(pwd)":/workspace/training,/mnt/scratch-nyx:/mnt/scratch-nyx,/mnt/scratch-artemis:/mnt/scratch-artemis \
+  --pwd /workspace/training \
+  /mnt/scratch-artemis/giuseppe/melt-data/melt_cuda126_lhotse2_td.sif \
+  bash -lc 'source /workspace/venv/bin/activate 2>/dev/null; python -m pytest tests/ --ignore=tests/integration -q -p no:cacheprovider -rf'
+EOF
+```
+
+`--qos=cpu` is the CPU-only tier on the `h100` partition — it does not consume
+a GPU allocation, so it does not compete with `gpu-debug`/`gpu-h100` jobs. The
+`sbatch ... <<'EOF' ... EOF` form submits the heredoc directly as the job
+script, so there is nothing extra to create or clean up on disk. Check status
+with `squeue -u $USER -j <jobid>` and read the result from
+`logs/melt-tests.<jobid>.out`.
+
 ### When tests fail for reasons that are not your code
 
 **Read this before concluding a test failure is a bug.** These hosts produce
@@ -245,6 +281,10 @@ operator's job, not the library's.
    sum **VmData** (from `/proc/<pid>/status`) per user, not RSS — RSS makes
    other users' editors look dominant while your own pytest workers, which
    actually hold the ledger, look small.
+8. **Prefer a CPU-only SLURM job on artemis for the full suite** over an
+   interactive nyx run — see "Running the suite as a CPU-only SLURM job"
+   above. It sidesteps the ledger problem entirely rather than requiring
+   careful reaping.
 
 ## Staleness Warning
 
