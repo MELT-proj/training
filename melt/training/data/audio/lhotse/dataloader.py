@@ -18,8 +18,11 @@ import math
 import os
 import random
 import sys
+import threading
 import time
 import warnings
+import weakref
+from collections import OrderedDict
 from functools import partial
 from glob import glob
 from pathlib import Path
@@ -92,6 +95,13 @@ def _harden_rng_setstate() -> None:
     random.Random.setstate = setstate
 
 
+# Weak references throughout: this cache decides when a handle is *closed*, and
+# must never be the reason a reader stays alive.
+_shar_handle_lru: "OrderedDict[int, weakref.ref]" = OrderedDict()
+_shar_handle_lock = threading.Lock()
+_shar_handle_cap = 0  # 0 disables eviction (lhotse's own behaviour)
+
+
 def _bound_indexed_reader_handles() -> None:
     """Cap how many Shar shard files stay open at once. This is the MN5 wall.
 
@@ -131,26 +141,21 @@ def _bound_indexed_reader_handles() -> None:
     ``MELT_SHAR_OPEN_SHARDS`` to tune the cap, or to 0 to restore lhotse's
     unbounded behaviour. Report upstream.
     """
+    global _shar_handle_cap
     try:
         cap = int(os.environ.get("MELT_SHAR_OPEN_SHARDS", "256"))
     except ValueError:
         cap = 256
-    if cap <= 0:
+    # Read live rather than baked in at first import: the patch is re-applied in
+    # each worker, and a test needs to exercise a different cap in-process.
+    _shar_handle_cap = max(cap, 0)
+    if _shar_handle_cap <= 0:
         return
 
     try:
         from lhotse.indexing import IndexedJsonlReader, IndexedTarReader
     except ImportError:  # lhotse < 2.0 has no indexed reader at all
         return
-
-    import threading
-    import weakref
-    from collections import OrderedDict
-
-    # Weak references: this cache decides when a handle is *closed*, and must
-    # never be the reason a reader stays alive.
-    lru: OrderedDict[int, weakref.ref] = OrderedDict()
-    lock = threading.Lock()
 
     def _bind(cls: type) -> None:
         original = cls._ensure_open
@@ -159,12 +164,15 @@ def _bound_indexed_reader_handles() -> None:
 
         def _ensure_open(self) -> None:
             original(self)
+            limit = _shar_handle_cap
+            if limit <= 0:
+                return
             key = id(self)
-            with lock:
-                lru.pop(key, None)
-                lru[key] = weakref.ref(self)
-                while len(lru) > cap:
-                    _, ref = lru.popitem(last=False)
+            with _shar_handle_lock:
+                _shar_handle_lru.pop(key, None)
+                _shar_handle_lru[key] = weakref.ref(self)
+                while len(_shar_handle_lru) > limit:
+                    _, ref = _shar_handle_lru.popitem(last=False)
                     victim = ref()
                     # Never close the reader just opened for this caller, which
                     # is about to read from it.
