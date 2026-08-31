@@ -90,6 +90,60 @@ Common launch variables:
 - `SINGULARITY_IMG`: Path to the `.sif` image for container runs
 - `TMPDIR_HOST`: Host tmp directory to bind into container
 
+## Multi-cluster HPC guidance
+
+Three machines are available for building, testing, and running training jobs.
+Full topology (partitions, QOS limits, per-node hardware, storage quotas) lives
+in the private cross-project reference `g8a9/agents-info`, not here —
+`/home/giuseppe/agents-info/HPCs/sardine-and-marenostrum5.md` is the source of
+truth; read it before submitting anything non-trivial. This section is
+deliberately just a quick "which one do I want" summary. This project's own
+HPC procedures (image builds, syncing the repo, launcher conventions, dataset
+staging) live in `docs/hpc_runbook.md`.
+
+| | nyx | artemis (sardine) | marenostrum5 (mn5) |
+|---|---|---|---|
+| role | dev/build box | interactive GPU debugging, small-scale validation | production campaign runs |
+| GPUs | none (not a SLURM node) | 7x A6000, 4x H100, 8x H200 via `srun`/`sbatch` | 4x H100 per `acc` node, allocated whole-node only |
+| filesystem | local disk | NFS | GPFS |
+| internet | yes | yes | **no, none at all** |
+| typical queue wait | none (not SLURM) | seconds to minutes | `acc_debug`: fast; `acc_ehpc`: 12-13+ hours observed |
+
+**nyx** — storage box, not a SLURM node (no `sinfo`/`sbatch`/GPUs). Use it for
+CPU-heavy prep and the dev/test loop (see the testing section below). Runs
+`vm.overcommit_memory=2` (strict commit accounting): an `OSError: Cannot
+allocate memory` here is usually the commit ledger, not a real leak — check
+`Committed_AS` vs `CommitLimit` in `/proc/meminfo` before assuming a code bug.
+
+**artemis** — real GPUs for interactive debugging and small-scale validation
+before committing an MN5 allocation. QOS tiers that matter day to day:
+- `gpu-debug`: 1 h wall, 1 job/user — quick sanity checks.
+- `gpu-h100` / `gpu-h200`: up to 2 days, 4 GPUs, 2 jobs/user — real debugging
+  runs, e.g. reproducing a bug at controlled scale before chasing it on mn5.
+
+Always pass `--partition` and `--qos` explicitly — artemis has no default for
+either.
+
+**marenostrum5** — where campaign-scale runs actually happen (multi-node,
+whole `acc` nodes, GPFS). No outbound internet on any node, ever: code goes
+over via `infra/sync_repo.sh mn5`, never `git pull` on mn5 itself; datasets
+and HF checkpoints must be pre-staged too. Two QOS tiers:
+- `acc_debug`: 2 h wall, 1 job / 1 submission at a time, but very fast to get
+  since few people use it — the right tool for confirming a fix survives
+  MN5's actual filesystem/memory semantics (GPFS behaves very differently
+  from a dev box for some workloads) before committing to a long `acc_ehpc`
+  allocation.
+- `acc_ehpc`: the real campaign QOS, up to 3 days / 100 nodes, but much lower
+  scheduling priority than `acc_debug` — queue waits of 12-13+ hours have
+  been observed. Request the shortest walltime that covers the work: MN5's
+  backfill scheduler starts short jobs sooner, and billing is by elapsed
+  time, not requested time, so over-requesting only costs queue position.
+
+Rule of thumb: reproduce and fix on artemis (GPUs in seconds, has internet,
+small scale), confirm on mn5 via `acc_debug` (same filesystem/memory
+semantics as the real run, cheap and fast to get), then commit to `acc_ehpc`
+for the actual campaign work.
+
 ## artemis- or nyx- specific commands
 
 ### Python Environments
@@ -110,11 +164,134 @@ singularity exec --bind /mnt/scratch-nyx,/mnt/scratch-artemis \
   bash -c 'source /workspace/venv/bin/activate
     export PYTHONPATH=/mnt/scratch-nyx/giuseppe/container-extras:$PYTHONPATH
     export HF_HOME=/mnt/scratch-artemis/giuseppe/.cache/huggingface
+    export NUMBA_CACHE_DIR=/tmp/numba
     python -m pytest tests/ -v'
 ```
+
+`NUMBA_CACHE_DIR` is not optional. Without it `tests/test_processing_melt.py`
+raises 18 errors of the form `RuntimeError: cannot cache function '__o_fold':
+no locator available for file`, because numba tries to write its cache next to
+a module inside the read-only image. With it, that file passes.
+
+### Running the suite as a CPU-only SLURM job (recommended over an interactive nyx run)
+
+The interactive command above works, but running the *whole* suite in parallel
+directly on nyx repeatedly runs into the overcommit-ledger problem described
+below — it is a shared, non-SLURM box with a strict memory ledger, not a real
+allocation. Prefer submitting a small CPU-only job on artemis instead: no GPU
+is needed for the unit suite, and a real SLURM allocation gives the run its
+own memory budget instead of sharing nyx's ledger with everyone else logged in.
+
+```bash
+cd ~/melt-proj/training   # wherever the repo checkout lives on artemis
+mkdir -p logs
+sbatch --partition=h100 --qos=cpu --cpus-per-task=16 --mem=64G --time=00:40:00 \
+       --job-name=melt-tests --output=logs/%x.%j.out <<'EOF'
+#!/bin/bash
+set -euo pipefail
+export SINGULARITYENV_LOCAL_DATASETS_DIR=/mnt/scratch-nyx/giuseppe/melt/melt-data/shar
+export SINGULARITYENV_HF_HOME=/mnt/scratch-artemis/giuseppe/melt-data/hf_cache
+export SINGULARITYENV_PYTHONPATH=/mnt/scratch-nyx/giuseppe/container-extras:/workspace/training
+export SINGULARITYENV_NUMBA_CACHE_DIR=/tmp/numba
+export SINGULARITYENV_WANDB_MODE=disabled
+singularity exec \
+  --bind "$(pwd)":/workspace/training,/mnt/scratch-nyx:/mnt/scratch-nyx,/mnt/scratch-artemis:/mnt/scratch-artemis \
+  --pwd /workspace/training \
+  /mnt/scratch-artemis/giuseppe/melt-data/melt_cuda126_lhotse2_td.sif \
+  bash -lc 'source /workspace/venv/bin/activate 2>/dev/null; python -m pytest tests/ --ignore=tests/integration -q -p no:cacheprovider -rf'
+EOF
+```
+
+`--qos=cpu` is the CPU-only tier on the `h100` partition — it does not consume
+a GPU allocation, so it does not compete with `gpu-debug`/`gpu-h100` jobs. The
+`sbatch ... <<'EOF' ... EOF` form submits the heredoc directly as the job
+script, so there is nothing extra to create or clean up on disk. Check status
+with `squeue -u $USER -j <jobid>` and read the result from
+`logs/melt-tests.<jobid>.out`.
+
+### When tests fail for reasons that are not your code
+
+**Read this before concluding a test failure is a bug.** These hosts produce
+two failure modes that look like code defects and are not, and both have cost
+real debugging time.
+
+#### 1. The commit ledger, not free memory
+
+nyx runs `vm.overcommit_memory=2` — **strict commit accounting**. The kernel
+refuses allocations against a ledger (`Committed_AS` vs `CommitLimit`, ~141 GB),
+not against free RAM. The symptom is scattered failures that move around
+between runs:
+
+```
+OSError: [Errno 12] Cannot allocate memory
+MemoryError
+```
+
+typically in `test_check_training_config.py`, `test_lhotse_dataloader.py` and
+`test_trainer.py` — the files that fork subprocesses. One has been seen as a
+`MemoryError` raised inside pytest's own traceback formatter, which no test
+assertion can produce.
+
+**`free -g` and `MemAvailable` are misleading here** and will happily show
+100+ GB available while every fork fails. They measure resident pages; the
+ledger charges *committed address space at mmap time*, touched or not. Check
+the right thing:
+
+```bash
+grep -E 'CommitLimit|Committed_AS' /proc/meminfo
+```
+
+If `Committed_AS` is near `CommitLimit`, the box is the problem. Measured: a
+single pytest process holds **~5.0 GB of VmData against ~0.6 GB of RSS**, an 8x
+gap, from torch's arenas, CUDA address reservations, glibc per-thread malloc
+arenas (up to 8 x 64 cores here) and 8 MB thread stacks. Eight workers charge
+~40 GB for ~5 GB actually used.
+
+#### 2. Orphaned DataLoader workers, which cause (1)
+
+torch DataLoader workers are `daemon=True`, which only covers a **clean**
+interpreter shutdown. Nothing runs when pytest is SIGKILLed — including by your
+own `timeout -s KILL` — so the workers are reparented and stay resident
+forever, each holding its share of the ledger. They then cause more failures,
+which cause more timeouts, which leak more workers.
+
+Reaping them has been measured to drop `Committed_AS` from **131 GB to 96 GB**
+in one step. Note this is deliberately *not* fixed in the training code: see
+issue #97, closed as not planned — cleaning up after a killed process is the
+operator's job, not the library's.
+
+#### Best practices
+
+1. **Reap after every pytest run**, unconditionally:
+   `pkill -9 -f "python -m pytest"`. Workers do not exit on their own.
+2. **Check the ledger before blaming code**, and again before re-running.
+   Above ~110 GB, clean up and wait rather than interpreting results.
+3. **Never wrap pytest in `timeout -s KILL`** without reaping afterwards. That
+   is what created the problem in the first place.
+4. **Run one pytest invocation at a time**, and prefer file-by-file over the
+   whole suite when the box is shared. Clean up between files.
+5. **Look for orphans before starting**:
+   `ps -eo pid,etime,rss,cmd | grep "[p]ython -m pytest"`.
+6. **Classify failures before reporting them.** Only `OSError: [Errno 12]` and
+   `MemoryError` are environmental. **Anything else — `AttributeError`,
+   assertion failures, `ValueError` — is a real failure and must be
+   investigated**, not waved away as flakiness. When a run mixes both, say
+   which is which.
+7. You are probably the biggest consumer. When attributing ledger pressure,
+   sum **VmData** (from `/proc/<pid>/status`) per user, not RSS — RSS makes
+   other users' editors look dominant while your own pytest workers, which
+   actually hold the ledger, look small.
+8. **Prefer a CPU-only SLURM job on artemis for the full suite** over an
+   interactive nyx run — see "Running the suite as a CPU-only SLURM job"
+   above. It sidesteps the ledger problem entirely rather than requiring
+   careful reaping.
 
 ## Staleness Warning
 
 This codebase is an academic-driven effort. Hence, we will likely stop updating the files related to past projects. For those files, avoid updating the code and adapting to new conventions. The following list of projects is now stale:
 
 - `projects/iwslt26-metric/`
+
+## Rules
+
+- Avoid running `find` on the file system root "\". If you need to find a file, a venv, or else, just a path to who issued the command.

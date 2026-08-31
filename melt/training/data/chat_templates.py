@@ -96,12 +96,27 @@ def validate_chat_template_config(tokenizer, config: ChatTemplateConfig, name: s
         name: Its registry key, for the error message.
 
     Raises:
-        ValueError: If either boundary is missing from the rendered probe.
+        ValueError: If the tokenizer has no chat template at all, or if either
+            boundary is missing from the rendered probe.
     """
     if not hasattr(tokenizer, "apply_chat_template"):
         return
     if not getattr(tokenizer, "chat_template", None):
-        return
+        # Reached only when the caller has already decided to apply the chat
+        # template, so this is always a misconfiguration rather than a tokenizer
+        # this function has no opinion about. It used to return quietly, which
+        # deferred the failure to `apply_chat_template()` on the first batch --
+        # past model construction, past the first shard read, and on MN5 past
+        # the queue wait. Base checkpoints are the usual way in: they ship no
+        # template while their Instruct siblings do.
+        raise ValueError(
+            f"chat_template_config is '{name}' and apply_chat_template is on, but this "
+            "tokenizer has no chat template, so nothing can render. Base checkpoints "
+            "normally ship none.\n"
+            "Either set model.decoder.chat_template_from to an instruction-tuned "
+            "checkpoint sharing this vocabulary (usually the Instruct sibling of the "
+            "decoder), or set data.apply_chat_template: false."
+        )
 
     probe = [
         {"role": "user", "content": "__melt_probe_user__"},

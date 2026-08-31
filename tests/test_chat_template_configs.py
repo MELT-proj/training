@@ -77,10 +77,24 @@ class TestValidation:
 
         assert "think" in caplog.text
 
-    def test_tokenizer_without_a_template_is_skipped(self):
+    def test_tokenizer_without_a_template_raises(self):
+        # The base-checkpoint case. This used to return quietly and let
+        # apply_chat_template() raise on the first batch instead -- past model
+        # construction and, on a cluster, past the queue wait.
         tok = _FakeTokenizer("irrelevant", chat_template=None)
 
-        validate_chat_template_config(tok, get_chat_template_config("chatml"), "chatml")
+        with pytest.raises(ValueError, match="has no chat template"):
+            validate_chat_template_config(tok, get_chat_template_config("chatml"), "chatml")
+
+    def test_the_no_template_error_names_the_way_out(self):
+        tok = _FakeTokenizer("irrelevant", chat_template=None)
+
+        with pytest.raises(ValueError) as excinfo:
+            validate_chat_template_config(tok, get_chat_template_config("llama3"), "llama3")
+
+        # Both escapes have to be reachable from the message alone.
+        assert "chat_template_from" in str(excinfo.value)
+        assert "apply_chat_template: false" in str(excinfo.value)
 
 
 # The mock tests above prove the validator's logic. Only a real tokenizer proves

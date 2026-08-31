@@ -67,13 +67,19 @@ DECODER_TAGS = {
     "Qwen/Qwen3-1.7B": "qwen1_7b",
 }
 
-# Wall-clock defaults, preserved from the two hand-written launchers this
-# replaces (08:00:00 for the 125 h arm, 12:00:00 for the 700 h arm, which does
-# not fit one allocation and expects to resume). New budgets get a generic
-# fallback -- check it against measured throughput before trusting it.
+# Wall-clock defaults. 08:00:00 for the 125 h arm, preserved from the
+# hand-written launcher this replaces. 06:00:00 for the 700 h arm: measured
+# at 6.81 s/it on DDP (batch_duration 180, world_size 8), one epoch is ~4.1 h
+# of training plus ~9 min startup, comfortably inside a 6 h allocation (and
+# MN5's backfill scheduler starts a 6 h request sooner than the original
+# 12:00:00, which assumed the slower FSDP2 throughput this arm no longer
+# uses -- see README.md's "Why DDP and not FSDP2" section). Still expect to
+# resume: infrastructure interrupts long jobs regardless of how well they fit.
+# New budgets get a generic fallback -- check it against measured throughput
+# before trusting it.
 TIME_DEFAULTS = {
     "ABL-MA-125-asr.yaml": "08:00:00",
-    "ABL-MA-700-asr.yaml": "12:00:00",
+    "ABL-MA-700-asr.yaml": "06:00:00",
 }
 DEFAULT_TIME_FALLBACK = "08:00:00"
 

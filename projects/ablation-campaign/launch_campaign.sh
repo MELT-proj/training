@@ -1,10 +1,11 @@
 #!/bin/bash
 #
-# Shared core for the ablation campaign's launchers, on MN5, 2 nodes x 4 GPUs
-# by default. Not meant to be run directly -- launch_MA.sh and launch_IFT.sh
-# set STAGE and a per-stage CONFIG default and exec this. See
-# projects/ablation-campaign/README.md for the axes this exposes and the two
-# correctness rules that matter more than the layout.
+# Shared core for the ablation campaign's launchers, on MN5 (2 nodes x 4
+# GPUs) by default; set SITE=artemis for a 1-node smoke test before
+# committing an MN5 allocation. Not meant to be run directly -- launch_MA.sh
+# and launch_IFT.sh set STAGE and a per-stage CONFIG default and exec this.
+# See projects/ablation-campaign/README.md for the axes this exposes and the
+# two correctness rules that matter more than the layout.
 #
 # Replaces launch_MA_llama32-1b-instruct_mn5.sh and launch_MA_700_llama32-1b_mn5.sh
 # (both 125 h and 700 h are now the same launcher with a different CONFIG).
@@ -64,15 +65,30 @@ DECODER_FREEZE="${DECODER_FREEZE:-}"
 ADAPTER_LR="${ADAPTER_LR:-}"
 SEED="${SEED:-42}"
 
-# --- topology ----------------------------------------------------------------
+# --- site / topology ----------------------------------------------------------
+# SITE selects infra/runners/sites/<site>.sh (see submit-container.sh). Topology
+# and QoS defaults below match each site's own campaign convention -- mn5's
+# full 2-node x 4-GPU arms vs. a 1-node x 2-GPU smoke test on artemis, which is
+# what MELT_QOS/MELT_PARTITION default to under SITE=artemis (its own site file
+# defaults the same way; set here too so DRY_RUN's world_size is right without
+# depending on sourcing order).
+#
 # MELT_GPUS_PER_NODE is pinned rather than left to autodetection: MN5 allocates
 # `acc` nodes whole, so SLURM_GPUS_ON_NODE reports the node's full GPU count
 # whatever --gpus-per-node asked for. Pinning it is what makes world_size
 # reproducible across a resume (see bash/run_train.sh and PR #90).
-export MELT_NODES="${MELT_NODES:-2}"
-export MELT_GPUS_PER_NODE="${MELT_GPUS_PER_NODE:-4}"
+SITE="${SITE:-mn5}"
+if [[ "$SITE" == "artemis" ]]; then
+    export MELT_NODES="${MELT_NODES:-1}"
+    export MELT_GPUS_PER_NODE="${MELT_GPUS_PER_NODE:-2}"
+    export MELT_QOS="${MELT_QOS:-gpu-h100}"
+    export MELT_PARTITION="${MELT_PARTITION:-h100}"
+else
+    export MELT_NODES="${MELT_NODES:-2}"
+    export MELT_GPUS_PER_NODE="${MELT_GPUS_PER_NODE:-4}"
+    export MELT_QOS="${MELT_QOS:-acc_ehpc}"
+fi
 WORLD_SIZE=$((MELT_NODES * MELT_GPUS_PER_NODE))
-export MELT_QOS="${MELT_QOS:-acc_ehpc}"
 export MELT_SEED="$SEED"
 
 # --- derive EXP_NAME, eval/save steps, and the architecture override bundle --
@@ -98,7 +114,7 @@ export MELT_TIME="${MELT_TIME:-$TIME_DEFAULT}"
 # arm, MA and IFT alike, lets the step count fall out of num_train_epochs=1
 # rather than pinning max_steps per-arm, which is how two arms end up trained
 # for different amounts by accident.
-CMD=(infra/runners/submit-container.sh mn5 "$ACCELERATE_CONFIG"
+CMD=(infra/runners/submit-container.sh "$SITE" "$ACCELERATE_CONFIG"
     --config "$CONFIG"
     --run.exp_name "$EXP_NAME"
     --trainer.output_dir "/workspace/outputs/${EXP_NAME}"

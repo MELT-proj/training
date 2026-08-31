@@ -79,6 +79,12 @@ model:
     audio_eos_token: "<|audio_eos|>"
     audio_token: "<|audio|>"
     freeze: true
+    # Optional. A *base* checkpoint ships no chat template, so training one
+    # under `data.apply_chat_template: true` cannot render and fails at
+    # startup. Naming an instruction-tuned checkpoint that shares this
+    # vocabulary — usually the Instruct sibling — copies its template across,
+    # and nothing else. Leave unset for an already-instruction-tuned decoder.
+    # chat_template_from: null
 
   adapter:
     _type: mlp
