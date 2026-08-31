@@ -238,7 +238,7 @@ container_env MASTER_PORT "${MASTER_PORT}"
 # particular is how the host tests whether the worker's unbounded growth is a
 # leak or glibc heap fragmentation (MALLOC_MMAP_THRESHOLD_, MALLOC_ARENA_MAX)
 # without touching a line of code.
-for var in HF_HUB_OFFLINE GPU_MEM_MONITORING \
+for var in HF_HUB_OFFLINE GPU_MEM_MONITORING MELT_SHAR_OPEN_SHARDS \
            MELT_DEBUG_CUT_IDS_DIR MELT_DEBUG_CUT_IDS_MAX_BATCHES MELT_DEBUG_CUT_IDS_EVERY \
            MELT_WORKER_MEMSTATS MELT_WORKER_HEAPDUMP \
            MELT_WORKER_TRACEMALLOC MELT_WORKER_TRACEMALLOC_FRAMES \
