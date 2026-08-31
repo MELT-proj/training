@@ -56,6 +56,17 @@ DECODER_PROFILES = {
         "pad_token": "<|finetune_right_pad_id|>",
         "chat_template_config": "llama3",
     },
+    # Same eos/pad tokens as Qwen/Qwen3-1.7B (ABL-MA-125-asr.yaml,
+    # ABL-IFT-125.yaml) -- the whole Qwen3.x line shares them. chatml is
+    # correct per chat_templates.py's note on Qwen 3/3.5's empty
+    # <think></think> block (masking is inclusive, so the boundary strings
+    # still find the right span) and tests/test_chat_template_configs.py's
+    # own ("Qwen/Qwen3.5-9B", "chatml") case.
+    "Qwen/Qwen3.5-2B": {
+        "eos_token": "<|endoftext|>",
+        "pad_token": "<|text_pad|>",
+        "chat_template_config": "chatml",
+    },
 }
 
 # Short tags for EXP_NAME. Unknown names fall back to a sanitised slug (see
@@ -65,6 +76,7 @@ ENCODER_TAGS = {"facebook/w2v-bert-2.0": "w2vb"}
 DECODER_TAGS = {
     "meta-llama/Llama-3.2-1B-Instruct": "llama1bIns",
     "Qwen/Qwen3-1.7B": "qwen1_7b",
+    "Qwen/Qwen3.5-2B": "qwen35_2b",
 }
 
 # Wall-clock defaults. 08:00:00 for the 125 h arm, preserved from the
