@@ -20,7 +20,7 @@ def _make_minimal_model():
     config.text_decoder_config.n_layer = 1
     config.audio_bos_token_id = 100
 
-    model = MELTForCausalLM(config)
+    model = MELTForCausalLM(config, load_backbones=True)
     return model
 
 

@@ -48,7 +48,7 @@ def test_freeze_audio_stack():
     config.audio_encoder_config.num_hidden_layers = 1
     config.text_decoder_config.n_layer = 1
 
-    model = MELTForCausalLM(config)
+    model = MELTForCausalLM(config, load_backbones=True)
 
     # Freeze the entire audio stack (encoder + adapter)
     ret = model.audio_stack.freeze()
@@ -344,7 +344,7 @@ class TestInjectTensor:
         config = _make_melt_config()
         config.audio_encoder_config.num_hidden_layers = 1
         config.text_decoder_config.n_layer = 1
-        return MELTForCausalLM(config)
+        return MELTForCausalLM(config, load_backbones=True)
 
     def test_single_injection_mask(self, model):
         """Inject one audio mask into one text mask."""

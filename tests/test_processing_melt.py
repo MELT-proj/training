@@ -66,7 +66,11 @@ def tokenizer():
         use_fast=True,
         extra_special_tokens=MELT_SPECIAL_TOKEN_STRINGS,
     )
-    tok.add_special_tokens(MELT_SPECIAL_TOKEN_STRINGS)
+    # transformers 5 validates add_special_tokens' keys against the canonical
+    # SpecialTokensMixin attributes plus "extra_special_tokens" -- passing
+    # "audio_token" etc. as top-level keys now raises ValueError. Matches the
+    # fix in melt.training.setup.prepare_processor.
+    tok.add_special_tokens({"extra_special_tokens": list(MELT_SPECIAL_TOKEN_STRINGS.values())})
     return tok
 
 

@@ -25,8 +25,8 @@ from omegaconf import DictConfig, OmegaConf
 from peft import LoraConfig, TaskType, get_peft_model
 
 import wandb
+from accelerate.utils import find_tied_parameters
 from transformers import Seq2SeqTrainingArguments
-from transformers.modeling_utils import find_tied_parameters
 from transformers.trainer_utils import get_last_checkpoint
 
 from melt import ddp
@@ -72,8 +72,12 @@ def prepare_model(
     adapter_cfg = model_cfg.adapter
 
     # Detect last checkpoint
+    # transformers 5 removed `overwrite_output_dir` from TrainingArguments
+    # entirely, so it can no longer be read off `targs` -- read the raw YAML
+    # instead, with the same default (False) TrainingArguments used to apply.
+    overwrite_output_dir = bool(cfg.trainer.get("overwrite_output_dir", False))
     last_checkpoint = None
-    if os.path.isdir(targs.output_dir) and targs.do_train and not targs.overwrite_output_dir:
+    if os.path.isdir(targs.output_dir) and targs.do_train and not overwrite_output_dir:
         last_checkpoint = get_last_checkpoint(targs.output_dir)
         if last_checkpoint is None and len(os.listdir(targs.output_dir)) > 0:
             raise ValueError(

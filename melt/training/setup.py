@@ -112,9 +112,15 @@ def prepare_processor(cfg: DictConfig) -> MELTProcessor:
         borrow_chat_template(tokenizer, chat_template_from, decoder_cfg.name)
 
     # Add all special tokens to the vocabulary in a single call.
-    # ``extra_special_tokens`` only registers attribute names; calling
-    # ``add_special_tokens`` actually inserts them into the vocab.
-    special_tokens_to_add: dict[str, str] = dict(extra_special_tokens)
+    # transformers 5 validates add_special_tokens' keys against the canonical
+    # SpecialTokensMixin attributes plus "extra_special_tokens" -- passing
+    # "audio_token" etc. as top-level keys now raises ValueError. The MELT
+    # tokens go under "extra_special_tokens" as a list instead, matching how
+    # they were already registered by name via the extra_special_tokens=
+    # kwarg to from_pretrained() above.
+    special_tokens_to_add: dict[str, list[str] | str] = {
+        "extra_special_tokens": list(extra_special_tokens.values()),
+    }
     eos_token = decoder_cfg.get("eos_token", None)
     pad_token = decoder_cfg.get("pad_token", None)
     if eos_token is not None:
@@ -122,6 +128,19 @@ def prepare_processor(cfg: DictConfig) -> MELTProcessor:
     if pad_token is not None:
         special_tokens_to_add["pad_token"] = pad_token
     tokenizer.add_special_tokens(special_tokens_to_add)
+
+    # Assertion, not a hope: confirm each MELT special token actually landed
+    # in the vocabulary as its own token rather than silently mapping to
+    # <unk>, and that tokenizer.<name> still resolves post-add_special_tokens.
+    vocab = tokenizer.get_vocab()
+    for name, token_str in extra_special_tokens.items():
+        if not hasattr(tokenizer, name):
+            raise RuntimeError(f"prepare_processor: tokenizer.{name} did not resolve after add_special_tokens.")
+        if token_str not in vocab:
+            raise RuntimeError(
+                f"prepare_processor: special token {token_str!r} ({name}) is not in the tokenizer vocabulary "
+                "after add_special_tokens -- it would silently collapse to <unk> at encode time."
+            )
 
     return MELTProcessor(
         feature_extractor=feature_extractor,

@@ -105,14 +105,16 @@ class TestMELTConfig:
         expected_vocab_size = AutoConfig.from_pretrained(TEXT_DECODER).vocab_size
         assert config.vocab_size == expected_vocab_size
 
-    def test_is_composition(self):
+    def test_sub_configs_declared(self):
+        """transformers 5 removed `is_composition`; `sub_configs` is the
+        mechanism that now marks MELTConfig as holding nested sub-configs."""
         config = MELTConfig(
             audio_encoder=AUDIO_ENCODER,
             text_decoder=TEXT_DECODER,
             adapter_config={"_type": "mlp"},
         )
 
-        assert config.is_composition is True
+        assert set(config.sub_configs) == {"audio_encoder_config", "text_decoder_config", "adapter_config"}
 
     def test_adapter_type_from_adapter_config(self):
         config = MELTConfig(

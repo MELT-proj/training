@@ -25,8 +25,8 @@ from omegaconf import DictConfig, OmegaConf
 from peft import LoraConfig, TaskType, get_peft_model
 
 import wandb
+from accelerate.utils import find_tied_parameters
 from transformers import Seq2SeqTrainingArguments, set_seed
-from transformers.modeling_utils import find_tied_parameters
 from transformers.trainer_utils import get_last_checkpoint
 
 from .. import ddp
@@ -92,7 +92,12 @@ def prepare_model(
         logger.info(f"Resuming from checkpoint: {last_checkpoint} (scanned from {resume})")
     elif resume is not True:
         # resume is None: auto-detect from output_dir (existing behaviour).
-        if os.path.isdir(targs.output_dir) and targs.do_train and not targs.overwrite_output_dir:
+        # transformers 5 removed `overwrite_output_dir` from TrainingArguments
+        # entirely, so trainer_args_dict() (config.py) can no longer forward
+        # it onto `targs` -- read it from the raw YAML instead, with the same
+        # default (False) TrainingArguments used to apply.
+        overwrite_output_dir = bool(cfg.trainer.get("overwrite_output_dir", False))
+        if os.path.isdir(targs.output_dir) and targs.do_train and not overwrite_output_dir:
             last_checkpoint = get_last_checkpoint(targs.output_dir)
             if last_checkpoint is None and len(os.listdir(targs.output_dir)) > 0:
                 raise ValueError(
@@ -141,7 +146,7 @@ def prepare_model(
         model = MELTForCausalLM.from_pretrained(ckpt_dir, config=config)
     else:
         config = prepare_melt_config(cfg, processor)
-        model = MELTForCausalLM(config)
+        model = MELTForCausalLM(config, load_backbones=True)
 
     logger.info("Tied model weights:")
     for tied_pair in find_tied_parameters(model):

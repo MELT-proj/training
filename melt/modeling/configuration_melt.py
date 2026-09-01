@@ -1,6 +1,7 @@
+from typing import ClassVar
+
 from transformers import AutoConfig
 from transformers.configuration_utils import PretrainedConfig
-from transformers.utils import logging
 
 
 # Required special token names (no hard-coded defaults).
@@ -46,7 +47,11 @@ class MELTAdapterConfig(PretrainedConfig):
     has_no_defaults_at_init = True
 
     # No sub-configs → the recursive _attn_implementation setter is a no-op.
-    sub_configs: dict = {}
+    # ClassVar, not a plain annotation: transformers 5 turns every
+    # PretrainedConfig subclass into a dataclass, which rejects a mutable
+    # default ({}) on a real field. ClassVar is what PretrainedConfig itself
+    # uses for this same attribute.
+    sub_configs: ClassVar[dict] = {}
 
     def __init__(
         self,
@@ -125,7 +130,6 @@ class MELTConfig(PretrainedConfig):
         "text_decoder_config": AutoConfig,
         "adapter_config": MELTAdapterConfig,
     }  # type: ignore
-    is_composition = True
 
     # ------------------------------------------------------------------
     # Override the _attn_implementation property so that the parent class
@@ -183,8 +187,11 @@ class MELTConfig(PretrainedConfig):
 
         self.initializer_range = initializer_range
 
-        # Set decoder-related attributes
-        self.loss_type = "ForCausalLMLoss"
+        # Set decoder-related attributes. "ForCausalLM" (not "ForCausalLMLoss")
+        # is the actual key in transformers' loss registry -- both keys
+        # resolve to the same loss function since the old, invalid key fell
+        # back to this one with a warning; using the real key just quiets it.
+        self.loss_type = "ForCausalLM"
         super().__init__(**kwargs)
 
     def get_text_config(self, decoder: bool = False):
