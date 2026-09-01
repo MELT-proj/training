@@ -106,7 +106,8 @@ PLAN="$(python3 "${SCRIPT_DIR}/plan_arm.py" \
     --encoder-lr "$ENCODER_LR" --decoder-lr "$DECODER_LR" --adapter-lr "$ADAPTER_LR" \
     --seed "$SEED")" || { echo "ERROR: plan_arm.py failed (see above)" >&2; exit 1; }
 eval "$PLAN"
-# PLAN sets: EXP_NAME, STEPS, EVAL_STEPS, SAVE_STEPS, TIME_DEFAULT, OVERRIDE_ARGS[]
+# PLAN sets: EXP_NAME, STEPS, EVAL_STEPS, SAVE_STEPS, SAVE_TOTAL_LIMIT,
+#            TIME_DEFAULT, OVERRIDE_ARGS[]
 
 export MELT_TIME="${MELT_TIME:-$TIME_DEFAULT}"
 
@@ -126,7 +127,7 @@ CMD=(infra/runners/submit-container.sh "$SITE" "$ACCELERATE_CONFIG"
     --trainer.num_train_epochs 1
     --trainer.eval_steps "$EVAL_STEPS"
     --trainer.save_steps "$SAVE_STEPS"
-    --trainer.save_total_limit 2
+    --trainer.save_total_limit "$SAVE_TOTAL_LIMIT"
     --trainer.seed "$SEED"
     "$@")
 

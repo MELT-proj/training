@@ -1,0 +1,105 @@
+# The ablation campaign's INTENT: every arm we mean to run, as axis values.
+#
+# This file is the input, not a log. `campaign.py status` joins it against
+# reality (SLURM + the output dirs) to answer "what has run, what is running,
+# what is missing". Adding an ablation means adding a row here, reviewed in a
+# PR -- not typing a submit command.
+#
+# What belongs where (see README.md's "The three axes"):
+#   - a new data mixture / budget / task set -> a new ABL-*.yaml, referenced
+#     by `config:` below
+#   - a new architecture or LR point         -> a row here
+#   - anything that must be identical across arms (batch_duration,
+#     quadratic_duration, max_samples, max_duration/max_tokens) -> the base
+#     YAML, never here
+#
+# Every field except `id`, `stage` and `config` is optional and falls back to
+# `defaults:` and then to the base config's own value. An omitted axis means
+# "inherit whatever the config declares" -- it never guesses.
+
+defaults:
+  site: mn5
+  accelerate: config/accelerate/ddp.yaml
+  nodes: 2
+  gpus_per_node: 4          # -> world_size 8. Pinned, never autodetected: MN5
+                            # allocates `acc` nodes whole so SLURM_GPUS_ON_NODE
+                            # reports the node's full count (PR #90).
+  qos: acc_ehpc
+  eval_rounds: 11           # eval_steps = round(steps / eval_rounds)
+  keep_checkpoints: 2       # save_total_limit
+
+arms:
+  # ---------------------------------------------------------------- MA (stage 1)
+  - id: MA-125-llama1b-ins
+    stage: MA
+    config: ABL-MA-125-asr.yaml
+    # REQUIRED, not decorative: ABL-MA-125-asr.yaml's own model.decoder is
+    # still the Qwen-oriented SFT default, so omitting this inherits Qwen3-1.7B
+    # and silently runs a different backbone than the arm's name claims. Naming
+    # it here triggers plan_arm's decoder + chat-template override bundle, which
+    # is exactly what the hand-written 125 h launcher did. The 700 h config, by
+    # contrast, bakes the Llama block in, so its rows can stay silent.
+    decoder: meta-llama/Llama-3.2-1B-Instruct
+    seed: 42
+    time: "08:00:00"
+    # Ran before the grid existed, under a hand-composed name with no LR tags.
+    exp_name: MA-125asr-w2vbF-llama1bInsF-mlpT-s42-8g
+
+  - id: MA-700-llama1b-ins
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    seed: 42
+    time: "06:00:00"
+    # The `-md60` suffix marks the re-run at max_duration 60 / max_tokens 400.
+    # The first attempt filtered at an unintended max_duration 30; its
+    # directory (same name without the suffix) is left in place and must NOT
+    # be reused -- pointing a run at it would resume from its checkpoint-2188
+    # rather than train from scratch. See README.md's "max_duration /
+    # max_tokens" section.
+    exp_name: MA-700asr-w2vbF-llama1bInsF-mlpT-s42-8g-md60
+
+  - id: MA-700-llama1b-base
+    stage: MA
+    config: ABL-MA-700-asr.yaml     # deliberately the SAME config as the
+                                    # Instruct arm: same mixture, bins, step
+                                    # budget and prompt, so a difference
+                                    # between them is attributable to the
+                                    # backbone alone.
+    decoder: meta-llama/Llama-3.2-1B
+    seed: 42
+    time: "06:00:00"
+    # Never launched. This row is why the grid exists: the gap was invisible
+    # while the campaign lived in hand-written scripts.
+
+  # --------------------------------------------------------------- IFT (stage 2)
+  - id: IFT-125-llama1b-ins
+    stage: IFT
+    config: ABL-IFT-125.yaml
+    decoder: meta-llama/Llama-3.2-1B-Instruct   # see MA-125-llama1b-ins
+    init_from: MA-125-llama1b-ins
+    seed: 1337
+    time: "08:00:00"
+    # NOTE: ABL-IFT-125.yaml hardcodes
+    #   model.ckpt: /workspace/outputs/ABL-MA-125-asr-v060-ckpt3000
+    # which is neither this grid's MA-125 arm nor any current run -- a stale
+    # pointer at a v0.6.0-era directory. init_from overrides it (campaign.py
+    # prints a NOTE when it does). Once this arm actually runs, drop the
+    # hardcoded key from the YAML so the grid is the only source.
+    #
+    # Also unresolved: that config pins trainer.max_steps: 6250, computed at
+    # world_size 2, so it does NOT mean "one epoch" at this grid's world_size 8.
+    # Flagged rather than silently changed -- see launch_IFT.sh's header.
+
+  - id: IFT-700-llama1b-ins
+    stage: IFT
+    config: ABL-IFT-700.yaml
+    init_from: MA-700-llama1b-ins
+    seed: 1337
+    time: "06:00:00"
+    # 6 intermediate checkpoints plus the training-end one, evenly spaced:
+    # at 700 h/language that is a checkpoint roughly every 100 h/language.
+    checkpoint_count: 7
+    # Pinned: this arm was already in flight under the hand-written launcher's
+    # name when the grid landed, and renaming it mid-run would orphan its
+    # output directory and its resume path.
+    exp_name: IFT-700both-w2vbF-llama1bInsT-mlpF-s1337-8g
