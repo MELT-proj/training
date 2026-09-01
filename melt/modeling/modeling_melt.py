@@ -1173,7 +1173,7 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
         # concatenates onto `self.keys`/`self.values` in place, so a checkpoint's
         # recompute pass (same cache object, same layer_idx) doubles the cached
         # sequence length instead of no-op'ing, corrupting the recomputed activations
-        # (confirmed on job 329800, FSDP2 + Qwen 3.5-2B). Ignore the caller's value.
+        # (confirmed under FSDP2 with Qwen 3.5-2B). Ignore the caller's value.
         use_cache = False
 
         # We do not pass labels to the LLM and compute the loss ourselves

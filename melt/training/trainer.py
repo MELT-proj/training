@@ -702,14 +702,15 @@ class MELTTrainer(Seq2SeqTrainer):
         dataloader: DataLoader,
     ):
         """
-        Calculates and returns the following values:
+        Returns a tuple, in order:
         - `num_train_epochs`
         - `num_update_steps_per_epoch`: number of optimization steps in an epoch.
         - `num_examples`: used only for logging.
         - `num_train_samples`: used for speed metrics.
-        - `total_train_batch_size`: logged verbatim by the training loop; -1
-          (via get_total_train_batch_size) on the Lhotse infinite-dataloader
-          path, where batches are duration-based rather than a fixed size.
+        - `total_train_batch_size` (from `get_total_train_batch_size`, not a
+          parameter of this method): logged verbatim by the training loop; -1
+          on the Lhotse infinite-dataloader path, where batches are
+          duration-based rather than a fixed size.
         - `len_dataloader`: used to compute `steps_in_epoch`. If not provided, falls back to max_steps * grad_accum
         - `max_steps`: used for scheduler setup, logging, and total optimization steps.
 
