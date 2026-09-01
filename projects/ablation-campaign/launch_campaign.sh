@@ -20,8 +20,8 @@
 #                                        rendered by build_campaign_config.py --
 #                                        never write a new one per arm)
 #   Architecture   ADAPTER, ADAPTER_FREEZE, ENCODER, ENCODER_FREEZE,
-#                  DECODER, DECODER_FREEZE                 (2-6 CLI overrides)
-#   Optimisation   ADAPTER_LR                               (1 CLI override)
+#                  DECODER, DECODER_FREEZE, DECODER_LORA     (2-7 CLI overrides)
+#   Optimisation   ENCODER_LR, DECODER_LR, ADAPTER_LR         (0-3 CLI overrides)
 #
 # Every axis below defaults to EMPTY, which plan_arm.py reads as "inherit
 # the chosen CONFIG's own value" -- no CLI override, no assumption about
@@ -62,6 +62,9 @@ ENCODER="${ENCODER:-}"
 ENCODER_FREEZE="${ENCODER_FREEZE:-}"
 DECODER="${DECODER:-}"
 DECODER_FREEZE="${DECODER_FREEZE:-}"
+DECODER_LORA="${DECODER_LORA:-}"
+ENCODER_LR="${ENCODER_LR:-}"
+DECODER_LR="${DECODER_LR:-}"
 ADAPTER_LR="${ADAPTER_LR:-}"
 SEED="${SEED:-42}"
 
@@ -99,7 +102,8 @@ PLAN="$(python3 "${SCRIPT_DIR}/plan_arm.py" \
     --adapter "$ADAPTER" --adapter-freeze "$ADAPTER_FREEZE" \
     --encoder "$ENCODER" --encoder-freeze "$ENCODER_FREEZE" \
     --decoder "$DECODER" --decoder-freeze "$DECODER_FREEZE" \
-    --adapter-lr "$ADAPTER_LR" \
+    --decoder-lora "$DECODER_LORA" \
+    --encoder-lr "$ENCODER_LR" --decoder-lr "$DECODER_LR" --adapter-lr "$ADAPTER_LR" \
     --seed "$SEED")" || { echo "ERROR: plan_arm.py failed (see above)" >&2; exit 1; }
 eval "$PLAN"
 # PLAN sets: EXP_NAME, STEPS, EVAL_STEPS, SAVE_STEPS, TIME_DEFAULT, OVERRIDE_ARGS[]

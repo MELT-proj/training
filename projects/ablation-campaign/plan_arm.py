@@ -34,6 +34,13 @@ What it does, in order:
    estimate_steps_per_epoch / _effective_duration_inflation exactly (duplicated
    here deliberately -- importing that module drags in torch/omegaconf, which
    is not installed in every shell this needs to run from).
+
+Optimisation axes are ENCODER_LR, DECODER_LR and ADAPTER_LR (one CLI override
+each, same inherit-or-override rule as the architecture axes), plus
+DECODER_LORA for toggling model.lora.enabled. A config that omits an *_lr key
+(several ABL-*-700 configs do, for whichever module that stage freezes) falls
+back to melt/training/config.py's DEFAULT_CONFIG value rather than failing --
+see DEFAULT_ENCODER_LR/DEFAULT_DECODER_LR/DEFAULT_ADAPTER_LR below.
 """
 from __future__ import annotations
 
@@ -95,6 +102,20 @@ TIME_DEFAULTS = {
 }
 DEFAULT_TIME_FALLBACK = "08:00:00"
 
+# Fallback learning rates, mirroring melt/training/config.py's DEFAULT_CONFIG
+# optimization block. This script never imports melt (it has to run in any
+# dev shell), so it can't read that merge directly -- these constants are the
+# values OmegaConf would fill in when a base config omits a key. That
+# omission is deliberate in several ABL-*-700 configs: a frozen module's LR
+# has no effect, so e.g. ABL-MA-700-asr.yaml comments out encoder_lr/decoder_lr
+# and ABL-IFT-700.yaml comments out encoder_lr/adapter_lr. Falling back here
+# (instead of dying like the pre-refactor code did) is what lets those two
+# configs plan at all -- die()ing on a missing key that the config omitted on
+# purpose is not "flagging a mistake", it's just wrong.
+DEFAULT_ENCODER_LR = "6e-6"
+DEFAULT_DECODER_LR = "2e-5"
+DEFAULT_ADAPTER_LR = "2e-4"
+
 
 def die(msg: str) -> None:
     print(f"ERROR: {msg}", file=sys.stderr)
@@ -132,11 +153,11 @@ def decoder_tag(name: str) -> str:
     return DECODER_TAGS.get(name, _slug(name, 16))
 
 
-def lr_tag(adapter_lr: str) -> str:
-    # adapter_lr values like "2e-4" have no decimal point, so PyYAML reads
-    # them as plain strings (YAML 1.1 float resolution requires a dot) -- we
-    # get the exact text the config author wrote, which is what we want here.
-    return "lr" + adapter_lr.replace(".", "p").replace("-", "").replace("+", "")
+def lr_tag(lr: str, prefix: str = "lr") -> str:
+    # LR values like "2e-4" have no decimal point, so PyYAML reads them as
+    # plain strings (YAML 1.1 float resolution requires a dot) -- we get the
+    # exact text the config author wrote, which is what we want here.
+    return prefix + lr.replace(".", "p").replace("-", "").replace("+", "")
 
 
 def data_tag(config_path: str, stage: str) -> str:
@@ -220,6 +241,9 @@ def main() -> None:
     p.add_argument("--encoder-freeze", required=True)
     p.add_argument("--decoder", required=True)
     p.add_argument("--decoder-freeze", required=True)
+    p.add_argument("--decoder-lora", required=True, help="empty string means: use the config's own value, no override")
+    p.add_argument("--encoder-lr", required=True, help="empty string means: use the config's own value, no override")
+    p.add_argument("--decoder-lr", required=True, help="empty string means: use the config's own value, no override")
     p.add_argument("--adapter-lr", required=True, help="empty string means: use the config's own value, no override")
     p.add_argument("--seed", required=True, type=int)
     args = p.parse_args()
@@ -267,7 +291,15 @@ def main() -> None:
     cfg_encoder_freeze = bool(get(cfg, "model.encoder.freeze"))
     cfg_decoder_name = get(cfg, "model.decoder.name")
     cfg_decoder_freeze = bool(get(cfg, "model.decoder.freeze"))
-    cfg_adapter_lr = get(cfg, "optimization.adapter_lr")
+    # model.lora.enabled is a single global toggle in the current model
+    # builder (melt/training/train.py), not decoder-scoped -- see README.md's
+    # "Decoder LoRA" note. bool(None) correctly reproduces the DEFAULT_CONFIG
+    # default (false) for every ABL-*.yaml config, none of which declare a
+    # lora: block of their own.
+    cfg_decoder_lora = bool(get(cfg, "model.lora.enabled"))
+    cfg_encoder_lr = get(cfg, "optimization.encoder_lr", DEFAULT_ENCODER_LR)
+    cfg_decoder_lr = get(cfg, "optimization.decoder_lr", DEFAULT_DECODER_LR)
+    cfg_adapter_lr = get(cfg, "optimization.adapter_lr", DEFAULT_ADAPTER_LR)
 
     adapter_effective = args.adapter or cfg_adapter_type
     encoder_effective = args.encoder or cfg_encoder_name
@@ -281,6 +313,7 @@ def main() -> None:
     adapter_freeze = as_bool(args.adapter_freeze) if args.adapter_freeze else cfg_adapter_freeze
     encoder_freeze = as_bool(args.encoder_freeze) if args.encoder_freeze else cfg_encoder_freeze
     decoder_freeze = as_bool(args.decoder_freeze) if args.decoder_freeze else cfg_decoder_freeze
+    decoder_lora = as_bool(args.decoder_lora) if args.decoder_lora else cfg_decoder_lora
 
     overrides: list[str] = []
 
@@ -327,26 +360,51 @@ def main() -> None:
     if args.decoder_freeze and decoder_freeze != cfg_decoder_freeze:
         overrides += ["--model.decoder.freeze", str(decoder_freeze).lower()]
 
+    if args.decoder_lora and decoder_lora != cfg_decoder_lora:
+        overrides += ["--model.lora.enabled", str(decoder_lora).lower()]
+    if decoder_lora and decoder_freeze:
+        print(
+            "WARNING: DECODER_LORA=true but the decoder is frozen "
+            f"(DECODER_FREEZE={'true' if args.decoder_freeze else '<inherited>'}). "
+            "train.py sets requires_grad from model.decoder.freeze unconditionally, "
+            "including on the decoder's own LoRA params, so this combination "
+            "trains nothing on the decoder -- a silent no-op ablation. Pass "
+            "DECODER_FREEZE=false if the LoRA arm is meant to actually train.",
+            file=sys.stderr,
+        )
+
     if args.adapter and adapter_effective != cfg_adapter_type:
         overrides += ["--model.adapter._type", adapter_effective]
     if args.adapter_freeze and adapter_freeze != cfg_adapter_freeze:
         overrides += ["--model.adapter.freeze", str(adapter_freeze).lower()]
 
+    if args.encoder_lr:
+        encoder_lr_effective = args.encoder_lr
+        overrides += ["--optimization.encoder_lr", args.encoder_lr]
+    else:
+        encoder_lr_effective = str(cfg_encoder_lr)
+
+    if args.decoder_lr:
+        decoder_lr_effective = args.decoder_lr
+        overrides += ["--optimization.decoder_lr", args.decoder_lr]
+    else:
+        decoder_lr_effective = str(cfg_decoder_lr)
+
     if args.adapter_lr:
         adapter_lr_effective = args.adapter_lr
         overrides += ["--optimization.adapter_lr", args.adapter_lr]
     else:
-        if cfg_adapter_lr is None:
-            die(f"{args.config} has no optimization.adapter_lr and ADAPTER_LR was not set")
         adapter_lr_effective = str(cfg_adapter_lr)
 
     exp_name = "-".join([
         args.stage,
         data_tag(args.config, args.stage),
         f"{encoder_tag(encoder_effective)}{'F' if encoder_freeze else 'T'}",
-        f"{decoder_tag(decoder_effective)}{'F' if decoder_freeze else 'T'}",
+        f"{decoder_tag(decoder_effective)}{'F' if decoder_freeze else 'T'}" + ("-lora" if decoder_lora else ""),
         f"{adapter_effective}{'F' if adapter_freeze else 'T'}",
-        lr_tag(adapter_lr_effective),
+        lr_tag(encoder_lr_effective, "elr"),
+        lr_tag(decoder_lr_effective, "dlr"),
+        lr_tag(adapter_lr_effective, "lr"),
         f"s{args.seed}",
         f"{args.world_size}g",
     ])

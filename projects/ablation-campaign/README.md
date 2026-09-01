@@ -13,8 +13,8 @@ The campaign varies three things. Each lives in exactly one place:
 | axis | varies how | belongs in |
 |---|---|---|
 | **Data**: mixture, hours, task | a rendered config, ~550 lines | one YAML per budget x task: `ABL-MA-125-asr.yaml`, `ABL-MA-700-asr.yaml`, `ABL-IFT-125.yaml`, `ABL-IFT-700.yaml` |
-| **Architecture**: adapter, encoder, decoder, freezing | 0-7 CLI overrides | `ADAPTER`, `ADAPTER_FREEZE`, `ENCODER`, `ENCODER_FREEZE`, `DECODER`, `DECODER_FREEZE` env vars |
-| **Optimisation**: adapter LR | 0-1 CLI override | `ADAPTER_LR` env var |
+| **Architecture**: adapter, encoder, decoder, freezing, decoder LoRA | 0-8 CLI overrides | `ADAPTER`, `ADAPTER_FREEZE`, `ENCODER`, `ENCODER_FREEZE`, `DECODER`, `DECODER_FREEZE`, `DECODER_LORA` env vars |
+| **Optimisation**: encoder/decoder/adapter LR | 0-3 CLI overrides | `ENCODER_LR`, `DECODER_LR`, `ADAPTER_LR` env vars |
 
 There is deliberately **no YAML per arm**. A data axis change (a new budget or
 task mix) is big enough, and shared enough across many arms, to earn its own
@@ -73,6 +73,17 @@ CONFIG=projects/ablation-campaign/ABL-MA-125-asr.yaml \
 # stage 1 (MA), 700 h/language, ablating the adapter LR
 CONFIG=projects/ablation-campaign/ABL-MA-700-asr.yaml ADAPTER_LR=1e-4 \
     bash projects/ablation-campaign/launch_MA.sh
+
+# stage 1 (MA), ablating the encoder and decoder LR (both frozen by default
+# in MA, so this only matters alongside ENCODER_FREEZE=false/DECODER_FREEZE=false)
+CONFIG=projects/ablation-campaign/ABL-MA-700-asr.yaml \
+ENCODER_FREEZE=false ENCODER_LR=1e-5 DECODER_FREEZE=false DECODER_LR=3e-5 \
+    bash projects/ablation-campaign/launch_MA.sh
+
+# stage 2 (IFT), LoRA on the decoder instead of a full fine-tune (see
+# "Decoder LoRA" below for what DECODER_LORA actually toggles)
+CONFIG=projects/ablation-campaign/ABL-IFT-125.yaml DECODER_LORA=true \
+    bash projects/ablation-campaign/launch_IFT.sh
 
 # stage 2 (IFT)
 CONFIG=projects/ablation-campaign/ABL-IFT-125.yaml \
@@ -150,18 +161,50 @@ dies on a `world_size` mismatch.
 `EXP_NAME` is composed, never typed by hand, from:
 
 ```
-{STAGE}-{data tag}-{encoder}{F|T}-{decoder}{F|T}-{adapter}{F|T}-{lr tag}-s{seed}-{world_size}g
+{STAGE}-{data tag}-{encoder}{F|T}-{decoder}{F|T}[-lora]-{adapter}{F|T}-{elr tag}-{dlr tag}-{lr tag}-s{seed}-{world_size}g
 ```
 
-e.g. `MA-125asr-w2vbF-llama1bInsF-mlpT-lr2e4-s42-8g`. Trailing `F`/`T` marks a
-module frozen/trainable. The **LR tag is new** in this refactor (adapter LR
-is now an ablated axis, so it has to be visible in the name or two arms that
-only differ in LR become indistinguishable in W&B and in `outputs/`); every
-other segment matches the convention documented in the pre-refactor
-`launch_MA_llama32-1b-instruct_mn5.sh` header. The data tag comes straight
-from the config's own filename (`ABL-{STAGE}-<tag>.yaml` -> `<tag>` with
-dashes stripped), not from parsing hours out of the YAML, since the filename
-is already the source of truth for "which budget x task is this."
+e.g. `MA-125asr-w2vbF-llama1bInsF-mlpT-elr6e6-dlr2e5-lr2e4-s42-8g`, or with
+decoder LoRA on: `IFT-125-w2vbF-qwen1_7bT-lora-mlpF-elr6e6-dlr2e5-lr2e4-s42-8g`.
+Trailing `F`/`T` marks a module frozen/trainable; `-lora` only appears when
+`DECODER_LORA` resolves true. The three LR tags (`elr`/`dlr`/`lr`, for
+encoder/decoder/adapter) are always present -- like the freeze markers, they
+report the real effective value whether or not it was explicitly overridden,
+so two arms that only differ in one LR never become indistinguishable in W&B
+or in `outputs/`. Every other segment matches the convention documented in
+the pre-refactor `launch_MA_llama32-1b-instruct_mn5.sh` header. The data tag
+comes straight from the config's own filename (`ABL-{STAGE}-<tag>.yaml` ->
+`<tag>` with dashes stripped), not from parsing hours out of the YAML, since
+the filename is already the source of truth for "which budget x task is
+this."
+
+### Encoder/decoder LR fallback when a config omits the key
+
+`ABL-MA-700-asr.yaml` and `ABL-IFT-700.yaml` comment out whichever `optimization.*_lr`
+key belongs to a module that stage freezes (a frozen module's LR has no
+effect on training). `plan_arm.py` falls back to `melt/training/config.py`'s
+`DEFAULT_CONFIG` value (`encoder_lr: 6e-6`, `decoder_lr: 2e-5`,
+`adapter_lr: 2e-4`) when a key is missing from the chosen config and the axis
+was not explicitly requested -- the same value OmegaConf would fill in at
+train time, since this script never imports melt to read that merge
+directly. This also fixed a real bug: before this fallback existed,
+`launch_IFT.sh` could not plan `ABL-IFT-700.yaml` at all (it dies on a
+missing `optimization.adapter_lr`, which that config omits since the adapter
+is frozen in stage 2).
+
+### Decoder LoRA
+
+`DECODER_LORA` toggles `--model.lora.enabled`. Note this is a single global
+switch in the current model builder (`melt/training/train.py`), not scoped to
+the decoder specifically -- there is no separate per-module LoRA flag in
+`melt/` today. In practice it is the decoder that trains under it for this
+campaign (PEFT's `task_type=TaskType.CAUSAL_LM` targets the causal-LM
+attention/MLP projections), but this has not been verified against the
+encoder's own module names. `train.py` also sets a module's `requires_grad`
+from its `freeze` flag unconditionally, including on any LoRA params PEFT
+injected into it -- so `DECODER_LORA=true` with the decoder frozen trains
+nothing and is a silent no-op; `launch_campaign.sh` warns on this combination
+rather than submitting it quietly.
 
 ## Two rules that matter more than the file layout
 
