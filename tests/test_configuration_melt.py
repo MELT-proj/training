@@ -83,7 +83,10 @@ class TestMELTConfig:
         )
 
         assert config.initializer_range == 0.02
-        assert config.loss_type == "ForCausalLMLoss"
+        # "ForCausalLM" is the actual key in transformers' loss registry; the
+        # old "ForCausalLMLoss" silently fell back to this one with a
+        # warning. See configuration_melt.py.
+        assert config.loss_type == "ForCausalLM"
 
     def test_custom_initializer_range(self):
         config = MELTConfig(
