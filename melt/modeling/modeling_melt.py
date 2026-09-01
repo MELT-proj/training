@@ -1166,6 +1166,16 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
         # if logits_to_keep == 0:
         #     logits_to_keep = labels.shape[1] if labels is not None else input_ids.shape[1]
 
+        # This forward() is only ever used to compute a loss (training or eval-loss);
+        # real generation goes through generate() -> text_decoder.generate() directly
+        # and never reaches here. A KV cache built here would be discarded on return --
+        # and is actively unsafe under activation checkpointing: DynamicCache.update()
+        # concatenates onto `self.keys`/`self.values` in place, so a checkpoint's
+        # recompute pass (same cache object, same layer_idx) doubles the cached
+        # sequence length instead of no-op'ing, corrupting the recomputed activations
+        # (confirmed on job 329800, FSDP2 + Qwen 3.5-2B). Ignore the caller's value.
+        use_cache = False
+
         # We do not pass labels to the LLM and compute the loss ourselves
         outputs: CausalLMOutputWithPast = self.text_decoder(
             inputs_embeds=decoder_input_embs,
@@ -1611,11 +1621,16 @@ class MELTForSequenceClassification(MELTPreTrainedModel):
                 labels=labels,
             )
 
-        # Delegate both logits and loss computation to the underlying sequence classifier.
+        # Same reasoning as MELTForCausalLM.forward(): this is only ever used to score
+        # a full sequence in one pass, never to generate incrementally, so a KV cache
+        # is both wasted and unsafe under activation checkpointing (see the comment
+        # there). Force it off explicitly rather than leaving it to default to
+        # self.config.use_cache.
         output = self.text_decoder(
             inputs_embeds=decoder_input_embs,
             attention_mask=attention_mask,
             labels=labels,
+            use_cache=False,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
