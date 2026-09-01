@@ -704,7 +704,7 @@ data:
           tgt_lang: de
     # Statistics
     total_hours: 212.08
-    total_cuts: 28815
+    total_cuts: 101728
     force_estimate: true
 
     # data.strict_text_field is not inherited by eval (resolve_eval_data_config
