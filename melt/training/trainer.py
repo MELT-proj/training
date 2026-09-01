@@ -700,15 +700,17 @@ class MELTTrainer(Seq2SeqTrainer):
         self,
         args: TrainingArguments,
         dataloader: DataLoader,
-        total_train_batch_size: int | None = None,
     ):
         """
-        Calculates and returns the following values:
+        Returns a tuple, in order:
         - `num_train_epochs`
         - `num_update_steps_per_epoch`: number of optimization steps in an epoch.
         - `num_examples`: used only for logging.
         - `num_train_samples`: used for speed metrics.
-        - `epoch_based`: used to scale num_train_tokens.
+        - `total_train_batch_size` (from `get_total_train_batch_size`, not a
+          parameter of this method): logged verbatim by the training loop; -1
+          on the Lhotse infinite-dataloader path, where batches are
+          duration-based rather than a fixed size.
         - `len_dataloader`: used to compute `steps_in_epoch`. If not provided, falls back to max_steps * grad_accum
         - `max_steps`: used for scheduler setup, logging, and total optimization steps.
 
@@ -723,9 +725,7 @@ class MELTTrainer(Seq2SeqTrainer):
         │   └── if should_training_stop: break
         """
         if args.per_device_train_batch_size != -1:
-            return super().set_initial_training_values(
-                args, dataloader, total_train_batch_size
-            )
+            return super().set_initial_training_values(args, dataloader)
 
         num_workers = self.config.data.train_ds.num_workers
         grad_accum = args.gradient_accumulation_steps
@@ -846,7 +846,6 @@ class MELTTrainer(Seq2SeqTrainer):
 
         # For step-based training with infinite dataloaders, we want:
         # - num_train_epochs = sys.maxsize (so the outer loop keeps running)
-        # - epoch_based = False (we stop by max_steps, not epochs)
         # The training loop will terminate when global_step >= max_steps
         if epoch_based:
             logger.info(
@@ -857,14 +856,13 @@ class MELTTrainer(Seq2SeqTrainer):
         # Set num_train_epochs to a large value so the outer loop keeps running
         # The inner loop will break when global_step >= max_steps
         num_train_epochs = sys.maxsize
-        epoch_based = False
 
         return (
             num_train_epochs,
             optimization_steps_per_epoch,
             num_examples,
             num_train_samples,
-            epoch_based,
+            self.get_total_train_batch_size(args),
             len_dataloader,
             max_steps,
         )
@@ -1008,7 +1006,7 @@ class MELTTrainer(Seq2SeqTrainer):
     # Optimizer
     # ------------------------------------------------------------------
 
-    def create_optimizer(self):
+    def create_optimizer(self, model=None):
         """Create optimizer groups respecting freeze flags and modular audio stack.
 
         This method prefers explicit attributes when available:

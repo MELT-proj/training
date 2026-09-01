@@ -7,20 +7,13 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-import transformers.modeling_utils
 from transformers import AutoModel, AutoModelForCausalLM, AutoModelForSequenceClassification
-from transformers.cache_utils import Cache, DynamicCache
 from transformers.generation.utils import GenerationMixin
-from transformers.modeling_outputs import (
-    BaseModelOutputWithPast,
-    CausalLMOutputWithPast,
-)
+from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.modeling_utils import PreTrainedModel
 from transformers.models.wav2vec2_bert.modeling_wav2vec2_bert import (
     Wav2Vec2BertAdapterLayer,
 )
-from transformers.processing_utils import Unpack
-from transformers.utils import TransformersKwargs
 
 from ..logging_utils import get_logger
 from .configuration_melt import MELTConfig
@@ -616,8 +609,7 @@ class MELTPreTrainedModel(PreTrainedModel):
     base_model_prefix = "melt"
     _skip_keys_device_placement = ["past_key_values"]
     supports_gradient_checkpointing = False
-    _supports_param_buffer_assignment = False
-    _supports_flash_attn_2 = False
+    _supports_flash_attn = False
     _supports_sdpa = True
 
     def _init_weights(self, module: nn.Module):
@@ -704,25 +696,29 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
     # only the adapter weights were saved (partial checkpoint).
     _keys_to_ignore_on_load_missing = ["audio_stack.encoder.*", "text_decoder.*"]
 
-    def __init__(self, config: MELTConfig):
+    def __init__(self, config: MELTConfig, load_backbones: bool = False):
+        """
+        Args:
+            load_backbones: whether to pull the encoder/decoder backbones'
+                pretrained weights via ``from_pretrained``. Fresh-build callers
+                must pass ``True`` explicitly. Left ``False`` by default so
+                that ``MELTForCausalLM.from_pretrained(ckpt)`` -- which
+                constructs the shell via ``cls(config, *model_args,
+                **model_kwargs)`` before overwriting it with the checkpoint's
+                own state dict -- never redundantly re-downloads a backbone.
+        """
         super().__init__(config)
 
         # Initialize the text decoder (language model)
-        self.text_decoder = self._create_text_stack(config)
+        self.text_decoder = self._create_text_stack(config, load_backbones)
 
         # Cache EOS token id once to avoid repeated config lookups and temporary
         # tensor allocations inside _inject_tensor on every forward pass.
         eos_id = self.text_decoder.config.eos_token_id
         self._eos_token_id: int = eos_id[0] if isinstance(eos_id, list) else eos_id
 
-        # Propagate tied weights keys if present
-        if self.text_decoder._tied_weights_keys is not None:
-            self._tied_weights_keys = [
-                f"text_decoder.{k}" for k in self.text_decoder._tied_weights_keys
-            ]
-
         # Initialize the audio stack (encoder model + adapter)
-        self.audio_stack = self._create_audio_stack(config)
+        self.audio_stack = self._create_audio_stack(config, load_backbones)
 
         # Sync attention implementation between config and models
         self.config.audio_encoder_config._attn_implementation = (
@@ -734,7 +730,10 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
         self.audio_stack.encoder.model.config = self.config.audio_encoder_config
         self.text_decoder.config = self.config.text_decoder_config
 
-        # Initialize weights and apply final processing
+        # Initialize weights and apply final processing. post_init() walks
+        # named_children() and merges each child's own tied-weights keys
+        # (prefixed with the child's name) automatically -- no manual
+        # _tied_weights_keys propagation needed here.
         self.post_init()
 
     # -----------------------------------------------------------------
@@ -742,39 +741,33 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
     # -----------------------------------------------------------------
 
     @staticmethod
-    def _create_text_stack(config: MELTConfig):
+    def _create_text_stack(config: MELTConfig, load_backbones: bool):
         """Instantiate the text decoder (language model).
 
-        When ``transformers.modeling_utils._init_weights`` is ``True`` (i.e. we
-        are creating a *fresh* model), the decoder is loaded via
-        ``from_pretrained`` so that it ships with pretrained weights.
+        When ``load_backbones`` is ``True`` (i.e. we are creating a *fresh*
+        model), the decoder is loaded via ``from_pretrained`` so that it ships
+        with pretrained weights.
 
-        When the flag is ``False`` (i.e. ``MELTForCausalLM.from_pretrained`` is
-        loading a local checkpoint), we use ``from_config`` instead – the
-        checkpoint's own state-dict will overwrite all weights, so downloading
-        the original pretrained weights would be wasteful.
+        When ``False`` (i.e. ``MELTForCausalLM.from_pretrained`` is loading a
+        local checkpoint), we use ``from_config`` instead -- the checkpoint's
+        own state-dict will overwrite all weights, so downloading the original
+        pretrained weights would be wasteful.
         """
-        if (
-            transformers.modeling_utils._init_weights
-            and config.text_decoder is not None
-        ):
+        if load_backbones and config.text_decoder is not None:
             return AutoModelForCausalLM.from_pretrained(
                 config.text_decoder, config=config.text_decoder_config
             )
         return AutoModelForCausalLM.from_config(config.text_decoder_config)
 
     @staticmethod
-    def _create_audio_stack(config: MELTConfig) -> MELTAudioStack:
+    def _create_audio_stack(config: MELTConfig, load_backbones: bool) -> MELTAudioStack:
         """Instantiate the audio stack (encoder + adapter).
 
-        Mirrors :meth:`_create_text_stack` – the audio encoder inside the stack
-        is loaded via ``from_pretrained`` only when we are creating a fresh
-        model; otherwise ``from_config`` is used.
+        Mirrors :meth:`_create_text_stack` -- the audio encoder inside the
+        stack is loaded via ``from_pretrained`` only when we are creating a
+        fresh model; otherwise ``from_config`` is used.
         """
-        load_pretrained = bool(
-            transformers.modeling_utils._init_weights
-            and config.audio_encoder is not None
-        )
+        load_pretrained = bool(load_backbones and config.audio_encoder is not None)
         return MELTAudioStack(config, load_pretrained=load_pretrained)
 
     # -----------------------------------------------------------------
@@ -991,20 +984,6 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
 
         return out
 
-    @classmethod
-    def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
-        # At the moment fast initialization is not supported for composite models
-        if kwargs.get("_fast_init", False):
-            logger.warning(
-                "Fast initialization is currently not supported for MELTForCausalLM. "
-                "Falling back to slow initialization..."
-            )
-        kwargs["_fast_init"] = False
-
-        return super().from_pretrained(
-            pretrained_model_name_or_path, *model_args, **kwargs
-        )
-
     def _get_text_embeddings(self, input_ids):
         embedding = self.text_decoder.get_input_embeddings()
         return embedding(input_ids)
@@ -1187,6 +1166,16 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
         # if logits_to_keep == 0:
         #     logits_to_keep = labels.shape[1] if labels is not None else input_ids.shape[1]
 
+        # This forward() is only ever used to compute a loss (training or eval-loss);
+        # real generation goes through generate() -> text_decoder.generate() directly
+        # and never reaches here. A KV cache built here would be discarded on return --
+        # and is actively unsafe under activation checkpointing: DynamicCache.update()
+        # concatenates onto `self.keys`/`self.values` in place, so a checkpoint's
+        # recompute pass (same cache object, same layer_idx) doubles the cached
+        # sequence length instead of no-op'ing, corrupting the recomputed activations
+        # (confirmed under FSDP2 with Qwen 3.5-2B). Ignore the caller's value.
+        use_cache = False
+
         # We do not pass labels to the LLM and compute the loss ourselves
         outputs: CausalLMOutputWithPast = self.text_decoder(
             inputs_embeds=decoder_input_embs,
@@ -1232,10 +1221,6 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
-
-    def _reorder_cache(self, past_key_values, beam_idx):
-        # apply decoder cache reordering here
-        return self.text_decoder._reorder_cache(past_key_values, beam_idx)
 
     def generate(
         self,
@@ -1309,20 +1294,15 @@ class MELTForSequenceClassification(MELTPreTrainedModel):
     # Same loading behavior as MELTForCausalLM for shared stacks.
     _keys_to_ignore_on_load_missing = ["audio_stack.encoder.*", "text_decoder.*"]
 
-    def __init__(self, config: MELTConfig):
+    def __init__(self, config: MELTConfig, load_backbones: bool = False):
+        """See MELTForCausalLM.__init__ for the meaning of ``load_backbones``."""
         super().__init__(config)
 
         # Initialize the text decoder (sequence classification model)
-        self.text_decoder = self._create_text_stack(config)
-
-        # Propagate tied weights keys if present
-        if self.text_decoder._tied_weights_keys is not None:
-            self._tied_weights_keys = [
-                f"text_decoder.{k}" for k in self.text_decoder._tied_weights_keys
-            ]
+        self.text_decoder = self._create_text_stack(config, load_backbones)
 
         # Initialize the audio stack (encoder model + adapter)
-        self.audio_stack = self._create_audio_stack(config)
+        self.audio_stack = self._create_audio_stack(config, load_backbones)
 
         # Sync attention implementation between config and models
         self.config.audio_encoder_config._attn_implementation = (
@@ -1334,28 +1314,24 @@ class MELTForSequenceClassification(MELTPreTrainedModel):
         self.audio_stack.encoder.model.config = self.config.audio_encoder_config
         self.text_decoder.config = self.config.text_decoder_config
 
-        # Initialize weights and apply final processing
+        # Initialize weights and apply final processing. post_init() merges
+        # each child's own tied-weights keys automatically -- see
+        # MELTForCausalLM.__init__.
         self.post_init()
 
     @staticmethod
-    def _create_text_stack(config: MELTConfig):
+    def _create_text_stack(config: MELTConfig, load_backbones: bool):
         """Instantiate the text decoder (sequence classification model)."""
-        if (
-            transformers.modeling_utils._init_weights
-            and config.text_decoder is not None
-        ):
+        if load_backbones and config.text_decoder is not None:
             return AutoModelForSequenceClassification.from_pretrained(
                 config.text_decoder, config=config.text_decoder_config
             )
         return AutoModelForSequenceClassification.from_config(config.text_decoder_config)
 
     @staticmethod
-    def _create_audio_stack(config: MELTConfig) -> MELTAudioStack:
+    def _create_audio_stack(config: MELTConfig, load_backbones: bool) -> MELTAudioStack:
         """Instantiate the audio stack (encoder + adapter)."""
-        load_pretrained = bool(
-            transformers.modeling_utils._init_weights
-            and config.audio_encoder is not None
-        )
+        load_pretrained = bool(load_backbones and config.audio_encoder is not None)
         return MELTAudioStack(config, load_pretrained=load_pretrained)
 
     def _init_weights(self, module: nn.Module):
@@ -1490,14 +1466,6 @@ class MELTForSequenceClassification(MELTPreTrainedModel):
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
-        # At the moment fast initialization is not supported for composite models
-        if kwargs.get("_fast_init", False):
-            logger.warning(
-                "Fast initialization is currently not supported for MELTForSequenceClassification. "
-                "Falling back to slow initialization..."
-            )
-        kwargs["_fast_init"] = False
-
         # Pop MELT-specific sub-model kwargs before they reach transformers'
         # from_pretrained machinery (which would not know what to do with them).
         text_decoder_kwargs = kwargs.pop("text_decoder_kwargs", None) or {}
@@ -1653,11 +1621,16 @@ class MELTForSequenceClassification(MELTPreTrainedModel):
                 labels=labels,
             )
 
-        # Delegate both logits and loss computation to the underlying sequence classifier.
+        # Same reasoning as MELTForCausalLM.forward(): this is only ever used to score
+        # a full sequence in one pass, never to generate incrementally, so a KV cache
+        # is both wasted and unsafe under activation checkpointing (see the comment
+        # there). Force it off explicitly rather than leaving it to default to
+        # self.config.use_cache.
         output = self.text_decoder(
             inputs_embeds=decoder_input_embs,
             attention_mask=attention_mask,
             labels=labels,
+            use_cache=False,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,

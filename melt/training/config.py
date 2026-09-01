@@ -31,6 +31,11 @@ from omegaconf import DictConfig, OmegaConf
 
 from transformers import Seq2SeqTrainingArguments
 
+from ..logging_utils import get_logger
+
+
+logger = get_logger(__name__)
+
 
 # =============================================================================
 # OmegaConf Custom Resolvers
@@ -508,7 +513,26 @@ def trainer_args_dict(cfg: DictConfig) -> dict:
     # `generation_num_beams` and `generation_config` settable from YAML.
     valid_keys = set(Seq2SeqTrainingArguments(output_dir=".").to_dict().keys())
 
-    # Filter to only valid training arguments
+    # Filter to only valid training arguments. Warn on anything dropped: a
+    # transformers version bump can rename or remove a TrainingArguments
+    # field (e.g. `group_by_length` in transformers 5), and a YAML that
+    # still sets it would otherwise train with silently different
+    # hyperparameters instead of failing loudly.
+    #
+    # `overwrite_output_dir` is deliberately excluded from this warning: it
+    # was removed from TrainingArguments in the same release, but
+    # prepare_model() (train.py) reads it directly off the raw YAML instead,
+    # so it still takes effect -- the warning below would otherwise be wrong
+    # for the one key campaign YAMLs actually rely on.
+    dropped_keys = set(result.keys()) - valid_keys - {"overwrite_output_dir"}
+    if dropped_keys:
+        logger.warning(
+            "trainer_args_dict: dropping %d key(s) from the YAML `trainer:` block that "
+            "Seq2SeqTrainingArguments does not recognize (removed, renamed, or "
+            "misspelled): %s. These settings will NOT take effect.",
+            len(dropped_keys),
+            sorted(dropped_keys),
+        )
     result = {k: v for k, v in result.items() if k in valid_keys}
 
     return result
