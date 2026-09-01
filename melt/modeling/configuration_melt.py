@@ -176,6 +176,16 @@ class MELTConfig(PretrainedConfig):
         elif isinstance(text_decoder_config, dict):
             text_decoder_config = AutoConfig.for_model(**text_decoder_config)
 
+        if text_decoder_config is not None:
+            # Some decoders (e.g. Qwen3.5) nest their real text config under a
+            # sub-config and don't expose vocab_size/hidden_size/eos_token_id
+            # etc. at the top level. get_text_config() is the standard
+            # transformers method for resolving that -- and a no-op (returns
+            # self) for every decoder that isn't nested this way -- so
+            # flattening here once means every downstream read of
+            # text_decoder_config.<attr> across the codebase just works.
+            text_decoder_config = text_decoder_config.get_text_config(decoder=True)
+
         self.audio_encoder = audio_encoder
         self.text_decoder = text_decoder
         self.audio_encoder_config = audio_encoder_config
@@ -202,7 +212,12 @@ class MELTConfig(PretrainedConfig):
 
     @property
     def vocab_size(self):
-        return self.text_decoder_config.vocab_size
+        # get_text_config(), not a direct attribute read: some decoders (e.g.
+        # Qwen3.5) nest their real text config under a sub-config and don't
+        # expose vocab_size at the top level -- get_text_config() is the
+        # standard transformers method for resolving that, and is a no-op
+        # (returns self) for decoders that aren't nested this way.
+        return self.text_decoder_config.get_text_config().vocab_size
 
     @property
     def audio_token_id(self):

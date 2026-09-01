@@ -189,7 +189,7 @@ def prepare_melt_config(cfg: DictConfig, processor: MELTProcessor) -> MELTConfig
     # here; train.py's prepare_model sets it after resize_token_embeddings has
     # actually grown the embedding table to fit.
     pad_token_id = tokenizer.convert_tokens_to_ids([tokenizer.pad_token])[0]
-    if pad_token_id < config.text_decoder_config.vocab_size:
+    if pad_token_id < config.vocab_size:
         config.text_decoder_config.pad_token_id = pad_token_id
 
     return config

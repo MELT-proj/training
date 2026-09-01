@@ -116,9 +116,9 @@ def prepare_model(
 
     # If we added new tokens and the model did not have spare embedding entries,
     # we need to resize the token embeddings
-    if len(processor.tokenizer) > model.config.text_decoder_config.vocab_size:
+    if len(processor.tokenizer) > model.config.vocab_size:
         logger.info(
-            f"Resizing token embeddings from {model.config.text_decoder_config.vocab_size} to {len(processor.tokenizer)}"
+            f"Resizing token embeddings from {model.config.vocab_size} to {len(processor.tokenizer)}"
         )
         model.text_decoder.resize_token_embeddings(len(processor.tokenizer), mean_resizing=False, pad_to_multiple_of=8)
 
