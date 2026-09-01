@@ -209,9 +209,19 @@ def probe(site: str, exp_names: list[str]) -> dict:
     script_lines.append('squeue -u "$USER" -h -o "JOB|%i|%T|%j" 2>/dev/null || true')
     remote = "; ".join(script_lines)
 
-    res = subprocess.run(["ssh", ssh_host, remote], capture_output=True, text=True)
+    # Run the probe locally when we are already on the site (OUTPUT_DIR is a
+    # real directory here), and over ssh otherwise. Without this, running on
+    # the login node would ssh to the site's own alias -- which is defined in
+    # the *developer's* ~/.ssh/config and does not exist on the cluster, so the
+    # probe fails there of all places.
+    if os.path.isdir(out_dir):
+        res = subprocess.run(["bash", "-c", remote], capture_output=True, text=True)
+        where = "locally"
+    else:
+        res = subprocess.run(["ssh", ssh_host, remote], capture_output=True, text=True)
+        where = f"over ssh to {ssh_host}"
     if res.returncode != 0:
-        die(f"probe of {site} failed: {res.stderr.strip()[:400]}")
+        die(f"probe of {site} ({where}) failed: {res.stderr.strip()[:400]}")
 
     disk: dict[str, dict] = {}
     jobs: list[tuple[str, str]] = []
