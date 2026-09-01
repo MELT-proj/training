@@ -14,14 +14,15 @@ authors = [
 requires-python = ">=3.10"
 dependencies = [
     "torch>=2.9,<2.10",
-    "transformers==4.57.1",
-    "wandb>=0.23",
+    "transformers>=5.16,<6",
+    "wandb>=0.29",
+    "mlflow>=3.0",
     "datasets>=4.0",
     "omegaconf>=2.3",
     "librosa>=0.11",
     "soundfile>=0.13",
     "sentencepiece>=0.2",
-    "accelerate>=1.0",
+    "accelerate>=1.1",
     "deepspeed>=0.18",
     # 2.0.0a3 is the first release carrying indexed Shar manifests (.idx
     # sidecars), which partition by sample index instead of by shard -- see
