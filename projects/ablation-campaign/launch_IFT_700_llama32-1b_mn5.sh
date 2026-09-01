@@ -33,8 +33,17 @@ EXP_NAME="IFT-700both-w2vbF-llama1bInsT-mlpF-s1337-8g"
 # whole, so SLURM_GPUS_ON_NODE reports the node's full GPU count whatever
 # --gpus-per-node asked for. Pinning it is what makes world_size reproducible
 # across a resume (bash/run_train.sh, PR #90).
-export MELT_NODES=2
-export MELT_GPUS_PER_NODE=4          # -> world_size 8
+#
+# Both default to the real arm's topology (2 nodes x 4 GPUs -> world_size 8)
+# but are overridable so a debug-QoS smoke test can request a single node
+# without editing this file, e.g.:
+#   MELT_NODES=1 MELT_QOS=acc_debug MELT_TIME=00:30:00 \
+#     bash projects/ablation-campaign/launch_IFT_700_llama32-1b_mn5.sh \
+#     --run.exp_name smoke --trainer.output_dir /workspace/outputs/smoke \
+#     --trainer.max_steps 10 --trainer.save_steps 5 \
+#     --data.validation_ds.max_samples 4
+export MELT_NODES="${MELT_NODES:-2}"
+export MELT_GPUS_PER_NODE="${MELT_GPUS_PER_NODE:-4}"          # -> world_size 8 by default
 export MELT_QOS="${MELT_QOS:-acc_ehpc}"
 
 # 1337, not stage 1's 42. run_train.sh feeds MELT_SEED to
@@ -66,15 +75,27 @@ export MELT_TIME="${MELT_TIME:-6:00:00}"
 # arm is how two arms end up trained for different amounts.
 NUM_TRAIN_EPOCHS=1
 
-# ~12 rounds over 6310 steps, plus eval_on_start. Each round decodes 200
-# utterances for each of 6 named eval sets.
-EVAL_STEPS=500
+# 902 = ceil(6310 / 7): 6 checkpoints strictly before the end (902, 1804,
+# 2706, 3608, 4510, 5412 -- none of these is a multiple of 902 that reaches
+# 6310, so the periodic saves stop at 6/7) plus the training-end checkpoint
+# HF always writes at the final step regardless of save_steps (confirmed on
+# the stage-1 md60 run: checkpoint-2625 exists even though save_steps was
+# 200 and 2625 isn't a multiple of it). 700 h/language over 7 -> each
+# checkpoint lands roughly every 100 h/language of training, which is the
+# point of the 1/7 spacing. Eval mirrors save so every kept checkpoint has an
+# eval score next to it (was the campaign's "save_steps == eval_steps"
+# convention before this, at 500/500 -- see README's "Derived eval_steps /
+# save_steps").
+EVAL_STEPS=902
 
-# Every 500 steps, keeping 2. These checkpoints are much larger than stage 1's:
+# Keep all 7 rather than rotating down to the last 2: the whole point of the
+# 1/7 cadence is having every ~100 h/language checkpoint around afterwards,
+# not just the end state. These checkpoints are much larger than stage 1's --
 # a trainable decoder means AdamW's moments are saved alongside the weights,
-# so budget ~22 GB each, ~45 GB for the two kept.
-SAVE_STEPS=500
-SAVE_TOTAL_LIMIT=2
+# so budget ~22 GB each, ~154 GB for all 7 (19 TB free on gpfs_scratch as of
+# 2026-09-01, plenty of room).
+SAVE_STEPS=902
+SAVE_TOTAL_LIMIT=7
 
 # --- launch ----------------------------------------------------------------
 # config/accelerate/ddp.yaml, as in stage 1. FSDP2 would shard the 1.24 B

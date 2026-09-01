@@ -393,9 +393,9 @@ infra/runners/submit-container.sh mn5 config/accelerate/ddp.yaml \
     --run.exp_name "IFT-700both-w2vbF-llama1bInsT-mlpF-s1337-8g" \
     --trainer.output_dir "/workspace/outputs/IFT-700both-w2vbF-llama1bInsT-mlpF-s1337-8g" \
     --trainer.num_train_epochs 1 \
-    --trainer.eval_steps 500 \
-    --trainer.save_steps 500 \
-    --trainer.save_total_limit 2 \
+    --trainer.eval_steps 902 \
+    --trainer.save_steps 902 \
+    --trainer.save_total_limit 7 \
     --trainer.seed 1337
 ```
 
@@ -403,6 +403,15 @@ with `MELT_NODES=2 MELT_GPUS_PER_NODE=4 MELT_SEED=1337 MELT_TIME=6:00:00`.
 Seed 1337 (not stage 1's 42) matters because `run_train.sh` feeds
 `MELT_SEED` to `--data.*.shard_seed`; reusing 42 would replay the very cuts
 stage 1 already streamed.
+
+`save_steps`/`eval_steps` are `902 = ceil(6310 / 7)`, not the derived-formula
+500 the rest of the campaign uses: the deliverable for this arm is 6
+intermediate checkpoints plus the final one, spaced at roughly 1/7 of
+training each (~100 h/language of the 700 h budget), so `save_total_limit`
+is 7 rather than the usual 2 to keep all of them instead of rotating down to
+the last two. See the script's own comment for why 6310/7 rounding up still
+lands the periodic saves at 6/7 and lets the training-end checkpoint (always
+written regardless of `save_steps`) supply the 7th.
 
 | | Stage 1 (MA) | Stage 2 (IFT) |
 |---|---|---|
@@ -438,7 +447,7 @@ shrink to keep the same peak-memory margin. `run.memory_preallocation: true`
 reports the true worst-case peak (both `max_duration` and `min_duration`
 passes) before step 1 rather than leaving it to surface as an OOM later.
 Checkpoints are much larger here too (AdamW's moments are saved with the
-weights): budget ~22 GB each, ~45 GB for the two `save_total_limit` keeps.
+weights): budget ~22 GB each, ~154 GB for the seven `save_total_limit` keeps.
 
 6310 steps (the derived one-epoch count at `batch_duration: 120`) does not
 fit in one 6 h allocation. Resume with:
