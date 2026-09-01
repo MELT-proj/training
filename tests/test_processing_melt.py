@@ -475,19 +475,22 @@ class TestMELTProcessorSaveLoad:
                 assert tc[name] == getattr(processor, name)
 
     def test_special_tokens_in_extra_special_tokens(self, processor):
-        """MELT special tokens must be in extra_special_tokens after a round-trip."""
+        """MELT special tokens must be in extra_special_tokens after a round-trip.
+
+        transformers 5 serializes extra_special_tokens as a flat list of
+        token strings rather than a {name: token} dict (the name->token
+        mapping still resolves correctly at runtime via tokenizer.<name> --
+        see test_from_pretrained_restores_token_strings -- only the on-disk
+        JSON shape changed).
+        """
         with tempfile.TemporaryDirectory() as d:
             processor.save_pretrained(d)
             tc = json.load(open(os.path.join(d, "tokenizer_config.json")))
-            extra = tc.get("extra_special_tokens", {})
+            extra = tc.get("extra_special_tokens", [])
             for name in MELT_REQUIRED_SPECIAL_TOKENS:
                 token_str = getattr(processor, name)
-                assert name in extra, (
-                    f"'{name}' missing from extra_special_tokens"
-                )
-                assert extra[name] == token_str, (
-                    f"extra_special_tokens['{name}'] mismatch: "
-                    f"{extra[name]!r} != {token_str!r}"
+                assert token_str in extra, (
+                    f"'{token_str}' ({name}) missing from extra_special_tokens {extra!r}"
                 )
 
     def test_from_pretrained_restores_token_strings(self, processor):
