@@ -1303,6 +1303,22 @@ class MELTTrainer(Seq2SeqTrainer):
         max_duration = float(train_ds_cfg.max_duration)
         min_duration = float(train_ds_cfg.min_duration)
 
+        # eval_on_start runs generate() over every named eval set before the
+        # first training_step, and its outputs hold a reference cycle plain
+        # refcounting doesn't clear -- the same class of leak already
+        # diagnosed for this function's own warmup batches below (see the
+        # comment in _run_preallocation_pass's `finally`), just triggered by
+        # generation instead. Confirmed on a real run (MA-700, Qwen3.5-2B,
+        # 2026-09-02): 56.2 GB allocated before this function's first pass
+        # even started, of which only 5.8 GB was model parameters -- the
+        # missing ~50 GB was still-referenced eval-generation memory, and it
+        # OOM'd both preallocation passes and then the real first batch.
+        # Without an explicit collect first, this pass's own gc.collect()
+        # only clears cycles ITS batch created, not eval's.
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
         logger.warning(
             f"[Preallocation] rank={self._global_rank} — starting warmup passes "
             f"(max_duration={max_duration}s, min_duration={min_duration}s) …"
