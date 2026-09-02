@@ -1,0 +1,40 @@
+compute_environment: LOCAL_MACHINE
+debug: false
+distributed_type: FSDP
+downcast_bf16: 'no'
+enable_cpu_affinity: false
+fsdp_config:
+  fsdp_activation_checkpointing: true
+  # TRANSFORMER_BASED_WRAP's auto-detection reads _no_split_modules off the
+  # instantiated model class, which for Qwen3.5's *ForCausalLM classes still
+  # lists {'Qwen3_5DecoderLayer', 'Qwen3_5VisionBlock'} -- inherited from the
+  # full multimodal model definition, even though melt only ever instantiates
+  # the text-only decoder (via get_text_config(decoder=True), see
+  # configuration_melt.py) and Qwen3_5VisionBlock genuinely does not exist in
+  # that instantiation. Auto-detection fails with "Could not find the
+  # transformer layer class Qwen3_5VisionBlock in the model" (verified
+  # 2026-09-02, mn5 job 45348050).
+  #
+  # fsdp_transformer_layer_cls_to_wrap names the real layer class explicitly,
+  # sidestepping the broken auto-detection -- but fsdp_auto_wrap_policy must
+  # STAY set to TRANSFORMER_BASED_WRAP alongside it. Removing it entirely
+  # (tried first) leaves accelerate's internal auto_wrap_policy_func unbuilt,
+  # and fsdp2_apply_ac (only reached because fsdp_activation_checkpointing is
+  # on) calls it unconditionally: "TypeError: 'NoneType' object is not
+  # callable" (verified 2026-09-02, mn5 job 45348161). The class name
+  # overrides what TRANSFORMER_BASED_WRAP auto-detects; it doesn't replace
+  # the policy type.
+  fsdp_auto_wrap_policy: TRANSFORMER_BASED_WRAP
+  fsdp_transformer_layer_cls_to_wrap: Qwen3_5DecoderLayer
+  fsdp_cpu_ram_efficient_loading: true
+  fsdp_offload_params: false
+  fsdp_reshard_after_forward: true
+  fsdp_state_dict_type: SHARDED_STATE_DICT
+  fsdp_version: 2
+main_training_function: main
+mixed_precision: bf16
+same_network: true
+tpu_env: []
+tpu_use_cluster: false
+tpu_use_sudo: false
+use_cpu: false
