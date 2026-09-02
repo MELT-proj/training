@@ -71,6 +71,34 @@ arms:
     # Never launched. This row is why the grid exists: the gap was invisible
     # while the campaign lived in hand-written scripts.
 
+  - id: MA-700-qwen35-2b-ins
+    stage: MA
+    config: ABL-MA-700-asr.yaml     # same config as the Llama pair, for the
+                                    # same reason: identical mixture/bins/
+                                    # budget/prompt across every 700 h arm.
+    decoder: Qwen/Qwen3.5-2B
+    seed: 42
+    time: "06:00:00"
+    # Never run through this grid. Qwen/Qwen3.5-2B DID train cleanly in the
+    # transformers5-migration verification (loss 3.51 -> 3.55 -> 3.41 over
+    # steps 5/10/15, 2 GPUs on artemis) -- but that was 15 steps, ad hoc, not
+    # through campaign.py, and not at this arm's real topology/batch_duration.
+    # Smoke-test on acc_debug before committing an acc_ehpc allocation, the
+    # same way the IFT-700 Llama run was validated.
+
+  - id: MA-700-qwen35-2b-base
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    decoder: Qwen/Qwen3.5-2B-Base
+    seed: 42
+    time: "06:00:00"
+    # Never run at all, not even ad hoc. Unlike the Llama Base/Instruct pair,
+    # Qwen3.5-2B-Base ships its OWN chat template (verified byte-identical to
+    # the Instruct sibling's, 2026-09-02) rather than needing chat_template_from
+    # -- so `campaign.py plan` for this row should NOT emit
+    # --model.decoder.chat_template_from at all. If it does, DECODER_PROFILES
+    # regressed; check plan_arm.py's Qwen/Qwen3.5-2B-Base entry.
+
   # --------------------------------------------------------------- IFT (stage 2)
   - id: IFT-125-llama1b-ins
     stage: IFT
@@ -103,3 +131,32 @@ arms:
     # name when the grid landed, and renaming it mid-run would orphan its
     # output directory and its resume path.
     exp_name: IFT-700both-w2vbF-llama1bInsT-mlpF-s1337-8g
+
+  - id: IFT-700-qwen35-2b-ins
+    stage: IFT
+    config: ABL-IFT-700.yaml
+    decoder: Qwen/Qwen3.5-2B          # ABL-IFT-700.yaml bakes in Llama, unlike
+                                      # the MA config's silent inherit -- must
+                                      # be explicit here too.
+    init_from: MA-700-qwen35-2b-ins
+    seed: 1337
+    time: "06:00:00"
+    checkpoint_count: 7               # same cadence as IFT-700-llama1b-ins
+    # Never run. Qwen3.5-2B is a materially bigger trainable decoder than
+    # Llama-3.2-1B (2B vs 1.24B params) at the SAME batch_duration: 120 the
+    # Llama IFT-700 arm was profiled at (README's "Stage 2's batch_duration
+    # drops to 120" section derives that number for the 1.24B case
+    # specifically). Re-verify peak memory before trusting this arm's
+    # topology/wall-time -- run.memory_preallocation: true will report it on
+    # step 1, but a smoke test on acc_debug is cheaper than finding out via
+    # an OOM on acc_ehpc.
+
+  - id: IFT-700-qwen35-2b-base
+    stage: IFT
+    config: ABL-IFT-700.yaml
+    decoder: Qwen/Qwen3.5-2B-Base
+    init_from: MA-700-qwen35-2b-base
+    seed: 1337
+    time: "06:00:00"
+    checkpoint_count: 7
+    # Same memory caveat as IFT-700-qwen35-2b-ins.

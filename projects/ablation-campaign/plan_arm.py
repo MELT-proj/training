@@ -78,13 +78,32 @@ DECODER_PROFILES = {
         "chat_template_config": "llama3",
         "chat_template_from": "meta-llama/Llama-3.2-1B-Instruct",
     },
-    # Same eos/pad tokens as Qwen/Qwen3-1.7B (ABL-MA-125-asr.yaml,
-    # ABL-IFT-125.yaml) -- the whole Qwen3.x line shares them. chatml is
-    # correct per chat_templates.py's note on Qwen 3/3.5's empty
+    # eos_token/pad_token here are MELT's own convention, not the checkpoint's
+    # native defaults -- verified against the real tokenizer_config.json
+    # (2026-09-02): Qwen/Qwen3.5-2B ships eos_token="<|im_end|>" (its chat
+    # turn-boundary marker) and pad_token="<|endoftext|>" (reusing eos as
+    # pad). MELT deliberately overrides both: "<|endoftext|>" as the actual
+    # generation-stop token (matching ABL-MA-125-asr.yaml's Qwen/Qwen3-1.7B
+    # block, the whole Qwen3.x line shares it) rather than the template's
+    # turn marker, and "<|text_pad|>" as a fresh token melt adds itself
+    # (confirmed absent from Qwen3.5-2B's vocab; not referenced anywhere in
+    # melt/, it only exists via this config value flowing into
+    # add_special_tokens) so padding never collides with a real eos position.
+    # chatml is correct per chat_templates.py's note on Qwen 3/3.5's empty
     # <think></think> block (masking is inclusive, so the boundary strings
     # still find the right span) and tests/test_chat_template_configs.py's
     # own ("Qwen/Qwen3.5-9B", "chatml") case.
     "Qwen/Qwen3.5-2B": {
+        "eos_token": "<|endoftext|>",
+        "pad_token": "<|text_pad|>",
+        "chat_template_config": "chatml",
+    },
+    # Unlike the Llama Base/Instruct pair, Qwen3.5-2B-Base is NOT missing a
+    # chat template -- verified (2026-09-02) its tokenizer_config.json ships
+    # one, byte-identical to Qwen/Qwen3.5-2B's (both 7,755 chars). So no
+    # chat_template_from here; apply_chat_template renders the same way on
+    # both checkpoints already, without borrowing anything.
+    "Qwen/Qwen3.5-2B-Base": {
         "eos_token": "<|endoftext|>",
         "pad_token": "<|text_pad|>",
         "chat_template_config": "chatml",
@@ -99,7 +118,8 @@ DECODER_TAGS = {
     "meta-llama/Llama-3.2-1B-Instruct": "llama1bIns",
     "meta-llama/Llama-3.2-1B": "llama1bBase",
     "Qwen/Qwen3-1.7B": "qwen1_7b",
-    "Qwen/Qwen3.5-2B": "qwen35_2b",
+    "Qwen/Qwen3.5-2B": "qwen35_2bIns",
+    "Qwen/Qwen3.5-2B-Base": "qwen35_2bBase",
 }
 
 # Wall-clock defaults. 08:00:00 for the 125 h arm, preserved from the
