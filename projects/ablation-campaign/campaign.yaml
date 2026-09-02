@@ -28,6 +28,22 @@ defaults:
   eval_rounds: 11           # eval_steps = round(steps / eval_rounds)
   keep_checkpoints: 2       # save_total_limit
 
+# `time:` policy (revised 2026-09-02): size each arm's wall time to cover its
+# WHOLE run in one allocation, not one chunk of it. A node failure's cost is
+# bounded by the checkpoint interval (`checkpoint_count`/`keep_checkpoints`),
+# not by how long the allocation is -- a 20 h request that fails at hour 19
+# loses one checkpoint interval, same as a 6 h request that fails at hour 5.
+# So a longer allocation does not raise the cost of a failure; it only removes
+# the toil of manually `--resume`-ing every few hours in the normal case.
+# `sbatch --test-only` across a wide range of node counts/wall times showed no
+# scheduling penalty for asking for more (2026-09-02), though check that
+# still holds if the cluster is more loaded. `time:` should be a real,
+# measured-or-reasoned estimate per arm -- MA arms finish in well under an
+# hour (adapter-only, frozen decoder) so their existing 6-8h defaults were
+# already one-shot; IFT arms train the full decoder and need sizing per
+# decoder. See README.md's "Stage 2 -- IFT-700" section for the Llama
+# numbers this was derived from (5.73 s/step measured, 2 nodes, grad_accum 4).
+
 arms:
   # ---------------------------------------------------------------- MA (stage 1)
   - id: MA-125-llama1b-ins
@@ -117,15 +133,31 @@ arms:
     # Also unresolved: that config pins trainer.max_steps: 6250, computed at
     # world_size 2, so it does NOT mean "one epoch" at this grid's world_size 8.
     # Flagged rather than silently changed -- see launch_IFT.sh's header.
+    #
+    # time: "08:00:00" predates the one-shot policy above and was never
+    # re-derived against a real measurement (unlike IFT-700-llama1b-ins) --
+    # this arm has never been launched through the grid, and the max_steps
+    # issue needs resolving before it should be. Don't trust this number.
 
   - id: IFT-700-llama1b-ins
     stage: IFT
     config: ABL-IFT-700.yaml
     init_from: MA-700-llama1b-ins
     seed: 1337
-    time: "06:00:00"
+    # 20h: measured 5.73 s/step steady state x 6310 steps = ~10.0h of pure
+    # training, plus ~14 min one-time warmup (checkpoint load + cuDNN
+    # autotune) and unmeasured periodic generation-eval overhead (7 rounds,
+    # up to 1,400 generated utterances each) -- 20h is a deliberately
+    # generous single-allocation estimate, not a tight one. Revise once this
+    # arm's own log gives real eval-round durations. The live run (job
+    # 45305938) was extended from 6h to 20h in place via `scontrol update`
+    # after it was already queued, rather than resubmitted, to keep its
+    # accumulated fairshare priority.
+    time: "20:00:00"
     # 6 intermediate checkpoints plus the training-end one, evenly spaced:
-    # at 700 h/language that is a checkpoint roughly every 100 h/language.
+    # at 700 h/language that is a checkpoint roughly every 100 h/language
+    # (~1.4h of wall clock at the measured rate) -- this is also what bounds
+    # a node failure's cost regardless of the allocation length above.
     checkpoint_count: 7
     # Pinned: this arm was already in flight under the hand-written launcher's
     # name when the grid landed, and renaming it mid-run would orphan its
@@ -140,7 +172,13 @@ arms:
                                       # be explicit here too.
     init_from: MA-700-qwen35-2b-ins
     seed: 1337
-    time: "06:00:00"
+    # 24h is a GUESS, not a measurement: 1.61x the Llama IFT-700 arm's 20h
+    # (2B / 1.24B trainable params, i.e. assuming compute scales ~linearly
+    # with param count at the same batch_duration/seq length -- a rough
+    # first-order estimate, not verified). Re-derive from this arm's own
+    # smoke test once run, the same way IFT-700-llama1b-ins now has a real
+    # number instead of a guess.
+    time: "24:00:00"
     checkpoint_count: 7               # same cadence as IFT-700-llama1b-ins
     # Never run. Qwen3.5-2B is a materially bigger trainable decoder than
     # Llama-3.2-1B (2B vs 1.24B params) at the SAME batch_duration: 120 the
@@ -157,6 +195,6 @@ arms:
     decoder: Qwen/Qwen3.5-2B-Base
     init_from: MA-700-qwen35-2b-base
     seed: 1337
-    time: "06:00:00"
+    time: "24:00:00"                  # same estimate and caveat as IFT-700-qwen35-2b-ins
     checkpoint_count: 7
     # Same memory caveat as IFT-700-qwen35-2b-ins.

@@ -507,17 +507,29 @@ passes) before step 1 rather than leaving it to surface as an OOM later.
 Checkpoints are much larger here too (AdamW's moments are saved with the
 weights): budget ~22 GB each, ~154 GB for the seven `save_total_limit` keeps.
 
-6310 steps (the derived one-epoch count at `batch_duration: 120`) does not
-fit in one 6 h allocation. Resume with:
+6310 steps is ~10.3 h of pure training at the measured 5.73 s/step steady
+state (2 nodes, `grad_accum: 4` -- see the scaling benchmark below), before
+counting periodic generation-eval overhead. Rather than size the allocation
+to one chunk of that and chain resumes, this arm requests a single 20 h
+allocation (`time: "20:00:00"` in `campaign.yaml`) and expects to complete in
+it. This was a deliberate change from the campaign's earlier 6 h-chunks
+convention: `checkpoint_count: 7` already bounds a node failure's cost to one
+checkpoint interval (~1.4 h) regardless of how long the allocation is, so a
+longer allocation does not increase what a failure costs -- it only removes
+the operational toil of manually resubmitting `--resume` every 6 h in the
+*normal*, failure-free case. `sbatch --test-only` against a range of
+node/wall-time combinations (2026-09-02) showed no scheduling penalty for
+requesting more time either, though that can change with cluster load.
+
+`--resume` remains available for the failure case:
 
 ```bash
 python3 projects/ablation-campaign/campaign.py run IFT-700-llama1b-ins --resume
 ```
 
-`--resume` appends `--trainer.resume_from_checkpoint True` -- a bool, not a
-path, so HF scans `output_dir` for the last checkpoint itself. Never point it
-at a `checkpoint-N/` subdirectory: `train.py` calls `get_last_checkpoint()` on
+It appends `--trainer.resume_from_checkpoint True` -- a bool, not a path, so
+HF scans `output_dir` for the last checkpoint itself. Never point it at a
+`checkpoint-N/` subdirectory: `train.py` calls `get_last_checkpoint()` on
 whatever it is given. The topology comes from the same grid row either way, so
 `MELT_GPUS_PER_NODE` cannot drift across a resume and take the run down on a
-`world_size` mismatch -- which is the failure the hand-written script could
-only warn about.
+`world_size` mismatch.
