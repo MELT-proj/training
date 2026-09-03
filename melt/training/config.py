@@ -138,6 +138,13 @@ data:
   # configured field, no supervision text, no `custom.text`) has nothing to
   # mislabel, so it is skipped like the non-strict case instead of raising.
   strict_text_field: false
+  # With strict_text_field, turns the mismatch case (configured field empty,
+  # fallback exists and would mislabel) from a raise into a logged warning
+  # plus a skipped cut. For tolerating a handful of known-rare data gaps in a
+  # large multi-corpus mixture without one bad cut crashing an entire
+  # distributed run -- not for masking a systematic problem, which should
+  # still surface loudly at the default false.
+  skip_text_field_mismatch: false
 
   train_ds:
     input_cfg: []
