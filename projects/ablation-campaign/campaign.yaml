@@ -93,21 +93,35 @@ arms:
                                     # same reason: identical mixture/bins/
                                     # budget/prompt across every 700 h arm.
     decoder: Qwen/Qwen3.5-2B
+    # DDP OOM'd reliably here (job 45342287, then again after the
+    # eval-generation-memory fix alone, job 45347523): even a synthetic
+    # 2-utterance preallocation batch couldn't be allocated after
+    # eval_on_start. Qwen3.5-2B is 2B params / 262,144-token vocab, ~2x
+    # Llama-3.2-1B's footprint, at settings tuned for the smaller decoder.
+    # FSDP2 (sharded weights + activation checkpointing) fixes it -- verified
+    # end to end on mn5 job 45351025, COMPLETED cleanly, train_loss=3.603
+    # (2026-09-02). Needed fsdp2_qwen35.yaml specifically, not the shared
+    # fsdp2.yaml: see that file's own comment for why (Qwen3.5's
+    # _no_split_modules still names a vision-model class that doesn't exist
+    # in melt's text-only instantiation).
+    accelerate: config/accelerate/fsdp2_qwen35.yaml
     seed: 42
-    time: "06:00:00"
-    # Never run through this grid. Qwen/Qwen3.5-2B DID train cleanly in the
-    # transformers5-migration verification (loss 3.51 -> 3.55 -> 3.41 over
-    # steps 5/10/15, 2 GPUs on artemis) -- but that was 15 steps, ad hoc, not
-    # through campaign.py, and not at this arm's real topology/batch_duration.
-    # Smoke-test on acc_debug before committing an acc_ehpc allocation, the
-    # same way the IFT-700 Llama run was validated.
+    # FSDP2 is materially slower than DDP for this workload (per-batch
+    # unshard/reshard on every generate() call). The verification run took
+    # ~43 min; keep some margin over the Llama arm's real 6h even though MA
+    # is adapter-only and normally finishes in ~30 min.
+    time: "02:00:00"
 
   - id: MA-700-qwen35-2b-base
     stage: MA
     config: ABL-MA-700-asr.yaml
     decoder: Qwen/Qwen3.5-2B-Base
+    accelerate: config/accelerate/fsdp2_qwen35.yaml  # same OOM under DDP is
+                                    # expected here too -- same decoder, same
+                                    # settings, only the checkpoint differs.
+                                    # Not yet run to confirm.
     seed: 42
-    time: "06:00:00"
+    time: "02:00:00"
     # Never run at all, not even ad hoc. Unlike the Llama Base/Instruct pair,
     # Qwen3.5-2B-Base ships its OWN chat template (verified byte-identical to
     # the Instruct sibling's, 2026-09-02) rather than needing chat_template_from
@@ -170,29 +184,35 @@ arms:
     decoder: Qwen/Qwen3.5-2B          # ABL-IFT-700.yaml bakes in Llama, unlike
                                       # the MA config's silent inherit -- must
                                       # be explicit here too.
+    # Confirmed needed for MA-700-qwen35-2b-ins (DDP OOM'd, FSDP2 didn't --
+    # see that row's comment). IFT trains the full 2B decoder on top of MA's
+    # frozen-decoder case, so the memory pressure this addresses is if
+    # anything worse here, not less -- but IFT under FSDP2 itself is still
+    # unverified (this row has never run at all). Smoke-test before trusting
+    # the time budget below.
+    accelerate: config/accelerate/fsdp2_qwen35.yaml
     init_from: MA-700-qwen35-2b-ins
     seed: 1337
     # 24h is a GUESS, not a measurement: 1.61x the Llama IFT-700 arm's 20h
     # (2B / 1.24B trainable params, i.e. assuming compute scales ~linearly
     # with param count at the same batch_duration/seq length -- a rough
-    # first-order estimate, not verified). Re-derive from this arm's own
-    # smoke test once run, the same way IFT-700-llama1b-ins now has a real
-    # number instead of a guess.
+    # first-order estimate, not verified) PLUS FSDP2 is itself materially
+    # slower than DDP per step (unshard/reshard on every forward/generate).
+    # Re-derive from this arm's own smoke test once run, the same way
+    # IFT-700-llama1b-ins now has a real number instead of a guess.
     time: "24:00:00"
     checkpoint_count: 7               # same cadence as IFT-700-llama1b-ins
-    # Never run. Qwen3.5-2B is a materially bigger trainable decoder than
-    # Llama-3.2-1B (2B vs 1.24B params) at the SAME batch_duration: 120 the
-    # Llama IFT-700 arm was profiled at (README's "Stage 2's batch_duration
-    # drops to 120" section derives that number for the 1.24B case
-    # specifically). Re-verify peak memory before trusting this arm's
+    # Never run. Re-verify peak memory before trusting this arm's
     # topology/wall-time -- run.memory_preallocation: true will report it on
     # step 1, but a smoke test on acc_debug is cheaper than finding out via
-    # an OOM on acc_ehpc.
+    # an OOM (or a slow-not-hung FSDP2 timeout, see MA-700-qwen35-2b-ins) on
+    # acc_ehpc.
 
   - id: IFT-700-qwen35-2b-base
     stage: IFT
     config: ABL-IFT-700.yaml
     decoder: Qwen/Qwen3.5-2B-Base
+    accelerate: config/accelerate/fsdp2_qwen35.yaml  # see IFT-700-qwen35-2b-ins
     init_from: MA-700-qwen35-2b-base
     seed: 1337
     time: "24:00:00"                  # same estimate and caveat as IFT-700-qwen35-2b-ins

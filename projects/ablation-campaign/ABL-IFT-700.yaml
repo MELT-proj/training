@@ -118,6 +118,14 @@ model:
 data:
   sample_rate: 16000
   strict_text_field: true
+  # A single malformed cut (missing custom.translation_en, yodas-granary/
+  # French/ast) took down the whole distributed run at step 4080/6310 (job
+  # 45342217, 2026-09-02) -- checked severity before enabling this: 1 cut of
+  # 4,000 in its shard (0.03%), 0 of 80,000 sampled elsewhere in the same
+  # source. Genuinely rare, not systematic, so skip-and-warn is the right
+  # call here rather than raise-and-crash. See skip_text_field_mismatch's
+  # own docstring (get_text_from_cut) for why this stays opt-in generally.
+  skip_text_field_mismatch: true
 
   # -- Instruction formatting ----------------------------------------------
   # build_campaign_config.py writes `false` here unconditionally (it renders
@@ -710,7 +718,10 @@ data:
     # data.strict_text_field is not inherited by eval (resolve_eval_data_config
     # only carries apply_chat_template/prompt_template/*/chat_template_config,
     # dataloader.py:1226-1231), so it is set explicitly here to match training.
+    # skip_text_field_mismatch travels the same path -- see the top-level
+    # data.skip_text_field_mismatch comment for why it's on.
     strict_text_field: true
+    skip_text_field_mismatch: true
 
     # Batch composition
     batch_size: 16
