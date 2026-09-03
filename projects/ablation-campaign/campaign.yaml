@@ -98,19 +98,29 @@ arms:
     # 2-utterance preallocation batch couldn't be allocated after
     # eval_on_start. Qwen3.5-2B is 2B params / 262,144-token vocab, ~2x
     # Llama-3.2-1B's footprint, at settings tuned for the smaller decoder.
-    # FSDP2 (sharded weights + activation checkpointing) fixes it -- verified
-    # end to end on mn5 job 45351025, COMPLETED cleanly, train_loss=3.603
-    # (2026-09-02). Needed fsdp2_qwen35.yaml specifically, not the shared
-    # fsdp2.yaml: see that file's own comment for why (Qwen3.5's
-    # _no_split_modules still names a vision-model class that doesn't exist
-    # in melt's text-only instantiation).
+    # FSDP2 (sharded weights + activation checkpointing) fixes the OOM --
+    # verified end to end on mn5, job 45351025 (2026-09-02). Needed
+    # fsdp2_qwen35.yaml specifically, not the shared fsdp2.yaml: see that
+    # file's own comment for why (Qwen3.5's _no_split_modules still names a
+    # vision-model class that doesn't exist in melt's text-only
+    # instantiation).
     accelerate: config/accelerate/fsdp2_qwen35.yaml
     seed: 42
-    # FSDP2 is materially slower than DDP for this workload (per-batch
-    # unshard/reshard on every generate() call). The verification run took
-    # ~43 min; keep some margin over the Llama arm's real 6h even though MA
-    # is adapter-only and normally finishes in ~30 min.
-    time: "02:00:00"
+    # CORRECTED 2026-09-03: job 45351025 above was `--trainer.max_steps 2`,
+    # a 2-step smoke test (614 s/step incl. eval_on_start generation), NOT a
+    # full-run timing -- the previous "~43 min verification run" note in
+    # this file conflated the two and produced a time budget that was wrong
+    # by ~7x. The real full run (job 45367979, 02:00:00 budget) TIMED OUT at
+    # step 102/2625 with zero checkpoints saved (first save_steps is 239) --
+    # nothing lost, but wasted a 2h allocation. Its steady-state rate
+    # (steps 64-102, no eval yet) was a consistent 18.2-19.5 s/step, i.e.
+    # 2625 steps x ~18.5 s = ~13.5h of training compute alone, before adding
+    # the 11 eval_rounds' own generation overhead (unmeasured, but the
+    # smoke test's 614s single eval-inclusive step suggests it is not
+    # cheap under FSDP2 either). 20h applies the same one-shot generous
+    # margin as IFT-700-llama1b-ins; re-derive from this arm's own
+    # completed run once it has one.
+    time: "20:00:00"
 
   - id: MA-700-qwen35-2b-base
     stage: MA
@@ -121,7 +131,12 @@ arms:
                                     # settings, only the checkpoint differs.
                                     # Not yet run to confirm.
     seed: 42
-    time: "02:00:00"
+    # Same 20h basis as MA-700-qwen35-2b-ins's corrected estimate above --
+    # this arm hasn't run at all yet, so there is no arm-specific timing,
+    # but the Instruct sibling's measured ~18.5 s/step under FSDP2 (not the
+    # invalid 2-step smoke test) is the best available proxy: same decoder,
+    # same accelerate config, same base config.
+    time: "20:00:00"
     # Never run at all, not even ad hoc. Unlike the Llama Base/Instruct pair,
     # Qwen3.5-2B-Base ships its OWN chat template (verified byte-identical to
     # the Instruct sibling's, 2026-09-02) rather than needing chat_template_from
@@ -193,12 +208,17 @@ arms:
     accelerate: config/accelerate/fsdp2_qwen35.yaml
     init_from: MA-700-qwen35-2b-ins
     seed: 1337
-    # 24h is a GUESS, not a measurement: 1.61x the Llama IFT-700 arm's 20h
-    # (2B / 1.24B trainable params, i.e. assuming compute scales ~linearly
-    # with param count at the same batch_duration/seq length -- a rough
-    # first-order estimate, not verified) PLUS FSDP2 is itself materially
-    # slower than DDP per step (unshard/reshard on every forward/generate).
-    # Re-derive from this arm's own smoke test once run, the same way
+    # 24h is a GUESS, not a measurement, and now a SUSPECT one: it was
+    # derived from a 1.61x param-count scaling of the Llama IFT-700 arm's
+    # 20h, using the "~43 min" FSDP2 timing that MA-700-qwen35-2b-ins's own
+    # comment (2026-09-03) turned out to be a 2-step smoke test, not a real
+    # run -- the actual MA-700-qwen35-2b-ins full run measured ~18.5 s/step
+    # steady state under FSDP2 and needed 20h, not 2h. This arm's guess
+    # never used that bad number directly, but it inherits the same
+    # underlying risk: FSDP2 overhead on this decoder is empirically much
+    # larger than intuition suggests, and IFT trains the full decoder (not
+    # just the adapter), so the true multiplier over MA could go either
+    # way. DO NOT trust 24h -- smoke-test on acc_debug first, the same way
     # IFT-700-llama1b-ins now has a real number instead of a guess.
     time: "24:00:00"
     checkpoint_count: 7               # same cadence as IFT-700-llama1b-ins
