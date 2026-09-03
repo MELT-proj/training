@@ -321,7 +321,9 @@ def _fallback_text_from_cut(cut: Cut) -> str | None:
     return text or None
 
 
-def get_text_from_cut(cut: Cut, text_field: str, strict: bool = False) -> str | None:
+def get_text_from_cut(
+    cut: Cut, text_field: str, strict: bool = False, skip_on_mismatch: bool = False
+) -> str | None:
     """Extract the text transcript from a cut.
 
     Args:
@@ -340,16 +342,27 @@ def get_text_from_cut(cut: Cut, text_field: str, strict: bool = False) -> str | 
             supervision text and no ``custom.text``) has nothing to
             mislabel, so it is skipped like the non-strict case: this
             returns ``None`` instead of raising.
+        skip_on_mismatch: When ``True`` (and *strict*), the case that would
+            otherwise raise — configured field empty, fallback exists and
+            would mislabel — instead logs a warning and returns ``None``
+            (skipped), the same as a cut with no text anywhere. Use this to
+            tolerate rare, isolated data gaps (a handful of cuts out of a
+            multi-thousand-hour corpus missing one field) without a single
+            bad cut crashing an entire distributed training run. Default
+            ``False`` preserves the original fail-loud behaviour, so a new,
+            *systematic* gap (e.g. an entire source misconfigured) still
+            surfaces immediately instead of being silently sampled around.
 
     Returns:
         Text transcript, or ``None`` if no text is available.
 
     Raises:
-        ValueError: If *strict*, the configured *text_field* resolves to
-            nothing, and a fallback text exists — falling back there would
-            silently mislabel the sample. If no fallback exists either, the
-            cut has no text anywhere and is skipped (returns ``None``)
-            rather than raising.
+        ValueError: If *strict*, not *skip_on_mismatch*, the configured
+            *text_field* resolves to nothing, and a fallback text exists —
+            falling back there would silently mislabel the sample. If no
+            fallback exists either, the cut has no text anywhere and is
+            skipped (returns ``None``) rather than raising, regardless of
+            *skip_on_mismatch*.
     """
     text: str | None = None
 
@@ -365,6 +378,15 @@ def get_text_from_cut(cut: Cut, text_field: str, strict: bool = False) -> str | 
                     "Cut %s has no value at text_field %r and no fallback "
                     "text either (no supervision text, no custom.text); "
                     "skipping instead of raising.",
+                    cut.id,
+                    text_field,
+                )
+                return None
+            if skip_on_mismatch:
+                logger.warning(
+                    "Cut %s has no value at text_field %r; skipping it "
+                    "(not falling back to supervision text, which holds "
+                    "different content and would mislabel this sample).",
                     cut.id,
                     text_field,
                 )
