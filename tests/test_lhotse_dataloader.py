@@ -6,6 +6,7 @@ These tests focus on the OmegaConf-based config approach:
 - Lhotse CutSet/sampler/dataloader creation works with DictConfig objects
 """
 
+import logging
 import os
 from pathlib import Path
 
@@ -1077,6 +1078,68 @@ class TestStrictTextField:
 
         with pytest.raises(ValueError):
             get_text_from_cut(cut, "custom.translation_en", strict=True)
+
+    def test_skip_on_mismatch_returns_none_instead_of_raising(self):
+        from melt.training.data.audio.lhotse.helpers import get_text_from_cut
+
+        # Same setup as test_strict_raises_when_configured_field_is_absent,
+        # but with skip_on_mismatch=True: a real, isolated data gap (job
+        # 45342217, 2026-09-02 -- a single yodas-granary/French/ast cut out
+        # of 4,000 in its shard missing custom.translation_en) should be
+        # skipped and logged, not crash the whole distributed run.
+        cut = _StubCut(text="bonjour le monde", custom={"translation_en": None})
+
+        assert (
+            get_text_from_cut(
+                cut, "custom.translation_en", strict=True, skip_on_mismatch=True
+            )
+            is None
+        )
+
+    def test_skip_on_mismatch_logs_a_warning(self, caplog):
+        from melt.training.data.audio.lhotse.helpers import get_text_from_cut
+
+        cut = _StubCut(cut_id="fr102_00000408", text="bonjour", custom={"translation_en": None})
+
+        with caplog.at_level(logging.WARNING):
+            get_text_from_cut(
+                cut, "custom.translation_en", strict=True, skip_on_mismatch=True
+            )
+
+        assert any(
+            "fr102_00000408" in r.message and "translation_en" in r.message
+            for r in caplog.records
+        )
+
+    def test_skip_on_mismatch_is_a_no_op_without_strict(self):
+        from melt.training.data.audio.lhotse.helpers import get_text_from_cut
+
+        # skip_on_mismatch only changes behaviour inside the strict branch --
+        # without strict=True there is no mismatch check to short-circuit,
+        # so this must fall back exactly as the plain non-strict path does.
+        cut = _StubCut(text="hola mundo", custom={"translation_en": None})
+
+        assert (
+            get_text_from_cut(
+                cut, "custom.translation_en", strict=False, skip_on_mismatch=True
+            )
+            == "hola mundo"
+        )
+
+    def test_skip_on_mismatch_does_not_mask_the_no_fallback_case(self):
+        from melt.training.data.audio.lhotse.helpers import get_text_from_cut
+
+        # No fallback exists either way -- this already returns None via the
+        # separate no-fallback branch (debug-logged, not warning-logged).
+        # skip_on_mismatch must not change that path's log level or outcome.
+        cut = _StubCut(text=None, custom={"translation_en": None})
+
+        assert (
+            get_text_from_cut(
+                cut, "custom.translation_en", strict=True, skip_on_mismatch=True
+            )
+            is None
+        )
 
     def test_non_strict_preserves_the_existing_fallback(self):
         from melt.training.data.audio.lhotse.helpers import get_text_from_cut

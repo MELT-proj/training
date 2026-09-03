@@ -71,6 +71,9 @@ class MELTMapDataset(torch.utils.data.Dataset):
         source = ds_config if ds_config is not None else config
         self._text_field = str(_get_config_value(source, "text_field", "text"))
         self._strict_text_field = bool(_get_config_value(config, "strict_text_field", False))
+        self._skip_text_field_mismatch = bool(
+            _get_config_value(config, "skip_text_field_mismatch", False)
+        )
 
         # Build a *valid-indices* list once (cuts with missing text are skipped).
         # This is computed at construction time and reused across all eval calls.
@@ -82,7 +85,10 @@ class MELTMapDataset(torch.utils.data.Dataset):
         skipped = 0
         for idx, cut in enumerate(cuts):
             text = get_text_from_cut(
-                cut, self._resolve_text_field(cut), strict=self._strict_text_field
+                cut,
+                self._resolve_text_field(cut),
+                strict=self._strict_text_field,
+                skip_on_mismatch=self._skip_text_field_mismatch,
             )
             if text and text.strip():
                 self._valid_indices.append(idx)
@@ -143,7 +149,10 @@ class MELTMapDataset(torch.utils.data.Dataset):
 
         # --- text ---
         text = get_text_from_cut(
-            cut, self._resolve_text_field(cut), strict=self._strict_text_field
+            cut,
+            self._resolve_text_field(cut),
+            strict=self._strict_text_field,
+            skip_on_mismatch=self._skip_text_field_mismatch,
         )
         if not text or not text.strip():
             return {"__invalid__": True, "cut_id": cut.id}
