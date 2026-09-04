@@ -111,16 +111,25 @@ arms:
     # full-run timing -- the previous "~43 min verification run" note in
     # this file conflated the two and produced a time budget that was wrong
     # by ~7x. The real full run (job 45367979, 02:00:00 budget) TIMED OUT at
-    # step 102/2625 with zero checkpoints saved (first save_steps is 239) --
-    # nothing lost, but wasted a 2h allocation. Its steady-state rate
-    # (steps 64-102, no eval yet) was a consistent 18.2-19.5 s/step, i.e.
-    # 2625 steps x ~18.5 s = ~13.5h of training compute alone, before adding
-    # the 11 eval_rounds' own generation overhead (unmeasured, but the
-    # smoke test's 614s single eval-inclusive step suggests it is not
-    # cheap under FSDP2 either). 20h applies the same one-shot generous
-    # margin as IFT-700-llama1b-ins; re-derive from this arm's own
-    # completed run once it has one.
-    time: "20:00:00"
+    # step 102/2625 with zero checkpoints saved.
+    #
+    # CORRECTED AGAIN 2026-09-04: the 20h resubmission (job 45374299) ALSO
+    # timed out, at step 1912/2625 (73%), mid-eval, with checkpoint-1673 as
+    # the last good save. This confirmed the "eval overhead unmeasured but
+    # probably not cheap" caveat above understated it badly: steady-state
+    # training alone is ~18.5 s/step as measured before (2625 steps =~
+    # 13.5h), but the 8 eval rounds completed by step 1912 consumed ~10h
+    # BETWEEN them -- roughly 65-75 min per eval round (200 samples x 6
+    # eval sets: asr_en/de/fr/es/it + st_en_de, each independently
+    # generation-bound under FSDP2's per-batch unshard/reshard). Full run:
+    # ~13.5h training + 11 rounds x ~70 min eval =~ 26.3h. 28h leaves ~1.7h
+    # margin. This arm was resumed from checkpoint-1673 rather than
+    # restarted (`campaign.py run MA-700-qwen35-2b-ins --resume`), so it
+    # will finish well inside this budget -- 28h is sized for a FRESH
+    # one-shot run (e.g. if this arm is ever rerun from scratch, or for
+    # MA-700-qwen35-2b-base below), not for the remaining ~7h this resume
+    # actually needs.
+    time: "28:00:00"
 
   - id: MA-700-qwen35-2b-base
     stage: MA
@@ -131,12 +140,12 @@ arms:
                                     # settings, only the checkpoint differs.
                                     # Not yet run to confirm.
     seed: 42
-    # Same 20h basis as MA-700-qwen35-2b-ins's corrected estimate above --
-    # this arm hasn't run at all yet, so there is no arm-specific timing,
-    # but the Instruct sibling's measured ~18.5 s/step under FSDP2 (not the
-    # invalid 2-step smoke test) is the best available proxy: same decoder,
-    # same accelerate config, same base config.
-    time: "20:00:00"
+    # Same 28h basis as MA-700-qwen35-2b-ins's twice-corrected estimate
+    # above (~13.5h training + 11 x ~70min eval rounds =~ 26.3h) -- this
+    # arm hasn't run at all yet, so there is no arm-specific timing, but
+    # the Instruct sibling's measured rate is the best available proxy:
+    # same decoder, same accelerate config, same base config.
+    time: "28:00:00"
     # Never run at all, not even ad hoc. Unlike the Llama Base/Instruct pair,
     # Qwen3.5-2B-Base ships its OWN chat template (verified byte-identical to
     # the Instruct sibling's, 2026-09-02) rather than needing chat_template_from
