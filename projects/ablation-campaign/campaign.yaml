@@ -1,0 +1,240 @@
+# The ablation campaign's INTENT: every arm we mean to run, as axis values.
+#
+# This file is the input, not a log. `campaign.py status` joins it against
+# reality (SLURM + the output dirs) to answer "what has run, what is running,
+# what is missing". Adding an ablation means adding a row here, reviewed in a
+# PR -- not typing a submit command.
+#
+# What belongs where (see README.md's "The three axes"):
+#   - a new data mixture / budget / task set -> a new ABL-*.yaml, referenced
+#     by `config:` below
+#   - a new architecture or LR point         -> a row here
+#   - anything that must be identical across arms (batch_duration,
+#     quadratic_duration, max_samples, max_duration/max_tokens) -> the base
+#     YAML, never here
+#
+# Every field except `id`, `stage` and `config` is optional and falls back to
+# `defaults:` and then to the base config's own value. An omitted axis means
+# "inherit whatever the config declares" -- it never guesses.
+
+defaults:
+  site: mn5
+  accelerate: config/accelerate/ddp.yaml
+  nodes: 2
+  gpus_per_node: 4          # -> world_size 8. Pinned, never autodetected: MN5
+                            # allocates `acc` nodes whole so SLURM_GPUS_ON_NODE
+                            # reports the node's full count (PR #90).
+  qos: acc_ehpc
+  eval_rounds: 11           # eval_steps = round(steps / eval_rounds)
+  keep_checkpoints: 2       # save_total_limit
+
+# `time:` policy (revised 2026-09-02): size each arm's wall time to cover its
+# WHOLE run in one allocation, not one chunk of it. A node failure's cost is
+# bounded by the checkpoint interval (`checkpoint_count`/`keep_checkpoints`),
+# not by how long the allocation is -- a 20 h request that fails at hour 19
+# loses one checkpoint interval, same as a 6 h request that fails at hour 5.
+# So a longer allocation does not raise the cost of a failure; it only removes
+# the toil of manually `--resume`-ing every few hours in the normal case.
+# `sbatch --test-only` across a wide range of node counts/wall times showed no
+# scheduling penalty for asking for more (2026-09-02), though check that
+# still holds if the cluster is more loaded. `time:` should be a real,
+# measured-or-reasoned estimate per arm -- MA arms finish in well under an
+# hour (adapter-only, frozen decoder) so their existing 6-8h defaults were
+# already one-shot; IFT arms train the full decoder and need sizing per
+# decoder. See README.md's "Stage 2 -- IFT-700" section for the Llama
+# numbers this was derived from (5.73 s/step measured, 2 nodes, grad_accum 4).
+
+arms:
+  # ---------------------------------------------------------------- MA (stage 1)
+  - id: MA-125-llama1b-ins
+    stage: MA
+    config: ABL-MA-125-asr.yaml
+    # REQUIRED, not decorative: ABL-MA-125-asr.yaml's own model.decoder is
+    # still the Qwen-oriented SFT default, so omitting this inherits Qwen3-1.7B
+    # and silently runs a different backbone than the arm's name claims. Naming
+    # it here triggers plan_arm's decoder + chat-template override bundle, which
+    # is exactly what the hand-written 125 h launcher did. The 700 h config, by
+    # contrast, bakes the Llama block in, so its rows can stay silent.
+    decoder: meta-llama/Llama-3.2-1B-Instruct
+    seed: 42
+    time: "08:00:00"
+    # Ran before the grid existed, under a hand-composed name with no LR tags.
+    exp_name: MA-125asr-w2vbF-llama1bInsF-mlpT-s42-8g
+
+  - id: MA-700-llama1b-ins
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    seed: 42
+    time: "06:00:00"
+    # The `-md60` suffix marks the re-run at max_duration 60 / max_tokens 400.
+    # The first attempt filtered at an unintended max_duration 30; its
+    # directory (same name without the suffix) is left in place and must NOT
+    # be reused -- pointing a run at it would resume from its checkpoint-2188
+    # rather than train from scratch. See README.md's "max_duration /
+    # max_tokens" section.
+    exp_name: MA-700asr-w2vbF-llama1bInsF-mlpT-s42-8g-md60
+
+  - id: MA-700-llama1b-base
+    stage: MA
+    config: ABL-MA-700-asr.yaml     # deliberately the SAME config as the
+                                    # Instruct arm: same mixture, bins, step
+                                    # budget and prompt, so a difference
+                                    # between them is attributable to the
+                                    # backbone alone.
+    decoder: meta-llama/Llama-3.2-1B
+    seed: 42
+    time: "06:00:00"
+    # Never launched. This row is why the grid exists: the gap was invisible
+    # while the campaign lived in hand-written scripts.
+
+  - id: MA-700-qwen35-2b-ins
+    stage: MA
+    config: ABL-MA-700-asr.yaml     # same config as the Llama pair, for the
+                                    # same reason: identical mixture/bins/
+                                    # budget/prompt across every 700 h arm.
+    decoder: Qwen/Qwen3.5-2B
+    # DDP OOM'd reliably here (job 45342287, then again after the
+    # eval-generation-memory fix alone, job 45347523): even a synthetic
+    # 2-utterance preallocation batch couldn't be allocated after
+    # eval_on_start. Qwen3.5-2B is 2B params / 262,144-token vocab, ~2x
+    # Llama-3.2-1B's footprint, at settings tuned for the smaller decoder.
+    # FSDP2 (sharded weights + activation checkpointing) fixes the OOM --
+    # verified end to end on mn5, job 45351025 (2026-09-02). Needed
+    # fsdp2_qwen35.yaml specifically, not the shared fsdp2.yaml: see that
+    # file's own comment for why (Qwen3.5's _no_split_modules still names a
+    # vision-model class that doesn't exist in melt's text-only
+    # instantiation).
+    accelerate: config/accelerate/fsdp2_qwen35.yaml
+    seed: 42
+    # CORRECTED 2026-09-03: job 45351025 above was `--trainer.max_steps 2`,
+    # a 2-step smoke test (614 s/step incl. eval_on_start generation), NOT a
+    # full-run timing -- the previous "~43 min verification run" note in
+    # this file conflated the two and produced a time budget that was wrong
+    # by ~7x. The real full run (job 45367979, 02:00:00 budget) TIMED OUT at
+    # step 102/2625 with zero checkpoints saved (first save_steps is 239) --
+    # nothing lost, but wasted a 2h allocation. Its steady-state rate
+    # (steps 64-102, no eval yet) was a consistent 18.2-19.5 s/step, i.e.
+    # 2625 steps x ~18.5 s = ~13.5h of training compute alone, before adding
+    # the 11 eval_rounds' own generation overhead (unmeasured, but the
+    # smoke test's 614s single eval-inclusive step suggests it is not
+    # cheap under FSDP2 either). 20h applies the same one-shot generous
+    # margin as IFT-700-llama1b-ins; re-derive from this arm's own
+    # completed run once it has one.
+    time: "20:00:00"
+
+  - id: MA-700-qwen35-2b-base
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    decoder: Qwen/Qwen3.5-2B-Base
+    accelerate: config/accelerate/fsdp2_qwen35.yaml  # same OOM under DDP is
+                                    # expected here too -- same decoder, same
+                                    # settings, only the checkpoint differs.
+                                    # Not yet run to confirm.
+    seed: 42
+    # Same 20h basis as MA-700-qwen35-2b-ins's corrected estimate above --
+    # this arm hasn't run at all yet, so there is no arm-specific timing,
+    # but the Instruct sibling's measured ~18.5 s/step under FSDP2 (not the
+    # invalid 2-step smoke test) is the best available proxy: same decoder,
+    # same accelerate config, same base config.
+    time: "20:00:00"
+    # Never run at all, not even ad hoc. Unlike the Llama Base/Instruct pair,
+    # Qwen3.5-2B-Base ships its OWN chat template (verified byte-identical to
+    # the Instruct sibling's, 2026-09-02) rather than needing chat_template_from
+    # -- so `campaign.py plan` for this row should NOT emit
+    # --model.decoder.chat_template_from at all. If it does, DECODER_PROFILES
+    # regressed; check plan_arm.py's Qwen/Qwen3.5-2B-Base entry.
+
+  # --------------------------------------------------------------- IFT (stage 2)
+  - id: IFT-125-llama1b-ins
+    stage: IFT
+    config: ABL-IFT-125.yaml
+    decoder: meta-llama/Llama-3.2-1B-Instruct   # see MA-125-llama1b-ins
+    init_from: MA-125-llama1b-ins
+    seed: 1337
+    time: "08:00:00"
+    # NOTE: ABL-IFT-125.yaml hardcodes
+    #   model.ckpt: /workspace/outputs/ABL-MA-125-asr-v060-ckpt3000
+    # which is neither this grid's MA-125 arm nor any current run -- a stale
+    # pointer at a v0.6.0-era directory. init_from overrides it (campaign.py
+    # prints a NOTE when it does). Once this arm actually runs, drop the
+    # hardcoded key from the YAML so the grid is the only source.
+    #
+    # Also unresolved: that config pins trainer.max_steps: 6250, computed at
+    # world_size 2, so it does NOT mean "one epoch" at this grid's world_size 8.
+    # Flagged rather than silently changed -- see launch_IFT.sh's header.
+    #
+    # time: "08:00:00" predates the one-shot policy above and was never
+    # re-derived against a real measurement (unlike IFT-700-llama1b-ins) --
+    # this arm has never been launched through the grid, and the max_steps
+    # issue needs resolving before it should be. Don't trust this number.
+
+  - id: IFT-700-llama1b-ins
+    stage: IFT
+    config: ABL-IFT-700.yaml
+    init_from: MA-700-llama1b-ins
+    seed: 1337
+    # 20h: measured 5.73 s/step steady state x 6310 steps = ~10.0h of pure
+    # training, plus ~14 min one-time warmup (checkpoint load + cuDNN
+    # autotune) and unmeasured periodic generation-eval overhead (7 rounds,
+    # up to 1,400 generated utterances each) -- 20h is a deliberately
+    # generous single-allocation estimate, not a tight one. Revise once this
+    # arm's own log gives real eval-round durations. The live run (job
+    # 45305938) was extended from 6h to 20h in place via `scontrol update`
+    # after it was already queued, rather than resubmitted, to keep its
+    # accumulated fairshare priority.
+    time: "20:00:00"
+    # 6 intermediate checkpoints plus the training-end one, evenly spaced:
+    # at 700 h/language that is a checkpoint roughly every 100 h/language
+    # (~1.4h of wall clock at the measured rate) -- this is also what bounds
+    # a node failure's cost regardless of the allocation length above.
+    checkpoint_count: 7
+    # Pinned: this arm was already in flight under the hand-written launcher's
+    # name when the grid landed, and renaming it mid-run would orphan its
+    # output directory and its resume path.
+    exp_name: IFT-700both-w2vbF-llama1bInsT-mlpF-s1337-8g
+
+  - id: IFT-700-qwen35-2b-ins
+    stage: IFT
+    config: ABL-IFT-700.yaml
+    decoder: Qwen/Qwen3.5-2B          # ABL-IFT-700.yaml bakes in Llama, unlike
+                                      # the MA config's silent inherit -- must
+                                      # be explicit here too.
+    # Confirmed needed for MA-700-qwen35-2b-ins (DDP OOM'd, FSDP2 didn't --
+    # see that row's comment). IFT trains the full 2B decoder on top of MA's
+    # frozen-decoder case, so the memory pressure this addresses is if
+    # anything worse here, not less -- but IFT under FSDP2 itself is still
+    # unverified (this row has never run at all). Smoke-test before trusting
+    # the time budget below.
+    accelerate: config/accelerate/fsdp2_qwen35.yaml
+    init_from: MA-700-qwen35-2b-ins
+    seed: 1337
+    # 24h is a GUESS, not a measurement, and now a SUSPECT one: it was
+    # derived from a 1.61x param-count scaling of the Llama IFT-700 arm's
+    # 20h, using the "~43 min" FSDP2 timing that MA-700-qwen35-2b-ins's own
+    # comment (2026-09-03) turned out to be a 2-step smoke test, not a real
+    # run -- the actual MA-700-qwen35-2b-ins full run measured ~18.5 s/step
+    # steady state under FSDP2 and needed 20h, not 2h. This arm's guess
+    # never used that bad number directly, but it inherits the same
+    # underlying risk: FSDP2 overhead on this decoder is empirically much
+    # larger than intuition suggests, and IFT trains the full decoder (not
+    # just the adapter), so the true multiplier over MA could go either
+    # way. DO NOT trust 24h -- smoke-test on acc_debug first, the same way
+    # IFT-700-llama1b-ins now has a real number instead of a guess.
+    time: "24:00:00"
+    checkpoint_count: 7               # same cadence as IFT-700-llama1b-ins
+    # Never run. Re-verify peak memory before trusting this arm's
+    # topology/wall-time -- run.memory_preallocation: true will report it on
+    # step 1, but a smoke test on acc_debug is cheaper than finding out via
+    # an OOM (or a slow-not-hung FSDP2 timeout, see MA-700-qwen35-2b-ins) on
+    # acc_ehpc.
+
+  - id: IFT-700-qwen35-2b-base
+    stage: IFT
+    config: ABL-IFT-700.yaml
+    decoder: Qwen/Qwen3.5-2B-Base
+    accelerate: config/accelerate/fsdp2_qwen35.yaml  # see IFT-700-qwen35-2b-ins
+    init_from: MA-700-qwen35-2b-base
+    seed: 1337
+    time: "24:00:00"                  # same estimate and caveat as IFT-700-qwen35-2b-ins
+    checkpoint_count: 7
+    # Same memory caveat as IFT-700-qwen35-2b-ins.

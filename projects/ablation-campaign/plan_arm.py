@@ -50,6 +50,7 @@ import os
 import re
 import shlex
 import sys
+from dataclasses import dataclass
 
 import yaml
 
@@ -63,13 +64,46 @@ DECODER_PROFILES = {
         "pad_token": "<|finetune_right_pad_id|>",
         "chat_template_config": "llama3",
     },
-    # Same eos/pad tokens as Qwen/Qwen3-1.7B (ABL-MA-125-asr.yaml,
-    # ABL-IFT-125.yaml) -- the whole Qwen3.x line shares them. chatml is
-    # correct per chat_templates.py's note on Qwen 3/3.5's empty
+    # The Base half of the Instruct/Base pair. Same vocabulary as its Instruct
+    # sibling (<|eot_id|> 128009 and <|finetune_right_pad_id|> 128004 are both
+    # already in it, so nothing resizes an embedding table), but it ships NO
+    # chat template at all -- data.apply_chat_template has nothing to render
+    # and the run dies at startup without chat_template_from. Borrowing copies
+    # only the template string, never the tokenizer. See README.md's "Base arm"
+    # section for the verification that both arms produce byte-identical
+    # input_ids and label spans.
+    "meta-llama/Llama-3.2-1B": {
+        "eos_token": "<|eot_id|>",
+        "pad_token": "<|finetune_right_pad_id|>",
+        "chat_template_config": "llama3",
+        "chat_template_from": "meta-llama/Llama-3.2-1B-Instruct",
+    },
+    # eos_token/pad_token here are MELT's own convention, not the checkpoint's
+    # native defaults -- verified against the real tokenizer_config.json
+    # (2026-09-02): Qwen/Qwen3.5-2B ships eos_token="<|im_end|>" (its chat
+    # turn-boundary marker) and pad_token="<|endoftext|>" (reusing eos as
+    # pad). MELT deliberately overrides both: "<|endoftext|>" as the actual
+    # generation-stop token (matching ABL-MA-125-asr.yaml's Qwen/Qwen3-1.7B
+    # block, the whole Qwen3.x line shares it) rather than the template's
+    # turn marker, and "<|text_pad|>" as a fresh token melt adds itself
+    # (confirmed absent from Qwen3.5-2B's vocab; not referenced anywhere in
+    # melt/, it only exists via this config value flowing into
+    # add_special_tokens) so padding never collides with a real eos position.
+    # chatml is correct per chat_templates.py's note on Qwen 3/3.5's empty
     # <think></think> block (masking is inclusive, so the boundary strings
     # still find the right span) and tests/test_chat_template_configs.py's
     # own ("Qwen/Qwen3.5-9B", "chatml") case.
     "Qwen/Qwen3.5-2B": {
+        "eos_token": "<|endoftext|>",
+        "pad_token": "<|text_pad|>",
+        "chat_template_config": "chatml",
+    },
+    # Unlike the Llama Base/Instruct pair, Qwen3.5-2B-Base is NOT missing a
+    # chat template -- verified (2026-09-02) its tokenizer_config.json ships
+    # one, byte-identical to Qwen/Qwen3.5-2B's (both 7,755 chars). So no
+    # chat_template_from here; apply_chat_template renders the same way on
+    # both checkpoints already, without borrowing anything.
+    "Qwen/Qwen3.5-2B-Base": {
         "eos_token": "<|endoftext|>",
         "pad_token": "<|text_pad|>",
         "chat_template_config": "chatml",
@@ -82,8 +116,10 @@ DECODER_PROFILES = {
 ENCODER_TAGS = {"facebook/w2v-bert-2.0": "w2vb"}
 DECODER_TAGS = {
     "meta-llama/Llama-3.2-1B-Instruct": "llama1bIns",
+    "meta-llama/Llama-3.2-1B": "llama1bBase",
     "Qwen/Qwen3-1.7B": "qwen1_7b",
-    "Qwen/Qwen3.5-2B": "qwen35_2b",
+    "Qwen/Qwen3.5-2B": "qwen35_2bIns",
+    "Qwen/Qwen3.5-2B-Base": "qwen35_2bBase",
 }
 
 # Wall-clock defaults. 08:00:00 for the 125 h arm, preserved from the
@@ -230,24 +266,69 @@ def derive_steps(train_ds: dict, gradient_accumulation_steps: int, world_size: i
     return math.ceil(batches_per_rank / gradient_accumulation_steps)
 
 
-def main() -> None:
-    p = argparse.ArgumentParser()
-    p.add_argument("--config", required=True)
-    p.add_argument("--stage", required=True, choices=["MA", "IFT"])
-    p.add_argument("--world-size", required=True, type=int)
-    p.add_argument("--adapter", required=True)
-    p.add_argument("--adapter-freeze", required=True)
-    p.add_argument("--encoder", required=True)
-    p.add_argument("--encoder-freeze", required=True)
-    p.add_argument("--decoder", required=True)
-    p.add_argument("--decoder-freeze", required=True)
-    p.add_argument("--decoder-lora", required=True, help="empty string means: use the config's own value, no override")
-    p.add_argument("--encoder-lr", required=True, help="empty string means: use the config's own value, no override")
-    p.add_argument("--decoder-lr", required=True, help="empty string means: use the config's own value, no override")
-    p.add_argument("--adapter-lr", required=True, help="empty string means: use the config's own value, no override")
-    p.add_argument("--seed", required=True, type=int)
-    args = p.parse_args()
+@dataclass
+class ArmAxes:
+    """One arm's axis values. Empty string = "inherit the base config's value".
 
+    The architecture/optimisation fields are strings rather than parsed types
+    because "" has to stay distinguishable from an explicit "false"/"0" -- the
+    inherit-or-override rule in plan() depends on that distinction.
+
+    The four fields after ``seed`` are policy, not axes: they do not appear in
+    EXP_NAME and do not affect what is trained, only how often it is
+    checkpointed/evaluated and where it initialises from. Their defaults
+    reproduce the pre-grid behaviour exactly (~11 eval rounds, keep 2).
+    """
+
+    config: str
+    stage: str
+    world_size: int
+    adapter: str = ""
+    adapter_freeze: str = ""
+    encoder: str = ""
+    encoder_freeze: str = ""
+    decoder: str = ""
+    decoder_freeze: str = ""
+    decoder_lora: str = ""
+    encoder_lr: str = ""
+    decoder_lr: str = ""
+    adapter_lr: str = ""
+    seed: int = 42
+    # --- policy (not axes) ---------------------------------------------
+    # eval_rounds: eval_steps = round(steps / eval_rounds).
+    eval_rounds: int = 11
+    # checkpoint_count: when set, save_steps = ceil(steps / count) and
+    # save_total_limit = count, i.e. "keep N evenly spaced checkpoints".
+    # The Nth is supplied by the training-end checkpoint HF always writes,
+    # so the periodic saves stop at (N-1)/N. When None, saves mirror evals
+    # and keep_checkpoints applies -- the original convention.
+    checkpoint_count: int | None = None
+    keep_checkpoints: int = 2
+    # exp_name: pin the run identity instead of composing it. Only for
+    # continuity with an arm already started under a hand-written launcher's
+    # name -- a new arm should let it be composed so it can never be
+    # mislabelled by hand.
+    exp_name: str | None = None
+    # init_from: CONTAINER path to a previous stage's run directory, emitted
+    # as --model.ckpt. Lets stage 2 name its stage-1 dependency instead of
+    # hardcoding a path in the base YAML.
+    init_from: str | None = None
+
+
+@dataclass
+class ArmPlan:
+    """Everything the launcher needs, derived from an ArmAxes."""
+
+    exp_name: str
+    steps: int
+    eval_steps: int
+    save_steps: int
+    save_total_limit: int
+    time_default: str
+    overrides: list[str]
+
+
+def plan(args: ArmAxes) -> ArmPlan:
     if not os.path.isfile(args.config):
         die(f"config file not found: {args.config}")
     with open(args.config) as fh:
@@ -262,13 +343,28 @@ def main() -> None:
     grad_accum = int(grad_accum)
 
     steps = derive_steps(train_ds, grad_accum, args.world_size)
-    # ~11 eval rounds over the run, per the campaign convention documented in
-    # the old launchers' headers (both landed close to 11: 903/100~=9,
-    # 2188/200~=11 -- this makes the derivation land on ~11 for every arm
-    # instead of depending on someone hand-picking a round number). save_steps
-    # is set equal to eval_steps so saves always land on eval boundaries.
-    eval_steps = max(1, round(steps / 11))
-    save_steps = eval_steps
+    # ~11 eval rounds over the run by default, per the campaign convention
+    # documented in the old launchers' headers (both landed close to 11:
+    # 903/100~=9, 2188/200~=11 -- this makes the derivation land on ~11 for
+    # every arm instead of depending on someone hand-picking a round number).
+    eval_steps = max(1, round(steps / args.eval_rounds))
+
+    # save_steps defaults to eval_steps so saves always land on eval
+    # boundaries. An arm that asks for a specific number of evenly spaced
+    # keeps (checkpoint_count) overrides both that and save_total_limit:
+    # ceil() is what makes the periodic saves stop one short of the end, so
+    # the training-end checkpoint supplies the last of the N.
+    if args.checkpoint_count:
+        save_steps = max(1, math.ceil(steps / args.checkpoint_count))
+        save_total_limit = args.checkpoint_count
+        # Keep evals aligned with saves unless the arm asked for a different
+        # eval cadence explicitly; an unevaluated checkpoint is not much use
+        # when the deliverable is a curve over training.
+        if args.eval_rounds == ArmAxes.eval_rounds:
+            eval_steps = save_steps
+    else:
+        save_steps = eval_steps
+        save_total_limit = args.keep_checkpoints
 
     # Every architecture/optimisation axis below uses the SAME rule, uniformly:
     # an empty string means "inherit the base config's own value" (no CLI
@@ -357,6 +453,12 @@ def main() -> None:
         # this token goes straight into argv via OVERRIDE_ARGS, not through a
         # second round of shell parsing.
         overrides += ["--data.prompt_template", "'{audio_token}'"]
+        # A base checkpoint ships no chat template, so it has to borrow one.
+        # Only set for profiles that declare it: passing chat_template_from to
+        # a decoder that already HAS a template overwrites it with a copy of
+        # itself, which the run warns about.
+        if profile.get("chat_template_from"):
+            overrides += ["--model.decoder.chat_template_from", profile["chat_template_from"]]
     if args.decoder_freeze and decoder_freeze != cfg_decoder_freeze:
         overrides += ["--model.decoder.freeze", str(decoder_freeze).lower()]
 
@@ -396,7 +498,21 @@ def main() -> None:
     else:
         adapter_lr_effective = str(cfg_adapter_lr)
 
-    exp_name = "-".join([
+    # Stage dependency, when the grid names one. Emitted as a CLI override so
+    # the base YAML does not have to hardcode a specific previous run's output
+    # path (ABL-IFT-700.yaml does exactly that today, which goes stale the
+    # moment a second stage-1 arm exists).
+    cfg_ckpt = get(cfg, "model.ckpt")
+    if args.init_from:
+        if cfg_ckpt and cfg_ckpt != args.init_from:
+            print(
+                f"NOTE: overriding model.ckpt {cfg_ckpt!r} -> {args.init_from!r} "
+                "(init_from in the campaign grid wins over the base config).",
+                file=sys.stderr,
+            )
+        overrides += ["--model.ckpt", args.init_from]
+
+    composed_name = "-".join([
         args.stage,
         data_tag(args.config, args.stage),
         f"{encoder_tag(encoder_effective)}{'F' if encoder_freeze else 'T'}",
@@ -408,16 +524,73 @@ def main() -> None:
         f"s{args.seed}",
         f"{args.world_size}g",
     ])
+    exp_name = args.exp_name or composed_name
+    if args.exp_name and args.exp_name != composed_name:
+        print(
+            f"NOTE: exp_name is pinned to {args.exp_name!r}; the composed name "
+            f"would be {composed_name!r}. Pinning is only for continuity with a "
+            "run already started under a hand-written launcher -- a new arm "
+            "should let the name be composed.",
+            file=sys.stderr,
+        )
 
     time_default = TIME_DEFAULTS.get(os.path.basename(args.config), DEFAULT_TIME_FALLBACK)
 
+    return ArmPlan(
+        exp_name=exp_name,
+        steps=steps,
+        eval_steps=eval_steps,
+        save_steps=save_steps,
+        save_total_limit=save_total_limit,
+        time_default=time_default,
+        overrides=overrides,
+    )
+
+
+def main() -> None:
+    """argv -> bash. Kept as the interface launch_campaign.sh already uses."""
+    p = argparse.ArgumentParser()
+    p.add_argument("--config", required=True)
+    p.add_argument("--stage", required=True, choices=["MA", "IFT"])
+    p.add_argument("--world-size", required=True, type=int)
+    p.add_argument("--adapter", required=True)
+    p.add_argument("--adapter-freeze", required=True)
+    p.add_argument("--encoder", required=True)
+    p.add_argument("--encoder-freeze", required=True)
+    p.add_argument("--decoder", required=True)
+    p.add_argument("--decoder-freeze", required=True)
+    p.add_argument("--decoder-lora", required=True, help="empty string means: use the config's own value, no override")
+    p.add_argument("--encoder-lr", required=True, help="empty string means: use the config's own value, no override")
+    p.add_argument("--decoder-lr", required=True, help="empty string means: use the config's own value, no override")
+    p.add_argument("--adapter-lr", required=True, help="empty string means: use the config's own value, no override")
+    p.add_argument("--seed", required=True, type=int)
+    args = p.parse_args()
+
+    result = plan(ArmAxes(
+        config=args.config,
+        stage=args.stage,
+        world_size=args.world_size,
+        adapter=args.adapter,
+        adapter_freeze=args.adapter_freeze,
+        encoder=args.encoder,
+        encoder_freeze=args.encoder_freeze,
+        decoder=args.decoder,
+        decoder_freeze=args.decoder_freeze,
+        decoder_lora=args.decoder_lora,
+        encoder_lr=args.encoder_lr,
+        decoder_lr=args.decoder_lr,
+        adapter_lr=args.adapter_lr,
+        seed=args.seed,
+    ))
+
     out = []
-    out.append(f"EXP_NAME={shlex.quote(exp_name)}")
-    out.append(f"STEPS={steps}")
-    out.append(f"EVAL_STEPS={eval_steps}")
-    out.append(f"SAVE_STEPS={save_steps}")
-    out.append(f"TIME_DEFAULT={shlex.quote(time_default)}")
-    quoted = " ".join(shlex.quote(tok) for tok in overrides)
+    out.append(f"EXP_NAME={shlex.quote(result.exp_name)}")
+    out.append(f"STEPS={result.steps}")
+    out.append(f"EVAL_STEPS={result.eval_steps}")
+    out.append(f"SAVE_STEPS={result.save_steps}")
+    out.append(f"SAVE_TOTAL_LIMIT={result.save_total_limit}")
+    out.append(f"TIME_DEFAULT={shlex.quote(result.time_default)}")
+    quoted = " ".join(shlex.quote(tok) for tok in result.overrides)
     out.append(f"OVERRIDE_ARGS=({quoted})")
     print("\n".join(out))
 

@@ -39,13 +39,28 @@ set in `infra/runners/sites/mn5.sh`), so nothing can be fetched at run time.
    ```bash
    infra/setup/download_hf_models.sh
    ```
-3. **Pick your own writable output dir** if you are not the owner of the
+3. **Make sure the login node's `python3` has PyYAML.** `plan_arm.py` and
+   `campaign.py` need it; MN5's login node has no outbound internet, so `pip
+   install` hangs rather than failing. Copy it out of the container instead
+   (both are Python 3.12.9, so the C extension transfers too):
+   ```bash
+   SP="$HOME/.local/lib/python3.12/site-packages"; mkdir -p "$SP"
+   module load singularity
+   singularity exec --bind "$SP:/out" /gpfs/scratch/epor48/melt_cuda126.sif \
+       bash -c 'cp -r /workspace/venv/lib/python3.12/site-packages/yaml /out/'
+   python3 -c 'import yaml; print(yaml.__version__)'
+   ```
+   Without this, **every** launcher dies on the login node with
+   `ModuleNotFoundError: No module named 'yaml'` before submitting anything.
+   The container itself has PyYAML but no `squeue`/`sbatch`, so running the
+   launchers inside it is not an alternative.
+4. **Pick your own writable output dir** if you are not the owner of the
    shared default. `OUTPUT_DIR` and `TMPDIR_HOST` are written to; `HF_HOME`
    and `LOCAL_DATASETS_DIR` are read-only during a run and can stay shared.
    ```bash
    export OUTPUT_DIR=/gpfs/scratch/epor48/<you>/outputs
    ```
-4. **Pre-launch config check**, catches most mixture/bucket-bin mistakes
+5. **Pre-launch config check**, catches most mixture/bucket-bin mistakes
    before a job burns an allocation:
    ```bash
    python3 infra/check_training_config.py \
@@ -62,7 +77,52 @@ On artemis, nothing needs pre-downloading (the box has internet access);
 `infra/runners/sites/artemis.sh` runs with `WANDB_MODE=online` for the same
 reason.
 
-## Launching an arm
+## The campaign grid (start here)
+
+`campaign.yaml` declares **every arm the campaign intends to run**, as axis
+values. It is the input, not a log. Three artifacts, deliberately separate:
+
+| artifact | role | answers |
+|---|---|---|
+| `campaign.yaml` | **intent** | what are we trying to run? |
+| `plan_arm.py` | **render** | what exact command is that arm? |
+| `arms.tsv` | **ledger** | what was actually submitted? |
+
+```bash
+# what has run, what is running, what is missing
+python3 projects/ablation-campaign/campaign.py status
+
+# show an arm's exact command without submitting anything
+python3 projects/ablation-campaign/campaign.py plan IFT-700-llama1b-ins
+
+# submit one arm (from the cluster login node)
+python3 projects/ablation-campaign/campaign.py run IFT-700-llama1b-ins
+
+# continue it in the same output_dir after a 6 h allocation runs out
+python3 projects/ablation-campaign/campaign.py run IFT-700-llama1b-ins --resume
+
+# one-off override, passed straight through to train.py after a literal `--`
+python3 projects/ablation-campaign/campaign.py run MA-700-llama1b-base -- --trainer.max_steps 10
+```
+
+`status` joins intent against reality (the output dirs and the live queue),
+which is the question a saved command string cannot answer: **an arm that was
+never launched leaves no trace**, so only a declared grid can show it as
+missing. That is what `arms.tsv` alone could never do -- and why it sat empty
+while every real run went through a hand-written script that bypassed it.
+
+Adding an ablation means adding a row to `campaign.yaml` in a PR, not typing a
+submit command. An omitted field inherits the base config's own value; an
+unknown field is an error rather than a silent no-op, because a mis-spelled
+`decoder_freze` that quietly did nothing is exactly how an arm stops being the
+ablation it claims to be.
+
+`launch_MA.sh` / `launch_IFT.sh` remain as the env-var interface for one-offs
+that do not belong in the grid. Anything submitted through them, or through
+`submit-container.sh` directly, is off the ledger by design -- that is the
+debugging escape hatch, not the campaign path.
+
+## Launching an arm (one-offs, off the ledger)
 
 ```bash
 # stage 1 (MA), 125 h/language, default architecture (whatever
@@ -255,11 +315,17 @@ the full before/after diff.
 
 ## Arms registry
 
-Every real submission (not `DRY_RUN=1`) appends one line to `arms.tsv`:
-UTC timestamp, `EXP_NAME`, SLURM job id, and the exact effective command. The
-campaign's deliverable is a comparison table; reconstructing "what exactly did
-arm X run" from shell history is how campaigns go wrong. `arms.tsv` is
-checked into git as the source of truth -- do not hand-edit it.
+Every submission through `campaign.py run` (not `--dry-run`) appends one line
+to `arms.tsv`: UTC timestamp, `EXP_NAME`, SLURM job id, and the exact
+effective command. The campaign's deliverable is a comparison table;
+reconstructing "what exactly did arm X run" from shell history is how
+campaigns go wrong. `arms.tsv` is checked into git -- do not hand-edit it.
+
+The ledger records submissions, not truth: `campaign.py status` reads the
+*cluster* for what actually exists, so arms launched before the ledger existed
+(or by hand, for debugging) still classify correctly. What the ledger adds is
+job-id attribution, which is what lets `status` say RUNNING rather than
+guessing from a directory's mtime.
 
 ## IFT and `max_steps`
 
@@ -310,43 +376,31 @@ real arm. `run.memory_preallocation: true` (a forward+backward at
 caught rather than fatal) is cheap insurance against the same class of
 surprise showing up as an OOM instead.
 
-## Legacy hand-written 700 h/language MN5 launchers (Base arm, IFT-700)
+## The 700 h/language arms (Base arm, IFT-700)
 
-Two arms of the Llama 3.2 1B campaign still run from dedicated,
-hand-written scripts rather than `launch_MA.sh`/`launch_IFT.sh` -- they
-predate this refactor and have not been folded in yet:
-
-- `launch_MA_700_llama32-1b-base_mn5.sh` -- the **Base**-decoder half of the
-  Instruct/Base pair described below.
-- `launch_IFT_700_llama32-1b_mn5.sh` -- stage 2 on top of the (now
-  parameterised) Instruct MA arm, config `ABL-IFT-700.yaml`.
-
-The (now-superseded) **Instruct** MA arm these two used to sit alongside is
-launched through the generic system instead:
+Both of these used to run from dedicated hand-written scripts
+(`launch_MA_700_llama32-1b-base_mn5.sh`, `launch_IFT_700_llama32-1b_mn5.sh`).
+They are now rows in `campaign.yaml` -- `MA-700-llama1b-base` and
+`IFT-700-llama1b-ins` -- and the scripts are deleted. The reason they
+survived the first refactor was not inertia: `plan_arm.py` had no
+`DECODER_PROFILES` entry for the Base checkpoint and emitted no
+`chat_template_from` at all, so the Base arm was **not expressible**
+generically. Both gaps are closed.
 
 ```bash
-CONFIG=projects/ablation-campaign/ABL-MA-700-asr.yaml \
-    bash projects/ablation-campaign/launch_MA.sh
+python3 projects/ablation-campaign/campaign.py run MA-700-llama1b-base
+python3 projects/ablation-campaign/campaign.py run IFT-700-llama1b-ins
 ```
 
 ### Base arm
 
-```bash
-infra/runners/submit-container.sh mn5 config/accelerate/ddp.yaml \
-    --config projects/ablation-campaign/ABL-MA-700-asr.yaml \
-    --model.decoder.name meta-llama/Llama-3.2-1B \
-    --model.decoder.chat_template_from meta-llama/Llama-3.2-1B-Instruct \
-    --run.exp_name "MA-700asr-w2vbF-llama1bBaseF-mlpT-s42-8g" \
-    --trainer.output_dir "/workspace/outputs/MA-700asr-w2vbF-llama1bBaseF-mlpT-s42-8g" \
-    --trainer.num_train_epochs 1 \
-    --trainer.eval_steps 199 \
-    --trainer.save_steps 199 \
-    --trainer.save_total_limit 2 \
-    --trainer.seed 42
-```
+Its grid row sets one axis, `decoder: meta-llama/Llama-3.2-1B`; everything
+else is inherited. `campaign.py plan MA-700-llama1b-base` prints the rendered
+command, which includes the decoder + chat-template bundle
+(`--model.decoder.chat_template_from meta-llama/Llama-3.2-1B-Instruct` among
+them) that the hand-written script used to spell out by hand.
 
-with `MELT_NODES=2 MELT_GPUS_PER_NODE=4 MELT_QOS=acc_ehpc MELT_TIME=6:00:00
-MELT_SEED=42`. Both the Base and Instruct arms run off the **same**
+Both the Base and Instruct arms run off the **same**
 `ABL-MA-700-asr.yaml` -- deliberately, so they see the same data mixture,
 bucket bins, step budget and rendered prompt, and a difference between them
 is attributable to the backbone alone and nothing else.
@@ -382,16 +436,17 @@ Instruction fine-tuning on top of the Instruct MA arm's weights, mirroring
 stage 1's freeze pattern (decoder trains, encoder and adapter do not):
 
 ```bash
-bash projects/ablation-campaign/launch_IFT_700_llama32-1b_mn5.sh
+python3 projects/ablation-campaign/campaign.py run IFT-700-llama1b-ins
 ```
 
-which expands to:
+which renders to:
 
 ```bash
 infra/runners/submit-container.sh mn5 config/accelerate/ddp.yaml \
     --config projects/ablation-campaign/ABL-IFT-700.yaml \
     --run.exp_name "IFT-700both-w2vbF-llama1bInsT-mlpF-s1337-8g" \
     --trainer.output_dir "/workspace/outputs/IFT-700both-w2vbF-llama1bInsT-mlpF-s1337-8g" \
+    --model.ckpt "/workspace/outputs/MA-700asr-w2vbF-llama1bInsF-mlpT-s42-8g-md60" \
     --trainer.num_train_epochs 1 \
     --trainer.eval_steps 902 \
     --trainer.save_steps 902 \
@@ -400,6 +455,9 @@ infra/runners/submit-container.sh mn5 config/accelerate/ddp.yaml \
 ```
 
 with `MELT_NODES=2 MELT_GPUS_PER_NODE=4 MELT_SEED=1337 MELT_TIME=6:00:00`.
+`--model.ckpt` is derived from the row's `init_from: MA-700-llama1b-ins`
+rather than read from the YAML, so stage 2 names its stage-1 *arm* and the
+path follows whatever that arm is actually called.
 Seed 1337 (not stage 1's 42) matters because `run_train.sh` feeds
 `MELT_SEED` to `--data.*.shard_seed`; reusing 42 would replay the very cuts
 stage 1 already streamed.
@@ -449,14 +507,29 @@ passes) before step 1 rather than leaving it to surface as an OOM later.
 Checkpoints are much larger here too (AdamW's moments are saved with the
 weights): budget ~22 GB each, ~154 GB for the seven `save_total_limit` keeps.
 
-6310 steps (the derived one-epoch count at `batch_duration: 120`) does not
-fit in one 6 h allocation. Resume with:
+6310 steps is ~10.3 h of pure training at the measured 5.73 s/step steady
+state (2 nodes, `grad_accum: 4` -- see the scaling benchmark below), before
+counting periodic generation-eval overhead. Rather than size the allocation
+to one chunk of that and chain resumes, this arm requests a single 20 h
+allocation (`time: "20:00:00"` in `campaign.yaml`) and expects to complete in
+it. This was a deliberate change from the campaign's earlier 6 h-chunks
+convention: `checkpoint_count: 7` already bounds a node failure's cost to one
+checkpoint interval (~1.4 h) regardless of how long the allocation is, so a
+longer allocation does not increase what a failure costs -- it only removes
+the operational toil of manually resubmitting `--resume` every 6 h in the
+*normal*, failure-free case. `sbatch --test-only` against a range of
+node/wall-time combinations (2026-09-02) showed no scheduling penalty for
+requesting more time either, though that can change with cluster load.
+
+`--resume` remains available for the failure case:
 
 ```bash
-bash projects/ablation-campaign/launch_IFT_700_llama32-1b_mn5.sh \
-    --trainer.resume_from_checkpoint True
+python3 projects/ablation-campaign/campaign.py run IFT-700-llama1b-ins --resume
 ```
 
-`True` (a bool, not a path) makes HF scan `output_dir` for the last
-checkpoint itself. Keep `MELT_GPUS_PER_NODE` pinned across the resume or the
-run dies on a `world_size` mismatch.
+It appends `--trainer.resume_from_checkpoint True` -- a bool, not a path, so
+HF scans `output_dir` for the last checkpoint itself. Never point it at a
+`checkpoint-N/` subdirectory: `train.py` calls `get_last_checkpoint()` on
+whatever it is given. The topology comes from the same grid row either way, so
+`MELT_GPUS_PER_NODE` cannot drift across a resume and take the run down on a
+`world_size` mismatch.
