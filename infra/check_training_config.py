@@ -120,6 +120,37 @@ FAIL_CHECKS = {"W1", "W2", "W3", "W4", "N1", "N2", "H1", "H2", "H3", "B1", "B2",
 # hard ceiling in seconds on what the encoder can see.
 ENCODER_FRAME_SECONDS = 0.02
 
+# Encoders whose input frame rate differs from that default, keyed by a substring of
+# ``model.encoder.name``. This deliberately duplicates the ``frame_seconds`` field of
+# ``melt/modeling/encoder_specs.py`` rather than importing it: this script is
+# constrained to PyYAML and numpy so it stays runnable in the lhotse 2 venv, which is
+# the only environment with the data mounted. Keep the two in step.
+ENCODER_FRAME_SECONDS_BY_NAME = {
+    "whisper": 0.01,  # log-mel at hop_length 160 / 16 kHz, no stride-stacking
+    # The wav2vec2 family (HuBERT, mHuBERT-147, WavLM, ...) eats the raw waveform, so
+    # its "frames" are audio samples and max_audio_seq_len is a sample count.
+    "hubert": 1 / 16_000,
+    "wavlm": 1 / 16_000,
+    "data2vec-audio": 1 / 16_000,
+    "wav2vec2": 1 / 16_000,
+    # ...but w2v-BERT only *looks* like that family. It is frame-based, and the
+    # longest-key-first match below is what keeps a checkpoint named
+    # "wav2vec2-bert-something" off the waveform branch.
+    "wav2vec2-bert": ENCODER_FRAME_SECONDS,
+    "w2v-bert": ENCODER_FRAME_SECONDS,
+}
+
+
+def encoder_frame_seconds(encoder_name: str | None) -> float:
+    """Seconds of audio per encoder *input* frame, for the named encoder."""
+    if encoder_name:
+        lowered = str(encoder_name).lower()
+        # Longest key first: "wav2vec2-bert" must beat "wav2vec2", and they disagree.
+        for key in sorted(ENCODER_FRAME_SECONDS_BY_NAME, key=len, reverse=True):
+            if key in lowered:
+                return ENCODER_FRAME_SECONDS_BY_NAME[key]
+    return ENCODER_FRAME_SECONDS
+
 HIST_RESOLUTION = 0.01
 
 
@@ -583,7 +614,7 @@ def measure_sources(
     done = 0
     started = time.time()
 
-    with ProcessPoolExecutor(max_workers=jobs) as pool:
+    with ProcessPoolExecutor(max_workers=min(jobs, len(tasks))) as pool:
         # pool.map preserves input order and tasks are grouped by source, so a
         # source is finished as soon as its last shard comes back.  Writing then
         # rather than at the end makes an interrupted pass resumable, which
@@ -1764,8 +1795,9 @@ def check_runtime(
 
     encoder = ((cfg.get("model") or {}).get("encoder") or {})
     max_frames = encoder.get("max_audio_seq_len")
+    frame_seconds = encoder_frame_seconds(encoder.get("name"))
     if max_frames:
-        window = float(max_frames) * ENCODER_FRAME_SECONDS
+        window = float(max_frames) * frame_seconds
         for where in ("train_ds", "validation_ds"):
             split = data.get(where) or {}
             max_duration = split.get("max_duration")
@@ -1775,7 +1807,7 @@ def check_runtime(
                     "C3", where,
                     f"max_duration is {float(max_duration):g} s, above the encoder's "
                     f"{window:g} s window ({max_frames} frames x "
-                    f"{ENCODER_FRAME_SECONDS * 1000:g} ms) -- expected, not a truncation risk",
+                    f"{frame_seconds * 1000:g} ms) -- expected, not a truncation risk",
                     line=line_index.get(f"data.{where}.max_duration"),
                     fix=[f"MELTAudioStack.encoder chunks any sequence longer than {max_frames} "
                          "frames instead of truncating it (modeling_melt.py:509-555): a "

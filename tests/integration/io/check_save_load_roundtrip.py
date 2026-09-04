@@ -50,6 +50,8 @@ def _make_tiny_config():
     )
     config.audio_encoder_config.num_hidden_layers = 1
     config.text_decoder_config.n_layer = 1
+    # A sample count, not a frame count: wav2vec2-base is a raw-waveform encoder.
+    config.audio_encoder_config.max_audio_seq_len = 16_000
     return config
 
 

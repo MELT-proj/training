@@ -7,7 +7,11 @@ import torch
 from transformers.trainer_utils import IntervalStrategy
 
 from melt.modeling import MELTConfig, MELTForCausalLM
-from melt.training.trainer import MELTTrainer, _validate_eval_batch_size
+from melt.training.trainer import (
+    MELTTrainer,
+    _shutdown_dataloader_workers,
+    _validate_eval_batch_size,
+)
 
 
 def _make_minimal_model():
@@ -19,6 +23,8 @@ def _make_minimal_model():
     config.audio_encoder_config.num_hidden_layers = 1
     config.text_decoder_config.n_layer = 1
     config.audio_bos_token_id = 100
+    # A sample count, not a frame count: wav2vec2-base is a raw-waveform encoder.
+    config.audio_encoder_config.max_audio_seq_len = 16_000
 
     model = MELTForCausalLM(config, load_backbones=True)
     return model
@@ -329,22 +335,30 @@ def test_shutdown_dataloaders_stops_stateful_workers():
         num_workers=1,
         persistent_workers=True,
     )
-    it = iter(loader)
-    next(it)
-    del it
+    try:
+        it = iter(loader)
+        next(it)
+        del it
 
-    assert loader._iterator is not None, "loader should be holding a live iterator"
-    workers = list(loader._iterator._workers)
-    assert any(w.is_alive() for w in workers)
+        assert loader._iterator is not None, "loader should be holding a live iterator"
+        workers = list(loader._iterator._workers)
+        assert any(w.is_alive() for w in workers)
 
-    trainer = _make_teardown_trainer(loader)
-    trainer._shutdown_dataloaders()
+        trainer = _make_teardown_trainer(loader)
+        trainer._shutdown_dataloaders()
 
-    assert loader._iterator is None
-    assert trainer._train_dataloader_ref is None
-    for w in workers:
-        w.join(timeout=10)
-        assert not w.is_alive(), "worker survived the explicit shutdown"
+        assert loader._iterator is None
+        assert trainer._train_dataloader_ref is None
+        for w in workers:
+            w.join(timeout=10)
+            assert not w.is_alive(), "worker survived the explicit shutdown"
+    finally:
+        # If an assertion above fires, the shutdown call it was meant to
+        # exercise never runs, and the worker forked at `iter(loader)` would
+        # otherwise be left for __del__ -- the exact leak this test guards
+        # against (issue #63), just triggered by a test failure instead of a
+        # real run.
+        _shutdown_dataloader_workers(loader)
 
 
 def test_shutdown_dataloaders_is_safe_on_idle_and_repeated_calls():

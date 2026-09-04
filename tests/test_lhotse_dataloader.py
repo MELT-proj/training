@@ -564,6 +564,7 @@ class TestStatefulDataLoader:
         from melt.training.data.audio.lhotse.dataloader import (
             get_lhotse_dataloader_from_config,
         )
+        from melt.training.trainer import _shutdown_dataloader_workers
 
         def build():
             return get_lhotse_dataloader_from_config(
@@ -574,24 +575,34 @@ class TestStatefulDataLoader:
                 repeat=True,
             )
 
-        dl = build()
-        it = iter(dl)
-        consumed = [next(it)["cut_ids"] for _ in range(4)]
-        state = dl.state_dict()
-        tail = [next(it)["cut_ids"] for _ in range(6)]
+        dl = None
+        resumed_dl = None
+        try:
+            dl = build()
+            it = iter(dl)
+            consumed = [next(it)["cut_ids"] for _ in range(4)]
+            state = dl.state_dict()
+            tail = [next(it)["cut_ids"] for _ in range(6)]
 
-        # The training CutSet is .repeat()ed, so this stream never ends: take a
-        # fixed number of batches rather than materialising it.
-        resumed_dl = build()
-        resumed_dl.load_state_dict(state)
-        resumed_it = iter(resumed_dl)
-        resumed = [next(resumed_it)["cut_ids"] for _ in range(6)]
+            # The training CutSet is .repeat()ed, so this stream never ends: take a
+            # fixed number of batches rather than materialising it.
+            resumed_dl = build()
+            resumed_dl.load_state_dict(state)
+            resumed_it = iter(resumed_dl)
+            resumed = [next(resumed_it)["cut_ids"] for _ in range(6)]
 
-        assert consumed, "loader produced nothing to snapshot"
-        assert resumed == tail, (
-            "resumed stream diverged from the uninterrupted one: "
-            f"{resumed[:2]} vs {tail[:2]}"
-        )
+            assert consumed, "loader produced nothing to snapshot"
+            assert resumed == tail, (
+                "resumed stream diverged from the uninterrupted one: "
+                f"{resumed[:2]} vs {tail[:2]}"
+            )
+        finally:
+            # Neither loader is ever torn down otherwise (num_workers=2 each),
+            # so both a failure here and the passing path would leave workers
+            # for __del__/the cyclic collector to reap -- issue #63's failure
+            # mode, just from a test rather than a real run.
+            _shutdown_dataloader_workers(dl)
+            _shutdown_dataloader_workers(resumed_dl)
 
 
 class TestRngSetstateHardening:

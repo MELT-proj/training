@@ -32,6 +32,7 @@ from transformers.trainer_utils import (
 from .. import ddp
 from ..logging_utils import _is_global_master, force_print, get_logger
 from ..modeling import MELTProcessor
+from ..modeling.encoder_specs import get_encoder_spec_for_feature_extractor
 from .duration_tracker import DurationTracker
 from .data.audio.lhotse import (
     FallbackDataset,
@@ -1152,16 +1153,32 @@ class MELTTrainer(Seq2SeqTrainer):
         # - The fallback 0.02 s is already the effective output frame duration for
         #   wav2vec-bert-2.0 (raw hop 10 ms × stride 2); do NOT multiply by fe_stride
         #   again or the frame count will be halved.
+        spec = get_encoder_spec_for_feature_extractor(fe)
         if hop_length is not None:
             effective_frame_duration_s = (hop_length / sampling_rate) * fe_stride
         else:
-            effective_frame_duration_s = 0.02  # 20 ms effective output frame (wav2vec-bert-2.0 default)
+            # No hop_length means no spectrogram. For a raw-waveform encoder the
+            # "frames" are audio samples -- `Wav2Vec2FeatureExtractor` exposes neither
+            # hop_length nor stride, and feature_size is 1 -- so the spec's frame
+            # duration is the only thing that gets the time axis right. The old
+            # hardcoded 20 ms under-reserved the audio tensor by 320x.
+            effective_frame_duration_s = spec.frame_seconds
             logger.warning(
                 "[Preallocation] feature_extractor has no hop_length attribute; "
-                "falling back to 20 ms effective output frame duration."
+                "using the encoder spec's %g s input frame instead.",
+                effective_frame_duration_s,
             )
 
         max_audio_frames = int(duration_per_utt / effective_frame_duration_s)
+
+        # An encoder with a fixed input window (Whisper) sees whole windows however
+        # short the clip is, so the real worst case for the min_duration pass is a full
+        # window, not `duration_per_utt` of frames. Round up or preallocation
+        # under-reports by the padding ratio -- 60x for a 0.5 s clip against a 30 s window.
+        window_frames = spec.window_frames
+        if window_frames is not None:
+            max_audio_frames = max(1, -(-max_audio_frames // window_frames)) * window_frames
+
         n_utts           = max(1, int(batch_duration / duration_per_utt))
         # batch_size in config maps to Lhotse's max_cuts: a hard cap on items per batch.
         max_cuts = getattr(train_ds_cfg, "batch_size", None)
@@ -1183,7 +1200,9 @@ class MELTTrainer(Seq2SeqTrainer):
         logger.warning(
             f"[Preallocation] rank={self._global_rank} — synthetic batch: "
             f"n_utts={n_utts}, max_audio_frames={max_audio_frames} "
-            f"({duration_per_utt:.1f}s / {effective_frame_duration_s*1000:.0f}ms output frame), "
+            # .3g, not .0f: a raw-waveform encoder's frame is 0.0625 ms, which
+            # rounds to a uselessly bare "0ms".
+            f"({duration_per_utt:.1f}s / {effective_frame_duration_s*1000:.3g}ms output frame), "
             f"feature_dim={feature_dim}, max_text_len={max_text_len}, dtype={dtype}"
         )
 
@@ -1333,6 +1352,14 @@ class MELTTrainer(Seq2SeqTrainer):
         if min_duration < max_duration:
             self._run_preallocation_pass(model, duration_per_utt=min_duration, label="min_duration")
 
+        # These passes are synthetic worst cases and routinely allocate more --
+        # or OOM outright -- than any real batch will.  Leaving their high-water
+        # mark in place would make the FIRST `gpu_peak_gb` row report the warmup
+        # rather than training (measured: 66.8 GB, against 33 GB steady state on
+        # the very next row), so start the training series from a clean counter.
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+
     # ------------------------------------------------------------------
     # OOM diagnostics
     # ------------------------------------------------------------------
@@ -1377,10 +1404,23 @@ class MELTTrainer(Seq2SeqTrainer):
         deadlock the others. Only the merge into ``logs`` is conditional, and
         is gated on ``"loss" in logs`` so the series only appears on training
         rows, not eval rows.
+
+        ``gpu_peak_gb`` rides along on the same gate.  Without it the only GPU
+        memory numbers a run produces are the preallocation passes -- synthetic,
+        and deliberately pessimistic: every utterance there carries
+        ``max_tokens + 32`` text tokens, which no real batch can hit because
+        ``max_tokens`` is a per-cut filter (dataloader.py ``_token_filter``), not
+        a batch budget -- and the OOM handler, which by definition reports too
+        late to size anything.  The counter is reset after reading so each row
+        reports the window since the previous log, not a run-long high-water
+        mark that stops moving after the first few steps.
         """
         hours = self._duration_tracker.reduced_hours()
         if hours and "loss" in logs:
             logs.update(hours)
+        if "loss" in logs and torch.cuda.is_available():
+            logs["gpu_peak_gb"] = torch.cuda.max_memory_allocated() / 1024 ** 3
+            torch.cuda.reset_peak_memory_stats()
         super().log(logs, start_time)
 
     def _log_oom_batch_info(self, inputs: dict) -> None:

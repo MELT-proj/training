@@ -413,7 +413,7 @@ data:
 
     # Duration filtering
     min_duration: 0.5
-    max_duration: 120.0
+    max_duration: 60.0
     
     # Batch settings
     batch_size: null  # Use batch_duration instead for dynamic batching
@@ -446,7 +446,14 @@ data:
     lhotse_sampler_type: dynamic_bucketing  # One among: dynamic_bucketing, dynamic, bucketing
     num_buckets: 30
     buffer_size: 10000
-    bucket_duration_bins: [2.4, 3.54, 4.46, 5.34, 6.19, 7.12, 8.17, 9.4, 10.58, 11.62, 12.65, 13.67, 14.56, 15.08, 16.12, 17.19, 18.28, 19.41, 21.12, 23.3, 25.4, 27.5, 29.58, 33.52, 35.54, 36.78, 37.78, 38.58, 39.3]
+    # Measured against this mixture's real duration distribution; the previous
+    # set was off by 1.12 s at index 18 (21.12 where the data says 20.0).
+    # Byte-identical to ABL-IFT-700.yaml's, not by copying: the two share an
+    # input_cfg, so they share a duration distribution and the same estimator
+    # run answers both.
+    #
+    # RE-MEASURE THESE WHENEVER max_duration CHANGES.
+    bucket_duration_bins: [2.58, 3.9, 4.96, 5.92, 6.92, 8.0, 9.22, 10.4, 11.31, 12.19, 13.06, 13.92, 14.77, 15.62, 16.46, 17.32, 18.19, 19.08, 20.0, 22.32, 24.56, 26.8, 29.02, 32.82, 35.28, 36.6, 37.64, 38.5, 39.26]
 
     # Sampling
     shuffle: true
@@ -638,7 +645,7 @@ data:
     shuffle: false
     drop_last: true
     min_duration: 0.5
-    max_duration: 120.0
+    max_duration: 60.0
     num_workers: 0
     pin_memory: true
     prefetch_factor: null
