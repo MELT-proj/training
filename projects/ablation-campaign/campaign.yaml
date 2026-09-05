@@ -211,31 +211,38 @@ arms:
     # Confirmed needed for MA-700-qwen35-2b-ins (DDP OOM'd, FSDP2 didn't --
     # see that row's comment). IFT trains the full 2B decoder on top of MA's
     # frozen-decoder case, so the memory pressure this addresses is if
-    # anything worse here, not less -- but IFT under FSDP2 itself is still
-    # unverified (this row has never run at all). Smoke-test before trusting
-    # the time budget below.
+    # anything worse here, not less.
     accelerate: config/accelerate/fsdp2_qwen35.yaml
     init_from: MA-700-qwen35-2b-ins
     seed: 1337
-    # 24h is a GUESS, not a measurement, and now a SUSPECT one: it was
-    # derived from a 1.61x param-count scaling of the Llama IFT-700 arm's
-    # 20h, using the "~43 min" FSDP2 timing that MA-700-qwen35-2b-ins's own
-    # comment (2026-09-03) turned out to be a 2-step smoke test, not a real
-    # run -- the actual MA-700-qwen35-2b-ins full run measured ~18.5 s/step
-    # steady state under FSDP2 and needed 20h, not 2h. This arm's guess
-    # never used that bad number directly, but it inherits the same
-    # underlying risk: FSDP2 overhead on this decoder is empirically much
-    # larger than intuition suggests, and IFT trains the full decoder (not
-    # just the adapter), so the true multiplier over MA could go either
-    # way. DO NOT trust 24h -- smoke-test on acc_debug first, the same way
-    # IFT-700-llama1b-ins now has a real number instead of a guess.
-    time: "24:00:00"
+    # CORRECTED 2026-09-05, from two real smoke tests on acc_debug (mn5 jobs
+    # 45433385 and 45435280), replacing the earlier param-count-scaling
+    # guess entirely:
+    #   - job 45433385 (eval_on_start left on, max_steps=12): never reached a
+    #     training step in its 1h debug window -- eval_on_start alone ran 6
+    #     full eval sets (asr_en/de/fr/es/it + st_en_de) taking ~45 min total
+    #     before timing out. Zero errors across that hour, so the config
+    #     (decoder swap, init_from-consolidated MA-700-qwen35-2b-ins
+    #     checkpoint, FSDP2) is confirmed valid.
+    #   - job 45435280 (eval disabled, max_steps=15): isolated pure training
+    #     step rate. Steady state ~16-18 s/step (steps 3-15, after step-1
+    #     warmup/checkpoint-load skew).
+    # This arm shares ABL-IFT-700.yaml's batch_duration/world_size/grad_accum
+    # with IFT-700-llama1b-ins (decoder choice does not affect the
+    # audio-batching-driven step count), so the same 6310 steps/epoch applies:
+    # 6310 x ~17s =~ 29.8h training + 7 eval rounds x ~45min =~ 5.25h eval
+    # =~ 35h total. 40h leaves ~5h margin, matching the one-shot policy above.
+    time: "40:00:00"
     checkpoint_count: 7               # same cadence as IFT-700-llama1b-ins
-    # Never run. Re-verify peak memory before trusting this arm's
-    # topology/wall-time -- run.memory_preallocation: true will report it on
-    # step 1, but a smoke test on acc_debug is cheaper than finding out via
-    # an OOM (or a slow-not-hung FSDP2 timeout, see MA-700-qwen35-2b-ins) on
-    # acc_ehpc.
+    # NOTE (2026-09-05): plan_arm.py's Qwen decoder-profile bundle emits
+    # --data.prompt_template '{audio_token}' unconditionally, but this
+    # config's own prompt_template is a dict (asr/st keys, see line ~157),
+    # not a string. The braced value gets parsed by OmegaConf as a flow
+    # mapping and MERGED into the dict rather than replacing it -- harmless
+    # here (confirmed via resolved_config.json: asr/st templates survive
+    # intact, only a stray unused audio_token: null key gets added) but
+    # fragile. Worth fixing in plan_arm.py to skip this override for IFT
+    # stages; not blocking, since the net effect on this arm is a no-op.
 
   - id: IFT-700-qwen35-2b-base
     stage: IFT
