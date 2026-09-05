@@ -279,6 +279,17 @@ class MELTTrainer(Seq2SeqTrainer):
         self.config = config
         self.processor = processor
 
+        # MUST be set before super().__init__(): HF's Trainer.__init__ calls
+        # create_accelerator_and_postprocess -> _build_accelerator_args, which
+        # our override reads this from. Setting it further down (next to
+        # _memory_preallocation, where it otherwise belongs) crashed every DDP
+        # *and* FSDP run with AttributeError, because the override runs during
+        # super().__init__() and the attribute did not exist yet.
+        self._ddp_gradient_as_bucket_view = bool(
+            config is not None
+            and config.get("run", {}).get("ddp_gradient_as_bucket_view", False)
+        )
+
         _validate_eval_batch_size(args)
 
         # Seeding happens in train.py, before the model is built -- HF's
@@ -446,23 +457,6 @@ class MELTTrainer(Seq2SeqTrainer):
         )
         self._preallocation_done = False
 
-        # DDP keeps two copies of every gradient by default: the one autograd
-        # writes into `param.grad`, and the flat bucket buffer NCCL reduces.
-        # Making `param.grad` a view into the bucket removes the duplicate --
-        # worth ~7 GiB per rank for a 1.88 B-param trainable decoder, and it is
-        # mathematically a no-op (same reduction, one fewer copy), so unlike an
-        # optimizer swap it does not make an arm incomparable to its siblings.
-        # HF's TrainingArguments does not expose it (only ddp_find_unused_
-        # parameters / bucket_cap_mb / broadcast_buffers / static_graph /
-        # backend / timeout), so it is plumbed through _build_accelerator_args
-        # below. Off by default: `param.grad` then aliases a buffer the
-        # all-reduce overwrites in place, which is worth confirming against
-        # gradient accumulation + max_grad_norm clipping before trusting it.
-        self._ddp_gradient_as_bucket_view = bool(
-            config is not None
-            and config.get("run", {}).get("ddp_gradient_as_bucket_view", False)
-        )
-
     # ------------------------------------------------------------------
     # Accelerator construction override: DDP gradient bucket view
     # ------------------------------------------------------------------
@@ -483,10 +477,16 @@ class MELTTrainer(Seq2SeqTrainer):
         this override silently stops applying rather than crashing -- hence the
         explicit confirmation log below, which is what the smoke test reads to
         prove the flag actually landed.
+
+        ``getattr`` rather than a plain attribute read: this runs *during*
+        ``super().__init__()``, so it must not assume any MELTTrainer attribute
+        set after that call exists yet. Reading it directly took down every DDP
+        and FSDP run (mn5 jobs 45447932 / 45447997 / 45448029) until the flag
+        was hoisted above the super() call.
         """
         accelerator_args = super()._build_accelerator_args(*args, **kwargs)
 
-        if not self._ddp_gradient_as_bucket_view:
+        if not getattr(self, "_ddp_gradient_as_bucket_view", False):
             return accelerator_args
 
         from accelerate.utils import DistributedDataParallelKwargs
