@@ -232,7 +232,25 @@ arms:
     # audio-batching-driven step count), so the same 6310 steps/epoch applies:
     # 6310 x ~17s =~ 29.8h training + 7 eval rounds x ~45min =~ 5.25h eval
     # =~ 35h total. 40h leaves ~5h margin, matching the one-shot policy above.
-    time: "40:00:00"
+    #
+    # CORRECTED AGAIN 2026-09-05, this time from the real full run (job
+    # 45436478) rather than from smoke tests. Checkpoint mtimes give the
+    # steady-state cost of one 902-step segment (902 training steps plus the
+    # eval round that fires with them) to within nine seconds:
+    #   ckpt 902  at start +7h03m   (startup + eval_on_start included)
+    #   ckpt 1804 at +5h41m53s
+    #   ckpt 2706 at +5h41m44s
+    # So a full epoch is 7.05h (first segment) + 6 x 5.70h = 41.2h, plus the
+    # end-of-training eval and save, =~ 42h. The 40h above was ~2h short: job
+    # 45436478 will time out roughly 200 steps into its last segment, with
+    # checkpoint-5412 as the last good save, and needs a ~6.3h resume.
+    #
+    # The smoke-test estimate underestimated because both tests measured
+    # training steps alone (~16-18 s/step) and priced eval at the ~45min the
+    # eval_on_start test showed; the real per-segment number says training +
+    # eval together cost 5.70h per 902 steps, i.e. ~22.7s/step all-in. Time
+    # segments of a real run, not steps of a smoke test.
+    time: "46:00:00"
     checkpoint_count: 7               # same cadence as IFT-700-llama1b-ins
     # NOTE (2026-09-05): plan_arm.py's Qwen decoder-profile bundle emits
     # --data.prompt_template '{audio_token}' unconditionally, but this
@@ -251,6 +269,10 @@ arms:
     accelerate: config/accelerate/fsdp2_qwen35.yaml  # see IFT-700-qwen35-2b-ins
     init_from: MA-700-qwen35-2b-base
     seed: 1337
-    time: "24:00:00"                  # same estimate and caveat as IFT-700-qwen35-2b-ins
+    # 46h, matching IFT-700-qwen35-2b-ins's measured full-run cost (see that
+    # row for the checkpoint-interval arithmetic). The previous 24h here was
+    # never measured and would have timed out around 40% of the way through --
+    # it predated even the smoke tests, and inherited a param-count guess.
+    time: "46:00:00"
     checkpoint_count: 7
     # Same memory caveat as IFT-700-qwen35-2b-ins.
