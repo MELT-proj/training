@@ -279,17 +279,6 @@ class MELTTrainer(Seq2SeqTrainer):
         self.config = config
         self.processor = processor
 
-        # MUST be set before super().__init__(): HF's Trainer.__init__ calls
-        # create_accelerator_and_postprocess -> _build_accelerator_args, which
-        # our override reads this from. Setting it further down (next to
-        # _memory_preallocation, where it otherwise belongs) crashed every DDP
-        # *and* FSDP run with AttributeError, because the override runs during
-        # super().__init__() and the attribute did not exist yet.
-        self._ddp_gradient_as_bucket_view = bool(
-            config is not None
-            and config.get("run", {}).get("ddp_gradient_as_bucket_view", False)
-        )
-
         _validate_eval_batch_size(args)
 
         # Seeding happens in train.py, before the model is built -- HF's
@@ -456,61 +445,6 @@ class MELTTrainer(Seq2SeqTrainer):
             config is not None and config.get("run", {}).get("memory_preallocation", False)
         )
         self._preallocation_done = False
-
-    # ------------------------------------------------------------------
-    # Accelerator construction override: DDP gradient bucket view
-    # ------------------------------------------------------------------
-
-    def _build_accelerator_args(self, *args, **kwargs) -> dict:
-        """Flip ``gradient_as_bucket_view`` on the DDP handler HF already built.
-
-        ``Trainer._build_accelerator_args`` assembles a
-        ``DistributedDataParallelKwargs`` from the ``ddp_*`` TrainingArguments
-        and stashes it under ``kwargs_handlers``; ``gradient_as_bucket_view``
-        is a field on that dataclass with no TrainingArguments counterpart, so
-        the only way to set it is to reach into the handler before the
-        ``Accelerator`` is constructed from it.
-
-        Mutating what super() built (rather than constructing our own handler)
-        keeps every other ddp_* setting HF derived intact. This hooks a private
-        method, so it is version-sensitive: if a transformers bump renames it,
-        this override silently stops applying rather than crashing -- hence the
-        explicit confirmation log below, which is what the smoke test reads to
-        prove the flag actually landed.
-
-        ``getattr`` rather than a plain attribute read: this runs *during*
-        ``super().__init__()``, so it must not assume any MELTTrainer attribute
-        set after that call exists yet. Reading it directly took down every DDP
-        and FSDP run (mn5 jobs 45447932 / 45447997 / 45448029) until the flag
-        was hoisted above the super() call.
-        """
-        accelerator_args = super()._build_accelerator_args(*args, **kwargs)
-
-        if not getattr(self, "_ddp_gradient_as_bucket_view", False):
-            return accelerator_args
-
-        from accelerate.utils import DistributedDataParallelKwargs
-
-        patched = False
-        for handler in accelerator_args.get("kwargs_handlers") or []:
-            if isinstance(handler, DistributedDataParallelKwargs):
-                handler.gradient_as_bucket_view = True
-                patched = True
-
-        if patched:
-            logger.warning(
-                "[DDP] gradient_as_bucket_view=True — param.grad aliases the "
-                "reduction bucket, saving one full copy of the gradients."
-            )
-        else:
-            logger.warning(
-                "[DDP] run.ddp_gradient_as_bucket_view was requested but no "
-                "DistributedDataParallelKwargs handler was found (not a DDP "
-                "run, or transformers changed _build_accelerator_args); the "
-                "flag had NO effect."
-            )
-
-        return accelerator_args
 
     # ------------------------------------------------------------------
     # Training entry point override: capture resume path for sampler
