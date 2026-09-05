@@ -608,7 +608,21 @@ class MELTPreTrainedModel(PreTrainedModel):
     config_class = MELTConfig
     base_model_prefix = "melt"
     _skip_keys_device_placement = ["past_key_values"]
-    supports_gradient_checkpointing = False
+    # Lets `--trainer.gradient_checkpointing true` reach the wrapped decoder.
+    # HF's _set_gradient_checkpointing walks self.modules() and flips the flag
+    # on every submodule that already carries it (the decoder's per-layer
+    # GradientCheckpointingLayer blocks do), raising if it finds none -- so a
+    # mis-wired model fails loudly instead of silently training uncheckpointed.
+    #
+    # This was False from 43c6b85a, an unrelated cleanup commit ("remove utils
+    # dir") that carried no recorded incompatibility, so it reads as an
+    # untouched default rather than a finding. It matters for DDP: FSDP2 gets
+    # activation checkpointing from accelerate (fsdp_activation_checkpointing),
+    # but DDP has no equivalent and this HF flag is its only route -- and
+    # activations, not optimizer state, are what overflow the card on a 2 B
+    # decoder (mn5 job 45445498: 16.21 GB resident, 55.01 GB after a single
+    # 60 s utterance's forward+backward).
+    supports_gradient_checkpointing = True
     _supports_flash_attn = False
     _supports_sdpa = True
 
