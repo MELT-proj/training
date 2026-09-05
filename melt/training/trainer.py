@@ -359,6 +359,11 @@ class MELTTrainer(Seq2SeqTrainer):
         # Rank-local until reduced_hours() gathers it across ranks for logging.
         self._duration_tracker = DurationTracker()
 
+        # Cuts (utterances) per training microbatch since the last log() call.
+        # Unlike _duration_tracker this is reset every call, not cumulative --
+        # see _reduced_batch_cuts_stats for why.
+        self._batch_cuts_history: list[int] = []
+
         # Which named eval set is currently running; set by evaluation_loop and
         # used to key the logged sample table.
         self._eval_metric_key_prefix: str = "eval"
@@ -1354,6 +1359,8 @@ class MELTTrainer(Seq2SeqTrainer):
         src_langs = inputs.pop("src_langs", None)
         tgt_langs = inputs.pop("tgt_langs", None)
         self._duration_tracker.update(durations, tasks, langs, src_langs, tgt_langs)
+        if langs is not None:
+            self._batch_cuts_history.append(len(langs))
 
         if not self._preallocation_done:
             self._run_preallocation(model)
@@ -1381,7 +1388,46 @@ class MELTTrainer(Seq2SeqTrainer):
         hours = self._duration_tracker.reduced_hours()
         if hours and "loss" in logs:
             logs.update(hours)
+
+        cuts_stats = self._reduced_batch_cuts_stats()
+        if cuts_stats and "loss" in logs:
+            logs.update(cuts_stats)
+
         super().log(logs, start_time)
+
+    def _reduced_batch_cuts_stats(self, prefix: str = "train_cuts_per_batch") -> dict[str, float]:
+        """Return min/mean/max cuts-per-microbatch since the last log() call, reduced across ranks.
+
+        Unlike `_duration_tracker` (cumulative for the whole run), this resets
+        its local history every call -- what matters here is the composition
+        of batches in the interval just logged, not a running total. Motivated
+        by the mn5 OOM investigation: fixed-`batch_size` (cut-count) sampling
+        with no `batch_duration` cap can draw very different total audio
+        across microbatches of the same nominal size, which is invisible
+        without a per-batch cut count to compare against wall-clock/memory.
+
+        Must run unconditionally on every rank when distributed, mirroring
+        `DurationTracker.reduced_hours` -- the collective would deadlock
+        otherwise if gated on local state.
+        """
+        local = self._batch_cuts_history
+        self._batch_cuts_history = []
+
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            gathered: list[list[int] | None] = [None] * torch.distributed.get_world_size()
+            torch.distributed.all_gather_object(gathered, local)
+            merged = [c for rank_local in gathered if rank_local for c in rank_local]
+        else:
+            merged = local
+
+        if not merged:
+            return {}
+
+        return {
+            f"{prefix}/min": float(min(merged)),
+            f"{prefix}/mean": sum(merged) / len(merged),
+            f"{prefix}/max": float(max(merged)),
+        }
 
     def _log_oom_batch_info(self, inputs: dict) -> None:
         """Log tensor shapes, model info, and GPU memory state on OOM to identify the offending batch.
