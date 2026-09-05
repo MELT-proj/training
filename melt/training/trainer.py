@@ -446,6 +446,72 @@ class MELTTrainer(Seq2SeqTrainer):
         )
         self._preallocation_done = False
 
+        # DDP keeps two copies of every gradient by default: the one autograd
+        # writes into `param.grad`, and the flat bucket buffer NCCL reduces.
+        # Making `param.grad` a view into the bucket removes the duplicate --
+        # worth ~7 GiB per rank for a 1.88 B-param trainable decoder, and it is
+        # mathematically a no-op (same reduction, one fewer copy), so unlike an
+        # optimizer swap it does not make an arm incomparable to its siblings.
+        # HF's TrainingArguments does not expose it (only ddp_find_unused_
+        # parameters / bucket_cap_mb / broadcast_buffers / static_graph /
+        # backend / timeout), so it is plumbed through _build_accelerator_args
+        # below. Off by default: `param.grad` then aliases a buffer the
+        # all-reduce overwrites in place, which is worth confirming against
+        # gradient accumulation + max_grad_norm clipping before trusting it.
+        self._ddp_gradient_as_bucket_view = bool(
+            config is not None
+            and config.get("run", {}).get("ddp_gradient_as_bucket_view", False)
+        )
+
+    # ------------------------------------------------------------------
+    # Accelerator construction override: DDP gradient bucket view
+    # ------------------------------------------------------------------
+
+    def _build_accelerator_args(self, *args, **kwargs) -> dict:
+        """Flip ``gradient_as_bucket_view`` on the DDP handler HF already built.
+
+        ``Trainer._build_accelerator_args`` assembles a
+        ``DistributedDataParallelKwargs`` from the ``ddp_*`` TrainingArguments
+        and stashes it under ``kwargs_handlers``; ``gradient_as_bucket_view``
+        is a field on that dataclass with no TrainingArguments counterpart, so
+        the only way to set it is to reach into the handler before the
+        ``Accelerator`` is constructed from it.
+
+        Mutating what super() built (rather than constructing our own handler)
+        keeps every other ddp_* setting HF derived intact. This hooks a private
+        method, so it is version-sensitive: if a transformers bump renames it,
+        this override silently stops applying rather than crashing -- hence the
+        explicit confirmation log below, which is what the smoke test reads to
+        prove the flag actually landed.
+        """
+        accelerator_args = super()._build_accelerator_args(*args, **kwargs)
+
+        if not self._ddp_gradient_as_bucket_view:
+            return accelerator_args
+
+        from accelerate.utils import DistributedDataParallelKwargs
+
+        patched = False
+        for handler in accelerator_args.get("kwargs_handlers") or []:
+            if isinstance(handler, DistributedDataParallelKwargs):
+                handler.gradient_as_bucket_view = True
+                patched = True
+
+        if patched:
+            logger.warning(
+                "[DDP] gradient_as_bucket_view=True — param.grad aliases the "
+                "reduction bucket, saving one full copy of the gradients."
+            )
+        else:
+            logger.warning(
+                "[DDP] run.ddp_gradient_as_bucket_view was requested but no "
+                "DistributedDataParallelKwargs handler was found (not a DDP "
+                "run, or transformers changed _build_accelerator_args); the "
+                "flag had NO effect."
+            )
+
+        return accelerator_args
+
     # ------------------------------------------------------------------
     # Training entry point override: capture resume path for sampler
     # ------------------------------------------------------------------
