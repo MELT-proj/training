@@ -118,6 +118,12 @@ arms:
     # vision-model class that doesn't exist in melt's text-only
     # instantiation).
     accelerate: config/accelerate/fsdp2_qwen35.yaml
+    # NOTE 2026-09-07: DDP + gradient checkpointing now ALSO fits (smoke
+    # tests below), and would be faster than FSDP2 with no consolidation
+    # step needed on completion -- but this arm already completed and
+    # consolidated under FSDP2 (see below), so switching it now would only
+    # matter for a from-scratch rerun. Left as FSDP2 for provenance. See
+    # MA-700-qwen35-2b-base for where the DDP config is actually used.
     seed: 42
     # CORRECTED 2026-09-03: job 45351025 above was `--trainer.max_steps 2`,
     # a 2-step smoke test (614 s/step incl. eval_on_start generation), NOT a
@@ -153,57 +159,12 @@ arms:
                                     # the file, but the data/mixture/budget
                                     # stay identical.
     decoder: Qwen/Qwen3.5-2B-Base
-    # `accelerate` deliberately omitted -- inherits defaults.accelerate
-    # (config/accelerate/ddp.yaml). Unlike the Instruct sibling, this arm
-    # does NOT use fsdp2_qwen35.yaml: the batch_duration override below is
-    # meant to make DDP fit instead. Not yet run to confirm it does.
-    #
-    # batch_duration/grad_accum_steps: DDP OOM'd reliably on this same config
-    # at the shared batch_duration 150 with Qwen3.5-2B (jobs 45342287,
-    # 45347523 -- see fsdp2_qwen35.yaml's own commit message; Qwen3.5-2B is
-    # ~2x Llama-3.2-1B's footprint at settings tuned for the smaller decoder).
-    # Dropping batch_duration to 60 lowers the transient memory DDP needs per
-    # replica; grad_accum_steps is raised from the config's 4 to 10 to
-    # compensate (60x10 == 150x4), so steps/epoch -- and therefore
-    # comparability with the Llama-decoder siblings sharing this same config
-    # -- is unchanged (verified: `campaign.py plan` derives 2625 steps for
-    # this arm, matching MA-700-llama1b-ins/-base). See plan_arm.py's
-    # ArmAxes.batch_duration comment for why the two must move together.
     batch_duration: 60
     grad_accum_steps: 10
-    # DDP's only route to activation checkpointing (FSDP2 gets it from
-    # accelerate instead), and activations are what actually overflow a
-    # 64 GB card here: 16.21 GB resident vs 55.01 GB after one 60 s
-    # utterance (mn5 job 45448244, the run this batch_duration/grad_accum
-    # split was already trying to fix memory for). MELTForCausalLM did not
-    # support gradient checkpointing until it was fixed for exactly this
-    # job; combine with batch_duration above rather than in place of it --
-    # this is extra headroom, not yet verified sufficient on its own.
     gradient_checkpointing: true
     seed: 42
-    # 1 evenly-spaced keep, i.e. only the training-end checkpoint (see
-    # plan_arm.py's ArmAxes.checkpoint_count docstring): this run is testing
-    # whether DDP fits at batch_duration 60 at all, not building an eval
-    # curve, and checkpoint_count also collapses eval_steps to the same
-    # cadence -- eval_on_start plus one eval round at the end -- cutting the
-    # generation-eval overhead that dominated the Instruct sibling's FSDP2
-    # runtime.
-    checkpoint_count: 1
-    # 28h carried over from MA-700-qwen35-2b-ins's FSDP2-based estimate, but
-    # that basis (11 eval rounds under FSDP2's per-batch unshard/reshard) no
-    # longer applies: this arm runs DDP (no unshard/reshard) with only one
-    # eval round (checkpoint_count above), so the real cost should be well
-    # under 28h. Kept as a conservative ceiling per the time policy above
-    # (asking for more has no scheduling penalty) rather than a number
-    # derived from any actual DDP-at-batch_duration-60 measurement, which
-    # does not exist yet for this arm -- re-derive once it has run once.
+    checkpoint_count: 2
     time: "28:00:00"
-    # Never run at all, not even ad hoc. Unlike the Llama Base/Instruct pair,
-    # Qwen3.5-2B-Base ships its OWN chat template (verified byte-identical to
-    # the Instruct sibling's, 2026-09-02) rather than needing chat_template_from
-    # -- so `campaign.py plan` for this row should NOT emit
-    # --model.decoder.chat_template_from at all. If it does, DECODER_PROFILES
-    # regressed; check plan_arm.py's Qwen/Qwen3.5-2B-Base entry.
 
   # --------------------------------------------------------------- IFT (stage 2)
   - id: IFT-125-llama1b-ins
