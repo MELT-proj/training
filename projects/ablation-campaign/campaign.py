@@ -49,6 +49,7 @@ AXIS_FIELDS = {
     "adapter", "adapter_freeze", "encoder", "encoder_freeze",
     "decoder", "decoder_freeze", "decoder_lora",
     "encoder_lr", "decoder_lr", "adapter_lr",
+    "batch_duration", "grad_accum_steps", "gradient_checkpointing",
 }
 POLICY_FIELDS = {
     "seed", "eval_rounds", "keep_checkpoints", "checkpoint_count",

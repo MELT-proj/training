@@ -9,9 +9,22 @@
 #   - a new data mixture / budget / task set -> a new ABL-*.yaml, referenced
 #     by `config:` below
 #   - a new architecture or LR point         -> a row here
-#   - anything that must be identical across arms (batch_duration,
-#     quadratic_duration, max_samples, max_duration/max_tokens) -> the base
-#     YAML, never here
+#   - anything that must be identical across arms (quadratic_duration,
+#     max_samples, max_duration/max_tokens) -> the base YAML, never here
+#   - batch_duration/grad_accum_steps default to the base YAML too, and
+#     should stay there for arms that can run at the config's own value --
+#     but plan_arm.py DOES accept them as a per-arm override (a coupled
+#     pair: their product with world_size sets audio-seconds/step, so
+#     overriding one means compensating the other to keep steps/epoch, and
+#     therefore comparability with sibling arms, unchanged). This exists for
+#     memory-constrained cases like a decoder that only fits DDP at a
+#     smaller batch_duration -- see MA-700-qwen35-2b-base below for a worked
+#     example and plan_arm.py's ArmAxes for the mechanics.
+#   - gradient_checkpointing is a plain per-arm override too, but an
+#     independent one (no compensation needed): it trades recompute for
+#     activation memory without changing what a step trains on. DDP's only
+#     route to activation checkpointing -- FSDP2 gets it from accelerate's
+#     own fsdp_activation_checkpointing instead.
 #
 # Every field except `id`, `stage` and `config` is optional and falls back to
 # `defaults:` and then to the base config's own value. An omitted axis means
@@ -139,46 +152,19 @@ arms:
 
   - id: MA-700-qwen35-2b-base
     stage: MA
-    config: ABL-MA-700-asr.yaml
+    config: ABL-MA-700-asr.yaml     # same config as the Llama pair and the
+                                    # Instruct sibling -- batch_duration/
+                                    # grad_accum_steps below override two of
+                                    # its values per-arm rather than forking
+                                    # the file, but the data/mixture/budget
+                                    # stay identical.
     decoder: Qwen/Qwen3.5-2B-Base
-    # CORRECTED 2026-09-07: plain DDP OOMs (confirmed by direct test, mn5
-    # job 45530121 -- process already at 57-59 GB resident before a ~6.3 GiB
-    # ask, despite Qwen's frozen backbone costing only ~5.8 GiB of that: the
-    # rest is activations from backpropagating through 24 frozen decoder
-    # layers to reach the adapter -- freezing weights doesn't free the
-    # activations autograd needs to reach them). DDP + gradient checkpointing
-    # DOES fit (job 45530330, COMPLETED cleanly incl. the end-of-train eval
-    # HF always runs): 15 steps at ~12s/step steady state (vs IFT's
-    # 15-18s/step under the same fix -- MA has no decoder gradient/optimizer
-    # state to carry, so it has far more headroom), cuts/batch mean 12.6-15.0
-    # (batch_duration=150, this arm's own default, untouched). Faster than
-    # FSDP2 and needs no post-run weight-consolidation step (DDP saves a
-    # real model.safetensors directly, see ddp.yaml's own header comment).
-    #
-    # Requires --trainer.gradient_checkpointing true on the command line --
-    # there is no first-class campaign.yaml axis for it yet (plan_arm.py
-    # only emits it via the accelerate config's fsdp_activation_checkpointing
-    # for FSDP2; DDP has no such automatic route). Pass it through:
-    #   campaign.py run MA-700-qwen35-2b-base -- --trainer.gradient_checkpointing true
-    # Worth promoting to a real axis if this pattern recurs for more arms.
-    accelerate: config/accelerate/ddp.yaml
+    batch_duration: 60
+    grad_accum_steps: 10
+    gradient_checkpointing: true
     seed: 42
-    # Time basis unchanged from the previous FSDP2-derived 28h estimate
-    # (~13.5h training + 11 x ~70min eval rounds =~ 26.3h, from the Instruct
-    # sibling's measured rate) -- DDP+checkpointing's ~12s/step here is
-    # training-step rate only, not a full-run measurement, and eval cost
-    # under DDP+checkpointing hasn't been measured at all (the one eval this
-    # smoke test ran was 200 examples in ~7 min, not comparable to a full
-    # eval_rounds sweep). Keep the conservative number until a real segment
-    # is measured, per IFT-700-qwen35-2b-ins's lesson that isolated step
-    # rates alone underestimate real run cost.
+    checkpoint_count: 2
     time: "28:00:00"
-    # Never run at all, not even ad hoc. Unlike the Llama Base/Instruct pair,
-    # Qwen3.5-2B-Base ships its OWN chat template (verified byte-identical to
-    # the Instruct sibling's, 2026-09-02) rather than needing chat_template_from
-    # -- so `campaign.py plan` for this row should NOT emit
-    # --model.decoder.chat_template_from at all. If it does, DECODER_PROFILES
-    # regressed; check plan_arm.py's Qwen/Qwen3.5-2B-Base entry.
 
   # --------------------------------------------------------------- IFT (stage 2)
   - id: IFT-125-llama1b-ins
@@ -235,11 +221,27 @@ arms:
     decoder: Qwen/Qwen3.5-2B          # ABL-IFT-700.yaml bakes in Llama, unlike
                                       # the MA config's silent inherit -- must
                                       # be explicit here too.
+    # CONFIRMED (2026-09-07): `campaign.py plan` WARNs twice here that it is
+    # overriding data.chat_template_config 'llama3' -> 'chatml' -- once
+    # planning this arm, once resolving init_from's parent plan below, both
+    # for the same reason. Wanted: Qwen3.5's chat template is chatml, and
+    # ABL-IFT-700.yaml's own llama3 default is baked for the Llama decoder
+    # (see the comment above), not a deliberate IFT-specific choice this
+    # override would be clobbering. MA-700-qwen35-2b-ins/-base make the same
+    # override for the same decoder, so this is decoder-driven, not
+    # stage-driven -- if this config's default ever needs to be
+    # decoder-conditional, that logic belongs in DECODER_PROFILES, not here.
+    #
     # Confirmed needed for MA-700-qwen35-2b-ins (DDP OOM'd, FSDP2 didn't --
     # see that row's comment). IFT trains the full 2B decoder on top of MA's
     # frozen-decoder case, so the memory pressure this addresses is if
     # anything worse here, not less.
     accelerate: config/accelerate/fsdp2_qwen35.yaml
+    # `campaign.py plan` also NOTEs it is overriding model.ckpt from
+    # ABL-IFT-700.yaml's own baked-in default (the Llama MA-700 arm's pinned
+    # path) to this arm's own MA-700-qwen35-2b-ins checkpoint -- expected:
+    # that baked default is only ever right for IFT-700-llama1b-ins, and
+    # init_from below is exactly the mechanism meant to override it per arm.
     init_from: MA-700-qwen35-2b-ins
     seed: 1337
     # CORRECTED 2026-09-05, from two real smoke tests on acc_debug (mn5 jobs
@@ -292,6 +294,11 @@ arms:
   - id: IFT-700-qwen35-2b-base
     stage: IFT
     config: ABL-IFT-700.yaml
+    # Same two `campaign.py plan` messages as IFT-700-qwen35-2b-ins, for the
+    # same reason (see that row's comments): a chat_template_config
+    # 'llama3' -> 'chatml' WARNING (decoder-driven, confirmed wanted) and a
+    # model.ckpt NOTE overriding ABL-IFT-700.yaml's baked Llama default to
+    # this arm's own init_from target below.
     decoder: Qwen/Qwen3.5-2B-Base
     accelerate: config/accelerate/fsdp2_qwen35.yaml  # see IFT-700-qwen35-2b-ins
     init_from: MA-700-qwen35-2b-base
