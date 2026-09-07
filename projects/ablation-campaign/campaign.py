@@ -3,7 +3,8 @@
 
     campaign.py status [--site mn5]        what has run, is running, is missing
     campaign.py plan [ID ...]              show the exact command(s), submit nothing
-    campaign.py run ID [--resume] [-- ...] submit one arm
+    campaign.py run ID [--resume] [--time HH:MM:SS] [-- ...]
+                                            submit one arm
 
 Three artifacts, three jobs, deliberately not merged:
 
@@ -140,7 +141,13 @@ def resolve(row: dict, defaults: dict, arms: list[dict]) -> tuple[ArmAxes, dict]
     return axes, run
 
 
-def render(row: dict, defaults: dict, arms: list[dict], extra: list[str] | None = None):
+def render(
+    row: dict,
+    defaults: dict,
+    arms: list[dict],
+    extra: list[str] | None = None,
+    time_override: str | None = None,
+):
     axes, run = resolve(row, defaults, arms)
     p = plan_arm.plan(axes)
     cmd = [
@@ -161,7 +168,16 @@ def render(row: dict, defaults: dict, arms: list[dict], extra: list[str] | None 
         "MELT_GPUS_PER_NODE": str(run["gpus_per_node"]),
         "MELT_QOS": run["qos"],
         "MELT_SEED": str(axes.seed),
-        "MELT_TIME": run["time"] or p.time_default,
+        # time_override is per-submission, not written back to the grid:
+        # campaign.yaml's `time:` is meant to describe a FRESH one-shot run
+        # (the policy comment above the arms: list), and a --resume rarely
+        # needs anywhere near that much -- reusing it every time asks SLURM's
+        # backfill scheduler for far more walltime than the remaining work,
+        # which under contention can cost queue time for no reason (the grid
+        # value is fine when the cluster is idle, but that is not always true;
+        # see IFT-700-qwen35-2b-ins's campaign.yaml comment for the measured
+        # per-checkpoint-segment rate to size a resume's real remaining time).
+        "MELT_TIME": time_override or run["time"] or p.time_default,
     }
     return p, run, env, cmd
 
@@ -325,7 +341,10 @@ def cmd_run(args) -> None:
         # get_last_checkpoint() on whatever it is given.
         extra += ["--trainer.resume_from_checkpoint", "True"]
 
-    p, run, env, cmd = render(row, defaults, arms, extra)
+    p, run, env, cmd = render(row, defaults, arms, extra, time_override=args.time)
+    if args.time:
+        print(f"NOTE: --time {args.time} overrides the grid's {run['time'] or p.time_default} "
+              "for this submission only; campaign.yaml is unchanged.")
     printable = " ".join(f"{k}={shlex.quote(v)}" for k, v in env.items()) + " " + \
                 " ".join(shlex.quote(c) for c in cmd)
     if args.dry_run:
@@ -398,6 +417,10 @@ def main() -> None:
     s.add_argument("id")
     s.add_argument("--resume", action="store_true",
                    help="continue in the same output_dir from its last checkpoint")
+    s.add_argument("--time", default=None, metavar="HH:MM:SS",
+                   help="override the wall-time budget for THIS submission only "
+                        "(e.g. a --resume needing far less than the grid's "
+                        "fresh-run estimate); campaign.yaml is not touched")
     s.add_argument("--dry-run", action="store_true", help="print the command, submit nothing")
     s.set_defaults(func=cmd_run)
 
