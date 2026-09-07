@@ -15,6 +15,8 @@ The campaign varies three things. Each lives in exactly one place:
 | **Data**: mixture, hours, task | a rendered config, ~550 lines | one YAML per budget x task: `ABL-MA-125-asr.yaml`, `ABL-MA-700-asr.yaml`, `ABL-IFT-125.yaml`, `ABL-IFT-700.yaml` |
 | **Architecture**: adapter, encoder, decoder, freezing, decoder LoRA | 0-8 CLI overrides | `ADAPTER`, `ADAPTER_FREEZE`, `ENCODER`, `ENCODER_FREEZE`, `DECODER`, `DECODER_FREEZE`, `DECODER_LORA` env vars |
 | **Optimisation**: encoder/decoder/adapter LR | 0-3 CLI overrides | `ENCODER_LR`, `DECODER_LR`, `ADAPTER_LR` env vars |
+| **Batch/accum** (exception, not a fourth axis): `batch_duration`, `gradient_accumulation_steps` | 0-2 CLI overrides, always paired | `BATCH_DURATION`, `GRAD_ACCUM_STEPS` env vars -- see "Two rules" below for why this pair, and only this pair, is allowed to leave the base YAML |
+| **Memory/perf** (also not a fourth axis): `trainer.gradient_checkpointing` | 0-1 CLI override, independent | `GRADIENT_CHECKPOINTING` env var -- trades recompute for activation memory without changing what a step trains on, so (unlike batch/accum) it needs no compensating override and is not tagged into `EXP_NAME` |
 
 There is deliberately **no YAML per arm**. A data axis change (a new budget or
 task mix) is big enough, and shared enough across many arms, to earn its own
@@ -221,13 +223,19 @@ dies on a `world_size` mismatch.
 `EXP_NAME` is composed, never typed by hand, from:
 
 ```
-{STAGE}-{data tag}-{encoder}{F|T}-{decoder}{F|T}[-lora]-{adapter}{F|T}-{elr tag}-{dlr tag}-{lr tag}-s{seed}-{world_size}g
+{STAGE}-{data tag}-{encoder}{F|T}-{decoder}{F|T}[-lora]-{adapter}{F|T}[-bdN][-gaN]-{elr tag}-{dlr tag}-{lr tag}-s{seed}-{world_size}g
 ```
 
 e.g. `MA-125asr-w2vbF-llama1bInsF-mlpT-elr6e6-dlr2e5-lr2e4-s42-8g`, or with
-decoder LoRA on: `IFT-125-w2vbF-qwen1_7bT-lora-mlpF-elr6e6-dlr2e5-lr2e4-s42-8g`.
+decoder LoRA on: `IFT-125-w2vbF-qwen1_7bT-lora-mlpF-elr6e6-dlr2e5-lr2e4-s42-8g`,
+or with `BATCH_DURATION`/`GRAD_ACCUM_STEPS` overridden:
+`MA-700asr-w2vbF-qwen35_2bBaseF-mlpT-bd60-ga10-elr6e6-dlr2e5-lr2e5-s42-8g`.
 Trailing `F`/`T` marks a module frozen/trainable; `-lora` only appears when
-`DECODER_LORA` resolves true. The three LR tags (`elr`/`dlr`/`lr`, for
+`DECODER_LORA` resolves true, and `-bdN`/`-gaN` only appear when
+`BATCH_DURATION`/`GRAD_ACCUM_STEPS` actually differ from the config -- unlike
+the LR tags below, they are NOT always present, since making them so would
+have renamed (and orphaned the output directory of) every arm composed before
+this pair of overrides existed. The three LR tags (`elr`/`dlr`/`lr`, for
 encoder/decoder/adapter) are always present -- like the freeze markers, they
 report the real effective value whether or not it was explicitly overridden,
 so two arms that only differ in one LR never become indistinguishable in W&B
@@ -269,13 +277,41 @@ rather than submitting it quietly.
 ## Two rules that matter more than the file layout
 
 **Anything that must be identical across arms belongs in the base config,
-never the launcher.** `batch_duration`, `quadratic_duration`, `max_samples`
-and similar knobs govern effective batch size and eval noise; if one of them
-ends up as a launcher default instead of a YAML value, it is only a matter of
-time before two arms drift apart on it without anyone deciding that on
-purpose. `launch_campaign.sh` only ever overrides the three declared axes plus
-the campaign-wide invariants (`num_train_epochs: 1`, `save_total_limit: 2`)
-that apply to every arm identically by convention, not per-arm.
+never the launcher.** `quadratic_duration`, `max_samples`, `max_duration`/
+`max_tokens` and similar knobs govern eval noise and which audio is even
+admitted to training; if one of them ends up as a launcher default instead of
+a YAML value, it is only a matter of time before two arms drift apart on it
+without anyone deciding that on purpose.
+
+`batch_duration`/`gradient_accumulation_steps` are the one deliberate
+exception, and only as a **coupled pair**: `BATCH_DURATION`/
+`GRAD_ACCUM_STEPS` (campaign.yaml's `batch_duration`/`grad_accum_steps`) let
+an arm override both together, because it is their PRODUCT with world_size --
+audio-seconds trained per optimizer step -- that steps/epoch actually depends
+on, not either number alone. An arm that raises `grad_accum_steps` by the
+same factor it drops `batch_duration` keeps that product, and therefore its
+step count, identical to sibling arms sharing the same config -- `plan_arm.py`
+derives steps from the *effective* (post-override) values for exactly this
+reason, and only emits a CLI override (and tags `bdN`/`gaN` into `EXP_NAME`)
+when a value actually differs from the config. The intended use is a
+decoder that does not fit at the config's own `batch_duration` under a given
+`accelerate` config (see `MA-700-qwen35-2b-base` in campaign.yaml) -- not a
+general-purpose knob for changing what an arm trains on; reach for a new
+`ABL-*.yaml` for that instead. `launch_campaign.sh` otherwise only overrides
+the architecture/optimisation axes plus the campaign-wide invariants
+(`num_train_epochs: 1`, `save_total_limit: 2`) that apply to every arm
+identically by convention, not per-arm.
+
+`gradient_checkpointing` is a second, independent exception: `GRADIENT_CHECKPOINTING`
+(campaign.yaml's `gradient_checkpointing`) lets an arm ask for
+`--trainer.gradient_checkpointing true` on its own, no paired knob required,
+because trading recompute for activation memory doesn't change what a step
+trains on -- same forward/backward result, same step count. It's DDP's only
+route to activation checkpointing (FSDP2 gets it from accelerate's own
+`fsdp_activation_checkpointing` instead), which is why `MA-700-qwen35-2b-base`
+sets it alongside its `batch_duration`/`grad_accum_steps` override: both are
+memory levers for the same DDP-under-Qwen3.5 problem, not alternatives to
+each other.
 
 **Ablating data breaks step-comparability.** With `num_train_epochs: 1`, a
 125 h arm and a 700 h arm derive different step counts by design (903 vs
@@ -288,10 +324,13 @@ and therefore a step count, so they stay directly comparable step-for-step.
 
 `eval_steps` and `save_steps` used to be hand-maintained per arm (100/200 for
 the 125 h arm's 903 steps, 200/200 for the 700 h arm's 2188) and drifted
-whenever `batch_duration` changed. They are now derived from the config's own
-`total_hours`, `batch_duration`, `quadratic_duration` and
-`trainer.gradient_accumulation_steps` at the actual world_size, targeting
-~11 eval rounds per run:
+whenever `batch_duration` changed. They are now derived from `total_hours` and
+`quadratic_duration` (always the config's own) and from `batch_duration`/
+`gradient_accumulation_steps` at the actual world_size -- the config's own
+values, unless an arm's `BATCH_DURATION`/`GRAD_ACCUM_STEPS` override them, in
+which case the *effective* (post-override) values are what steps are derived
+from, since those are what will actually train -- targeting ~11 eval rounds
+per run:
 
 ```
 steps = ceil(total_hours * 3600 / batch_duration * inflation / world_size / gradient_accumulation_steps)

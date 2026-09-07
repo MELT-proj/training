@@ -22,6 +22,12 @@
 #   Architecture   ADAPTER, ADAPTER_FREEZE, ENCODER, ENCODER_FREEZE,
 #                  DECODER, DECODER_FREEZE, DECODER_LORA     (2-7 CLI overrides)
 #   Optimisation   ENCODER_LR, DECODER_LR, ADAPTER_LR         (0-3 CLI overrides)
+#   Batch/accum    BATCH_DURATION, GRAD_ACCUM_STEPS            (0-2 CLI overrides,
+#                                        coupled -- see plan_arm.py's ArmAxes)
+#   Memory/perf    GRADIENT_CHECKPOINTING                      (0-1 CLI override,
+#                                        independent -- trades recompute for
+#                                        activation memory, DDP's only route to
+#                                        it since FSDP2 gets it from accelerate)
 #
 # Every axis below defaults to EMPTY, which plan_arm.py reads as "inherit
 # the chosen CONFIG's own value" -- no CLI override, no assumption about
@@ -66,6 +72,9 @@ DECODER_LORA="${DECODER_LORA:-}"
 ENCODER_LR="${ENCODER_LR:-}"
 DECODER_LR="${DECODER_LR:-}"
 ADAPTER_LR="${ADAPTER_LR:-}"
+BATCH_DURATION="${BATCH_DURATION:-}"
+GRAD_ACCUM_STEPS="${GRAD_ACCUM_STEPS:-}"
+GRADIENT_CHECKPOINTING="${GRADIENT_CHECKPOINTING:-}"
 SEED="${SEED:-42}"
 
 # --- site / topology ----------------------------------------------------------
@@ -104,6 +113,8 @@ PLAN="$(python3 "${SCRIPT_DIR}/plan_arm.py" \
     --decoder "$DECODER" --decoder-freeze "$DECODER_FREEZE" \
     --decoder-lora "$DECODER_LORA" \
     --encoder-lr "$ENCODER_LR" --decoder-lr "$DECODER_LR" --adapter-lr "$ADAPTER_LR" \
+    --batch-duration "$BATCH_DURATION" --grad-accum-steps "$GRAD_ACCUM_STEPS" \
+    --gradient-checkpointing "$GRADIENT_CHECKPOINTING" \
     --seed "$SEED")" || { echo "ERROR: plan_arm.py failed (see above)" >&2; exit 1; }
 eval "$PLAN"
 # PLAN sets: EXP_NAME, STEPS, EVAL_STEPS, SAVE_STEPS, SAVE_TOTAL_LIMIT,

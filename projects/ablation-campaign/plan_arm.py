@@ -41,6 +41,18 @@ DECODER_LORA for toggling model.lora.enabled. A config that omits an *_lr key
 (several ABL-*-700 configs do, for whichever module that stage freezes) falls
 back to melt/training/config.py's DEFAULT_CONFIG value rather than failing --
 see DEFAULT_ENCODER_LR/DEFAULT_DECODER_LR/DEFAULT_ADAPTER_LR below.
+
+BATCH_DURATION and GRAD_ACCUM_STEPS are a coupled pair, not independent axes:
+their product with world_size is the audio-seconds trained per optimizer
+step, which is what steps/epoch (and eval_steps/save_steps, derived from it)
+actually depends on -- see ArmAxes's own comment on the two fields. An arm
+that overrides one is expected to compensate the other so its step count
+stays comparable to sibling arms sharing the same base config.
+
+GRADIENT_CHECKPOINTING is a plain independent boolean (one CLI override,
+same inherit-or-override rule): it trades recompute for activation memory
+without changing what a step trains on, so unlike BATCH_DURATION/
+GRAD_ACCUM_STEPS it needs no compensating override.
 """
 from __future__ import annotations
 
@@ -249,15 +261,27 @@ def effective_duration_inflation(train_ds: dict) -> float:
     return 1.0 + mean_weighted_duration / q
 
 
-def derive_steps(train_ds: dict, gradient_accumulation_steps: int, world_size: int) -> int:
+def derive_steps(
+    train_ds: dict, batch_duration: float, gradient_accumulation_steps: int, world_size: int
+) -> int:
     """Port of estimate_steps_per_epoch's optimizer-step branch (batch_duration path only:
-    every ABL-* config sets batch_size: null, so that branch is not needed here)."""
+    every ABL-* config sets batch_size: null, so that branch is not needed here).
+
+    batch_duration is a parameter rather than read off train_ds internally so a
+    BATCH_DURATION axis override (see ArmAxes) can feed in the *effective*
+    value -- steps/eval_steps/save_steps must reflect what will actually be
+    trained, not the base config's own number, once an arm is allowed to
+    override it.
+    """
     total_hours = get(train_ds, "total_hours")
-    batch_duration = get(train_ds, "batch_duration")
     if total_hours is None:
         die("data.train_ds.total_hours is not set in the config; cannot derive steps")
-    if not batch_duration or float(batch_duration) <= 0:
-        die("data.train_ds.batch_duration is not set (or <= 0) in the config; cannot derive steps")
+    if not batch_duration or batch_duration <= 0:
+        die(
+            "effective batch_duration is not set (or <= 0) -- neither "
+            "data.train_ds.batch_duration in the config nor a BATCH_DURATION "
+            "override was usable; cannot derive steps"
+        )
 
     total_duration = float(total_hours) * 3600.0
     inflation = effective_duration_inflation(train_ds)
@@ -293,6 +317,29 @@ class ArmAxes:
     encoder_lr: str = ""
     decoder_lr: str = ""
     adapter_lr: str = ""
+    # batch_duration/grad_accum_steps: same inherit-or-override rule as every
+    # other axis above, but they are NOT independent knobs -- a config's step
+    # count (and therefore its LR schedule, eval/save cadence, and comparability
+    # with sibling arms sharing the same config) is driven by their PRODUCT
+    # (world_size x batch_duration x grad_accum_steps = audio-seconds trained
+    # per optimizer step), not either one alone. An arm that overrides one
+    # without compensating the other silently changes what "one epoch" means
+    # for that arm relative to its siblings -- see README.md's "Two rules that
+    # matter more than the file layout". Typical use: a decoder that needs a
+    # smaller batch_duration to fit memory (e.g. under DDP) raises
+    # grad_accum_steps by the same factor to keep the product, and therefore
+    # steps/epoch, unchanged.
+    batch_duration: str = ""
+    grad_accum_steps: str = ""
+    # gradient_checkpointing: independent boolean, unlike the coupled pair
+    # above -- it trades recompute for activation memory (mathematically a
+    # no-op: same forward/backward result, same step count) rather than
+    # changing what a step trains on, so it needs no compensating override
+    # and is not tagged into EXP_NAME. DDP's only route to activation
+    # checkpointing (FSDP2 gets it from accelerate's own
+    # fsdp_activation_checkpointing instead) -- see melt/modeling/modeling_melt.py's
+    # commit enabling supports_gradient_checkpointing for why this exists.
+    gradient_checkpointing: str = ""
     seed: int = 42
     # --- policy (not axes) ---------------------------------------------
     # eval_rounds: eval_steps = round(steps / eval_rounds).
@@ -337,12 +384,22 @@ def plan(args: ArmAxes) -> ArmPlan:
     train_ds = get(cfg, "data.train_ds")
     if train_ds is None:
         die(f"{args.config} has no data.train_ds section")
-    grad_accum = get(cfg, "trainer.gradient_accumulation_steps")
-    if not grad_accum:
-        die(f"{args.config} has no trainer.gradient_accumulation_steps")
-    grad_accum = int(grad_accum)
 
-    steps = derive_steps(train_ds, grad_accum, args.world_size)
+    cfg_batch_duration = get(train_ds, "batch_duration")
+    cfg_grad_accum = get(cfg, "trainer.gradient_accumulation_steps")
+    batch_duration_effective = float(args.batch_duration) if args.batch_duration else (
+        float(cfg_batch_duration) if cfg_batch_duration else None
+    )
+    grad_accum_effective = int(args.grad_accum_steps) if args.grad_accum_steps else (
+        int(cfg_grad_accum) if cfg_grad_accum else None
+    )
+    if not grad_accum_effective:
+        die(
+            f"{args.config} has no trainer.gradient_accumulation_steps and "
+            "GRAD_ACCUM_STEPS was not set"
+        )
+
+    steps = derive_steps(train_ds, batch_duration_effective, grad_accum_effective, args.world_size)
     # ~11 eval rounds over the run by default, per the campaign convention
     # documented in the old launchers' headers (both landed close to 11:
     # 903/100~=9, 2188/200~=11 -- this makes the derivation land on ~11 for
@@ -480,6 +537,29 @@ def plan(args: ArmAxes) -> ArmPlan:
     if args.adapter_freeze and adapter_freeze != cfg_adapter_freeze:
         overrides += ["--model.adapter.freeze", str(adapter_freeze).lower()]
 
+    # batch_duration/grad_accum_steps overrides -- see ArmAxes's comment on
+    # why these two are coupled. Only emitted (and only tagged into EXP_NAME
+    # below) when they actually differ from the config, same rule as every
+    # other axis.
+    batch_duration_overridden = bool(args.batch_duration) and (
+        cfg_batch_duration is None or float(args.batch_duration) != float(cfg_batch_duration)
+    )
+    if batch_duration_overridden:
+        bd = batch_duration_effective
+        overrides += ["--data.train_ds.batch_duration", str(int(bd)) if bd == int(bd) else str(bd)]
+    grad_accum_overridden = bool(args.grad_accum_steps) and (
+        cfg_grad_accum is None or grad_accum_effective != int(cfg_grad_accum)
+    )
+    if grad_accum_overridden:
+        overrides += ["--trainer.gradient_accumulation_steps", str(grad_accum_effective)]
+
+    cfg_gradient_checkpointing = bool(get(cfg, "trainer.gradient_checkpointing"))
+    gradient_checkpointing_effective = (
+        as_bool(args.gradient_checkpointing) if args.gradient_checkpointing else cfg_gradient_checkpointing
+    )
+    if args.gradient_checkpointing and gradient_checkpointing_effective != cfg_gradient_checkpointing:
+        overrides += ["--trainer.gradient_checkpointing", str(gradient_checkpointing_effective).lower()]
+
     if args.encoder_lr:
         encoder_lr_effective = args.encoder_lr
         overrides += ["--optimization.encoder_lr", args.encoder_lr]
@@ -512,12 +592,25 @@ def plan(args: ArmAxes) -> ArmPlan:
             )
         overrides += ["--model.ckpt", args.init_from]
 
+    # Only appear when overridden, unlike the always-present LR tags: adding
+    # them unconditionally would rename every arm ever composed under the old
+    # scheme (batch_duration/grad_accum_steps were not overridable axes until
+    # this pair of knobs existed), silently orphaning their output
+    # directories and resume paths.
+    batch_grad_tags = []
+    if batch_duration_overridden:
+        bd = batch_duration_effective
+        batch_grad_tags.append(f"bd{int(bd) if bd == int(bd) else bd}")
+    if grad_accum_overridden:
+        batch_grad_tags.append(f"ga{grad_accum_effective}")
+
     composed_name = "-".join([
         args.stage,
         data_tag(args.config, args.stage),
         f"{encoder_tag(encoder_effective)}{'F' if encoder_freeze else 'T'}",
         f"{decoder_tag(decoder_effective)}{'F' if decoder_freeze else 'T'}" + ("-lora" if decoder_lora else ""),
         f"{adapter_effective}{'F' if adapter_freeze else 'T'}",
+        *batch_grad_tags,
         lr_tag(encoder_lr_effective, "elr"),
         lr_tag(decoder_lr_effective, "dlr"),
         lr_tag(adapter_lr_effective, "lr"),
@@ -563,6 +656,9 @@ def main() -> None:
     p.add_argument("--encoder-lr", required=True, help="empty string means: use the config's own value, no override")
     p.add_argument("--decoder-lr", required=True, help="empty string means: use the config's own value, no override")
     p.add_argument("--adapter-lr", required=True, help="empty string means: use the config's own value, no override")
+    p.add_argument("--batch-duration", required=True, help="empty string means: use the config's own value, no override")
+    p.add_argument("--grad-accum-steps", required=True, help="empty string means: use the config's own value, no override")
+    p.add_argument("--gradient-checkpointing", required=True, help="empty string means: use the config's own value, no override")
     p.add_argument("--seed", required=True, type=int)
     args = p.parse_args()
 
@@ -580,6 +676,9 @@ def main() -> None:
         encoder_lr=args.encoder_lr,
         decoder_lr=args.decoder_lr,
         adapter_lr=args.adapter_lr,
+        batch_duration=args.batch_duration,
+        grad_accum_steps=args.grad_accum_steps,
+        gradient_checkpointing=args.gradient_checkpointing,
         seed=args.seed,
     ))
 

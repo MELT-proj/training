@@ -3,8 +3,28 @@ debug: false
 deepspeed_config:
   deepspeed_hostfile: ''
   deepspeed_multinode_launcher: pdsh
-  gradient_accumulation_steps: 4
-  gradient_clipping: 1.0
+  # 'auto' (not a hardcoded 4) so this always tracks whatever
+  # --trainer.gradient_accumulation_steps says, matching how ddp.yaml/fsdp2*.yaml
+  # already work (they don't set this key at all, so the Trainer's own value
+  # is the only one that exists). A literal number here would silently win
+  # over any CLI override -- accelerate bakes deepspeed_config's value into
+  # the DeepSpeed config verbatim (via ACCELERATE_GRADIENT_ACCUMULATION_STEPS,
+  # see accelerate/utils/dataclasses.py's DeepSpeedPlugin.__post_init__),
+  # and HF's DeepSpeed integration only fills a value in from
+  # TrainingArguments when the DeepSpeed config says 'auto'; a concrete
+  # mismatch is a hard error at launch. No campaign arm uses this config
+  # today (see projects/ablation-campaign/campaign.yaml), so this was
+  # dormant, not yet a real failure.
+  gradient_accumulation_steps: auto
+  # Same fix, same reason: 'auto' (not a hardcoded 1.0) so this always
+  # tracks whatever --trainer.max_grad_norm says instead of silently
+  # winning over it. accelerate bakes deepspeed_config's value into the
+  # DeepSpeed config verbatim (via ACCELERATE_GRADIENT_CLIPPING, same
+  # DeepSpeedPlugin.__post_init__ as above), and HF's DeepSpeed integration
+  # only fills a value in from TrainingArguments when the DeepSpeed config
+  # says 'auto'. Still dormant like the field above -- no campaign arm uses
+  # this config today.
+  gradient_clipping: auto
   zero3_init_flag: false
   zero_stage: 1
 distributed_type: DEEPSPEED
