@@ -137,10 +137,30 @@ its input is padded to the batch's length, the merged embeddings and mask agree
 to 1e-16 in float64, and `generate()` already derives correct per-row position
 ids from the mask. What remains is arithmetic. A different batch shape means a
 different reduction order, and in bfloat16 that flips greedy decisions on the
-utterances where the top two logits are close — 2 of 16 on a librispeech slice,
-6 of 16 under flash attention. No attention implementation changes that, so a
-batched number is only comparable with another batched number at the same
-width.
+utterances where the top two logits are close. So a batched number is only
+comparable with another batched number at the same width.
+
+It is the **dtype**, not the attention implementation. Batch 16 against batch 1
+over the same 16 utterances, with the first-step logit perturbation the batch
+introduces and the top-two margin it has to cross to flip a greedy choice:
+
+| configuration | transcripts differing | median \|Δlogit\| | median top-2 margin |
+|---|---|---|---|
+| bfloat16, sdpa as shipped | 2 of 16 | 1.6e-01 | 4.16 |
+| bfloat16, sdpa on deterministic backends | 4 of 16 | 1.8e-01 | 4.13 |
+| bfloat16, eager | 1 of 16 | 1.9e-01 | 4.09 |
+| bfloat16, flash_attention_2 | 2 of 16 | 1.6e-01 | 4.13 |
+| float32, eager | **0 of 16** | 1.6e-04 | 4.07 |
+| float32, sdpa on deterministic backends | **0 of 16** | 1.8e-04 | 4.07 |
+
+Every bfloat16 configuration perturbs the logits by about the same 0.2, and the
+implementation only shuffles which rows land on the wrong side of a close call.
+float32 shrinks the perturbation by roughly a thousand and every transcript
+then agrees. That is not a guarantee — the perturbation is smaller, not zero,
+and a genuinely tied logit pair would still flip — but at this margin
+distribution nothing comes close. float32 costs about twice the memory and
+throughput, so it is a way to settle an argument about a specific number, not a
+default for a campaign.
 
 **A batch must at least repeat itself, and until #118 it did not.** Five
 identical `generate()` calls on the same mixed-length batch of 16 returned five
