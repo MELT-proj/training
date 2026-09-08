@@ -687,8 +687,9 @@ class MELTPreTrainedModel(PreTrainedModel):
         it, because the two backbones do not have to agree: with
         Wav2Vec2-BERT, which has no flash-attention kernel in transformers
         5.16.1, forcing the decoder's choice onto the encoder makes the model
-        unloadable (mn5 job 45561614), while a Whisper or Wav2Vec2 encoder
-        takes the same value happily.
+        unloadable ("Wav2Vec2BertModel does not support Flash Attention 2
+        yet"), while a Whisper or Wav2Vec2 encoder takes the same value
+        happily.
 
         A sub-config that already carries an explicit value keeps it.  A
         round-tripped checkpoint deserialises its sub-configs with

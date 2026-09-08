@@ -439,6 +439,41 @@ class TestAttnImplementationPropagation:
         assert config.text_decoder_config._attn_implementation is None
         assert config.audio_encoder_config._attn_implementation is None
 
+    def test_it_runs_on_every_construction_path_not_just_from_pretrained(self):
+        """`__init__` is the hook, so a fresh scaffold goes through it too.
+
+        `MELTForCausalLM(config, load_backbones=True)` -- the training path that
+        builds a new model over pretrained backbones -- reaches the same
+        `__init__` as `from_pretrained`, so the decoder is constructed with
+        whatever was asked for either way.
+        """
+        config = _local_melt_config()
+        config._attn_implementation = "sdpa"
+
+        model = MELTForCausalLM(config, load_backbones=False)
+
+        assert model.text_decoder.config._attn_implementation == "sdpa"
+
+    def test_the_fresh_training_path_is_unaffected(self):
+        """`prepare_melt_config` already sets the decoder's implementation.
+
+        It passes `decoder_kwargs={"attn_implementation": ...}`, which lands
+        directly on the decoder sub-config, so on that path this propagation
+        finds an explicit value and leaves it alone. The behaviour change is
+        confined to configs that arrive with the value unset, which is what a
+        round-tripped checkpoint gives you.
+
+        Uses eager rather than flash_attention_2 only so the assertion survives
+        a CPU-only runner, where instantiating a flash-attention config raises.
+        """
+        config = _local_melt_config()
+        config.text_decoder_config._attn_implementation = "eager"
+        config._attn_implementation = "sdpa"
+
+        model = MELTForCausalLM(config, load_backbones=False)
+
+        assert model.text_decoder.config._attn_implementation == "eager"
+
 
 # ============================================================================
 # _inject_tensor tests (2D attention mask case – no real decoder needed)
