@@ -135,9 +135,9 @@ class TestMELTConfig:
         This is why train.py re-applies `model.decoder.attn_implementation`
         from the YAML on the `model.ckpt` path: without it the reloaded config
         falls back to transformers' sdpa default, which on an H100 dispatches
-        to the cuDNN backend and makes generation ~2 s per token (artemis job
-        328287). If transformers ever starts persisting the value this test
-        fails, and that re-application can go.
+        to the cuDNN backend and makes generation ~2 s per token. If
+        transformers ever starts persisting the value this test fails, and
+        that re-application can go.
         """
         config = MELTConfig(
             audio_encoder=AUDIO_ENCODER,

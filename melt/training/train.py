@@ -126,8 +126,8 @@ def prepare_model(
         # torch dispatches sdpa to the cuDNN backend, whose per-call CPU
         # planning cost dominates incremental decoding -- profiled at 65 ms of
         # CPU per attention call against 13 us of GPU, which put generate() at
-        # ~2.3 s per token and one eval batch at ~100 s (artemis job 328287)
-        # where the same evaluation on a from-scratch run took ~8.6 s.
+        # ~2.3 s per token and one eval batch at ~100 s, where the same
+        # evaluation on a from-scratch run took ~8.6 s.
         #
         # MELTConfig deliberately does not propagate `_attn_implementation` to
         # its sub-configs (see configuration_melt.py), so passing

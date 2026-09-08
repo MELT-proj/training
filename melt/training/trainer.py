@@ -95,8 +95,8 @@ def unsharded_for_generation(*models: torch.nn.Module):
     ``MELTForCausalLM.generate`` reaches straight for the embedding table and
     then drives the text decoder itself.  Under FSDP2 the parameters are
     therefore still ``DTensor`` when the first lookup runs, and it fails with
-    ``aten.embedding.default: got mixed torch.Tensor and DTensor`` (artemis job
-    327817) rather than quietly producing a wrong answer.
+    ``aten.embedding.default: got mixed torch.Tensor and DTensor`` rather than
+    quietly producing a wrong answer.
 
     The whole model is unsharded at once, which does give up FSDP's memory
     saving for the length of one batch's decoding.  That is the right trade
@@ -1199,8 +1199,8 @@ class MELTTrainer(Seq2SeqTrainer):
         # `model` is whatever the training loop was handed, which under DDP is a
         # DistributedDataParallel wrapper. That proxies forward() but NOT
         # attribute access, so `model.config` raises AttributeError and takes
-        # the whole run down with it (MN5 job 45024395). Unwrap for the attribute
-        # read only -- compute_loss below must still be called with the wrapper,
+        # the whole run down with it. Unwrap for the attribute read only --
+        # compute_loss below must still be called with the wrapper,
         # or the gradient sync this pass is meant to exercise would not happen.
         audio_token_id = self.accelerator.unwrap_model(model).config.audio_token_id
         input_ids             = torch.full((n_utts, max_text_len), fill_value=0, device=device, dtype=torch.long)
@@ -1783,7 +1783,7 @@ class MELTTrainer(Seq2SeqTrainer):
         # autocast alone -- so generation ran the whole model in fp32 and
         # flash-attention refused the inputs outright:
         #   RuntimeError: FlashAttention only support fp16 and bf16 data type
-        # (MN5 job 44990706, at eval_on_start, before a single training step).
+        # (at eval_on_start, before a single training step).
         # So `attn_implementation: flash_attention_2` only ever worked because
         # FSDP was silently supplying the dtype. Ask for it explicitly here.
         with torch.no_grad(), self.accelerator.autocast(), unsharded_for_generation(
@@ -1792,10 +1792,9 @@ class MELTTrainer(Seq2SeqTrainer):
             # The same pre-forward hook that all-gathers also applies
             # MixedPrecisionPolicy.cast_forward_inputs, so bypassing forward
             # leaves the float32 audio features to meet bf16 weights:
-            # "RuntimeError: expected scalar type Float but found BFloat16"
-            # (artemis job 327826).  Read the dtype *inside* this block: a
-            # sharded parameter keeps its storage dtype and only the
-            # all-gathered copy follows param_dtype.
+            # "RuntimeError: expected scalar type Float but found BFloat16".
+            # Read the dtype *inside* this block: a sharded parameter keeps its
+            # storage dtype and only the all-gathered copy follows param_dtype.
             input_features = self._cast_to_audio_dtype(inputs.get("input_features"))
 
             # `self.model` rather than `model`: under DDP the latter is the
