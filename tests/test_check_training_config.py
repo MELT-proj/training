@@ -808,6 +808,17 @@ class TestRuntimeTraps:
         assert ctc.encoder_frame_seconds("openai/whisper-large-v3") == 0.01
         assert ctc.encoder_frame_seconds(None) == 0.02
 
+    def test_mms_is_recognised_as_a_waveform_encoder(self):
+        """Its name says "mms", not "wav2vec2", but it is one -- and the miss is silent.
+
+        Falling through to the 20 ms default would put a 960000-sample window at
+        19200 s of audio, so no max_duration could ever exceed it and C3 would
+        never fire, rather than failing loudly.
+        """
+        assert ctc.encoder_frame_seconds("facebook/mms-1b") == 1 / 16_000
+        assert ctc.encoder_frame_seconds("facebook/mms-1b-all") == 1 / 16_000
+        assert ctc.encoder_frame_seconds("facebook/mms-300m") == 1 / 16_000
+
     def test_strict_text_field_not_inherited_by_eval_is_reported(self):
         report = ctc.Report(Path("cfg.yaml"))
         leaf = ctc.Leaf(

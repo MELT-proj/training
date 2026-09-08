@@ -534,6 +534,16 @@ class MELTAudioEncoder(nn.Module):
         # AutoModel; keep only the encoder.
         self.model = self.spec.unwrap(model)
 
+        # Say which attention implementation the encoder ended up on. The value is
+        # not persisted in a saved config (see train.py's ckpt branch), so a run's
+        # log is the only place it is recorded, and `model.encoder.attn_implementation`
+        # is worth nothing if nobody can tell afterwards whether it took effect.
+        logger.info(
+            "Audio encoder %s attention implementation: %s",
+            type(self.model).__name__,
+            getattr(self.model.config, "_attn_implementation", "unknown"),
+        )
+
         # Validate that the encoder doesn't have an LM head
         if self.model.get_output_embeddings() is not None:
             raise ValueError(
