@@ -25,10 +25,16 @@ about *before* it runs a forward pass:
    floor-based and read from the checkpoint's own config, because a ratio is not
    good enough: 60 s of audio is 2999 frames, not ``ceil(960000 / 320) = 3000``.
 
-A fifth difference is carried here for one encoder only: whether the attention mask
-is handed to the HF encoder at all. Group-norm wav2vec2-family checkpoints declare
-``return_attention_mask: false`` and are documented as degrading when masked, so MELT
-computes a mask for its own shape bookkeeping and does not pass it on.
+A fifth difference splits one family down the middle: whether the attention mask is
+handed to the HF encoder at all. This is a property of the *checkpoint*, not of the
+family, and it follows ``feat_extract_norm`` -- the same rule the checkpoints' own
+``preprocessor_config.json`` files follow. Group-norm checkpoints (wav2vec2-base,
+mHuBERT-147) declare ``return_attention_mask: false`` and are documented as degrading
+when masked, so MELT computes a mask for its own shape bookkeeping and does not pass it
+on. Layer-norm checkpoints (facebook/mms-1b and the XLS-R line) declare it ``true`` and
+genuinely need it: measured on the real ``facebook/mms-1b``, a 2 s clip batched with a
+3 s one reproduces its unbatched output to 2e-5 when masked and diverges by 2.76 when
+not.
 
 The default spec reproduces the pre-existing w2v-BERT behaviour exactly, so encoders
 without an entry here keep working unchanged.
@@ -48,6 +54,23 @@ LAYOUT_CHANNEL_MAJOR = "ft"  # (batch, features, time)
 # What the encoder consumes.
 INPUT_FEATURES = "features"  # a spectrogram-like tensor with a real feature axis
 INPUT_WAVEFORM = "waveform"  # raw samples, carried through MELT as (B, n_samples, 1)
+
+
+def _wants_attention_mask(encoder_config) -> bool:
+    """Whether a raw-waveform checkpoint should be handed an attention mask.
+
+    ``feat_extract_norm`` is the switch. A ``"group"`` checkpoint normalises the conv
+    frontend's output over the whole (zero-padded) sequence, was pretrained on
+    single-length batches with no mask, and HF's own model card guidance is to leave the
+    mask off; its ``preprocessor_config.json`` says ``return_attention_mask: false`` to
+    match. A ``"layer"`` checkpoint -- facebook/mms-1b, and XLS-R generally -- says
+    ``true``, and measurably needs it.
+
+    Read from the model config rather than the feature extractor because this is asked
+    on the model side, where only the model config is in hand, and because the two are
+    two spellings of one fact. Anything that does not say defaults to the safe answer.
+    """
+    return getattr(encoder_config, "feat_extract_norm", None) == "layer"
 
 
 def _clamp_min_zero(lengths):
@@ -74,9 +97,9 @@ class EncoderSpec:
             ``Wav2Vec2FeatureExtractor`` uses ``input_values``, everything else here
             uses ``input_features``. MELT always re-emits it as ``input_features``.
         passes_attention_mask: Whether the attention mask is forwarded to the HF
-            encoder. ``False`` for group-norm wav2vec2-family checkpoints, which
-            declare ``return_attention_mask: false``; MELT still computes the mask
-            for its own length bookkeeping.
+            encoder. For the raw-waveform family this is not fixed by the table but
+            read off the checkpoint by :meth:`for_config`; MELT still computes the mask
+            for its own length bookkeeping either way.
         window_frames: Number of input frames the encoder demands, or ``None`` when it
             accepts any length. When set, the processor pads audio up to a whole
             multiple of this and ``max_audio_seq_len`` should equal it so the existing
@@ -150,6 +173,12 @@ class EncoderSpec:
         The table is keyed on ``model_type``, but the conv frontend is a property of
         the individual checkpoint, so it is read here rather than hardcoded per family.
 
+        Two things are read here. The conv frontend, because the length arithmetic
+        needs the exact kernels and strides. And whether the encoder is masked, because
+        that splits the raw-waveform family rather than following it: it tracks
+        ``feat_extract_norm``, the same signal the checkpoints' own
+        ``preprocessor_config.json`` uses for ``return_attention_mask``.
+
         Raises:
             ValueError: if a waveform encoder's config does not describe its conv
                 frontend, which would leave the length arithmetic guessing.
@@ -166,7 +195,12 @@ class EncoderSpec:
                 "cannot be computed. Check the encoder entry in "
                 "melt/modeling/encoder_specs.py."
             )
-        return replace(self, conv_kernels=tuple(kernels), conv_strides=tuple(strides))
+        return replace(
+            self,
+            conv_kernels=tuple(kernels),
+            conv_strides=tuple(strides),
+            passes_attention_mask=_wants_attention_mask(encoder_config),
+        )
 
     def unwrap(self, model):
         """Reduce whatever ``AutoModel`` returned to the encoder we actually train on.
@@ -188,10 +222,11 @@ class EncoderSpec:
 
 DEFAULT_ENCODER_SPEC = EncoderSpec()
 
-# Every encoder built on ``Wav2Vec2FeatureExtractor``: a raw waveform in, a conv
-# frontend that takes 16 kHz down to 50 Hz, and (for the group-norm checkpoints this
-# family is dominated by) no attention mask. `downsample_factor` is only a fallback --
-# `for_config` replaces it with the checkpoint's exact conv arithmetic.
+# Every encoder built on ``Wav2Vec2FeatureExtractor``: a raw waveform in and a conv
+# frontend that takes 16 kHz down to 50 Hz. Two fields here are only placeholders that
+# `for_config` replaces from the checkpoint itself -- `downsample_factor` with the exact
+# conv arithmetic, and `passes_attention_mask` with the checkpoint's `feat_extract_norm`.
+# The conservative `False` is what a config too sparse to say would otherwise get.
 WAVEFORM_ENCODER_SPEC = EncoderSpec(
     input_kind=INPUT_WAVEFORM,
     feature_key="input_values",

@@ -169,6 +169,7 @@ def prepare_melt_config(cfg: DictConfig, processor: MELTProcessor) -> MELTConfig
         audio_encoder=encoder_cfg.name,
         text_decoder=decoder_cfg.name,
         adapter_config=adapter_cfg,
+        encoder_kwargs={"attn_implementation": encoder_cfg.get("attn_implementation", "sdpa")},
         decoder_kwargs={"attn_implementation": decoder_cfg.get("attn_implementation", "sdpa")},
         max_audio_seq_len=max_audio_seq_len,
     )

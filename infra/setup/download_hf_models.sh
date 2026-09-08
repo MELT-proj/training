@@ -19,6 +19,13 @@ MODELS=(
   # index, a 1.1 GB fairseq checkpoint and 80 dataset manifests, none of which
   # transformers ever reads: 6.3 GB blind vs 360 MB restricted.
   "utter-project/mHuBERT-147|config.json,preprocessor_config.json,model.safetensors"
+  # The multilingual raw-waveform arm, and the only encoder MELT has that can run
+  # flash attention. Restricted to the three files transformers reads: the repo's
+  # only weight file is `pytorch_model.bin`, and while an online load quietly
+  # prefers the Hub's auto-converted `model.safetensors` from `refs/pr/6` -- a
+  # second 3.9 GB of the same weights -- the .bin alone loads fine, verified with
+  # HF_HUB_OFFLINE=1 against a cache holding nothing but `main`.
+  "facebook/mms-1b|config.json,preprocessor_config.json,pytorch_model.bin"
   "Qwen/Qwen2.5-0.5B"
 
   # Ablation campaign backbones (base vs instruct). MN5 compute nodes run

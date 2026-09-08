@@ -270,7 +270,8 @@ class TestWaveformSpecTable:
         spec = get_encoder_spec(model_type)
         assert spec.is_waveform is True
         assert spec.feature_key == "input_values"
-        # Group-norm checkpoints declare return_attention_mask: false.
+        # Unspecialised, the table has to assume the conservative answer; only
+        # `for_config` can read the checkpoint that decides it.
         assert spec.passes_attention_mask is False
         # "Frames" are samples: 1/16 kHz, not 20 ms.
         assert spec.frame_seconds == pytest.approx(1 / 16_000)
@@ -296,6 +297,25 @@ class TestWaveformSpecTable:
         cfg = types.SimpleNamespace(model_type="hubert")
         with pytest.raises(ValueError, match="conv_kernel"):
             get_encoder_spec_for_config(cfg)
+
+    def test_group_norm_checkpoints_are_left_unmasked(self):
+        spec = get_encoder_spec_for_config(_tiny_hubert_config(feat_extract_norm="group"))
+        assert spec.passes_attention_mask is False
+
+    def test_layer_norm_checkpoints_are_masked(self):
+        """mms-1b's half of the family: `feat_extract_norm: layer`, mask required.
+
+        Measured on the real checkpoint: a 2 s clip batched with a 3 s one matches its
+        unbatched output to 2e-5 when masked and diverges by 2.76 when not, so getting
+        this wrong is a silent accuracy bug, not a crash.
+        """
+        spec = get_encoder_spec_for_config(_tiny_hubert_config(feat_extract_norm="layer"))
+        assert spec.passes_attention_mask is True
+
+    def test_a_config_that_does_not_say_gets_the_conservative_answer(self):
+        cfg = _tiny_hubert_config()
+        del cfg.feat_extract_norm
+        assert get_encoder_spec_for_config(cfg).passes_attention_mask is False
 
     def test_for_config_is_a_no_op_for_spectral_encoders(self):
         cfg = types.SimpleNamespace(model_type="whisper")
@@ -455,3 +475,38 @@ class TestRealConfigs:
         assert _get_encoder_hidden_size(cfg) == 768
         # 60 s of audio, the campaign's max_duration, at the launcher's window.
         assert spec.output_lengths(60 * 16_000) == 2999
+        # Group-norm: pretrained on unmasked, zero-padded batches.
+        assert spec.passes_attention_mask is False
+
+    def test_mms_1b_resolves_to_the_waveform_spec_and_is_masked(self):
+        from transformers import AutoConfig
+
+        cfg = AutoConfig.from_pretrained("facebook/mms-1b")
+        spec = get_encoder_spec_for_config(cfg)
+        assert spec.is_waveform is True
+        assert spec.feature_key == "input_values"
+        assert spec.window_frames is None  # no fixed input window, unlike Whisper
+        assert spec.total_stride == 320
+        assert _get_encoder_hidden_size(cfg) == 1280
+        # Layer-norm, unlike the rest of the family MELT has met so far.
+        assert spec.passes_attention_mask is True
+        # 2999, not 3000: the conv frontend floors. Verified against the real
+        # checkpoint's own `_get_feat_extract_output_lengths`.
+        assert spec.output_lengths(60 * 16_000) == 2999
+        assert spec.output_lengths(3 * 16_000) == 149
+
+    def test_mms_1b_emits_the_same_50_hz_as_w2v_bert(self):
+        """Why `max_tokens` and the bucket bins carry over to the MMS arm untouched.
+
+        w2v-BERT is frame-synchronous on 20 ms frames, so 60 s is 3000 audio
+        embeddings. MMS reaches 2999 for the same audio by a different route. One
+        frame in 3000 is not a difference worth re-deriving a config for.
+        """
+        from transformers import AutoConfig
+
+        mms = get_encoder_spec_for_config(AutoConfig.from_pretrained("facebook/mms-1b"))
+        seconds = 60
+        w2v_bert_frames = int(seconds / DEFAULT_ENCODER_SPEC.frame_seconds)
+        mms_frames = mms.output_lengths(seconds * 16_000)
+        assert w2v_bert_frames == 3000
+        assert abs(mms_frames - w2v_bert_frames) <= 1

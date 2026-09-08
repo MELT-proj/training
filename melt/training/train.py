@@ -142,6 +142,17 @@ def prepare_model(
                 f"Text decoder attention implementation from config: {requested_attn}"
             )
 
+        # The encoder half of the same hole. It matters for exactly the encoders
+        # that have a choice: w2v-BERT can only ever run sdpa, but the wav2vec2
+        # family (facebook/mms-1b) supports flash_attention_2, and a resumed run
+        # would silently drop back to sdpa without this.
+        requested_encoder_attn = encoder_cfg.get("attn_implementation", None)
+        if requested_encoder_attn:
+            config.audio_encoder_config._attn_implementation = requested_encoder_attn
+            logger.info(
+                f"Audio encoder attention implementation from config: {requested_encoder_attn}"
+            )
+
         processor = MELTProcessor.from_pretrained(ckpt_dir)
         model = MELTForCausalLM.from_pretrained(ckpt_dir, config=config)
     else:
