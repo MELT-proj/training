@@ -329,6 +329,153 @@ class TestAdapterOutputFeaturesShape:
 
 
 # ============================================================================
+# Attention implementation plumbing
+# ============================================================================
+
+
+def _local_melt_config(audio_encoder_config=None):
+    """A MELTConfig whose sub-configs are built in-process, so no Hub access."""
+    from transformers import LlamaConfig, Wav2Vec2BertConfig
+
+    if audio_encoder_config is None:
+        audio_encoder_config = Wav2Vec2BertConfig(
+            hidden_size=32, num_hidden_layers=1, num_attention_heads=2,
+            intermediate_size=64, feature_projection_input_dim=16,
+            output_hidden_size=32,
+        )
+    return MELTConfig(
+        audio_encoder_config=audio_encoder_config,
+        text_decoder_config=LlamaConfig(
+            vocab_size=64, hidden_size=32, intermediate_size=64,
+            num_hidden_layers=1, num_attention_heads=2, num_key_value_heads=2,
+        ),
+        adapter_config={"_type": "mlp"},
+    )
+
+
+class TestAttnImplementationPropagation:
+    """`from_pretrained(attn_implementation=...)` has to reach the backbones.
+
+    It did not: MELTConfig deliberately refuses to broadcast the value, and
+    nothing carried it down, so an inference run silently got transformers'
+    sdpa default no matter what it asked for. On an H100 that dispatches the
+    decode step to the cuDNN backend, whose output is not reproducible across
+    identical calls (MELT-proj/training#118).
+    """
+
+    def test_the_wrapper_admits_it_supports_flash_attention(self):
+        # Both backbones do, and every campaign run trains with it. Note this
+        # has to be True explicitly: transformers' own default is False, so
+        # deleting the attribute would not enable anything.
+        assert MELTForCausalLM._supports_flash_attn is True
+
+    def test_request_reaches_the_decoder_sub_config(self):
+        config = _local_melt_config()
+        config._attn_implementation = "flash_attention_2"
+
+        MELTForCausalLM._propagate_attn_implementation(config)
+
+        assert config.text_decoder_config._attn_implementation == "flash_attention_2"
+
+    def test_an_encoder_without_the_kernel_keeps_its_default(self):
+        """Wav2Vec2BertModel has no flash-attention kernel in transformers 5.16.1.
+
+        Forcing the decoder's choice onto it makes the model unloadable
+        ("Wav2Vec2BertModel does not support Flash Attention 2 yet").
+        """
+        config = _local_melt_config()
+        config._attn_implementation = "flash_attention_2"
+
+        MELTForCausalLM._propagate_attn_implementation(config)
+
+        assert config.audio_encoder_config._attn_implementation is None
+
+    def test_an_encoder_with_the_kernel_takes_the_request(self):
+        """The check is per encoder, not a blanket exemption for all of them.
+
+        Whisper, Wav2Vec2, HuBERT and Qwen2-Audio all carry the kernel, so
+        swapping the encoder must be enough to get flash attention there too.
+        """
+        from transformers import WhisperConfig
+
+        config = _local_melt_config(
+            audio_encoder_config=WhisperConfig(
+                d_model=32, encoder_layers=1, decoder_layers=1,
+                encoder_attention_heads=2, decoder_attention_heads=2,
+                encoder_ffn_dim=64, decoder_ffn_dim=64, vocab_size=64,
+            )
+        )
+        config._attn_implementation = "flash_attention_2"
+
+        MELTForCausalLM._propagate_attn_implementation(config)
+
+        assert config.audio_encoder_config._attn_implementation == "flash_attention_2"
+
+    def test_sdpa_reaches_an_encoder_that_has_no_flash_kernel(self):
+        """The gate is per implementation, not "this encoder gets nothing"."""
+        config = _local_melt_config()
+        config._attn_implementation = "sdpa"
+
+        MELTForCausalLM._propagate_attn_implementation(config)
+
+        assert config.audio_encoder_config._attn_implementation == "sdpa"
+
+    def test_an_explicit_decoder_value_is_not_overwritten(self):
+        """train.py sets the decoder's implementation directly; it must stick."""
+        config = _local_melt_config()
+        config.text_decoder_config._attn_implementation = "flash_attention_2"
+        config._attn_implementation = "sdpa"
+
+        MELTForCausalLM._propagate_attn_implementation(config)
+
+        assert config.text_decoder_config._attn_implementation == "flash_attention_2"
+
+    def test_nothing_requested_leaves_the_sub_configs_alone(self):
+        config = _local_melt_config()
+        config._attn_implementation = None
+
+        MELTForCausalLM._propagate_attn_implementation(config)
+
+        assert config.text_decoder_config._attn_implementation is None
+        assert config.audio_encoder_config._attn_implementation is None
+
+    def test_it_runs_on_every_construction_path_not_just_from_pretrained(self):
+        """`__init__` is the hook, so a fresh scaffold goes through it too.
+
+        `MELTForCausalLM(config, load_backbones=True)` -- the training path that
+        builds a new model over pretrained backbones -- reaches the same
+        `__init__` as `from_pretrained`, so the decoder is constructed with
+        whatever was asked for either way.
+        """
+        config = _local_melt_config()
+        config._attn_implementation = "sdpa"
+
+        model = MELTForCausalLM(config, load_backbones=False)
+
+        assert model.text_decoder.config._attn_implementation == "sdpa"
+
+    def test_the_fresh_training_path_is_unaffected(self):
+        """`prepare_melt_config` already sets the decoder's implementation.
+
+        It passes `decoder_kwargs={"attn_implementation": ...}`, which lands
+        directly on the decoder sub-config, so on that path this propagation
+        finds an explicit value and leaves it alone. The behaviour change is
+        confined to configs that arrive with the value unset, which is what a
+        round-tripped checkpoint gives you.
+
+        Uses eager rather than flash_attention_2 only so the assertion survives
+        a CPU-only runner, where instantiating a flash-attention config raises.
+        """
+        config = _local_melt_config()
+        config.text_decoder_config._attn_implementation = "eager"
+        config._attn_implementation = "sdpa"
+
+        model = MELTForCausalLM(config, load_backbones=False)
+
+        assert model.text_decoder.config._attn_implementation == "eager"
+
+
+# ============================================================================
 # _inject_tensor tests (2D attention mask case – no real decoder needed)
 # ============================================================================
 
