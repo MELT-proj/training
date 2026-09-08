@@ -90,6 +90,60 @@ Common launch variables:
 - `SINGULARITY_IMG`: Path to the `.sif` image for container runs
 - `TMPDIR_HOST`: Host tmp directory to bind into container
 
+## Multi-cluster HPC guidance
+
+Three machines are available for building, testing, and running training jobs.
+Full topology (partitions, QOS limits, per-node hardware, storage quotas) lives
+in the private cross-project reference `g8a9/agents-info`, not here —
+`/home/giuseppe/agents-info/HPCs/sardine-and-marenostrum5.md` is the source of
+truth; read it before submitting anything non-trivial. This section is
+deliberately just a quick "which one do I want" summary. This project's own
+HPC procedures (image builds, syncing the repo, launcher conventions, dataset
+staging) live in `docs/hpc_runbook.md`.
+
+| | nyx | artemis (sardine) | marenostrum5 (mn5) |
+|---|---|---|---|
+| role | dev/build box | interactive GPU debugging, small-scale validation | production campaign runs |
+| GPUs | none (not a SLURM node) | 7x A6000, 4x H100, 8x H200 via `srun`/`sbatch` | 4x H100 per `acc` node, allocated whole-node only |
+| filesystem | local disk | NFS | GPFS |
+| internet | yes | yes | **no, none at all** |
+| typical queue wait | none (not SLURM) | seconds to minutes | `acc_debug`: fast; `acc_ehpc`: 12-13+ hours observed |
+
+**nyx** — storage box, not a SLURM node (no `sinfo`/`sbatch`/GPUs). Use it for
+CPU-heavy prep and the dev/test loop (see the testing section below). Runs
+`vm.overcommit_memory=2` (strict commit accounting): an `OSError: Cannot
+allocate memory` here is usually the commit ledger, not a real leak — check
+`Committed_AS` vs `CommitLimit` in `/proc/meminfo` before assuming a code bug.
+
+**artemis** — real GPUs for interactive debugging and small-scale validation
+before committing an MN5 allocation. QOS tiers that matter day to day:
+- `gpu-debug`: 1 h wall, 1 job/user — quick sanity checks.
+- `gpu-h100` / `gpu-h200`: up to 2 days, 4 GPUs, 2 jobs/user — real debugging
+  runs, e.g. reproducing a bug at controlled scale before chasing it on mn5.
+
+Always pass `--partition` and `--qos` explicitly — artemis has no default for
+either.
+
+**marenostrum5** — where campaign-scale runs actually happen (multi-node,
+whole `acc` nodes, GPFS). No outbound internet on any node, ever: code goes
+over via `infra/sync_repo.sh mn5`, never `git pull` on mn5 itself; datasets
+and HF checkpoints must be pre-staged too. Two QOS tiers:
+- `acc_debug`: 2 h wall, 1 job / 1 submission at a time, but very fast to get
+  since few people use it — the right tool for confirming a fix survives
+  MN5's actual filesystem/memory semantics (GPFS behaves very differently
+  from a dev box for some workloads) before committing to a long `acc_ehpc`
+  allocation.
+- `acc_ehpc`: the real campaign QOS, up to 3 days / 100 nodes, but much lower
+  scheduling priority than `acc_debug` — queue waits of 12-13+ hours have
+  been observed. Request the shortest walltime that covers the work: MN5's
+  backfill scheduler starts short jobs sooner, and billing is by elapsed
+  time, not requested time, so over-requesting only costs queue position.
+
+Rule of thumb: reproduce and fix on artemis (GPUs in seconds, has internet,
+small scale), confirm on mn5 via `acc_debug` (same filesystem/memory
+semantics as the real run, cheap and fast to get), then commit to `acc_ehpc`
+for the actual campaign work.
+
 ## artemis- or nyx- specific commands
 
 ### Python Environments
@@ -118,6 +172,42 @@ singularity exec --bind /mnt/scratch-nyx,/mnt/scratch-artemis \
 raises 18 errors of the form `RuntimeError: cannot cache function '__o_fold':
 no locator available for file`, because numba tries to write its cache next to
 a module inside the read-only image. With it, that file passes.
+
+### Running the suite as a CPU-only SLURM job (recommended over an interactive nyx run)
+
+The interactive command above works, but running the *whole* suite in parallel
+directly on nyx repeatedly runs into the overcommit-ledger problem described
+below — it is a shared, non-SLURM box with a strict memory ledger, not a real
+allocation. Prefer submitting a small CPU-only job on artemis instead: no GPU
+is needed for the unit suite, and a real SLURM allocation gives the run its
+own memory budget instead of sharing nyx's ledger with everyone else logged in.
+
+```bash
+cd ~/melt-proj/training   # wherever the repo checkout lives on artemis
+mkdir -p logs
+sbatch --partition=h100 --qos=cpu --cpus-per-task=16 --mem=64G --time=00:40:00 \
+       --job-name=melt-tests --output=logs/%x.%j.out <<'EOF'
+#!/bin/bash
+set -euo pipefail
+export SINGULARITYENV_LOCAL_DATASETS_DIR=/mnt/scratch-nyx/giuseppe/melt/melt-data/shar
+export SINGULARITYENV_HF_HOME=/mnt/scratch-artemis/giuseppe/melt-data/hf_cache
+export SINGULARITYENV_PYTHONPATH=/mnt/scratch-nyx/giuseppe/container-extras:/workspace/training
+export SINGULARITYENV_NUMBA_CACHE_DIR=/tmp/numba
+export SINGULARITYENV_WANDB_MODE=disabled
+singularity exec \
+  --bind "$(pwd)":/workspace/training,/mnt/scratch-nyx:/mnt/scratch-nyx,/mnt/scratch-artemis:/mnt/scratch-artemis \
+  --pwd /workspace/training \
+  /mnt/scratch-artemis/giuseppe/melt-data/melt_cuda126_lhotse2_td.sif \
+  bash -lc 'source /workspace/venv/bin/activate 2>/dev/null; python -m pytest tests/ --ignore=tests/integration -q -p no:cacheprovider -rf'
+EOF
+```
+
+`--qos=cpu` is the CPU-only tier on the `h100` partition — it does not consume
+a GPU allocation, so it does not compete with `gpu-debug`/`gpu-h100` jobs. The
+`sbatch ... <<'EOF' ... EOF` form submits the heredoc directly as the job
+script, so there is nothing extra to create or clean up on disk. Check status
+with `squeue -u $USER -j <jobid>` and read the result from
+`logs/melt-tests.<jobid>.out`.
 
 ### When tests fail for reasons that are not your code
 
@@ -191,6 +281,10 @@ operator's job, not the library's.
    sum **VmData** (from `/proc/<pid>/status`) per user, not RSS — RSS makes
    other users' editors look dominant while your own pytest workers, which
    actually hold the ledger, look small.
+8. **Prefer a CPU-only SLURM job on artemis for the full suite** over an
+   interactive nyx run — see "Running the suite as a CPU-only SLURM job"
+   above. It sidesteps the ledger problem entirely rather than requiring
+   careful reaping.
 
 ## Staleness Warning
 

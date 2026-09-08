@@ -12,8 +12,8 @@ uv venv "${VENV_DIR}"
 # shellcheck disable=SC1091
 source "${VENV_DIR}/bin/activate"
 
-echo "[2/6] Installing transformers==4.57.1 and torch"
-uv pip install "transformers==4.57.1" torch
+echo "[2/6] Installing transformers>=5.16,<6 and torch"
+uv pip install "transformers>=5.16,<6" torch
 
 echo "[3/5] Downloading repo via huggingface_hub.snapshot_download: ${REPO_ID}"
 REPO_ID="${REPO_ID}" python - <<'PY'

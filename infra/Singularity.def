@@ -58,7 +58,12 @@ From: nvidia/cuda:12.6.1-devel-ubuntu22.04
     # flash-attn is an optional extra in pyproject.toml so a plain `uv sync`
     # would silently omit it. The extra resolves to a pinned prebuilt wheel
     # (see [tool.uv.sources]), so this is a download, not a source build.
-    /usr/local/bin/uv sync --python 3.12 --link-mode copy --cache-dir /usr/local/share/uv/cache --no-editable --index-strategy unsafe-best-match --extra flash-attn
+    # --locked: install exactly what uv.lock records instead of re-resolving.
+    # A bare `uv sync` here once let the image and CI (`pip install -e .`)
+    # silently diverge on lhotse/torchdata versions -- see the transformers 5
+    # migration notes. If pyproject.toml and uv.lock disagree, this fails
+    # loudly instead of building a different image than the lock describes.
+    /usr/local/bin/uv sync --locked --python 3.12 --link-mode copy --cache-dir /usr/local/share/uv/cache --no-editable --index-strategy unsafe-best-match --extra flash-attn
 
     # test torch installation
     /usr/local/bin/uv run python -c "import torch; print(torch.__version__)"

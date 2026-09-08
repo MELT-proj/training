@@ -1,0 +1,32 @@
+compute_environment: LOCAL_MACHINE
+debug: false
+distributed_type: FSDP
+downcast_bf16: 'no'
+enable_cpu_affinity: false
+fsdp_config:
+  fsdp_activation_checkpointing: true
+  # EuroLLM-9B-Instruct-2512 is a standard LlamaForCausalLM
+  # (architectures: ["LlamaForCausalLM"], config.json) -- verified on mn5
+  # (2026-09-04) that its _no_split_modules is the clean, single-entry
+  # ['LlamaDecoderLayer'], unlike Qwen3.5's leftover
+  # {'Qwen3_5DecoderLayer', 'Qwen3_5VisionBlock'} (see fsdp2_qwen35.yaml's own
+  # comment). Auto-detection alone would likely work here, but the class name
+  # is pinned explicitly anyway, matching the pattern fsdp2_qwen35.yaml
+  # established: fsdp_auto_wrap_policy must STAY set to
+  # TRANSFORMER_BASED_WRAP alongside fsdp_transformer_layer_cls_to_wrap --
+  # dropping either one broke Qwen3.5's FSDP2 run in two different ways
+  # (2026-09-02, mn5 jobs 45348050 / 45348161).
+  fsdp_auto_wrap_policy: TRANSFORMER_BASED_WRAP
+  fsdp_transformer_layer_cls_to_wrap: LlamaDecoderLayer
+  fsdp_cpu_ram_efficient_loading: true
+  fsdp_offload_params: false
+  fsdp_reshard_after_forward: true
+  fsdp_state_dict_type: SHARDED_STATE_DICT
+  fsdp_version: 2
+main_training_function: main
+mixed_precision: bf16
+same_network: true
+tpu_env: []
+tpu_use_cluster: false
+tpu_use_sudo: false
+use_cpu: false
