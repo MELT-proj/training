@@ -127,6 +127,60 @@ transcript in 20 steps instead of 256.
 `tests/integration/inference/run_inference.py --batch-size N` decodes N samples
 per `generate()` call. Prompts are left-padded by the processor and the merged
 audio embeddings are left-padded by `_inject_tensor`, so every sequence's last
-real position lines up and a batch must produce the same hypotheses as
-`--batch-size 1`. If it does not, padding is leaking into attention — that is
-the check to run first when batched eval WER looks wrong.
+real position lines up.
+
+**A batch does not reproduce `--batch-size 1`.** It used to say here that it
+must, and that a difference meant padding was leaking into attention. Neither
+is true, and #118 checked it stage by stage on a real checkpoint: the
+per-sample features are bit-identical, the audio encoder is byte-identical when
+its input is padded to the batch's length, the merged embeddings and mask agree
+to 1e-16 in float64, and `generate()` already derives correct per-row position
+ids from the mask. What remains is arithmetic. A different batch shape means a
+different reduction order, and in bfloat16 that flips greedy decisions on the
+utterances where the top two logits are close — 2 of 16 on a librispeech slice,
+6 of 16 under flash attention. No attention implementation changes that, so a
+batched number is only comparable with another batched number at the same
+width.
+
+**A batch must at least repeat itself, and until #118 it did not.** Five
+identical `generate()` calls on the same mixed-length batch of 16 returned five
+different transcripts, while batch size 1 always repeated. Mixed lengths make
+the merged mask non-trivial; flash attention refuses a non-null mask, so SDPA
+fell through to the cuDNN backend, whose decode step is not deterministic. That
+is the check to run first when batched eval WER looks wrong: run the same batch
+twice. `torch.use_deterministic_algorithms` does not catch it and issues no
+warning.
+
+The fix was to let the model be loaded with an attention implementation at all.
+`from_pretrained(attn_implementation=...)` used to set the flag on the composite
+config and leave both backbones on sdpa, and `flash_attention_2` was refused
+outright. Pass it explicitly for anything that decodes:
+
+```python
+MELTForCausalLM.from_pretrained(ckpt, dtype=torch.bfloat16,
+                                attn_implementation="flash_attention_2")
+```
+
+Measured on one H100 at batch 16, five repeats of the same call:
+
+| attention | distinct results | s/run |
+|---|---|---|
+| sdpa, backend chosen by torch | 4 of 5 | 1.416 |
+| sdpa pinned to the memory-efficient backend | 1 of 5 | 1.611 |
+| eager | 1 of 5 | 2.351 |
+| flash_attention_2 | 1 of 5 | 1.333 |
+
+**Sort by duration before batching.** The processor pads every row to the
+batch's longest audio, so a batch drawn in dataset order costs its longest
+utterance times its width. On librispeech clean/test that is two thirds of the
+batch spent on padding, and it is why throughput stops improving past about 16:
+
+| batch | dataset order, s/sample | sorted by duration, s/sample |
+|---|---|---|
+| 8 | 0.0573 | 0.0370 |
+| 16 | 0.0431 | 0.0210 |
+| 32 | 0.0372 | 0.0171 |
+| 64 | 0.0340 | 0.0339 |
+
+`run_inference.py` sorts for you whenever `--batch-size` is above 1. Anything
+else that batches MELT should do the same.

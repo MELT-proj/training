@@ -8,9 +8,11 @@ import torch.nn.functional as F
 from torch import nn
 
 from transformers import AutoModel, AutoModelForCausalLM, AutoModelForSequenceClassification
+from transformers.configuration_utils import PretrainedConfig
 from transformers.generation.utils import GenerationMixin
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.modeling_utils import PreTrainedModel
+from transformers.models.auto.modeling_auto import MODEL_MAPPING
 from transformers.models.wav2vec2_bert.modeling_wav2vec2_bert import (
     Wav2Vec2BertAdapterLayer,
 )
@@ -623,8 +625,98 @@ class MELTPreTrainedModel(PreTrainedModel):
     # decoder (mn5 job 45445498: 16.21 GB resident, 55.01 GB after a single
     # 60 s utterance's forward+backward).
     supports_gradient_checkpointing = True
-    _supports_flash_attn = False
+    # The text decoder supports flash attention and every campaign run trains
+    # with it, but this wrapper claimed otherwise, so `from_pretrained(
+    # attn_implementation="flash_attention_2")` was refused outright and
+    # inference had no way to ask for it.  It fell back to sdpa, which on an
+    # H100 dispatches the decode step to the cuDNN backend -- and that backend
+    # is not deterministic: five identical batched `generate()` calls returned
+    # five different transcripts (#118).  The False here was never a finding,
+    # it dates from a rename commit (10887a1) and predates flash attention in
+    # this codebase.  Note that *deleting* the line would not help: transformers'
+    # own default for the attribute is False.
+    _supports_flash_attn = True
     _supports_sdpa = True
+
+    @staticmethod
+    def _backbone_supports(sub_config: PretrainedConfig, implementation: str) -> bool:
+        """Whether the backbone ``AutoModel`` builds for *sub_config* can run it.
+
+        Read off the model class transformers would instantiate, via the same
+        class attributes transformers checks itself, so this tracks the library
+        rather than a list maintained here.  Support really is per encoder: in
+        transformers 5.16.1, Whisper, Wav2Vec2, HuBERT and Qwen2-Audio all take
+        ``flash_attention_2`` while Wav2Vec2-BERT and WavLM do not.
+
+        Anything unrecognised -- a custom kernel spec such as
+        ``kernels-community/...`` -- answers False, so the backbone is left on
+        its own default rather than handed a value that may not apply to it.
+        """
+        if implementation == "eager":
+            return True
+        flag = {
+            "sdpa": "_supports_sdpa",
+            "flash_attention_2": "_supports_flash_attn",
+            "flash_attention_3": "_supports_flash_attn",
+            "flex_attention": "_supports_flex_attn",
+        }.get(implementation)
+        if flag is None:
+            return False
+        try:
+            model_class = MODEL_MAPPING[type(sub_config)]
+        except (KeyError, ImportError, ValueError):
+            return False
+        return bool(getattr(model_class, flag, False))
+
+    @classmethod
+    def _propagate_attn_implementation(cls, config: MELTConfig) -> None:
+        """Carry the caller's ``attn_implementation`` into the sub-configs.
+
+        ``from_pretrained`` resolves ``attn_implementation=`` onto the composite
+        config, and :class:`MELTConfig` deliberately does not broadcast it (each
+        sub-config should keep what it was built with).  Nothing then carried
+        the request down, so asking for one was silently ignored and both
+        backbones were built with whatever transformers defaults to -- the other
+        half of #118.
+
+        The decoder takes the request unconditionally: it is the knob every
+        train YAML sets (``model.decoder.attn_implementation``) and the one
+        ``train.py`` re-applies on the ``model.ckpt`` path, so a decoder that
+        cannot honour it should fail loudly rather than quietly run something
+        else.  The audio encoder takes it only if its own model class supports
+        it, because the two backbones do not have to agree: with
+        Wav2Vec2-BERT, which has no flash-attention kernel in transformers
+        5.16.1, forcing the decoder's choice onto the encoder makes the model
+        unloadable (mn5 job 45561614), while a Whisper or Wav2Vec2 encoder
+        takes the same value happily.
+
+        A sub-config that already carries an explicit value keeps it.  A
+        round-tripped checkpoint deserialises its sub-configs with
+        ``_attn_implementation`` unset (see
+        ``test_saved_config_does_not_carry_the_attn_implementation``), so a
+        value being present means somebody set it on purpose.
+        """
+        requested = config._attn_implementation
+        if requested is None:
+            return
+
+        decoder_config = config.text_decoder_config
+        if decoder_config is not None and decoder_config._attn_implementation is None:
+            decoder_config._attn_implementation = requested
+
+        encoder_config = config.audio_encoder_config
+        if encoder_config is not None and encoder_config._attn_implementation is None:
+            if cls._backbone_supports(encoder_config, requested):
+                encoder_config._attn_implementation = requested
+            else:
+                logger.info(
+                    "Audio encoder %s has no %s kernel in this transformers "
+                    "version; leaving it on the default. The decoder still uses "
+                    "%s.",
+                    getattr(encoder_config, "model_type", type(encoder_config).__name__),
+                    requested,
+                    requested,
+                )
 
     def _init_weights(self, module: nn.Module):
         """Initialize the weights for MELT adapter modules.
@@ -722,6 +814,10 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
                 own state dict -- never redundantly re-downloads a backbone.
         """
         super().__init__(config)
+
+        # Before the backbones are built, so they are constructed with the
+        # attention implementation the caller asked for.
+        self._propagate_attn_implementation(config)
 
         # Initialize the text decoder (language model)
         self.text_decoder = self._create_text_stack(config, load_backbones)
@@ -1311,6 +1407,8 @@ class MELTForSequenceClassification(MELTPreTrainedModel):
     def __init__(self, config: MELTConfig, load_backbones: bool = False):
         """See MELTForCausalLM.__init__ for the meaning of ``load_backbones``."""
         super().__init__(config)
+
+        self._propagate_attn_implementation(config)
 
         # Initialize the text decoder (sequence classification model)
         self.text_decoder = self._create_text_stack(config, load_backbones)
