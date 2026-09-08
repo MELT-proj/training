@@ -622,8 +622,8 @@ class MELTPreTrainedModel(PreTrainedModel):
     # activation checkpointing from accelerate (fsdp_activation_checkpointing),
     # but DDP has no equivalent and this HF flag is its only route -- and
     # activations, not optimizer state, are what overflow the card on a 2 B
-    # decoder (mn5 job 45445498: 16.21 GB resident, 55.01 GB after a single
-    # 60 s utterance's forward+backward).
+    # decoder (16.21 GB resident, 55.01 GB after a single 60 s utterance's
+    # forward+backward).
     supports_gradient_checkpointing = True
     # The text decoder supports flash attention and every campaign run trains
     # with it, but this wrapper claimed otherwise, so `from_pretrained(
