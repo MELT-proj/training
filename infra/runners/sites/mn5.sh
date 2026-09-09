@@ -2,10 +2,14 @@
 
 # --- storage (host paths) -------------------------------------------------
 # `:-` so an exported value wins: `OUTPUT_DIR=/gpfs/... infra/runners/submit-*.sh mn5 …`.
-# The project is shared by several accounts, and a directory here belongs to
-# whoever created it — the defaults below are readable by the group but writable
-# only by their owner. Set your own OUTPUT_DIR and TMPDIR_HOST (both get written
-# to); HF_HOME and LOCAL_DATASETS_DIR are read-only in a run and can stay shared.
+# The project is shared by several accounts. `outputs/` is group-writable and
+# setgid (2026-09-09) specifically so every checkpoint any account trains lands
+# in one place, readable and resumable by anyone on the team -- new files and
+# directories created inside it inherit the epor48 group automatically. Do NOT
+# point OUTPUT_DIR at a personal scratch dir; that is what caused
+# init_from/model.ckpt to point at a path only its creator's account could
+# see. HF_HOME and LOCAL_DATASETS_DIR are read-only in a run and can stay
+# shared too.
 # 2026-08-07: hf_cache, outputs and the .sif images moved off gpfs_projects to
 # gpfs_scratch, which was filling up (projects was at 35.7 TB of a 48.8 TB group
 # quota). `shar` and `tmp` stayed behind, so only some of these paths changed --

@@ -12,7 +12,7 @@ The campaign varies three things. Each lives in exactly one place:
 
 | axis | varies how | belongs in |
 |---|---|---|
-| **Data**: mixture, hours, task | a rendered config, ~550 lines | one YAML per budget x task: `ABL-MA-125-asr.yaml`, `ABL-MA-700-asr.yaml`, `ABL-IFT-125.yaml`, `ABL-IFT-700.yaml` |
+| **Data**: mixture, hours, task | a rendered config, ~550 lines | one YAML per budget x task: `ABL-MA-700-asr.yaml`, `ABL-IFT-700.yaml` |
 | **Architecture**: adapter, encoder, decoder, freezing, decoder LoRA | 0-8 CLI overrides | `ADAPTER`, `ADAPTER_FREEZE`, `ENCODER`, `ENCODER_FREEZE`, `DECODER`, `DECODER_FREEZE`, `DECODER_LORA` env vars |
 | **Optimisation**: encoder/decoder/adapter LR | 0-3 CLI overrides | `ENCODER_LR`, `DECODER_LR`, `ADAPTER_LR` env vars |
 | **Batch/accum** (exception, not a fourth axis): `batch_duration`, `gradient_accumulation_steps` | 0-2 CLI overrides, always paired | `BATCH_DURATION`, `GRAD_ACCUM_STEPS` env vars -- see "Two rules" below for why this pair, and only this pair, is allowed to leave the base YAML |
@@ -56,12 +56,13 @@ set in `infra/runners/sites/mn5.sh`), so nothing can be fetched at run time.
    `ModuleNotFoundError: No module named 'yaml'` before submitting anything.
    The container itself has PyYAML but no `squeue`/`sbatch`, so running the
    launchers inside it is not an alternative.
-4. **Pick your own writable output dir** if you are not the owner of the
-   shared default. `OUTPUT_DIR` and `TMPDIR_HOST` are written to; `HF_HOME`
-   and `LOCAL_DATASETS_DIR` are read-only during a run and can stay shared.
-   ```bash
-   export OUTPUT_DIR=/gpfs/scratch/epor48/<you>/outputs
-   ```
+4. **Leave `OUTPUT_DIR` at its default**, `/gpfs/scratch/epor48/outputs` (set
+   in `infra/runners/sites/mn5.sh`). It is group-writable and setgid so every
+   checkpoint any account trains lands in one shared place -- do not redirect
+   it to a personal scratch dir, or `init_from`/`model.ckpt`/a resume path
+   built from another arm's `exp_name` will only resolve for whoever created
+   that directory. `TMPDIR_HOST` is also written to; `HF_HOME` and
+   `LOCAL_DATASETS_DIR` are read-only during a run and can stay shared.
 5. **Pre-launch config check**, catches most mixture/bucket-bin mistakes
    before a job burns an allocation:
    ```bash
@@ -127,9 +128,9 @@ debugging escape hatch, not the campaign path.
 ## Launching an arm (one-offs, off the ledger)
 
 ```bash
-# stage 1 (MA), 125 h/language, default architecture (whatever
-# ABL-MA-125-asr.yaml itself declares)
-CONFIG=projects/ablation-campaign/ABL-MA-125-asr.yaml \
+# stage 1 (MA), 700 h/language, default architecture (whatever
+# ABL-MA-700-asr.yaml itself declares)
+CONFIG=projects/ablation-campaign/ABL-MA-700-asr.yaml \
     bash projects/ablation-campaign/launch_MA.sh
 
 # stage 1 (MA), 700 h/language, ablating the adapter LR
@@ -144,11 +145,11 @@ ENCODER_FREEZE=false ENCODER_LR=1e-5 DECODER_FREEZE=false DECODER_LR=3e-5 \
 
 # stage 2 (IFT), LoRA on the decoder instead of a full fine-tune (see
 # "Decoder LoRA" below for what DECODER_LORA actually toggles)
-CONFIG=projects/ablation-campaign/ABL-IFT-125.yaml DECODER_LORA=true \
+CONFIG=projects/ablation-campaign/ABL-IFT-700.yaml DECODER_LORA=true \
     bash projects/ablation-campaign/launch_IFT.sh
 
-# stage 2 (IFT)
-CONFIG=projects/ablation-campaign/ABL-IFT-125.yaml \
+# stage 2 (IFT), default architecture (whatever ABL-IFT-700.yaml declares)
+CONFIG=projects/ablation-campaign/ABL-IFT-700.yaml \
     bash projects/ablation-campaign/launch_IFT.sh
 
 # see the exact command without submitting anything
@@ -158,7 +159,7 @@ DRY_RUN=1 CONFIG=projects/ablation-campaign/ABL-MA-700-asr.yaml \
 # a quick test on artemis (1 node, 2 H100s) before the real submission on mn5
 SITE=artemis ACCELERATE_CONFIG=config/accelerate/ddp.yaml \
 MELT_NODES=1 MELT_GPUS_PER_NODE=2 MELT_QOS=gpu-h100 MELT_PARTITION=h100 \
-CONFIG=projects/ablation-campaign/ABL-MA-125-asr.yaml \
+CONFIG=projects/ablation-campaign/ABL-MA-700-asr.yaml \
     bash projects/ablation-campaign/launch_MA.sh
 ```
 
@@ -184,7 +185,7 @@ when asked for the same values).
 This was a deliberate choice over a single "sensible default" set of freeze
 flags: MA trains only the adapter (encoder and decoder frozen), while IFT
 freezes the adapter stage 1 produced and trains the decoder on top of it (see
-`ABL-IFT-125.yaml`'s own `model.adapter`/`model.decoder` comments). A
+`ABL-IFT-700.yaml`'s own `model.adapter`/`model.decoder` comments). A
 hardcoded MA-shaped default (encoder/decoder frozen, adapter trainable) would
 have been right for stage 1 and silently backwards for stage 2 the first time
 someone ran `launch_IFT.sh` without overriding it.
@@ -366,13 +367,6 @@ The ledger records submissions, not truth: `campaign.py status` reads the
 job-id attribution, which is what lets `status` say RUNNING rather than
 guessing from a directory's mtime.
 
-## IFT and `max_steps`
-
-`ABL-IFT-125.yaml` currently pins `trainer.max_steps: 6250` in the base
-config, computed (per its own comment) at world_size 2. `launch_IFT.sh` does
-NOT override `max_steps` -- see that script's header for why this is flagged
-rather than silently fixed.
-
 ## Why DDP and not FSDP2 for an adapter-only (MA) arm
 
 Only the adapter trains. FSDP shards *parameters*, but the state sharding
@@ -393,10 +387,9 @@ writes a real `model.safetensors` instead of FSDP2's sharded no-op (issue
 #91), so a completed run needs no consolidation step. Use `ddp.yaml` (the
 default `ACCELERATE_CONFIG` in `launch_campaign.sh`) for any arm that freezes
 both encoder and decoder; reach for an FSDP config only once a stage trains
-enough of the backbone that DDP no longer fits in memory (e.g. IFT's decoder
-training, currently still on FSDP for the 125 h config -- see
-`ABL-IFT-125.yaml`'s own comment on why its stage 1 needed
-`utils/merge_fsdp_weight.py`).
+enough of the backbone that DDP no longer fits in memory (e.g. the Qwen3.5-2B
+IFT arms, which need `fsdp2_qwen35.yaml` -- see `MA-700-qwen35-2b-ins`'s
+comment in `campaign.yaml` for why).
 
 ## `max_duration` / `max_tokens`: a caution from a real incident
 
@@ -529,9 +522,8 @@ instructions (`"{audio_token} Transcribe this audio in {lang}."` for ASR,
 to the **target** language).
 
 `model.ckpt` points at stage 1's **run directory** (DDP wrote consolidated
-`model-0000N-of-00002.safetensors`, not FSDP's sharded state -- no
-`utils/merge_fsdp_weight.py` needed, unlike `ABL-IFT-125.yaml`'s FSDP-trained
-stage 1, #91). `model.decoder.attn_implementation` is still read from the
+`model-0000N-of-00002.safetensors`, not FSDP's sharded state, so no
+`utils/merge_fsdp_weight.py` step is needed here, #91). `model.decoder.attn_implementation` is still read from the
 YAML and pushed onto the checkpoint's sub-config, since a checkpoint's
 `config.json` records no attention implementation and falling back to sdpa
 costs ~12x on generation (#86).

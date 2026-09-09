@@ -134,8 +134,7 @@ DECODER_TAGS = {
     "Qwen/Qwen3.5-2B-Base": "qwen35_2bBase",
 }
 
-# Wall-clock defaults. 08:00:00 for the 125 h arm, preserved from the
-# hand-written launcher this replaces. 06:00:00 for the 700 h arm: measured
+# Wall-clock defaults. 06:00:00 for the 700 h arm: measured
 # at 6.81 s/it on DDP (batch_duration 180, world_size 8), one epoch is ~4.1 h
 # of training plus ~9 min startup, comfortably inside a 6 h allocation (and
 # MN5's backfill scheduler starts a 6 h request sooner than the original
@@ -145,7 +144,6 @@ DECODER_TAGS = {
 # New budgets get a generic fallback -- check it against measured throughput
 # before trusting it.
 TIME_DEFAULTS = {
-    "ABL-MA-125-asr.yaml": "08:00:00",
     "ABL-MA-700-asr.yaml": "06:00:00",
 }
 DEFAULT_TIME_FALLBACK = "08:00:00"
