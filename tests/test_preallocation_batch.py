@@ -117,3 +117,53 @@ def test_labels_produce_a_finite_loss(bare_model):
     labels = _build(_stub_trainer(), _FakeDDP(bare_model), duration_per_utt=60.0)["labels"]
     assert (labels[:, 0] == 0).all()
     assert (labels[:, 1:] == -100).all()
+
+
+# ---------------------------------------------------------------------------
+# Raw-waveform encoders
+# ---------------------------------------------------------------------------
+
+
+class Wav2Vec2FeatureExtractor:  # noqa: N801 - the class NAME is the lookup key
+    """Stands in for the real thing, which is resolved by class name.
+
+    Deliberately exposes only what the real one does: `feature_size` 1, a sampling
+    rate, and neither `hop_length` nor `stride`. Before the spec was consulted, that
+    combination silently took the hardcoded 20 ms fallback and under-reserved the
+    audio tensor by 320x.
+    """
+
+    feature_size = 1
+    sampling_rate = 16_000
+
+
+def _waveform_stub_trainer(**kw):
+    stub = _stub_trainer(**kw)
+    stub.processor = SimpleNamespace(feature_extractor=Wav2Vec2FeatureExtractor())
+    return stub
+
+
+def test_waveform_encoder_preallocates_at_sample_resolution(bare_model):
+    """60 s of audio is 960 000 samples, not 3000 frames."""
+    batch = _build(_waveform_stub_trainer(), _FakeDDP(bare_model), duration_per_utt=60.0)
+
+    assert batch["input_features"].shape == (3, 960_000, 1)
+    assert batch["features_attention_mask"].shape == (3, 960_000)
+
+
+def test_the_old_fallback_would_have_under_reserved_by_320x(bare_model):
+    """Guard the guard: 0.02 s frames would have given 3000, and no error anywhere."""
+    batch = _build(_waveform_stub_trainer(), _FakeDDP(bare_model), duration_per_utt=60.0)
+
+    assert batch["input_features"].shape[1] == 320 * 3000
+
+
+def test_an_unknown_extractor_still_falls_back_to_20_ms(bare_model):
+    """The fallback is now spec-driven, but the default spec is still w2v-BERT's."""
+    stub = _stub_trainer()
+    stub.processor = SimpleNamespace(
+        feature_extractor=SimpleNamespace(sampling_rate=16_000, feature_size=80)
+    )
+    batch = _build(stub, _FakeDDP(bare_model), duration_per_utt=60.0)
+
+    assert batch["input_features"].shape == (3, 3000, 80)

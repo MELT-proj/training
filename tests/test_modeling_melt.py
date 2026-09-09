@@ -32,6 +32,9 @@ def _make_melt_config(**kwargs):
     defaults.update(kwargs)
     config = MELTConfig(**defaults)
     config.audio_bos_token_id = 100
+    # wav2vec2-base eats a raw waveform, so max_audio_seq_len is a SAMPLE count and
+    # MELTAudioEncoder rejects a frame-sized one. 1 s of audio keeps these tiny.
+    config.audio_encoder_config.max_audio_seq_len = 16_000
     return config
 
 
@@ -126,7 +129,7 @@ class TestAdapterOutputFeaturesShape:
         input_features = torch.randn(batch_size, seq_len, input_hidden_size)
         attention_mask = torch.ones(batch_size, seq_len)
 
-        output_shape, output_mask = adapter._get_output_features_shape(input_features, attention_mask)
+        output_shape, output_mask = adapter._get_output_features_shape(input_features.shape, attention_mask)
 
         assert output_shape == (batch_size, seq_len, 1024)
         assert torch.equal(output_mask, attention_mask)
@@ -141,7 +144,7 @@ class TestAdapterOutputFeaturesShape:
 
         input_features = torch.randn(batch_size, seq_len, input_hidden_size)
 
-        output_shape, output_mask = adapter._get_output_features_shape(input_features, None)
+        output_shape, output_mask = adapter._get_output_features_shape(input_features.shape, None)
 
         assert output_shape == (batch_size, seq_len, 1024)
         assert output_mask is None
@@ -157,7 +160,7 @@ class TestAdapterOutputFeaturesShape:
         input_features = torch.randn(batch_size, seq_len, input_hidden_size)
         attention_mask = torch.ones(batch_size, seq_len)
 
-        predicted_shape, _ = adapter._get_output_features_shape(input_features, attention_mask)
+        predicted_shape, _ = adapter._get_output_features_shape(input_features.shape, attention_mask)
         actual_output = adapter(input_features)
 
         assert actual_output.shape == predicted_shape
@@ -266,7 +269,7 @@ class TestAdapterOutputFeaturesShape:
         input_features = torch.randn(batch_size, seq_len, 1024)
         attention_mask = torch.ones(batch_size, seq_len)
 
-        output_shape, output_mask = adapter._get_output_features_shape(input_features, attention_mask)
+        output_shape, output_mask = adapter._get_output_features_shape(input_features.shape, attention_mask)
 
         assert output_shape == (batch_size, 25, 2048)
         assert output_mask.shape == (batch_size, 25)
@@ -301,7 +304,7 @@ class TestAdapterOutputFeaturesShape:
         attention_mask = torch.ones(batch_size, seq_len)
         attention_mask[1, 50:] = 0
 
-        output_shape, output_mask = adapter._get_output_features_shape(input_features, attention_mask)
+        output_shape, output_mask = adapter._get_output_features_shape(input_features.shape, attention_mask)
 
         assert output_shape[1] == 50
         assert output_mask.shape == (batch_size, 50)
@@ -321,8 +324,8 @@ class TestAdapterOutputFeaturesShape:
         input_features = torch.randn(batch_size, seq_len, input_hidden_size)
         attention_mask = torch.ones(batch_size, seq_len)
 
-        output_shape, output_mask = adapter._get_output_features_shape(input_features, attention_mask)
-        inner_shape, inner_mask = adapter.adapter._get_output_features_shape(input_features, attention_mask)
+        output_shape, output_mask = adapter._get_output_features_shape(input_features.shape, attention_mask)
+        inner_shape, inner_mask = adapter.adapter._get_output_features_shape(input_features.shape, attention_mask)
 
         assert output_shape == inner_shape
         assert torch.equal(output_mask, inner_mask)
