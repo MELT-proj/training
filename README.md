@@ -6,6 +6,26 @@
 
 MELT is a training and modeling stack built on Hugging Face components with Lhotse-based speech dataloading.
 
+## Features
+
+**Modeling**
+- Audio encoders: wav2vec2-BERT 2.0 (Seamless), wav2vec2 (MMS), Whisper, HuBERT, and other `Wav2Vec2FeatureExtractor`-based checkpoints (WavLM, data2vec-audio, ...)
+- Adapters: MLP, Q-Former, Conformer
+- Text decoders: virtually any `AutoModelForCausalLM` that accepts `inputs_embeds` — tested with Llama 3.2, Qwen 2.5, Qwen 3.5, EuroLLM
+- A regular `transformers` model (`MELTForCausalLM`): `.from_pretrained()`, `.generate()`, `attn_implementation=` per backbone
+
+**Training utils**
+- Lhotse for dynamic, duration-based batching and bucketing, including lhotse 2's indexed Shar access
+- Resumable dataloading via torchdata's `StatefulDataLoader`
+- `accelerate` + the HF `Trainer` API for DDP/FSDP2 distributed training, with gradient checkpointing
+- `.generate()`-based (not teacher-forced) validation, with per-language metrics and cumulative training-hours logged
+- A config consistency checker (`infra/check_training_config.py`) that catches stale bucket bins and shape mismatches before a job is submitted
+- SLURM launchers for multi-cluster runs (MN5, Artemis), in container or native mode
+
+**Data pipeline**
+- Custom, per-dataset prompt templates
+- Bucket-duration estimation utilities
+
 ## Milestones
 - [**2025/07**] v1 of the model was accepted and published as system paper at IWLST 2025. [Link](https://aclanthology.org/2025.iwslt-1.36/) 
 
@@ -49,11 +69,6 @@ opens; after that, ask for it:
 A `/test` run is not attached to the PR's head commit, so it appears under the
 [Actions tab](https://github.com/MELT-proj/training/actions) rather than as a
 check on the PR; the comment gets a 👀 reaction when it starts.
-
-## Main Components
-- Training orchestrator: custom MELT Trainer built on HF Trainer
-- Modeling choices: Hugging Face encoder/decoder classes with adapter support
-- Data loading: Lhotse Shar pipelines for speech datasets
 
 ## Citation
 
