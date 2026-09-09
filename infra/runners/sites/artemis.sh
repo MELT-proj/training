@@ -12,17 +12,11 @@ export SINGULARITY_IMG=${SINGULARITY_IMG:-/mnt/scratch-artemis/giuseppe/melt-dat
 export SINGULARITY_BIN=${SINGULARITY_BIN:-singularity}
 
 # --- repo sync (infra/sync_repo.sh) ---------------------------------------
-# artemis does not share a filesystem with nyx, where development happens, so the
-# cluster keeps its own checkout that has to be brought up to date before a submit.
+# Artemis keeps its own checkout, synced from here before each submit.
 export REMOTE_SSH="${REMOTE_SSH:-artemis}"
 export REMOTE_REPO="${REMOTE_REPO:-melt-proj/training}"
 
 # --- native mode ----------------------------------------------------------
-# melt-312 pins torchdata 0.10.0 (repo requires >=0.11, see pyproject.toml);
-# lhotse2 has the matching stack (torch 2.9.1+cu126, torchdata 0.11.0,
-# lhotse 2.0.0a3, transformers 4.57.1) and its `melt` editable install has
-# been repointed at this checkout (it previously resolved to a stale,
-# disconnected copy at melt-data-adjacent lhotse2-repo).
 export VENV_PATH="${VENV_PATH:-/mnt/scratch-artemis/giuseppe/venvs/lhotse2/bin/activate}"
 
 # --- misc -----------------------------------------------------------------
@@ -43,9 +37,8 @@ export MELT_SEED="${MELT_SEED:-42}"
 
 # --- scheduler ------------------------------------------------------------
 # MELT_NODES/MELT_QOS/MELT_TIME/MELT_PARTITION/MELT_GPUS_PER_NODE are overridable
-# the same way as on mn5. a6000 nodes cannot run containers (Singularity fails
-# with "starter-suid doesn't have setuid bit set" -- confirmed via job 328945),
-# so submit-native.sh (not submit-container.sh) is the only option there:
+# the same way as on mn5. The a6000 partition only supports native-mode runs,
+# not submit-container.sh:
 #   MELT_QOS=gpu-debug MELT_PARTITION=a6000 infra/runners/submit-native.sh artemis …
 SBATCH_ARGS=(--time="${MELT_TIME:-01:00:00}" --nodes="${MELT_NODES:-1}" --gpus-per-node="${MELT_GPUS_PER_NODE:-2}" --qos="${MELT_QOS:-gpu-h100}" --partition="${MELT_PARTITION:-h100}")
 # a6000 debug alternative (native mode only -- see above):

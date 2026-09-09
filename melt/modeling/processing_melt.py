@@ -418,6 +418,9 @@ class MELTProcessor(ProcessorMixin):
             # encoder itself is never handed the mask.
             audio_kwargs["return_attention_mask"] = True
             audio_kwargs["pad_to_multiple_of"] = 8
+            # True only for encoders whose spec declares a fixed input window
+            # (currently Whisper only -- see encoder_specs.py); every other
+            # encoder takes the unwindowed branch below.
             windowed = spec.window_frames is not None
             for audio_array in audio:
                 if windowed:
