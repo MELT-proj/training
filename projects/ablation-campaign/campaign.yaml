@@ -119,6 +119,9 @@ arms:
     config: ABL-IFT-700.yaml
     init_from: MA-700-llama1b-ins
     seed: 1337
+    batch_duration: 30
+    grad_accum_steps: 20
+    gradient_checkpointing: false
     time: "20:00:00"
     # 6 intermediate checkpoints plus the training-end one, evenly spaced:
     # at 700 h/language that is a checkpoint roughly every 100 h/language
@@ -139,6 +142,9 @@ arms:
                                         # chat template of its own.
     init_from: MA-700-llama1b-base
     seed: 1337
+    batch_duration: 30
+    grad_accum_steps: 20
+    gradient_checkpointing: false
     time: "20:00:00"
     checkpoint_count: 7               # same cadence as IFT-700-llama1b-ins
 
@@ -151,6 +157,9 @@ arms:
     init_from: MA-700-qwen35-2b-ins
     seed: 1337
     time: "46:00:00"
+    batch_duration: 30
+    grad_accum_steps: 20
+    gradient_checkpointing: false
     checkpoint_count: 7               # same cadence as IFT-700-llama1b-ins
 
   - id: IFT-700-qwen35-2b-base
@@ -162,13 +171,10 @@ arms:
     # model.ckpt NOTE overriding ABL-IFT-700.yaml's baked Llama default to
     # this arm's own init_from target below.
     decoder: Qwen/Qwen3.5-2B-Base
-    accelerate: config/accelerate/fsdp2_qwen35.yaml  # see IFT-700-qwen35-2b-ins
     init_from: MA-700-qwen35-2b-base
     seed: 1337
-    # 46h, matching IFT-700-qwen35-2b-ins's measured full-run cost (see that
-    # row for the checkpoint-interval arithmetic). The previous 24h here was
-    # never measured and would have timed out around 40% of the way through --
-    # it predated even the smoke tests, and inherited a param-count guess.
+    batch_duration: 30
+    grad_accum_steps: 20
+    gradient_checkpointing: false
     time: "46:00:00"
     checkpoint_count: 7
-    # Same memory caveat as IFT-700-qwen35-2b-ins.
