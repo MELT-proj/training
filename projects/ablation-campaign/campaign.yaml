@@ -82,19 +82,6 @@ arms:
     decoder: meta-llama/Llama-3.2-1B
     seed: 42
     time: "06:00:00"
-    # Completed (2026-09-09), same -md60 max_duration-60/max_tokens-400
-    # correction as the Instruct sibling. Pinned rather than composed because
-    # it was launched by hand under the pre-existing naming convention, same
-    # reason as MA-700-llama1b-ins-md60 above.
-    #
-    # Originally landed in a colleague's personal scratch dir, which is what
-    # triggered a HFValidationError the first time this checkpoint was used
-    # to initialise IFT (model.ckpt/init_from resolve to a CONTAINER path,
-    # /workspace/outputs/<exp_name>, which only maps to whatever host
-    # directory the launching account's own OUTPUT_DIR points at). Moved into
-    # the shared /gpfs/scratch/epor48/outputs (2026-09-09), now group-writable
-    # -- see infra/runners/sites/mn5.sh -- so this resolves the same way for
-    # every account, same as every other arm's checkpoint.
     exp_name: MA-700asr-w2vbF-llama1bBaseF-mlpT-s42-8g-md60
 
   - id: MA-700-qwen35-2b-ins
@@ -103,48 +90,11 @@ arms:
                                     # same reason: identical mixture/bins/
                                     # budget/prompt across every 700 h arm.
     decoder: Qwen/Qwen3.5-2B
-    # DDP OOM'd reliably here (job 45342287, then again after the
-    # eval-generation-memory fix alone, job 45347523): even a synthetic
-    # 2-utterance preallocation batch couldn't be allocated after
-    # eval_on_start. Qwen3.5-2B is 2B params / 262,144-token vocab, ~2x
-    # Llama-3.2-1B's footprint, at settings tuned for the smaller decoder.
-    # FSDP2 (sharded weights + activation checkpointing) fixes the OOM --
-    # verified end to end on mn5, job 45351025 (2026-09-02). Needed
-    # fsdp2_qwen35.yaml specifically, not the shared fsdp2.yaml: see that
-    # file's own comment for why (Qwen3.5's _no_split_modules still names a
-    # vision-model class that doesn't exist in melt's text-only
-    # instantiation).
-    accelerate: config/accelerate/fsdp2_qwen35.yaml
-    # NOTE 2026-09-07: DDP + gradient checkpointing now ALSO fits (smoke
-    # tests below), and would be faster than FSDP2 with no consolidation
-    # step needed on completion -- but this arm already completed and
-    # consolidated under FSDP2 (see below), so switching it now would only
-    # matter for a from-scratch rerun. Left as FSDP2 for provenance. See
-    # MA-700-qwen35-2b-base for where the DDP config is actually used.
+    batch_duration: 30
+    grad_accum_steps: 20
+    gradient_checkpointing: false
     seed: 42
-    # CORRECTED 2026-09-03: job 45351025 above was `--trainer.max_steps 2`,
-    # a 2-step smoke test (614 s/step incl. eval_on_start generation), NOT a
-    # full-run timing -- the previous "~43 min verification run" note in
-    # this file conflated the two and produced a time budget that was wrong
-    # by ~7x. The real full run (job 45367979, 02:00:00 budget) TIMED OUT at
-    # step 102/2625 with zero checkpoints saved.
-    #
-    # CORRECTED AGAIN 2026-09-04: the 20h resubmission (job 45374299) ALSO
-    # timed out, at step 1912/2625 (73%), mid-eval, with checkpoint-1673 as
-    # the last good save. This confirmed the "eval overhead unmeasured but
-    # probably not cheap" caveat above understated it badly: steady-state
-    # training alone is ~18.5 s/step as measured before (2625 steps =~
-    # 13.5h), but the 8 eval rounds completed by step 1912 consumed ~10h
-    # BETWEEN them -- roughly 65-75 min per eval round (200 samples x 6
-    # eval sets: asr_en/de/fr/es/it + st_en_de, each independently
-    # generation-bound under FSDP2's per-batch unshard/reshard). Full run:
-    # ~13.5h training + 11 rounds x ~70 min eval =~ 26.3h. 28h leaves ~1.7h
-    # margin. This arm was resumed from checkpoint-1673 rather than
-    # restarted (`campaign.py run MA-700-qwen35-2b-ins --resume`), so it
-    # will finish well inside this budget -- 28h is sized for a FRESH
-    # one-shot run (e.g. if this arm is ever rerun from scratch, or for
-    # MA-700-qwen35-2b-base below), not for the remaining ~7h this resume
-    # actually needs.
+    checkpoint_count: 2
     time: "28:00:00"
 
   - id: MA-700-qwen35-2b-base
@@ -156,9 +106,9 @@ arms:
                                     # the file, but the data/mixture/budget
                                     # stay identical.
     decoder: Qwen/Qwen3.5-2B-Base
-    batch_duration: 60
-    grad_accum_steps: 10
-    gradient_checkpointing: true
+    batch_duration: 30
+    grad_accum_steps: 20
+    gradient_checkpointing: false
     seed: 42
     checkpoint_count: 2
     time: "28:00:00"
@@ -169,24 +119,12 @@ arms:
     config: ABL-IFT-700.yaml
     init_from: MA-700-llama1b-ins
     seed: 1337
-    # 20h: measured 5.73 s/step steady state x 6310 steps = ~10.0h of pure
-    # training, plus ~14 min one-time warmup (checkpoint load + cuDNN
-    # autotune) and unmeasured periodic generation-eval overhead (7 rounds,
-    # up to 1,400 generated utterances each) -- 20h is a deliberately
-    # generous single-allocation estimate, not a tight one. Revise once this
-    # arm's own log gives real eval-round durations. The live run (job
-    # 45305938) was extended from 6h to 20h in place via `scontrol update`
-    # after it was already queued, rather than resubmitted, to keep its
-    # accumulated fairshare priority.
     time: "20:00:00"
     # 6 intermediate checkpoints plus the training-end one, evenly spaced:
     # at 700 h/language that is a checkpoint roughly every 100 h/language
     # (~1.4h of wall clock at the measured rate) -- this is also what bounds
     # a node failure's cost regardless of the allocation length above.
     checkpoint_count: 7
-    # Pinned: this arm was already in flight under the hand-written launcher's
-    # name when the grid landed, and renaming it mid-run would orphan its
-    # output directory and its resume path.
     exp_name: IFT-700both-w2vbF-llama1bInsT-mlpF-s1337-8g
 
   - id: IFT-700-llama1b-base
@@ -201,9 +139,6 @@ arms:
                                         # chat template of its own.
     init_from: MA-700-llama1b-base
     seed: 1337
-    # Same architecture/size as IFT-700-llama1b-ins, so its measured 5.73
-    # s/step and 20h budget are reused rather than re-measured -- revise once
-    # this arm's own log gives a real number, same caveat as that row's.
     time: "20:00:00"
     checkpoint_count: 7               # same cadence as IFT-700-llama1b-ins
 
@@ -213,80 +148,10 @@ arms:
     decoder: Qwen/Qwen3.5-2B          # ABL-IFT-700.yaml bakes in Llama, unlike
                                       # the MA config's silent inherit -- must
                                       # be explicit here too.
-    # CONFIRMED (2026-09-07): `campaign.py plan` WARNs twice here that it is
-    # overriding data.chat_template_config 'llama3' -> 'chatml' -- once
-    # planning this arm, once resolving init_from's parent plan below, both
-    # for the same reason. Wanted: Qwen3.5's chat template is chatml, and
-    # ABL-IFT-700.yaml's own llama3 default is baked for the Llama decoder
-    # (see the comment above), not a deliberate IFT-specific choice this
-    # override would be clobbering. MA-700-qwen35-2b-ins/-base make the same
-    # override for the same decoder, so this is decoder-driven, not
-    # stage-driven -- if this config's default ever needs to be
-    # decoder-conditional, that logic belongs in DECODER_PROFILES, not here.
-    #
-    # Confirmed needed for MA-700-qwen35-2b-ins (DDP OOM'd, FSDP2 didn't --
-    # see that row's comment). IFT trains the full 2B decoder on top of MA's
-    # frozen-decoder case, so the memory pressure this addresses is if
-    # anything worse here, not less.
-    accelerate: config/accelerate/fsdp2_qwen35.yaml
-    # `campaign.py plan` also NOTEs it is overriding model.ckpt from
-    # ABL-IFT-700.yaml's own baked-in default (the Llama MA-700 arm's pinned
-    # path) to this arm's own MA-700-qwen35-2b-ins checkpoint -- expected:
-    # that baked default is only ever right for IFT-700-llama1b-ins, and
-    # init_from below is exactly the mechanism meant to override it per arm.
     init_from: MA-700-qwen35-2b-ins
     seed: 1337
-    # CORRECTED 2026-09-05, from two real smoke tests on acc_debug (mn5 jobs
-    # 45433385 and 45435280), replacing the earlier param-count-scaling
-    # guess entirely:
-    #   - job 45433385 (eval_on_start left on, max_steps=12): never reached a
-    #     training step in its 1h debug window -- eval_on_start alone ran 6
-    #     full eval sets (asr_en/de/fr/es/it + st_en_de) taking ~45 min total
-    #     before timing out. Zero errors across that hour, so the config
-    #     (decoder swap, init_from-consolidated MA-700-qwen35-2b-ins
-    #     checkpoint, FSDP2) is confirmed valid.
-    #   - job 45435280 (eval disabled, max_steps=15): isolated pure training
-    #     step rate. Steady state ~16-18 s/step (steps 3-15, after step-1
-    #     warmup/checkpoint-load skew).
-    # This arm shares ABL-IFT-700.yaml's batch_duration/world_size/grad_accum
-    # with IFT-700-llama1b-ins (decoder choice does not affect the
-    # audio-batching-driven step count), so the same 6310 steps/epoch applies:
-    # 6310 x ~17s =~ 29.8h training + 7 eval rounds x ~45min =~ 5.25h eval
-    # =~ 35h total. 40h leaves ~5h margin, matching the one-shot policy above.
-    #
-    # CORRECTED AGAIN 2026-09-05, this time from the real full run (job
-    # 45436478) rather than from smoke tests. Checkpoint mtimes give the
-    # steady-state cost of one 902-step segment (902 training steps plus the
-    # eval round that fires with them) to within nine seconds:
-    #   ckpt 902  at start +7h03m   (startup + eval_on_start included)
-    #   ckpt 1804 at +5h41m53s
-    #   ckpt 2706 at +5h41m44s
-    # So a full epoch is 7.05h (first segment) + 6 x 5.70h = 41.2h, plus the
-    # end-of-training eval and save, =~ 42h. The 40h above was ~2h short: job
-    # 45436478 will time out roughly 200 steps into its last segment, with
-    # checkpoint-5412 as the last good save, and needs a ~6.3h resume.
-    #
-    # The smoke-test estimate underestimated because both tests measured
-    # training steps alone (~16-18 s/step) and priced eval at the ~45min the
-    # eval_on_start test showed; the real per-segment number says training +
-    # eval together cost 5.70h per 902 steps, i.e. ~22.7s/step all-in. Time
-    # segments of a real run, not steps of a smoke test.
     time: "46:00:00"
     checkpoint_count: 7               # same cadence as IFT-700-llama1b-ins
-    # CORRECTED (2026-09-09): the 2026-09-05 note here claimed the decoder-
-    # profile bundle's --data.prompt_template '{audio_token}' override was a
-    # harmless no-op against this config's dict-valued prompt_template
-    # (asr/st keys, line ~157). That was checked against the wrong value --
-    # OmegaConf.merge() does NOT recursively merge a dict base with a string
-    # override; it replaces the subtree. This arm's REAL resolved_config.json
-    # confirms it: data.prompt_template resolved to the bare string
-    # "{audio_token}", asr/st gone. This arm's completed run (checkpoints
-    # under IFT-700-w2vbF-qwen35_2bInsT-mlpF-elr6e6-dlr2e5-lr2e4-s1337-8g)
-    # trained with no per-task instruction for its entire epoch -- not the
-    # instruction-tuned run this campaign intends. Fixed in plan_arm.py
-    # (skips the prompt_template trio whenever the base config already
-    # declares a dict there); this arm needs a full rerun once that fix is
-    # confirmed on a fresh `campaign.py plan`.
 
   - id: IFT-700-qwen35-2b-base
     stage: IFT
