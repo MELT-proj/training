@@ -273,15 +273,20 @@ arms:
     # segments of a real run, not steps of a smoke test.
     time: "46:00:00"
     checkpoint_count: 7               # same cadence as IFT-700-llama1b-ins
-    # NOTE (2026-09-05): plan_arm.py's Qwen decoder-profile bundle emits
-    # --data.prompt_template '{audio_token}' unconditionally, but this
-    # config's own prompt_template is a dict (asr/st keys, see line ~157),
-    # not a string. The braced value gets parsed by OmegaConf as a flow
-    # mapping and MERGED into the dict rather than replacing it -- harmless
-    # here (confirmed via resolved_config.json: asr/st templates survive
-    # intact, only a stray unused audio_token: null key gets added) but
-    # fragile. Worth fixing in plan_arm.py to skip this override for IFT
-    # stages; not blocking, since the net effect on this arm is a no-op.
+    # CORRECTED (2026-09-09): the 2026-09-05 note here claimed the decoder-
+    # profile bundle's --data.prompt_template '{audio_token}' override was a
+    # harmless no-op against this config's dict-valued prompt_template
+    # (asr/st keys, line ~157). That was checked against the wrong value --
+    # OmegaConf.merge() does NOT recursively merge a dict base with a string
+    # override; it replaces the subtree. This arm's REAL resolved_config.json
+    # confirms it: data.prompt_template resolved to the bare string
+    # "{audio_token}", asr/st gone. This arm's completed run (checkpoints
+    # under IFT-700-w2vbF-qwen35_2bInsT-mlpF-elr6e6-dlr2e5-lr2e4-s1337-8g)
+    # trained with no per-task instruction for its entire epoch -- not the
+    # instruction-tuned run this campaign intends. Fixed in plan_arm.py
+    # (skips the prompt_template trio whenever the base config already
+    # declares a dict there); this arm needs a full rerun once that fix is
+    # confirmed on a fresh `campaign.py plan`.
 
   - id: IFT-700-qwen35-2b-base
     stage: IFT

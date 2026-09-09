@@ -500,14 +500,36 @@ def plan(args: ArmAxes) -> ArmPlan:
         overrides += ["--model.decoder.pad_token", profile["pad_token"]]
         overrides += ["--data.apply_chat_template", "true"]
         overrides += ["--data.chat_template_config", profile["chat_template_config"]]
-        overrides += ["--data.prompt_template_selection", "custom"]
-        # The inner single quotes are load-bearing: a bare {audio_token} misparses
-        # through OmegaConf's dotlist as the flow-mapping dict {audio_token: None}.
-        # See #94/#100 (and the pre-refactor 125 h launcher's header, which this
-        # bundle is a direct port of). No extra shell quoting is needed here --
-        # this token goes straight into argv via OVERRIDE_ARGS, not through a
-        # second round of shell parsing.
-        overrides += ["--data.prompt_template", "'{audio_token}'"]
+        # This trio (prompt_template_selection + prompt_template, below) is a
+        # direct port of the pre-refactor 125 h MA launcher's header, whose base
+        # config's own data.prompt_template was already the plain string
+        # "{audio_token}" -- so overriding it back to the same string was always
+        # a no-op there. It is NOT a no-op for a config (every ABL-IFT-*.yaml)
+        # whose own data.prompt_template is a task->template DICT: the override
+        # below emits the literal Python string "'{audio_token}'" (embedded
+        # quote characters and all -- load-bearing so OmegaConf's dotlist parser
+        # reads it as an explicit YAML string, not a flow-mapping), and
+        # OmegaConf.merge() then REPLACES the whole dict subtree with that bare
+        # string rather than merging into it -- confirmed both by reproducing it
+        # directly against OmegaConf.merge() and by inspecting a real completed
+        # run's resolved_config.json, which showed data.prompt_template as
+        # "{audio_token}" with the config's asr/st instructions gone entirely.
+        # This actually happened: IFT-700-qwen35-2b-ins trained with no
+        # per-task instruction for its whole run (needs a rerun once this fix
+        # lands). Skipping the whole trio whenever the base config already
+        # declares a dict here -- i.e. every IFT stage -- keeps this bundle
+        # doing its one real job (decoder identity + chat template) without
+        # touching a prompt_template the config owns and never asked to have
+        # swapped.
+        cfg_prompt_template = get(cfg, "data.prompt_template")
+        if not isinstance(cfg_prompt_template, dict):
+            overrides += ["--data.prompt_template_selection", "custom"]
+            # The inner single quotes are load-bearing: a bare {audio_token}
+            # misparses through OmegaConf's dotlist as the flow-mapping dict
+            # {audio_token: None}. See #94/#100. No extra shell quoting is
+            # needed here -- this token goes straight into argv via
+            # OVERRIDE_ARGS, not through a second round of shell parsing.
+            overrides += ["--data.prompt_template", "'{audio_token}'"]
         # A base checkpoint ships no chat template, so it has to borrow one.
         # Only set for profiles that declare it: passing chat_template_from to
         # a decoder that already HAS a template overwrites it with a copy of
