@@ -171,6 +171,48 @@ class TestMELTConfig:
 
         assert reloaded.text_decoder_config._attn_implementation == "flash_attention_2"
 
+    def test_encoder_kwargs_reach_the_audio_encoder_sub_config(self):
+        """`model.encoder.attn_implementation` has to land somewhere that matters.
+
+        `encoder_kwargs` existed long before anything passed it: `prepare_melt_config`
+        built `decoder_kwargs` only, so the encoder always took transformers' default.
+        That was invisible while w2v-BERT was the only encoder (it can run nothing but
+        sdpa), and stops being invisible with facebook/mms-1b.
+        """
+        config = MELTConfig(
+            audio_encoder=AUDIO_ENCODER,
+            text_decoder=TEXT_DECODER,
+            adapter_config={"_type": "mlp"},
+            encoder_kwargs={"attn_implementation": "flash_attention_2"},
+            decoder_kwargs={"attn_implementation": "sdpa"},
+        )
+
+        assert config.audio_encoder_config._attn_implementation == "flash_attention_2"
+        # And the two halves stay independent -- MELTConfig deliberately does not
+        # broadcast one value across sub-configs.
+        assert config.text_decoder_config._attn_implementation == "sdpa"
+
+    def test_the_encoder_attn_implementation_is_lost_on_a_round_trip_too(self, tmp_path):
+        """The encoder mirror of the decoder's saved-config hole.
+
+        Same cause, same consequence: train.py re-applies
+        `model.encoder.attn_implementation` on the `model.ckpt` path because the
+        serialised sub-config does not carry it.
+        """
+        config = MELTConfig(
+            audio_encoder=AUDIO_ENCODER,
+            text_decoder=TEXT_DECODER,
+            adapter_config={"_type": "mlp"},
+            encoder_kwargs={"attn_implementation": "flash_attention_2"},
+        )
+        config.save_pretrained(tmp_path)
+        reloaded = MELTConfig.from_pretrained(tmp_path)
+
+        assert reloaded.audio_encoder_config._attn_implementation != "flash_attention_2"
+
+        reloaded.audio_encoder_config._attn_implementation = "flash_attention_2"
+        assert reloaded.audio_encoder_config._attn_implementation == "flash_attention_2"
+
     def test_save_pretrained_writes_config_json(self, tmp_path):
         config = MELTConfig(
             audio_encoder=AUDIO_ENCODER,

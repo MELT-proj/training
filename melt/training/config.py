@@ -79,6 +79,13 @@ model:
     # Counts SAMPLES, not frames, for a raw-waveform encoder (HuBERT and the
     # rest of the wav2vec2 family, whose conv frontend is inside the encoder):
     # 960000 there is 60 s. MELTAudioEncoder rejects a frame-sized value.
+    attn_implementation: sdpa
+    # sdpa is the only choice the default encoder has: w2v-BERT applies a
+    # relative-position bias inside self-attention, which flash-attn kernels
+    # cannot take, and transformers declares no flash support for it at all.
+    # facebook/mms-1b (and the wav2vec2 family generally) injects position once
+    # before the stack instead, leaving vanilla scaled-dot-product attention, so
+    # flash_attention_2 is available there.
 
   decoder:
     name: Qwen/Qwen2.5-0.5B

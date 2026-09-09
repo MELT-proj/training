@@ -133,6 +133,11 @@ ENCODER_FRAME_SECONDS_BY_NAME = {
     "wavlm": 1 / 16_000,
     "data2vec-audio": 1 / 16_000,
     "wav2vec2": 1 / 16_000,
+    # facebook/mms-1b and its siblings are wav2vec2 checkpoints whose *names* say
+    # nothing about it, so the substring match above misses them and they would
+    # silently get the 20 ms default -- putting the encoder's window at 960000 x
+    # 0.02 = 19200 s and hiding the C3 finding entirely rather than raising it.
+    "mms-": 1 / 16_000,
     # ...but w2v-BERT only *looks* like that family. It is frame-based, and the
     # longest-key-first match below is what keeps a checkpoint named
     # "wav2vec2-bert-something" off the waveform branch.
