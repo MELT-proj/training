@@ -1,6 +1,7 @@
+from typing import ClassVar
+
 from transformers import AutoConfig
 from transformers.configuration_utils import PretrainedConfig
-from transformers.utils import logging
 
 
 # Required special token names (no hard-coded defaults).
@@ -46,7 +47,11 @@ class MELTAdapterConfig(PretrainedConfig):
     has_no_defaults_at_init = True
 
     # No sub-configs → the recursive _attn_implementation setter is a no-op.
-    sub_configs: dict = {}
+    # ClassVar, not a plain annotation: transformers 5 turns every
+    # PretrainedConfig subclass into a dataclass, which rejects a mutable
+    # default ({}) on a real field. ClassVar is what PretrainedConfig itself
+    # uses for this same attribute.
+    sub_configs: ClassVar[dict] = {}
 
     def __init__(
         self,
@@ -125,7 +130,6 @@ class MELTConfig(PretrainedConfig):
         "text_decoder_config": AutoConfig,
         "adapter_config": MELTAdapterConfig,
     }  # type: ignore
-    is_composition = True
 
     # ------------------------------------------------------------------
     # Override the _attn_implementation property so that the parent class
@@ -172,6 +176,16 @@ class MELTConfig(PretrainedConfig):
         elif isinstance(text_decoder_config, dict):
             text_decoder_config = AutoConfig.for_model(**text_decoder_config)
 
+        if text_decoder_config is not None:
+            # Some decoders (e.g. Qwen3.5) nest their real text config under a
+            # sub-config and don't expose vocab_size/hidden_size/eos_token_id
+            # etc. at the top level. get_text_config() is the standard
+            # transformers method for resolving that -- and a no-op (returns
+            # self) for every decoder that isn't nested this way -- so
+            # flattening here once means every downstream read of
+            # text_decoder_config.<attr> across the codebase just works.
+            text_decoder_config = text_decoder_config.get_text_config(decoder=True)
+
         self.audio_encoder = audio_encoder
         self.text_decoder = text_decoder
         self.audio_encoder_config = audio_encoder_config
@@ -183,8 +197,11 @@ class MELTConfig(PretrainedConfig):
 
         self.initializer_range = initializer_range
 
-        # Set decoder-related attributes
-        self.loss_type = "ForCausalLMLoss"
+        # Set decoder-related attributes. "ForCausalLM" (not "ForCausalLMLoss")
+        # is the actual key in transformers' loss registry -- both keys
+        # resolve to the same loss function since the old, invalid key fell
+        # back to this one with a warning; using the real key just quiets it.
+        self.loss_type = "ForCausalLM"
         super().__init__(**kwargs)
 
     def get_text_config(self, decoder: bool = False):
@@ -195,7 +212,12 @@ class MELTConfig(PretrainedConfig):
 
     @property
     def vocab_size(self):
-        return self.text_decoder_config.vocab_size
+        # get_text_config(), not a direct attribute read: some decoders (e.g.
+        # Qwen3.5) nest their real text config under a sub-config and don't
+        # expose vocab_size at the top level -- get_text_config() is the
+        # standard transformers method for resolving that, and is a no-op
+        # (returns self) for decoders that aren't nested this way.
+        return self.text_decoder_config.get_text_config().vocab_size
 
     @property
     def audio_token_id(self):

@@ -92,6 +92,12 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         # rather than a silent fallback to the supervision text. See
         # ``get_text_from_cut``.
         self.strict_text_field = bool(_get_config_value(config, "strict_text_field", False))
+        # When set (with strict_text_field), that error becomes a logged
+        # warning and a skipped cut instead of raising. See
+        # ``get_text_from_cut``'s skip_on_mismatch.
+        self.skip_text_field_mismatch = bool(
+            _get_config_value(config, "skip_text_field_mismatch", False)
+        )
 
         # Template selection strategy when apply_chat_template is True.
         # "random"        – randomly pick from all templates for the task (current default)
@@ -382,7 +388,12 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
             tag_text_field = cut.tags.get("text_field")
             if tag_text_field:
                 text_field = tag_text_field
-        return get_text_from_cut(cut, text_field, strict=self.strict_text_field)
+        return get_text_from_cut(
+            cut,
+            text_field,
+            strict=self.strict_text_field,
+            skip_on_mismatch=self.skip_text_field_mismatch,
+        )
 
     def _get_tags(self, cut: Cut) -> tuple[str, str, str, str]:
         """Extract task and language tags from a cut (delegates to shared helper).

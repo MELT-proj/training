@@ -230,8 +230,19 @@ container_env MASTER_PORT "${MASTER_PORT}"
 
 # Forward optional host-set vars only when present. WANDB_PROJECT/WANDB_MODE
 # defaults are applied inside run_train.sh, so they are not duplicated here.
-for var in HF_HUB_OFFLINE GPU_MEM_MONITORING \
-           MELT_DEBUG_CUT_IDS_DIR MELT_DEBUG_CUT_IDS_MAX_BATCHES MELT_DEBUG_CUT_IDS_EVERY; do
+#
+# The MELT_WORKER_* diagnostics and the MALLOC_* knobs have to be forwarded
+# rather than set here: both are read inside the DataLoader worker, which is
+# forked from the rank *inside* the container, so a value that only exists on
+# the host node never reaches the process being measured. MALLOC_* in
+# particular is how the host tests whether the worker's unbounded growth is a
+# leak or glibc heap fragmentation (MALLOC_MMAP_THRESHOLD_, MALLOC_ARENA_MAX)
+# without touching a line of code.
+for var in HF_HUB_OFFLINE GPU_MEM_MONITORING MELT_SHAR_OPEN_SHARDS \
+           MELT_DEBUG_CUT_IDS_DIR MELT_DEBUG_CUT_IDS_MAX_BATCHES MELT_DEBUG_CUT_IDS_EVERY \
+           MELT_WORKER_MEMSTATS MELT_WORKER_HEAPDUMP \
+           MELT_WORKER_TRACEMALLOC MELT_WORKER_TRACEMALLOC_FRAMES \
+           MALLOC_ARENA_MAX MALLOC_MMAP_THRESHOLD_ MALLOC_TRIM_THRESHOLD_; do
     [[ -n "${!var:-}" ]] && container_env "$var" "${!var}"
 done
 
@@ -275,9 +286,26 @@ echo "[container] launching: bash/run_train.sh ${ACCELERATE_CONFIG} ${TRAIN_ARGS
 # SLURM_PROCID/NODEID/LOCALID/STEP_ID are set by srun per task and stripped by
 # --cleanenv, so they are forwarded with --env inside the step. Train args are
 # passed as positional parameters, which is quoting-safe (args with spaces survive).
-export SINGULARITY_BIN SINGULARITY_IMG BIND_ARGS
+export SINGULARITY_BIN SINGULARITY_IMG BIND_ARGS SUBMIT_DIR
+
+# Opt-in host-memory tracer, one per node, outside the container. See
+# bash/memtrace.sh for why: MN5 caps the job at ReqMem with NoOverMemoryKill, so
+# exhausting node memory surfaces as a DataLoader SIGBUS, a munged timeout or a
+# NODE_FAIL rather than an OOM, and sacct only keeps the peak. Set MELT_MEMTRACE
+# to a sampling interval in seconds to record the shape and the owner instead.
+MELT_MEMTRACE="${MELT_MEMTRACE:-0}"
+export MELT_MEMTRACE
+if [[ "${MELT_MEMTRACE}" != "0" ]]; then
+    echo "[container] memtrace: every ${MELT_MEMTRACE}s -> logs/memtrace.${SLURM_JOB_ID}.<node>.tsv"
+fi
 
 srun --kill-on-bad-exit=1 --wait=60 bash -c '
+    if [[ "${MELT_MEMTRACE:-0}" != "0" ]]; then
+        # Backgrounded before the exec below replaces this shell; it is reaped
+        # with the step, so there is nothing to clean up.
+        bash "${SUBMIT_DIR}/bash/memtrace.sh" "${MELT_MEMTRACE}" \
+            "${SUBMIT_DIR}/logs/memtrace.${SLURM_JOB_ID}.$(hostname -s).tsv" &
+    fi
     exec "$SINGULARITY_BIN" exec --nv \
         --bind "$BIND_ARGS" \
         --pwd /workspace/training \

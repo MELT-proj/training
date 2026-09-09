@@ -26,7 +26,7 @@ def _make_minimal_model():
     # A sample count, not a frame count: wav2vec2-base is a raw-waveform encoder.
     config.audio_encoder_config.max_audio_seq_len = 16_000
 
-    model = MELTForCausalLM(config)
+    model = MELTForCausalLM(config, load_backbones=True)
     return model
 
 

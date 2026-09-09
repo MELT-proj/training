@@ -6,6 +6,7 @@ These tests focus on the OmegaConf-based config approach:
 - Lhotse CutSet/sampler/dataloader creation works with DictConfig objects
 """
 
+import logging
 import os
 from pathlib import Path
 
@@ -683,6 +684,110 @@ class TestRngSetstateHardening:
             assert target.random() == refs[n].random(), f"{n} did not resume"
 
 
+class TestSharReaderHandleCap:
+    """Open Shar shard files must be bounded (issue #76).
+
+    Lhotse caches one reader per shard touched and never closes it, so a long
+    run accumulates one open file per shard forever. On a local disk that costs
+    4 KiB each and hides; on the cluster filesystems that matter it is ~1 MiB
+    each (the same shard reports st_blksize 4096 on a local host and 1048576
+    over nfs4), which is what walls 2-node MN5 runs at ~486 GB of host RAM.
+
+    Raising the fd limit -- what MELT_NOFILE=65536 did -- converts the fd crash
+    into that memory wall rather than fixing it, so the bound is the fix.
+    """
+
+    @staticmethod
+    def _open_fds_under(directory: str) -> int:
+        """Count this process's open fds that point inside *directory*."""
+        root = f"/proc/{os.getpid()}/fd"
+        n = 0
+        for entry in os.listdir(root):
+            try:
+                target = os.readlink(os.path.join(root, entry))
+            except OSError:
+                continue  # fd closed while we were looking
+            if target.startswith(str(directory)):
+                n += 1
+        return n
+
+    @staticmethod
+    def _read_all_ids(shar_dir: str) -> list[str]:
+        from lhotse import CutSet
+
+        cuts = CutSet.from_shar(in_dir=shar_dir, indexed=True)
+        ids = []
+        for cut in cuts:
+            # Touch the payload: without a read the shard file is never opened
+            # and the test would pass trivially.
+            if cut.recording is not None:
+                _ = cut.recording.sources[0].source
+            ids.append(cut.id)
+        return ids
+
+    @pytest.fixture(autouse=True)
+    def _restore_cap(self):
+        import melt.training.data.audio.lhotse.dataloader as dl
+
+        previous = dl._shar_handle_cap
+        yield
+        dl._shar_handle_cap = previous
+
+    def _apply_cap(self, monkeypatch, value: str):
+        import melt.training.data.audio.lhotse.dataloader as dl
+
+        monkeypatch.setenv("MELT_SHAR_OPEN_SHARDS", value)
+        dl._bound_indexed_reader_handles()
+        if value == "0":
+            dl._shar_handle_cap = 0
+        return dl
+
+    def test_open_handles_stay_within_the_cap(self, indexed_synthetic_shar, monkeypatch):
+        self._apply_cap(monkeypatch, "2")
+        before = self._open_fds_under(indexed_synthetic_shar)
+        self._read_all_ids(indexed_synthetic_shar)
+        after = self._open_fds_under(indexed_synthetic_shar)
+        # Two reader classes (cuts jsonl + recording tar) may each hold up to
+        # the cap, and the count is taken while iteration is finished but the
+        # readers are still alive.
+        assert after - before <= 2 * 2, (
+            f"{after - before} shard files left open with a cap of 2"
+        )
+
+    def test_capping_does_not_change_what_is_read(self, indexed_synthetic_shar, monkeypatch):
+        """A cache bound must be invisible in the data."""
+        self._apply_cap(monkeypatch, "0")
+        uncapped = self._read_all_ids(indexed_synthetic_shar)
+
+        self._apply_cap(monkeypatch, "1")
+        capped = self._read_all_ids(indexed_synthetic_shar)
+
+        assert capped == uncapped
+        assert len(uncapped) == 40  # the fixture's cut count, so this can't pass empty
+
+    def test_cap_of_zero_restores_unbounded_behaviour(self, indexed_synthetic_shar, monkeypatch):
+        """The escape hatch has to actually disable eviction."""
+        dl = self._apply_cap(monkeypatch, "0")
+        assert dl._shar_handle_cap == 0
+        self._read_all_ids(indexed_synthetic_shar)
+
+    def test_binding_is_idempotent(self, monkeypatch):
+        pytest.importorskip("lhotse.indexing")
+        from lhotse.indexing import IndexedTarReader
+
+        self._apply_cap(monkeypatch, "8")
+        first = IndexedTarReader._ensure_open
+        self._apply_cap(monkeypatch, "8")
+        assert IndexedTarReader._ensure_open is first
+
+    def test_cap_is_read_live_not_frozen_at_import(self, monkeypatch):
+        """The patch is re-applied per worker; a later cap must take effect."""
+        dl = self._apply_cap(monkeypatch, "8")
+        assert dl._shar_handle_cap == 8
+        self._apply_cap(monkeypatch, "32")
+        assert dl._shar_handle_cap == 32
+
+
 class TestNamedEvalSets:
     """`name` on a validation source splits eval into separately reported sets.
 
@@ -984,6 +1089,68 @@ class TestStrictTextField:
 
         with pytest.raises(ValueError):
             get_text_from_cut(cut, "custom.translation_en", strict=True)
+
+    def test_skip_on_mismatch_returns_none_instead_of_raising(self):
+        from melt.training.data.audio.lhotse.helpers import get_text_from_cut
+
+        # Same setup as test_strict_raises_when_configured_field_is_absent,
+        # but with skip_on_mismatch=True: a real, isolated data gap (job
+        # 45342217, 2026-09-02 -- a single yodas-granary/French/ast cut out
+        # of 4,000 in its shard missing custom.translation_en) should be
+        # skipped and logged, not crash the whole distributed run.
+        cut = _StubCut(text="bonjour le monde", custom={"translation_en": None})
+
+        assert (
+            get_text_from_cut(
+                cut, "custom.translation_en", strict=True, skip_on_mismatch=True
+            )
+            is None
+        )
+
+    def test_skip_on_mismatch_logs_a_warning(self, caplog):
+        from melt.training.data.audio.lhotse.helpers import get_text_from_cut
+
+        cut = _StubCut(cut_id="fr102_00000408", text="bonjour", custom={"translation_en": None})
+
+        with caplog.at_level(logging.WARNING):
+            get_text_from_cut(
+                cut, "custom.translation_en", strict=True, skip_on_mismatch=True
+            )
+
+        assert any(
+            "fr102_00000408" in r.message and "translation_en" in r.message
+            for r in caplog.records
+        )
+
+    def test_skip_on_mismatch_is_a_no_op_without_strict(self):
+        from melt.training.data.audio.lhotse.helpers import get_text_from_cut
+
+        # skip_on_mismatch only changes behaviour inside the strict branch --
+        # without strict=True there is no mismatch check to short-circuit,
+        # so this must fall back exactly as the plain non-strict path does.
+        cut = _StubCut(text="hola mundo", custom={"translation_en": None})
+
+        assert (
+            get_text_from_cut(
+                cut, "custom.translation_en", strict=False, skip_on_mismatch=True
+            )
+            == "hola mundo"
+        )
+
+    def test_skip_on_mismatch_does_not_mask_the_no_fallback_case(self):
+        from melt.training.data.audio.lhotse.helpers import get_text_from_cut
+
+        # No fallback exists either way -- this already returns None via the
+        # separate no-fallback branch (debug-logged, not warning-logged).
+        # skip_on_mismatch must not change that path's log level or outcome.
+        cut = _StubCut(text=None, custom={"translation_en": None})
+
+        assert (
+            get_text_from_cut(
+                cut, "custom.translation_en", strict=True, skip_on_mismatch=True
+            )
+            is None
+        )
 
     def test_non_strict_preserves_the_existing_fallback(self):
         from melt.training.data.audio.lhotse.helpers import get_text_from_cut

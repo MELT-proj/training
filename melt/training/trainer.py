@@ -12,6 +12,7 @@ Key features:
 
 import contextlib
 import functools
+import gc
 import inspect
 import math
 import os
@@ -359,6 +360,11 @@ class MELTTrainer(Seq2SeqTrainer):
         # Rank-local until reduced_hours() gathers it across ranks for logging.
         self._duration_tracker = DurationTracker()
 
+        # Cuts (utterances) per training microbatch since the last log() call.
+        # Unlike _duration_tracker this is reset every call, not cumulative --
+        # see _reduced_batch_cuts_stats for why.
+        self._batch_cuts_history: list[int] = []
+
         # Which named eval set is currently running; set by evaluation_loop and
         # used to key the logged sample table.
         self._eval_metric_key_prefix: str = "eval"
@@ -700,15 +706,17 @@ class MELTTrainer(Seq2SeqTrainer):
         self,
         args: TrainingArguments,
         dataloader: DataLoader,
-        total_train_batch_size: int | None = None,
     ):
         """
-        Calculates and returns the following values:
+        Returns a tuple, in order:
         - `num_train_epochs`
         - `num_update_steps_per_epoch`: number of optimization steps in an epoch.
         - `num_examples`: used only for logging.
         - `num_train_samples`: used for speed metrics.
-        - `epoch_based`: used to scale num_train_tokens.
+        - `total_train_batch_size` (from `get_total_train_batch_size`, not a
+          parameter of this method): logged verbatim by the training loop; -1
+          on the Lhotse infinite-dataloader path, where batches are
+          duration-based rather than a fixed size.
         - `len_dataloader`: used to compute `steps_in_epoch`. If not provided, falls back to max_steps * grad_accum
         - `max_steps`: used for scheduler setup, logging, and total optimization steps.
 
@@ -723,9 +731,7 @@ class MELTTrainer(Seq2SeqTrainer):
         │   └── if should_training_stop: break
         """
         if args.per_device_train_batch_size != -1:
-            return super().set_initial_training_values(
-                args, dataloader, total_train_batch_size
-            )
+            return super().set_initial_training_values(args, dataloader)
 
         num_workers = self.config.data.train_ds.num_workers
         grad_accum = args.gradient_accumulation_steps
@@ -846,7 +852,6 @@ class MELTTrainer(Seq2SeqTrainer):
 
         # For step-based training with infinite dataloaders, we want:
         # - num_train_epochs = sys.maxsize (so the outer loop keeps running)
-        # - epoch_based = False (we stop by max_steps, not epochs)
         # The training loop will terminate when global_step >= max_steps
         if epoch_based:
             logger.info(
@@ -857,14 +862,13 @@ class MELTTrainer(Seq2SeqTrainer):
         # Set num_train_epochs to a large value so the outer loop keeps running
         # The inner loop will break when global_step >= max_steps
         num_train_epochs = sys.maxsize
-        epoch_based = False
 
         return (
             num_train_epochs,
             optimization_steps_per_epoch,
             num_examples,
             num_train_samples,
-            epoch_based,
+            self.get_total_train_batch_size(args),
             len_dataloader,
             max_steps,
         )
@@ -1008,7 +1012,7 @@ class MELTTrainer(Seq2SeqTrainer):
     # Optimizer
     # ------------------------------------------------------------------
 
-    def create_optimizer(self):
+    def create_optimizer(self, model=None):
         """Create optimizer groups respecting freeze flags and modular audio stack.
 
         This method prefers explicit attributes when available:
@@ -1242,6 +1246,8 @@ class MELTTrainer(Seq2SeqTrainer):
             torch.cuda.max_memory_allocated() / 1024 ** 3
             if torch.cuda.is_available() else 0.0
         )
+        batch = None
+        loss = None
         try:
             batch = self._build_max_length_batch(model, duration_per_utt=duration_per_utt)
             logger.warning(
@@ -1259,8 +1265,34 @@ class MELTTrainer(Seq2SeqTrainer):
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             return False
+        except RuntimeError as exc:
+            # The CUDA allocator raises torch.OutOfMemoryError (caught above); the CPU
+            # allocator raises a plain RuntimeError instead ("DefaultCPUAllocator: can't
+            # allocate memory ..."), which that CUDA-specific catch never sees. Only
+            # relevant to CPU-based dev/debugging -- production always runs on CUDA --
+            # but without this, a CPU OOM here crashes the run instead of being caught
+            # like its CUDA counterpart. Re-raise anything that isn't this specific
+            # allocator failure so unrelated RuntimeErrors still surface normally.
+            if torch.cuda.is_available() or "allocate memory" not in str(exc):
+                raise
+            logger.warning(
+                f"[Preallocation/{label}] rank={self._global_rank} — CPU OOM during warmup "
+                f"pass ({exc}). Training will proceed but may OOM later."
+            )
+            return False
         finally:
             model.zero_grad(set_to_none=True)
+            # `loss`'s autograd graph (and the synthetic `batch` it was built from) can
+            # hold reference cycles that plain refcounting won't collect. Confirmed by a
+            # CPU repro: RSS never dropped after "pass complete" below and the very next
+            # pass OOM'd on an allocation far smaller than what had just supposedly been
+            # freed. Python's generational GC is triggered by object count, not by how
+            # many GB a cycle is holding, so this explicit collect is what actually
+            # reclaims it before the next pass runs.
+            del batch, loss
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         mem_after_gb = (
             torch.cuda.max_memory_allocated() / 1024 ** 3
@@ -1294,6 +1326,22 @@ class MELTTrainer(Seq2SeqTrainer):
         train_ds_cfg = self.config.data.train_ds
         max_duration = float(train_ds_cfg.max_duration)
         min_duration = float(train_ds_cfg.min_duration)
+
+        # eval_on_start runs generate() over every named eval set before the
+        # first training_step, and its outputs hold a reference cycle plain
+        # refcounting doesn't clear -- the same class of leak already
+        # diagnosed for this function's own warmup batches below (see the
+        # comment in _run_preallocation_pass's `finally`), just triggered by
+        # generation instead. Confirmed on a real run (MA-700, Qwen3.5-2B,
+        # 2026-09-02): 56.2 GB allocated before this function's first pass
+        # even started, of which only 5.8 GB was model parameters -- the
+        # missing ~50 GB was still-referenced eval-generation memory, and it
+        # OOM'd both preallocation passes and then the real first batch.
+        # Without an explicit collect first, this pass's own gc.collect()
+        # only clears cycles ITS batch created, not eval's.
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         logger.warning(
             f"[Preallocation] rank={self._global_rank} — starting warmup passes "
@@ -1338,6 +1386,8 @@ class MELTTrainer(Seq2SeqTrainer):
         src_langs = inputs.pop("src_langs", None)
         tgt_langs = inputs.pop("tgt_langs", None)
         self._duration_tracker.update(durations, tasks, langs, src_langs, tgt_langs)
+        if langs is not None:
+            self._batch_cuts_history.append(len(langs))
 
         if not self._preallocation_done:
             self._run_preallocation(model)
@@ -1378,7 +1428,46 @@ class MELTTrainer(Seq2SeqTrainer):
         if "loss" in logs and torch.cuda.is_available():
             logs["gpu_peak_gb"] = torch.cuda.max_memory_allocated() / 1024 ** 3
             torch.cuda.reset_peak_memory_stats()
+
+        cuts_stats = self._reduced_batch_cuts_stats()
+        if cuts_stats and "loss" in logs:
+            logs.update(cuts_stats)
+
         super().log(logs, start_time)
+
+    def _reduced_batch_cuts_stats(self, prefix: str = "train_cuts_per_batch") -> dict[str, float]:
+        """Return min/mean/max cuts-per-microbatch since the last log() call, reduced across ranks.
+
+        Unlike `_duration_tracker` (cumulative for the whole run), this resets
+        its local history every call -- what matters here is the composition
+        of batches in the interval just logged, not a running total. Motivated
+        by the mn5 OOM investigation: fixed-`batch_size` (cut-count) sampling
+        with no `batch_duration` cap can draw very different total audio
+        across microbatches of the same nominal size, which is invisible
+        without a per-batch cut count to compare against wall-clock/memory.
+
+        Must run unconditionally on every rank when distributed, mirroring
+        `DurationTracker.reduced_hours` -- the collective would deadlock
+        otherwise if gated on local state.
+        """
+        local = self._batch_cuts_history
+        self._batch_cuts_history = []
+
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            gathered: list[list[int] | None] = [None] * torch.distributed.get_world_size()
+            torch.distributed.all_gather_object(gathered, local)
+            merged = [c for rank_local in gathered if rank_local for c in rank_local]
+        else:
+            merged = local
+
+        if not merged:
+            return {}
+
+        return {
+            f"{prefix}/min": float(min(merged)),
+            f"{prefix}/mean": sum(merged) / len(merged),
+            f"{prefix}/max": float(max(merged)),
+        }
 
     def _log_oom_batch_info(self, inputs: dict) -> None:
         """Log tensor shapes, model info, and GPU memory state on OOM to identify the offending batch.

@@ -260,9 +260,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--batch-size", type=int, default=1,
         help="Number of samples decoded per generate() call (default: 1). "
-             "Prompts and merged audio embeddings are left-padded, so a larger "
-             "batch must produce byte-identical hypotheses; if it does not, "
-             "padding is leaking into attention.",
+             "Above 1 the samples are sorted by duration first, so each batch "
+             "is nearly uniform in length. A batch does NOT reproduce the "
+             "hypotheses of --batch-size 1: different shapes mean different "
+             "reduction orders in bfloat16. See docs/generation_eval.md.",
     )
 
     # --- Output ---
@@ -578,6 +579,18 @@ def _chunks(items: list[Any], size: int):
         yield items[start:start + size]
 
 
+def _audio_length(sample: dict[str, Any]) -> int:
+    """Number of audio samples in a row, for length bucketing.
+
+    Both loaders have already materialised the array, so this costs no I/O.
+    """
+    audio, _ = _resolve_audio(sample)
+    try:
+        return int(audio.shape[-1])
+    except AttributeError:
+        return len(audio)
+
+
 def run_inference(
     model: MELTForCausalLM,
     processor: MELTProcessor,
@@ -648,6 +661,19 @@ def run_inference(
         if str(instance[file_id_column]) not in completed_ids
     ]
     skipped = len(dataset) - len(pending)
+
+    # Length bucketing. The processor pads every row to the batch's longest
+    # audio, so a batch drawn in dataset order costs its longest utterance
+    # times its width. On librispeech clean/test (median 5.8 s, max 35 s) that
+    # is two thirds of the batch spent on padding, and it is why throughput
+    # stops improving past about 16: measured on one H100, batch 16 in dataset
+    # order runs at 0.043 s per sample against 0.021 s bucketed, and going from
+    # batch 16 to 64 buys 27% more throughput for twice the memory (#118).
+    # Sorting by duration first makes each batch nearly uniform. Results are
+    # then written in duration order rather than dataset order; nothing
+    # downstream depends on the order, and rows still carry their file id.
+    if batch_size > 1:
+        pending.sort(key=_audio_length)
 
     def _run_one_batch(batch: list[dict[str, Any]]) -> None:
         """Decode *batch* and record every sample in it. Raises on failure."""
