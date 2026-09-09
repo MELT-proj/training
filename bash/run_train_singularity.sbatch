@@ -101,10 +101,10 @@ HOST_HF_TOKEN="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-}}"
 #
 #   lhotse/indexing.py read_index -> OSError: [Errno 24] Too many open files
 #
-# See issue #76. Observed cold-start on artemis jobs 327837/327839, and on
-# resume in job 328205, where it killed the job seconds after the sampler state
-# was restored. Raising the soft limit is a ceiling, not a reservation --
-# nothing is allocated when the readers are not open -- so it is safe to apply
+# See issue #76. Observed both on a cold start and on resume, where it killed
+# the job seconds after the sampler state was restored. Raising the soft limit
+# is a ceiling, not a reservation -- nothing is allocated when the readers are
+# not open -- so it is safe to apply
 # unconditionally. Set MELT_NOFILE to override; the hard limit is the cap.
 MELT_NOFILE="${MELT_NOFILE:-65536}"
 _nofile_hard="$(ulimit -Hn)"

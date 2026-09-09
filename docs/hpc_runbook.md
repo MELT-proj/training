@@ -436,7 +436,7 @@ nothing in `run_train.sh` interprets it — it is passed straight to
 | `config/accelerate/zero1.yaml`, `zero3.yaml` | DeepSpeed equivalents |
 
 For the ablation-campaign MA arms, `ddp.yaml` measured **2.28x** the throughput
-of `fsdp2.yaml` (MN5 job 44992666). Only the adapter trains there — 6.3 M of
+of `fsdp2.yaml` on MN5. Only the adapter trains there — 6.3 M of
 ~1.8 B parameters — so the gradients and optimizer moments FSDP would shard come
 to ~75 MB, while sharding the frozen backbones costs an all-gather every forward
 for ~5% of a 64 GB card. The larger half of that win is `ddp.yaml` not enabling

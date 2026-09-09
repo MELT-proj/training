@@ -7,9 +7,9 @@ divides total duration by `batch_duration` under-counts the batches in an epoch.
 
 That is not cosmetic. The count feeds `max_steps` when it is derived from
 `num_train_epochs`, and from there the LR schedule -- so a "1 epoch" run covered
-barely half the data while reporting `epoch: 1.0` (MN5 job 44947472, where the
-run's own train_hours counter measured 0.571 h/step against the 1.067 h/step the
-uncorrected arithmetic implied).
+barely half the data while reporting `epoch: 1.0`, with the run's own
+train_hours counter measuring 0.571 h/step against the 1.067 h/step the
+uncorrected arithmetic implied.
 """
 
 import math
@@ -55,7 +55,7 @@ def test_the_penalty_inflates_the_batch_count():
     """ABL-MA-125-asr: the uncorrected estimate is optimistic by a wide margin."""
     inflation = _effective_duration_inflation(_cfg())
     assert inflation > 1.5, inflation
-    # Measured 1.87 on job 44947472; midpoints under-read, so allow the gap but
+    # Measured 1.87 on a real run; midpoints under-read, so allow the gap but
     # pin that we are in the right neighbourhood rather than off by 2x.
     assert 1.55 < inflation < 1.75, inflation
 

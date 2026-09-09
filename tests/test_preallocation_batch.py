@@ -8,7 +8,7 @@ The pass had never run under DDP. `MELTTrainer.training_step` is handed
 whatever the training loop wraps the model in, and under DDP that is a
 `DistributedDataParallel`, which proxies `forward()` but not attribute access.
 Reading `model.config` off it raised `AttributeError` and killed the run on
-every rank (MN5 job 45024395, exit 1:0 at step 0). These tests pin the unwrap.
+every rank, exiting 1:0 at step 0. These tests pin the unwrap.
 """
 
 from types import SimpleNamespace
@@ -70,7 +70,7 @@ def bare_model():
 
 
 def test_wrapped_model_does_not_break_the_warmup_batch(bare_model):
-    """The DDP case: this is the exact failure that killed job 45024395."""
+    """The DDP case: this is the exact failure that killed a real run."""
     batch = _build(_stub_trainer(), _FakeDDP(bare_model), duration_per_utt=60.0)
     assert (batch["input_ids"][:, 1] == 128256).all()
 

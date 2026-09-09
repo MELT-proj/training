@@ -79,7 +79,7 @@ eval set per name, and each one draws up to `max_samples` cuts — so
 200. The shipped configs set the per-set number so the total lands near 1,000.
 
 **Budget it against `eval_steps` before raising either number.** Measured on
-one H100 (artemis job 327830, Qwen3-1.7B + w2v-bert-2.0, batch 4):
+one H100 (Qwen3-1.7B + w2v-bert-2.0, batch 4):
 
 | | |
 |---|---|

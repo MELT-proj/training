@@ -462,10 +462,9 @@ def _effective_duration_inflation(config: DictConfig) -> float:
     ``sum(d^2)/sum(d)`` without touching the manifests.
 
     It is an approximation, and a known-low one: on ABL-MA-125-asr it returns
-    1.63 where the run's own ``train_hours`` counter measured 1.87 (job
-    44947472), because midpoints under-represent the mass in each bucket's upper
-    half and because the shipped bins were estimated on a wider mixture than the
-    125 h subset. Under-correcting is the safe direction -- it shortens an epoch
+    1.63 where the run's own ``train_hours`` counter measured 1.87, because
+    midpoints under-represent the mass in each bucket's upper half and because
+    the shipped bins were estimated on a wider mixture than the 125 h subset. Under-correcting is the safe direction -- it shortens an epoch
     rather than overrunning one -- but do not read the result as exact.
 
     Args:

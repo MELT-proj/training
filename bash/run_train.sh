@@ -111,8 +111,8 @@ fi
 # node's full GPU count regardless of what --gpus-per-node asked for, so
 # trusting it silently launched 4 ranks for a 2-GPU request. That is not merely
 # wasteful: world_size is baked into a resumed lhotse sampler's partitioning,
-# so the mismatch aborted the run at dataloader construction (MN5 job 44916904)
-# after the model had already loaded.
+# so the mismatch aborted the run at dataloader construction, after the model
+# had already loaded.
 _GPUS_PER_NODE_EXPLICIT="${GPUS_PER_NODE:-}"
 GPUS_PER_NODE="${GPUS_PER_NODE:-1}"
 if [[ -n "$_GPUS_PER_NODE_EXPLICIT" ]]; then
@@ -233,9 +233,9 @@ if [[ "$RUNNING_UNDER_SLURM" -eq 1 ]]; then
     # That is a real collision, not a theoretical one: two single-node jobs on
     # one node both rendezvous on 29400, the second silently attaches to the
     # first one's store as a client, and dies when the first exits
-    # (RendezvousConnectionError against remote=[localhost]:29400 -- artemis
-    # jobs 327878/327879). Deriving MASTER_PORT per job cannot help while the
-    # port is not the one being used.
+    # (RendezvousConnectionError against remote=[localhost]:29400).
+    # Deriving MASTER_PORT per job cannot help while the port is not the one
+    # being used.
     #
     # accelerate exposes no `--rdzv_endpoint` flag to fix it directly (only
     # --rdzv_backend and --rdzv_conf), so the fix is to stop forcing c10d where
