@@ -125,7 +125,7 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         # (which keeps labelling the data mixture and the per-task WER/CER
         # split). Lets a run swap prompt STYLE (e.g. "verbatim") onto an
         # existing task's data without relabelling every source's `tags`.
-        self.prompt_template_task = _get_config_value(config, "prompt_template_task", None)
+        self.template_task_override = _get_config_value(config, "template_task_override", None)
 
         # Pre-compute boundary token IDs for chat-template label masking.
         if self.apply_chat_template:
@@ -503,10 +503,10 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
             texts, tasks, langs, src_langs, tgt_langs
         ):
             # Pick a prompt template for the task according to the selection
-            # strategy. prompt_template_task, when set, overrides which
+            # strategy. template_task_override, when set, overrides which
             # TASK_TEMPLATES bucket "random"/"with_language" draw from
             # without changing `task` itself -- see its assignment above.
-            template_task = self.prompt_template_task or task
+            template_task = self.template_task_override or task
             templates = TASK_TEMPLATES.get(template_task)
             if not templates:
                 raise ValueError(

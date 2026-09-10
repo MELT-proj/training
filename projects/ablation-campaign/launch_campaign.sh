@@ -31,9 +31,9 @@
 #   Duration       EPOCHS                                       (0-1 CLI override,
 #                                        trainer.num_train_epochs -- see the
 #                                        "One epoch" note below)
-#   Prompt style   PROMPT_TEMPLATE_TASK                         (0-2 CLI overrides,
+#   Prompt style   TEMPLATE_TASK_OVERRIDE                         (0-2 CLI overrides,
 #                                        forces data.prompt_template_selection
-#                                        to "random" and data.prompt_template_task
+#                                        to "random" and data.template_task_override
 #                                        to this value, so every sample draws
 #                                        from TASK_TEMPLATES[<value>]
 #                                        (melt/training/data/audio/lhotse/
@@ -91,7 +91,7 @@ BATCH_DURATION="${BATCH_DURATION:-}"
 GRAD_ACCUM_STEPS="${GRAD_ACCUM_STEPS:-}"
 GRADIENT_CHECKPOINTING="${GRADIENT_CHECKPOINTING:-}"
 EPOCHS="${EPOCHS:-}"
-PROMPT_TEMPLATE_TASK="${PROMPT_TEMPLATE_TASK:-}"
+TEMPLATE_TASK_OVERRIDE="${TEMPLATE_TASK_OVERRIDE:-}"
 SEED="${SEED:-42}"
 
 # --- site / topology ----------------------------------------------------------
@@ -132,7 +132,7 @@ PLAN="$(python3 "${SCRIPT_DIR}/plan_arm.py" \
     --encoder-lr "$ENCODER_LR" --decoder-lr "$DECODER_LR" --adapter-lr "$ADAPTER_LR" \
     --batch-duration "$BATCH_DURATION" --grad-accum-steps "$GRAD_ACCUM_STEPS" \
     --gradient-checkpointing "$GRADIENT_CHECKPOINTING" \
-    --epochs "$EPOCHS" --prompt-template-task "$PROMPT_TEMPLATE_TASK" \
+    --epochs "$EPOCHS" --template-task-override "$TEMPLATE_TASK_OVERRIDE" \
     --seed "$SEED")" || { echo "ERROR: plan_arm.py failed (see above)" >&2; exit 1; }
 eval "$PLAN"
 # PLAN sets: EXP_NAME, STEPS, EVAL_STEPS, SAVE_STEPS, SAVE_TOTAL_LIMIT,

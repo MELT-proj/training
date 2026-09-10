@@ -65,7 +65,7 @@ class MELTDataCollator:
         # See apply_chat_template_to_texts's own docstring: overrides which
         # TASK_TEMPLATES bucket "random"/"with_language" draw from, decoupled
         # from each sample's own `task`.
-        self.prompt_template_task = _get_config_value(config, "prompt_template_task", None)
+        self.template_task_override = _get_config_value(config, "template_task_override", None)
 
         # Pre-compute boundary token IDs for chat-template label masking
         if self.apply_chat_template:
@@ -120,7 +120,7 @@ class MELTDataCollator:
                 audio_token=self.processor.audio_token,
                 prompt_template=self.prompt_template,
                 prompt_template_selection=self.prompt_template_selection,
-                prompt_template_task=self.prompt_template_task,
+                template_task_override=self.template_task_override,
                 src_langs=src_langs,
                 tgt_langs=tgt_langs,
                 return_prompts=want_prompts,

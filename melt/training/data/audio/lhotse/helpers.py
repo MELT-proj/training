@@ -500,7 +500,7 @@ def apply_chat_template_to_texts(
     audio_token: str,
     prompt_template: str | dict[str, str] | None = None,
     prompt_template_selection: str = "random",
-    prompt_template_task: str | None = None,
+    template_task_override: str | None = None,
     src_langs: list[str] | None = None,
     tgt_langs: list[str] | None = None,
     return_prompts: bool = False,
@@ -519,7 +519,7 @@ def apply_chat_template_to_texts(
             is ``"custom"``.
         prompt_template_selection: Template selection strategy:
             ``"random"`` (default), ``"with_language"``, or ``"custom"``.
-        prompt_template_task: When set, overrides which ``TASK_TEMPLATES``
+        template_task_override: When set, overrides which ``TASK_TEMPLATES``
             bucket ``"random"``/``"with_language"`` draw from, decoupled from
             each sample's own *task* (which keeps labelling the data mixture
             and the per-task WER/CER split). Lets a run swap prompt STYLE
@@ -558,7 +558,7 @@ def apply_chat_template_to_texts(
         if prompt_template_selection == "custom":
             template = resolve_custom_template(prompt_template, task)
         else:
-            template_task = prompt_template_task or task
+            template_task = template_task_override or task
             templates = TASK_TEMPLATES.get(template_task)
             if templates is None:
                 raise ValueError(

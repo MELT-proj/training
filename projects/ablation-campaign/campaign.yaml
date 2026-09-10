@@ -76,15 +76,15 @@ arms:
     stage: MA
     config: ABL-MA-700-asr.yaml     # same ASR mixture/bins/budget as
                                     # MA-700-llama1b-ins -- only the prompt
-                                    # STYLE changes, via prompt_template_task
+                                    # STYLE changes, via template_task_override
                                     # below. tags.task stays "asr" (unchanged
                                     # data/eval-set identity and per-task
                                     # WER/CER grouping); only which
                                     # TASK_TEMPLATES bucket gets drawn from
                                     # changes. See melt/training/data/audio/
                                     # lhotse/helpers.py's TASK_TEMPLATES and
-                                    # plan_arm.py's ArmAxes.prompt_template_task.
-    prompt_template_task: verbatim
+                                    # plan_arm.py's ArmAxes.template_task_override.
+    template_task_override: verbatim
     epochs: 3
     seed: 42
     # 3x MA-700-llama1b-ins's own "06:00:00" (measured comfortably covering

@@ -346,15 +346,15 @@ class ArmAxes:
     # epochs), so it is tagged into EXP_NAME whenever it overrides the
     # config's own value, the same way batch_duration/grad_accum_steps are.
     epochs: str = ""
-    # prompt_template_task: "" means inherit (no override). Non-empty forces
-    # data.prompt_template_selection to "random" and data.prompt_template_task
+    # template_task_override: "" means inherit (no override). Non-empty forces
+    # data.prompt_template_selection to "random" and data.template_task_override
     # to this value, so every sample draws from TASK_TEMPLATES[<value>]
     # (melt/training/data/audio/lhotse/helpers.py) instead of whatever the
     # config's own prompt_template_selection/prompt_template resolve to --
     # without relabelling any source's `tags.task`, which stays the data
     # mixture's own identity and keeps grouping the per-task WER/CER split.
     # Tagged into EXP_NAME when set, same rule as every other axis.
-    prompt_template_task: str = ""
+    template_task_override: str = ""
     seed: int = 42
     # --- policy (not axes) ---------------------------------------------
     # eval_rounds: eval_steps = round(steps / eval_rounds).
@@ -616,26 +616,26 @@ def plan(args: ArmAxes) -> ArmPlan:
     overrides += ["--trainer.num_train_epochs", str(epochs_effective)]
     epochs_overridden = bool(args.epochs) and epochs_effective != int(cfg_num_train_epochs or 1)
 
-    # prompt_template_task: forces data.prompt_template_selection to "random"
+    # template_task_override: forces data.prompt_template_selection to "random"
     # (regardless of what the config declares -- ABL-MA-700-asr.yaml itself
-    # uses "custom") and data.prompt_template_task to the requested category,
+    # uses "custom") and data.template_task_override to the requested category,
     # so every sample draws from TASK_TEMPLATES[<value>]. See ArmAxes's own
     # comment for why this is a single combined override rather than exposing
     # prompt_template_selection as its own axis: a task-category swap is
     # meaningless under "custom" selection, which never consults
     # TASK_TEMPLATES at all.
-    if args.prompt_template_task:
+    if args.template_task_override:
         cfg_prompt_template_selection = get(cfg, "data.prompt_template_selection")
         if cfg_prompt_template_selection and cfg_prompt_template_selection != "random":
             print(
                 f"NOTE: overriding data.prompt_template_selection "
                 f"{cfg_prompt_template_selection!r} -> 'random' because "
-                f"PROMPT_TEMPLATE_TASK={args.prompt_template_task!r} was requested "
+                f"TEMPLATE_TASK_OVERRIDE={args.template_task_override!r} was requested "
                 "explicitly.",
                 file=sys.stderr,
             )
         overrides += ["--data.prompt_template_selection", "random"]
-        overrides += ["--data.prompt_template_task", args.prompt_template_task]
+        overrides += ["--data.template_task_override", args.template_task_override]
 
     if args.encoder_lr:
         encoder_lr_effective = args.encoder_lr
@@ -671,7 +671,7 @@ def plan(args: ArmAxes) -> ArmPlan:
 
     # Only appear when overridden, unlike the always-present LR tags: adding
     # them unconditionally would rename every arm ever composed under the old
-    # scheme (batch_duration/grad_accum_steps/epochs/prompt_template_task were
+    # scheme (batch_duration/grad_accum_steps/epochs/template_task_override were
     # not overridable axes until each one existed), silently orphaning their
     # output directories and resume paths.
     extra_tags = []
@@ -682,8 +682,8 @@ def plan(args: ArmAxes) -> ArmPlan:
         extra_tags.append(f"ga{grad_accum_effective}")
     if epochs_overridden:
         extra_tags.append(f"ep{epochs_effective}")
-    if args.prompt_template_task:
-        extra_tags.append(f"pt{_slug(args.prompt_template_task, 12)}")
+    if args.template_task_override:
+        extra_tags.append(f"tt{_slug(args.template_task_override, 12)}")
 
     composed_name = "-".join([
         args.stage,
@@ -741,7 +741,7 @@ def main() -> None:
     p.add_argument("--grad-accum-steps", required=True, help="empty string means: use the config's own value, no override")
     p.add_argument("--gradient-checkpointing", required=True, help="empty string means: use the config's own value, no override")
     p.add_argument("--epochs", required=True, help="empty string means: use the config's own value, no override")
-    p.add_argument("--prompt-template-task", required=True, help="empty string means: use the config's own prompt_template_selection/prompt_template, no override")
+    p.add_argument("--template-task-override", required=True, help="empty string means: use the config's own prompt_template_selection/prompt_template, no override")
     p.add_argument("--seed", required=True, type=int)
     args = p.parse_args()
 
@@ -763,7 +763,7 @@ def main() -> None:
         grad_accum_steps=args.grad_accum_steps,
         gradient_checkpointing=args.gradient_checkpointing,
         epochs=args.epochs,
-        prompt_template_task=args.prompt_template_task,
+        template_task_override=args.template_task_override,
         seed=args.seed,
     ))
 
