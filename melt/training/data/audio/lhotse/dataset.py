@@ -120,6 +120,13 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         if self.prompt_template_selection == "custom" and not self.prompt_template:
             raise ValueError("prompt_template_selection='custom' requires prompt_template to be set in config.")
 
+        # Optional override of which TASK_TEMPLATES bucket "random"/
+        # "with_language" draw from, decoupled from each sample's own `task`
+        # (which keeps labelling the data mixture and the per-task WER/CER
+        # split). Lets a run swap prompt STYLE (e.g. "verbatim") onto an
+        # existing task's data without relabelling every source's `tags`.
+        self.prompt_template_task = _get_config_value(config, "prompt_template_task", None)
+
         # Pre-compute boundary token IDs for chat-template label masking.
         if self.apply_chat_template:
             ct_name = str(_get_config_value(config, "chat_template_config", "chatml"))
@@ -495,11 +502,15 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
         for text, task, lang, src_lang, tgt_lang in zip(
             texts, tasks, langs, src_langs, tgt_langs
         ):
-            # Pick a prompt template for the task according to the selection strategy
-            templates = TASK_TEMPLATES.get(task)
+            # Pick a prompt template for the task according to the selection
+            # strategy. prompt_template_task, when set, overrides which
+            # TASK_TEMPLATES bucket "random"/"with_language" draw from
+            # without changing `task` itself -- see its assignment above.
+            template_task = self.prompt_template_task or task
+            templates = TASK_TEMPLATES.get(template_task)
             if not templates:
                 raise ValueError(
-                    f"No templates defined for task '{task}'. Available tasks: {list(TASK_TEMPLATES.keys())}"
+                    f"No templates defined for task '{template_task}'. Available tasks: {list(TASK_TEMPLATES.keys())}"
                 )
             template = self._select_template(templates, task=task)
             language_name = self._resolve_language_name(lang)

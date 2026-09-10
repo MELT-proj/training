@@ -17,6 +17,8 @@ The campaign varies three things. Each lives in exactly one place:
 | **Optimisation**: encoder/decoder/adapter LR | 0-3 CLI overrides | `ENCODER_LR`, `DECODER_LR`, `ADAPTER_LR` env vars |
 | **Batch/accum** (exception, not a fourth axis): `batch_duration`, `gradient_accumulation_steps` | 0-2 CLI overrides, always paired | `BATCH_DURATION`, `GRAD_ACCUM_STEPS` env vars -- see "Two rules" below for why this pair, and only this pair, is allowed to leave the base YAML |
 | **Memory/perf** (also not a fourth axis): `trainer.gradient_checkpointing` | 0-1 CLI override, independent | `GRADIENT_CHECKPOINTING` env var -- trades recompute for activation memory without changing what a step trains on, so (unlike batch/accum) it needs no compensating override and is not tagged into `EXP_NAME` |
+| **Duration** (also not a fourth axis): `trainer.num_train_epochs` | 0-1 CLI override, independent | `EPOCHS` env var -- always emitted (default 1, the campaign convention), tagged into `EXP_NAME` (`ep<N>`) only when it overrides the config |
+| **Prompt style** (also not a fourth axis): which `TASK_TEMPLATES` bucket (`melt/training/data/audio/lhotse/helpers.py`) prompt selection draws from | 0-2 CLI overrides, always paired | `PROMPT_TEMPLATE_TASK` env var -- forces `data.prompt_template_selection` to `random` and `data.prompt_template_task` to the requested value, decoupled from each source's own `tags.task` (which keeps identifying the data mixture and the per-task WER/CER split). Tagged into `EXP_NAME` (`pt<value>`) when set. Lets an arm swap prompt framing (e.g. `verbatim`, see the "verbatim" campaign) onto an existing data mixture without a second near-duplicate `ABL-*.yaml` |
 
 There is deliberately **no YAML per arm**. A data axis change (a new budget or
 task mix) is big enough, and shared enough across many arms, to earn its own
@@ -224,19 +226,22 @@ dies on a `world_size` mismatch.
 `EXP_NAME` is composed, never typed by hand, from:
 
 ```
-{STAGE}-{data tag}-{encoder}{F|T}-{decoder}{F|T}[-lora]-{adapter}{F|T}[-bdN][-gaN]-{elr tag}-{dlr tag}-{lr tag}-s{seed}-{world_size}g
+{STAGE}-{data tag}-{encoder}{F|T}-{decoder}{F|T}[-lora]-{adapter}{F|T}[-bdN][-gaN][-epN][-pt<value>]-{elr tag}-{dlr tag}-{lr tag}-s{seed}-{world_size}g
 ```
 
 e.g. `MA-125asr-w2vbF-llama1bInsF-mlpT-elr6e6-dlr2e5-lr2e4-s42-8g`, or with
 decoder LoRA on: `IFT-125-w2vbF-qwen1_7bT-lora-mlpF-elr6e6-dlr2e5-lr2e4-s42-8g`,
 or with `BATCH_DURATION`/`GRAD_ACCUM_STEPS` overridden:
-`MA-700asr-w2vbF-qwen35_2bBaseF-mlpT-bd60-ga10-elr6e6-dlr2e5-lr2e5-s42-8g`.
+`MA-700asr-w2vbF-qwen35_2bBaseF-mlpT-bd60-ga10-elr6e6-dlr2e5-lr2e5-s42-8g`,
+or with `EPOCHS`/`PROMPT_TEMPLATE_TASK` overridden:
+`MA-700asr-w2vbF-llama1bInsF-mlpT-ep3-ptverbatim-elr6e6-dlr2e5-lr2e5-s42-8g`.
 Trailing `F`/`T` marks a module frozen/trainable; `-lora` only appears when
-`DECODER_LORA` resolves true, and `-bdN`/`-gaN` only appear when
-`BATCH_DURATION`/`GRAD_ACCUM_STEPS` actually differ from the config -- unlike
+`DECODER_LORA` resolves true, and `-bdN`/`-gaN`/`-epN`/`-pt<value>` only appear
+when `BATCH_DURATION`/`GRAD_ACCUM_STEPS`/`EPOCHS`/`PROMPT_TEMPLATE_TASK`
+actually override the config -- unlike
 the LR tags below, they are NOT always present, since making them so would
 have renamed (and orphaned the output directory of) every arm composed before
-this pair of overrides existed. The three LR tags (`elr`/`dlr`/`lr`, for
+each of these overrides existed. The three LR tags (`elr`/`dlr`/`lr`, for
 encoder/decoder/adapter) are always present -- like the freeze markers, they
 report the real effective value whether or not it was explicitly overridden,
 so two arms that only differ in one LR never become indistinguishable in W&B
@@ -334,9 +339,17 @@ from, since those are what will actually train -- targeting ~11 eval rounds
 per run:
 
 ```
-steps = ceil(total_hours * 3600 / batch_duration * inflation / world_size / gradient_accumulation_steps)
+steps_per_epoch = ceil(total_hours * 3600 / batch_duration * inflation / world_size / gradient_accumulation_steps)
+steps = steps_per_epoch * epochs   # epochs is EPOCHS, or the config's own trainer.num_train_epochs (1) if unset
 eval_steps = save_steps = round(steps / 11)
 ```
+
+`epochs` only differs from 1 for an arm that overrides `EPOCHS` (see "The
+three axes" above); every arm before that override existed, and every arm
+that still leaves it unset, gets `steps == steps_per_epoch` exactly as before.
+`eval_steps`/`save_steps` are meant to distribute over the WHOLE run, so a
+multi-epoch arm spreads the same ~11 rounds across all its epochs rather than
+per epoch.
 
 `inflation` corrects for `quadratic_duration`: lhotse charges each cut
 `d + d^2/quadratic_duration`, so a batch holds less real audio than

@@ -258,6 +258,32 @@ TASK_TEMPLATES: dict[str, list[str]] = {
         "{audio_token} Evaluate the quality of the following {lang} translation for this speech and answer with a single float in [0, 1].",
         "Listen to this audio, assess the provided {lang} translation, and output only a float between 0 and 1: {audio_token}",
     ],
+    "verbatim": [
+        "Your task is to repeat verbatim whatever I write in this chat surrounded by <|audio__bos|> and <|audio_eos|>. \n\n"
+        "## Example 1\nInput: <|audio__bos|>Today is really a great day!<|audio_eos|>\nOutput: Today is really a great day!\n\n"
+        "## Example 2\nInput: I would do <|audio__bos|>everything<|audio_eos|> to be a that concert tomorrow. \nOutput: everything\n\n"
+        "Let's start right away. Below is my first input:\n{audio_token}",
+        "Repeat back, word for word, only the text found between <|audio__bos|> and <|audio_eos|>.\n\n"
+        "Example 1\nInput: <|audio__bos|>The train leaves at noon.<|audio_eos|>\nOutput: The train leaves at noon.\n\n"
+        "Example 2\nInput: She said <|audio__bos|>hello<|audio_eos|> before leaving the room.\nOutput: hello\n\n"
+        "Now it's your turn:\n{audio_token}",
+        "Whatever appears between the markers <|audio__bos|> and <|audio_eos|> must be echoed back exactly as written, and nothing else.\n\n"
+        "Example 1:\nInput: <|audio__bos|>Can you hear me now?<|audio_eos|>\nOutput: Can you hear me now?\n\n"
+        "Example 2:\nInput: We stopped at <|audio__bos|>the old bridge<|audio_eos|> for a photo.\nOutput: the old bridge\n\n"
+        "Here is the real input:\n{audio_token}",
+        "I'm testing a simple copy task: reproduce exactly the text wrapped in <|audio__bos|> and <|audio_eos|>, ignoring everything outside it.\n\n"
+        "Example 1\nInput: <|audio__bos|>Rain is expected tomorrow.<|audio_eos|>\nOutput: Rain is expected tomorrow.\n\n"
+        "Example 2\nInput: He only wanted <|audio__bos|>a glass of water<|audio_eos|> and nothing more.\nOutput: a glass of water\n\n"
+        "Ready? Here's the input:\n{audio_token}",
+        "Your job is verbatim repetition: copy exactly what sits between <|audio__bos|> and <|audio_eos|>, character for character.\n\n"
+        "Example 1\nInput: <|audio__bos|>Meet me at the station.<|audio_eos|>\nOutput: Meet me at the station.\n\n"
+        "Example 2\nInput: They found <|audio__bos|>a small key<|audio_eos|> under the mat.\nOutput: a small key\n\n"
+        "Let's begin with this input:\n{audio_token}",
+        "Below are a couple of examples showing how to repeat only the text between <|audio__bos|> and <|audio_eos|>. Study them, then do the same.\n\n"
+        "Example 1\nInput: <|audio__bos|>The concert starts at eight.<|audio_eos|>\nOutput: The concert starts at eight.\n\n"
+        "Example 2\nInput: I picked up <|audio__bos|>the wrong bag<|audio_eos|> at the airport.\nOutput: the wrong bag\n\n"
+        "Your turn:\n{audio_token}",
+    ],
 }
 
 
@@ -474,6 +500,7 @@ def apply_chat_template_to_texts(
     audio_token: str,
     prompt_template: str | dict[str, str] | None = None,
     prompt_template_selection: str = "random",
+    prompt_template_task: str | None = None,
     src_langs: list[str] | None = None,
     tgt_langs: list[str] | None = None,
     return_prompts: bool = False,
@@ -492,6 +519,14 @@ def apply_chat_template_to_texts(
             is ``"custom"``.
         prompt_template_selection: Template selection strategy:
             ``"random"`` (default), ``"with_language"``, or ``"custom"``.
+        prompt_template_task: When set, overrides which ``TASK_TEMPLATES``
+            bucket ``"random"``/``"with_language"`` draw from, decoupled from
+            each sample's own *task* (which keeps labelling the data mixture
+            and the per-task WER/CER split). Lets a run swap prompt STYLE
+            (e.g. ``"verbatim"``) onto an existing task's data without
+            relabelling every source's ``tags``. Ignored under ``"custom"``
+            selection, which resolves *task* against *prompt_template*
+            directly and never consults ``TASK_TEMPLATES``.
         src_langs: Source language ISO codes (per sample).  May be empty.
         tgt_langs: Target language ISO codes (per sample).  May be empty.
         return_prompts: Also return the generation prompt for each sample —
@@ -523,10 +558,11 @@ def apply_chat_template_to_texts(
         if prompt_template_selection == "custom":
             template = resolve_custom_template(prompt_template, task)
         else:
-            templates = TASK_TEMPLATES.get(task)
+            template_task = prompt_template_task or task
+            templates = TASK_TEMPLATES.get(template_task)
             if templates is None:
                 raise ValueError(
-                    f"Unknown task '{task}'. Expected one of: {', '.join(sorted(TASK_TEMPLATES.keys()))}"
+                    f"Unknown task '{template_task}'. Expected one of: {', '.join(sorted(TASK_TEMPLATES.keys()))}"
                 )
             if prompt_template_selection == "random":
                 template = random.choice(templates)

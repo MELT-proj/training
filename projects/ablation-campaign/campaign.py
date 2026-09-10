@@ -50,6 +50,7 @@ AXIS_FIELDS = {
     "decoder", "decoder_freeze", "decoder_lora",
     "encoder_lr", "decoder_lr", "adapter_lr",
     "batch_duration", "grad_accum_steps", "gradient_checkpointing",
+    "epochs", "prompt_template_task",
 }
 POLICY_FIELDS = {
     "seed", "eval_rounds", "keep_checkpoints", "checkpoint_count",
@@ -157,7 +158,6 @@ def render(
         "--run.exp_name", p.exp_name,
         "--trainer.output_dir", f"/workspace/outputs/{p.exp_name}",
         *p.overrides,
-        "--trainer.num_train_epochs", "1",
         "--trainer.eval_steps", str(p.eval_steps),
         "--trainer.save_steps", str(p.save_steps),
         "--trainer.save_total_limit", str(p.save_total_limit),
