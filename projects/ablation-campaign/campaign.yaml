@@ -159,7 +159,11 @@ arms:
     time: "46:00:00"
     batch_duration: 30
     grad_accum_steps: 20
-    gradient_checkpointing: false
+    # true: false OOM'd at step 1 (full-decoder DDP has no optimizer-state
+    # sharding, unlike the adapter-only MA arm); batch_duration/grad_accum_steps
+    # retuning doesn't help since a single max_duration cut alone nears the
+    # ceiling. Keeps DDP over FSDP2 for speed, per README's memory-lever notes.
+    gradient_checkpointing: true
     checkpoint_count: 7               # same cadence as IFT-700-llama1b-ins
 
   - id: IFT-700-qwen35-2b-base
