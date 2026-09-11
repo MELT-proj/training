@@ -811,6 +811,7 @@ wins):
 | `-e, --entity` | `WANDB_ENTITY` | none — **warns**, see below |
 | `-p, --project` | `WANDB_PROJECT` | whatever the run recorded (`melt`) |
 | `-v, --venv` | `VENV_PATH` | none — uses the current environment |
+| `-S, --staging-path` | `WANDB_STAGING_PATH` | none — see "Artifact/table uploads" below |
 | `-t, --threshold` | `ACTIVE_THRESHOLD_MINUTES` | `10` |
 | `-n, --dry-run` | — | off |
 
@@ -918,10 +919,39 @@ rsync -ravh --append-verify --exclude='.synced' \
 wandb sync ".../wandb/$RUN" --entity <the-shared-team> --include-offline --append
 ```
 
-Two harmless artefacts you will see: a `FileNotFoundError` uploading a stale
-artifact staging file, and W&B reporting a run as `finished` while it is
-plainly still training. Neither affects the metrics; a later manual sync marks
-the run caught-up.
+One harmless artefact you may still see: W&B reporting a run as `finished`
+while it is plainly still training. That does not affect the metrics; a later
+manual sync marks the run caught-up.
+
+#### Artifact/table uploads (eval hypotheses, `wandb.Table`)
+
+A run that logs a `wandb.Table` (e.g. the eval hypotheses table in
+`melt/training/trainer.py`) stages its media files *outside* the run
+directory, and wandb bakes the container-internal absolute path
+(`/workspace/tmp/.local/share/artifacts/staging/...`) into the offline run's
+binary log at record time. Plain `wandb sync` of the rsynced run directory
+cannot find that path on artemis — it never existed outside the MN5
+container — and drops the table with `FileNotFoundError ... Artifact won't be
+committed`, silently, without failing the run's sync.
+
+Fix it by also passing `--staging-path` (the remote `$TMPDIR_HOST/.local/share/artifacts/staging`,
+e.g. `/gpfs/projects/epor48/melt-data/tmp/.local/share/artifacts/staging` on
+MN5 — see `infra/runners/sites/mn5.sh`):
+
+```bash
+# [artemis] SINGULARITY_IMG must be the image the run itself used
+# (already exported if you sourced infra/runners/sites/artemis.sh)
+utils/sync_wandb.sh \
+  --remote-path /gpfs/scratch/epor48/<your-mn5-user>/outputs/wandb/wandb \
+  --staging-path /gpfs/projects/epor48/melt-data/tmp/.local/share/artifacts/staging \
+  --entity <the-shared-team>
+```
+
+This mirrors that directory locally too, and runs `wandb sync` inside
+`$SINGULARITY_IMG` with the mirror bound back onto the exact container path
+wandb recorded, so the lookup resolves. Without `--staging-path`, everything
+else still syncs fine (scalars, config, summary) — only artifact/table uploads
+are affected.
 
 **Checkpoints** — pull via the transfer node:
 

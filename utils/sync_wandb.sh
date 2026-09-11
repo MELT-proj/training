@@ -25,6 +25,9 @@
 #   -p, --project NAME       $WANDB_PROJECT       W&B project. default: whatever the run recorded
 #   -v, --venv PATH          $VENV_PATH           virtualenv *activate script* to source.
 #                                                 default: none (use the current environment)
+#   -S, --staging-path PATH  $WANDB_STAGING_PATH  remote artifact-staging directory (see below).
+#                                                 default: none (artifact/table uploads will fail
+#                                                 with a FileNotFoundError -- see below)
 #   -t, --threshold MINUTES  $ACTIVE_THRESHOLD_MINUTES
 #                                                 a run touched within this many minutes counts
 #                                                 as still training. default: 10
@@ -44,6 +47,29 @@
 #
 # The remote username is usually NOT your local one. To find it:
 #   ssh mn5 'echo $USER'
+#
+# --- artifact/table uploads (--staging-path) --------------------------------
+#
+# Any run that logs a wandb.Table (e.g. eval hypotheses) stages its media files
+# outside the run directory, under $WANDB_DATA_DIR/artifacts/staging. On MN5
+# that resolves to the container-internal path
+# /workspace/tmp/.local/share/artifacts/staging (bind-mounted from the shared
+# $TMPDIR_HOST -- see bash/run_train_singularity.sbatch and
+# infra/runners/sites/mn5.sh). wandb bakes that *absolute container path* into
+# the offline run's binary log at record time, so plain rsync of the run
+# directory is not enough: `wandb sync` looks the file up at that literal
+# path, which never existed outside the MN5 container, and fails with
+# "FileNotFoundError ... artifacts/staging/tmp...".
+#
+# Passing --staging-path (the remote $TMPDIR_HOST/.local/share/artifacts/staging,
+# e.g. /gpfs/projects/epor48/melt-data/tmp/.local/share/artifacts/staging on
+# MN5) makes this script mirror that directory locally too, and run
+# `wandb sync` inside the same Apptainer/Singularity image the run itself used
+# (read from $SINGULARITY_IMG / $SINGULARITY_BIN -- set already if you sourced
+# infra/runners/sites/artemis.sh), bind-mounting the local mirror back onto
+# /workspace/tmp/.local/share/artifacts/staging so the baked-in path resolves
+# exactly as it did on MN5. Without it, artifact/table uploads keep failing
+# silently (the run's scalars/summary still sync fine either way).
 
 set -euo pipefail
 
@@ -59,20 +85,28 @@ LOCAL_PATH="${WANDB_LOCAL_PATH:-/mnt/scratch-artemis/$USER/melt-data/outputs/wan
 WANDB_ENTITY="${WANDB_ENTITY:-}"
 WANDB_PROJECT="${WANDB_PROJECT:-}"
 VENV_PATH="${VENV_PATH:-}"
+WANDB_STAGING_PATH="${WANDB_STAGING_PATH:-}"
+# Local mirror of the staging dir defaults to a sibling of LOCAL_PATH's parent
+# (".../outputs/wandb/artifacts-staging" next to ".../outputs/wandb/wandb"),
+# recomputed below once LOCAL_PATH is finalised.
+WANDB_STAGING_LOCAL_PATH="${WANDB_STAGING_LOCAL_PATH:-}"
+SINGULARITY_IMG="${SINGULARITY_IMG:-}"
+SINGULARITY_BIN="${SINGULARITY_BIN:-singularity}"
 ACTIVE_THRESHOLD_MINUTES="${ACTIVE_THRESHOLD_MINUTES:-10}"
 DRY_RUN=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -r|--remote-path) REMOTE_PATH="${2:?--remote-path needs a value}"; shift 2 ;;
-        -l|--local-path)  LOCAL_PATH="${2:?--local-path needs a value}";   shift 2 ;;
-        -H|--host)        REMOTE_HOST="${2:?--host needs a value}";        shift 2 ;;
-        -e|--entity)      WANDB_ENTITY="${2:?--entity needs a value}";     shift 2 ;;
-        -p|--project)     WANDB_PROJECT="${2:?--project needs a value}";   shift 2 ;;
-        -v|--venv)        VENV_PATH="${2:?--venv needs a value}";          shift 2 ;;
-        -t|--threshold)   ACTIVE_THRESHOLD_MINUTES="${2:?--threshold needs a value}"; shift 2 ;;
-        -n|--dry-run)     DRY_RUN=1; shift ;;
-        -h|--help)        usage; exit 0 ;;
+        -r|--remote-path)   REMOTE_PATH="${2:?--remote-path needs a value}";   shift 2 ;;
+        -l|--local-path)    LOCAL_PATH="${2:?--local-path needs a value}";     shift 2 ;;
+        -H|--host)          REMOTE_HOST="${2:?--host needs a value}";          shift 2 ;;
+        -e|--entity)        WANDB_ENTITY="${2:?--entity needs a value}";       shift 2 ;;
+        -p|--project)       WANDB_PROJECT="${2:?--project needs a value}";     shift 2 ;;
+        -v|--venv)          VENV_PATH="${2:?--venv needs a value}";            shift 2 ;;
+        -S|--staging-path)  WANDB_STAGING_PATH="${2:?--staging-path needs a value}"; shift 2 ;;
+        -t|--threshold)     ACTIVE_THRESHOLD_MINUTES="${2:?--threshold needs a value}"; shift 2 ;;
+        -n|--dry-run)       DRY_RUN=1; shift ;;
+        -h|--help)          usage; exit 0 ;;
         *) die "unknown argument '$1' (try --help)" ;;
     esac
 done
@@ -92,6 +126,16 @@ fi
 # needs it. The old version depended on the caller remembering to include it.
 REMOTE_PATH="${REMOTE_PATH%/}"
 LOCAL_PATH="${LOCAL_PATH%/}"
+WANDB_STAGING_PATH="${WANDB_STAGING_PATH%/}"
+
+if [[ -n "$WANDB_STAGING_PATH" ]]; then
+    [[ -n "$SINGULARITY_IMG" ]] || die "--staging-path needs \$SINGULARITY_IMG set (the image the run itself
+       used, e.g. source infra/runners/sites/artemis.sh, or export SINGULARITY_IMG=/path/to/image.sif).
+       wandb sync has to run inside that image so the container-internal
+       staging path it recorded resolves to the mirror this script rsyncs."
+    WANDB_STAGING_LOCAL_PATH="${WANDB_STAGING_LOCAL_PATH:-$(dirname "$LOCAL_PATH")/artifacts-staging}"
+    WANDB_STAGING_LOCAL_PATH="${WANDB_STAGING_LOCAL_PATH%/}"
+fi
 
 # Only pass -e/-p through when set, so an unset value leaves whatever the run
 # recorded at training time intact rather than overriding it with a guess.
@@ -104,6 +148,13 @@ echo "local:     $LOCAL_PATH"
 echo "entity:    ${WANDB_ENTITY:-<personal account of whoever runs this>}"
 echo "project:   ${WANDB_PROJECT:-<as recorded in the run>}"
 echo "active if touched within: ${ACTIVE_THRESHOLD_MINUTES}m"
+if [[ -n "$WANDB_STAGING_PATH" ]]; then
+    echo "staging:   $REMOTE_HOST:$WANDB_STAGING_PATH -> $WANDB_STAGING_LOCAL_PATH"
+    echo "sync via:  $SINGULARITY_BIN exec ($SINGULARITY_IMG)"
+else
+    echo "staging:   not configured -- artifact/table uploads (wandb.Table, wandb.Artifact) will"
+    echo "           fail with a FileNotFoundError on the staged file. Pass --staging-path to fix."
+fi
 [[ $DRY_RUN -eq 1 ]] && echo "mode:      DRY RUN (nothing will be written or uploaded)"
 echo
 
@@ -149,9 +200,27 @@ RSYNC_FLAGS=(-ravh --append-verify --exclude='.synced' -e ssh)
 [[ $DRY_RUN -eq 1 ]] && RSYNC_FLAGS+=(--dry-run)
 rsync "${RSYNC_FLAGS[@]}" "$REMOTE_HOST:$REMOTE_PATH/" "$LOCAL_PATH/"
 
+if [[ -n "$WANDB_STAGING_PATH" ]]; then
+    echo ""
+    echo "--- 2b. Syncing artifact staging files ---"
+    if ssh "$REMOTE_HOST" "[ -d '$WANDB_STAGING_PATH' ]"; then
+        [[ $DRY_RUN -eq 1 ]] || mkdir -p "$WANDB_STAGING_LOCAL_PATH"
+        rsync "${RSYNC_FLAGS[@]}" "$REMOTE_HOST:$WANDB_STAGING_PATH/" "$WANDB_STAGING_LOCAL_PATH/"
+    else
+        # Not fatal: a fresh account, or one that has never logged a
+        # wandb.Table/wandb.Artifact, will not have this directory yet.
+        echo "WARNING: remote staging directory not found: $REMOTE_HOST:$WANDB_STAGING_PATH (skipping)"
+    fi
+fi
+
 echo ""
 echo "--- 3. Activating virtual environment ---"
-if [[ -n "$VENV_PATH" ]]; then
+if [[ -n "$WANDB_STAGING_PATH" ]]; then
+    # Container mode: `wandb sync` runs inside $SINGULARITY_IMG (see
+    # run_wandb_sync below), which has its own venv baked in at
+    # /workspace/venv -- a native --venv/PATH wandb is irrelevant here.
+    echo "container mode: wandb sync will run inside $SINGULARITY_IMG"
+elif [[ -n "$VENV_PATH" ]]; then
     # Repo convention (bash/run_train.sh, sites/*.sh): VENV_PATH *is* the
     # activate script, not the venv root.
     [[ -f "$VENV_PATH" ]] || die "VENV_PATH is not a file: $VENV_PATH
@@ -163,12 +232,35 @@ else
     echo "no --venv given; using the current environment"
 fi
 
-if ! command -v wandb >/dev/null 2>&1; then
+if [[ -z "$WANDB_STAGING_PATH" ]] && ! command -v wandb >/dev/null 2>&1; then
     MSG="'wandb' not found on PATH. Pass --venv /path/to/venv/bin/activate, or activate an environment that has it."
     # Under --dry-run this is worth knowing but not worth stopping for: the
     # point of a preview is to see the classification without uploading.
     [[ $DRY_RUN -eq 1 ]] && echo "WARNING: $MSG" || die "$MSG"
 fi
+
+# Runs `wandb sync` natively, or -- when --staging-path is configured --
+# inside the same Apptainer/Singularity image the run used, with the local
+# staging mirror bound onto the exact container path wandb baked into the
+# offline run's log (/workspace/tmp/.local/share/artifacts/staging). See the
+# "artifact/table uploads" note at the top of this file for why that is
+# necessary rather than just rsyncing the run directory.
+run_wandb_sync() {
+    if [[ -n "$WANDB_STAGING_PATH" ]]; then
+        # LOCAL_PATH is bound identity (same path in and out) because the run
+        # directory is passed to `wandb sync` as a plain artemis path -- it
+        # is not one of the paths Apptainer/Singularity auto-binds by
+        # default. The staging mirror, in contrast, is deliberately bound
+        # onto a *different* path: the container-internal one wandb recorded.
+        "$SINGULARITY_BIN" exec \
+            --bind "${LOCAL_PATH}:${LOCAL_PATH}" \
+            --bind "${WANDB_STAGING_LOCAL_PATH}:/workspace/tmp/.local/share/artifacts/staging" \
+            "$SINGULARITY_IMG" \
+            bash -c 'source /workspace/venv/bin/activate 2>/dev/null; exec wandb sync "$@"' _ "$@"
+    else
+        wandb sync "$@"
+    fi
+}
 
 echo ""
 echo "--- 4. Processing Offline Runs ---"
@@ -203,7 +295,7 @@ for run_dir in "$LOCAL_PATH"/offline-run-*/; do
         else
             echo ">> Syncing ACTIVE run (appending): $run_name"
             # Don't let wandb sync failure stop the script
-            if wandb sync "$run_dir" "${WANDB_TARGET[@]}" --include-offline --append; then
+            if run_wandb_sync "$run_dir" "${WANDB_TARGET[@]}" --include-offline --append; then
                 ((ACTIVE_SYNCED++)) || true
             else
                 echo "WARNING: Failed to sync $run_name"
@@ -217,7 +309,7 @@ for run_dir in "$LOCAL_PATH"/offline-run-*/; do
         else
             echo ">> Syncing FINISHED run (finalizing): $run_name"
             # Don't let wandb sync failure stop the script
-            if wandb sync "$run_dir" "${WANDB_TARGET[@]}" --include-offline --mark-synced; then
+            if run_wandb_sync "$run_dir" "${WANDB_TARGET[@]}" --include-offline --mark-synced; then
                 # Create .synced marker file to prevent re-syncing
                 touch "$run_dir/.synced"
                 ((FINISHED_SYNCED++)) || true
