@@ -13,7 +13,7 @@ directly from GitHub.
 
 ## [Unreleased]
 
-Targeting v0.8.0, pending merge of both:
+## [0.8.0] - 2026-09-12
 
 - [#107](https://github.com/MELT-proj/training/pull/107) — a per-encoder spec
   table (`melt/modeling/encoder_specs.py`) describing each supported speech
