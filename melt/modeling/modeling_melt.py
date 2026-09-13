@@ -104,12 +104,156 @@ class MELTMLPAdapter(nn.Module):
         output_shape = (batch_size, seq_len, self.output_hidden_size)
         return output_shape, features_attention_mask
 
-    def forward(self, audio_features: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, audio_features: torch.Tensor, attention_mask: torch.Tensor | None = None
+    ) -> torch.Tensor:
         hidden_states = self.fc1(audio_features)
         hidden_states = self.act(hidden_states)
         hidden_states = self.fc2(hidden_states)
         hidden_states = self.post_norm(hidden_states) * self.gain
         return hidden_states
+
+
+class MELTMoESwiGLUExpert(nn.Module):
+    """Single SwiGLU FFN expert: down_proj(silu(gate_proj(x)) * up_proj(x))."""
+
+    def __init__(self, in_features: int, intermediate_size: int, out_features: int):
+        super().__init__()
+        self.gate_proj = nn.Linear(in_features, intermediate_size, bias=False)
+        self.up_proj = nn.Linear(in_features, intermediate_size, bias=False)
+        self.down_proj = nn.Linear(intermediate_size, out_features, bias=False)
+        self.act = nn.SiLU()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.down_proj(self.act(self.gate_proj(x)) * self.up_proj(x))
+
+
+class MELTMoEAdapter(nn.Module):
+    """
+    Mixture-of-experts audio adapter.
+
+    Each token (audio frame) is routed by a plain linear router (softmax + top-k,
+    Mixtral / DeepSeek-MoE style gating -- no nonlinearity in the router itself) to a
+    subset of SwiGLU expert FFNs. An optional always-on shared expert can be added on
+    top of the routed output. No language id or other side signal is fed to the
+    router; any acoustic/semantic/language specialization has to emerge purely from
+    what's in the audio encoder's hidden states.
+
+    A Switch-Transformer-style load-balancing auxiliary loss is computed on every
+    forward pass and stashed on ``self.aux_loss`` (a scalar tensor, or ``None`` if the
+    adapter saw no valid/unmasked tokens) for ``MELTAudioAdapter`` to read back and
+    thread up into the training loss -- without it, routers tend to collapse onto a
+    couple of always-on experts.
+    """
+
+    def __init__(self, config: MELTConfig):
+        super().__init__()
+        audio_hidden_size = _get_encoder_hidden_size(config.audio_encoder_config)
+        out = config.text_decoder_config.hidden_size
+        adapter_cfg = config.adapter_config
+
+        self.num_experts = adapter_cfg.num_experts
+        self.num_experts_per_tok = adapter_cfg.num_experts_per_tok
+
+        self.router = nn.Linear(audio_hidden_size, self.num_experts, bias=False)
+        self.experts = nn.ModuleList(
+            MELTMoESwiGLUExpert(audio_hidden_size, adapter_cfg.moe_intermediate_size, out)
+            for _ in range(self.num_experts)
+        )
+        self.shared_expert = (
+            MELTMoESwiGLUExpert(
+                audio_hidden_size, adapter_cfg.shared_expert_intermediate_size, out
+            )
+            if adapter_cfg.use_shared_expert
+            else None
+        )
+
+        self.post_norm = nn.LayerNorm(out)
+        self.gain = nn.Parameter(torch.tensor([0.1]))
+        self.output_hidden_size = out
+
+        # Populated by forward(); MELTAudioAdapter reads this back to thread the
+        # load-balancing loss up into the training loss. None outside of a forward
+        # call, and also None if every frame in the batch was padding.
+        self.aux_loss: torch.Tensor | None = None
+
+    def _get_output_features_shape(
+        self,
+        input_shape: tuple[int, int, int],
+        features_attention_mask: torch.Tensor | None = None,
+        device: torch.device | None = None,
+    ) -> tuple[tuple[int, int, int], torch.Tensor | None]:
+        """Same contract as MELTMLPAdapter: routing preserves sequence length."""
+        batch_size, seq_len, _ = input_shape
+        output_shape = (batch_size, seq_len, self.output_hidden_size)
+        return output_shape, features_attention_mask
+
+    def forward(
+        self, audio_features: torch.Tensor, attention_mask: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        batch_size, seq_len, hidden_size = audio_features.shape
+        flat_hidden = audio_features.reshape(-1, hidden_size)  # (N, D), N = batch_size * seq_len
+
+        router_logits = self.router(flat_hidden)  # (N, num_experts)
+        routing_weights = F.softmax(router_logits, dim=-1, dtype=torch.float32)
+        topk_weights, topk_indices = routing_weights.topk(self.num_experts_per_tok, dim=-1)
+        topk_weights = topk_weights / topk_weights.sum(dim=-1, keepdim=True)
+        topk_weights = topk_weights.to(flat_hidden.dtype)
+
+        final_hidden = torch.zeros(
+            (flat_hidden.shape[0], self.output_hidden_size),
+            dtype=flat_hidden.dtype,
+            device=flat_hidden.device,
+        )
+
+        # Dense-masked dispatch (Mixtral-style): one-hot the (token, slot) -> expert
+        # assignment so each expert can be run once over every token that picked it in
+        # any of its k slots, without a python-level loop over individual tokens.
+        expert_mask = F.one_hot(topk_indices, num_classes=self.num_experts).permute(2, 1, 0)
+
+        for expert_idx in range(self.num_experts):
+            slot, token_idx = torch.where(expert_mask[expert_idx])
+            if token_idx.numel() == 0:
+                continue
+            expert_output = self.experts[expert_idx](flat_hidden[token_idx])
+            expert_output = expert_output * topk_weights[token_idx, slot, None]
+            final_hidden.index_add_(0, token_idx, expert_output)
+
+        if self.shared_expert is not None:
+            final_hidden = final_hidden + self.shared_expert(flat_hidden)
+
+        hidden_states = final_hidden.reshape(batch_size, seq_len, self.output_hidden_size)
+        hidden_states = self.post_norm(hidden_states) * self.gain
+
+        self.aux_loss = self._load_balancing_loss(routing_weights, topk_indices, attention_mask)
+
+        return hidden_states
+
+    def _load_balancing_loss(
+        self,
+        routing_weights: torch.Tensor,
+        topk_indices: torch.Tensor,
+        attention_mask: torch.Tensor | None,
+    ) -> torch.Tensor | None:
+        """Switch-Transformer-style load-balancing loss, excluding padded frames.
+
+        ``aux_loss = num_experts * sum_i(f_i * P_i)``, where ``f_i`` is the fraction of
+        valid tokens that route to expert ``i`` in any of their top-k slots and ``P_i``
+        is the mean full-softmax probability mass valid tokens place on expert ``i``.
+        Padded frames are excluded so they can't skew the balance statistics.
+        """
+        if attention_mask is not None:
+            valid = attention_mask.reshape(-1).to(torch.bool)
+            if not valid.any():
+                return None
+            routing_weights = routing_weights[valid]
+            topk_indices = topk_indices[valid]
+
+        expert_mask = F.one_hot(topk_indices, num_classes=self.num_experts).to(routing_weights.dtype)
+        tokens_per_expert = expert_mask.sum(dim=1).mean(dim=0)
+        router_prob_per_expert = routing_weights.mean(dim=0)
+
+        return self.num_experts * (tokens_per_expert * router_prob_per_expert).sum()
 
 
 class MELTQFormerAdapter(nn.Module):
@@ -178,7 +322,9 @@ class MELTQFormerAdapter(nn.Module):
         )
         return output_shape, output_attention_mask
 
-    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, hidden_states: torch.Tensor, attention_mask: torch.Tensor | None = None
+    ) -> torch.Tensor:
         batch_size, seq_len, dim = hidden_states.size()
         nblocks = math.ceil(seq_len / self.window_size)
         pad = nblocks * self.window_size - seq_len
@@ -380,6 +526,7 @@ class MELTAudioAdapter(nn.Module):
     - "mlp": Simple linear projection (Qwen2Audio style)
     - "qformer": Q-Former with learnable queries (GraniteSpeech style)
     - "conformer": Conformer adapter layers (Wav2Vec2Bert style)
+    - "moe": Mixture of SwiGLU experts with top-k routing
     """
 
     def __init__(self, config: MELTConfig):
@@ -392,20 +539,21 @@ class MELTAudioAdapter(nn.Module):
             self.adapter = MELTQFormerAdapter(config)
         elif architecture == "conformer":
             self.adapter = MELTConformerAdapter(config)
+        elif architecture == "moe":
+            self.adapter = MELTMoEAdapter(config)
         else:
             raise ValueError(
-                f"Unknown adapter architecture: {architecture}. Supported architectures: 'mlp', 'qformer', 'conformer'"
+                f"Unknown adapter architecture: {architecture}. Supported architectures: 'mlp', 'qformer', 'conformer', 'moe'"
             )
 
         logger.info("MELT instantiated with adapter architecture: %s", architecture)
 
     def forward(
         self, hidden_states: torch.Tensor, attention_mask: torch.Tensor | None = None
-    ) -> torch.Tensor:
-        # Some adapters (conformer) need attention_mask, others don't
-        if isinstance(self.adapter, MELTConformerAdapter):
-            return self.adapter(hidden_states, attention_mask=attention_mask)
-        return self.adapter(hidden_states)
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        output = self.adapter(hidden_states, attention_mask=attention_mask)
+        aux_loss = getattr(self.adapter, "aux_loss", None)
+        return output, aux_loss
 
     def _get_output_features_shape(
         self,
@@ -704,7 +852,7 @@ class MELTAudioStack(nn.Module):
         output_hidden_states: bool | None = None,
         return_dict: bool | None = None,
         **kwargs,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         hidden_states = self.encoder(
             input_features,
             features_attention_mask=features_attention_mask,
@@ -927,6 +1075,25 @@ class MELTPreTrainedModel(PreTrainedModel):
             module.post_norm.bias.data.zero_()
 
             # Keep the initial injected-audio scale small for stability.
+            module.gain.data.fill_(0.1)
+
+        # MoE adapter initialization (Mixtral/DeepSeek-MoE style SwiGLU experts)
+        elif isinstance(module, MELTMoEAdapter):
+            module.router.weight.data.normal_(mean=0.0, std=std)
+
+            experts = list(module.experts)
+            if module.shared_expert is not None:
+                experts = experts + [module.shared_expert]
+            for expert in experts:
+                expert.gate_proj.weight.data.normal_(mean=0.0, std=std)
+                expert.up_proj.weight.data.normal_(mean=0.0, std=std)
+                expert.down_proj.weight.data.normal_(mean=0.0, std=std)
+
+            module.post_norm.weight.data.fill_(1.0)
+            module.post_norm.bias.data.zero_()
+
+            # Same rationale as the MLP adapter: keep the initial injected-audio
+            # scale small for stability.
             module.gain.data.fill_(0.1)
 
         # Conformer adapter initialization (Wav2Vec2Bert style)
@@ -1288,7 +1455,7 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
         return_dict,
         **kwargs_encoder,
     ):
-        encoder_hidden_states = self.audio_stack(
+        encoder_hidden_states, aux_loss = self.audio_stack(
             input_features,
             features_attention_mask=features_attention_mask,
             output_attentions=output_attentions,
@@ -1324,7 +1491,7 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
         # we will have to compute the new lengths for each audio accordingly.
         audio_lengths = encoder_outputs_mask.sum(dim=1).unsqueeze(-1)
 
-        return encoder_hidden_states, encoder_outputs_mask, audio_lengths
+        return encoder_hidden_states, encoder_outputs_mask, audio_lengths, aux_loss
 
     def _merge_embeddings(
         self,
@@ -1418,8 +1585,11 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
         # 2. If the user provided audio features, extract audio embeddings
         # In this step chunking and adapter projection happens. Moreover, we return the new
         # features mask and audio lenghts since some adapters modify the sequence length.
+        # `aux_loss` is the MoE adapter's load-balancing loss (None for every other
+        # adapter, and when there's no audio in the batch at all).
+        aux_loss = None
         if input_features is not None:
-            encoder_hidden_states, encoder_outputs_mask, audio_lengths = (
+            encoder_hidden_states, encoder_outputs_mask, audio_lengths, aux_loss = (
                 self._get_audio_embeddings(
                     input_features=input_features,
                     features_attention_mask=features_attention_mask,
@@ -1500,6 +1670,8 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
                 ignore_index=-100,
                 **kwargs,
             )
+            if aux_loss is not None:
+                loss = loss + self.config.adapter_config.router_aux_loss_coef * aux_loss
 
         if not return_dict:
             output = (logits,) + outputs[1:]
@@ -1541,7 +1713,7 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
                 for k, v in kwargs.items()
                 if k.startswith("encoder_")
             }
-            encoder_hidden_states, encoder_outputs_mask, audio_lengths = (
+            encoder_hidden_states, encoder_outputs_mask, audio_lengths, _ = (
                 self._get_audio_embeddings(
                     input_features=input_features,
                     features_attention_mask=features_attention_mask,
@@ -1795,7 +1967,7 @@ class MELTForSequenceClassification(MELTPreTrainedModel):
         return_dict,
         **kwargs_encoder,
     ):
-        encoder_hidden_states = self.audio_stack(
+        encoder_hidden_states, aux_loss = self.audio_stack(
             input_features,
             features_attention_mask=features_attention_mask,
             output_attentions=output_attentions,
@@ -1820,7 +1992,7 @@ class MELTForSequenceClassification(MELTPreTrainedModel):
 
         audio_lengths = encoder_outputs_mask.sum(dim=1).unsqueeze(-1)
 
-        return encoder_hidden_states, encoder_outputs_mask, audio_lengths
+        return encoder_hidden_states, encoder_outputs_mask, audio_lengths, aux_loss
 
     def _merge_embeddings(
         self,
@@ -1882,8 +2054,11 @@ class MELTForSequenceClassification(MELTPreTrainedModel):
 
         decoder_input_embs = self._get_text_embeddings(input_ids)
 
+        # `aux_loss` is the MoE adapter's load-balancing loss (None for every other
+        # adapter, and when there's no audio in the batch at all).
+        aux_loss = None
         if input_features is not None:
-            encoder_hidden_states, encoder_outputs_mask, audio_lengths = (
+            encoder_hidden_states, encoder_outputs_mask, audio_lengths, aux_loss = (
                 self._get_audio_embeddings(
                     input_features=input_features,
                     features_attention_mask=features_attention_mask,
@@ -1929,6 +2104,9 @@ class MELTForSequenceClassification(MELTPreTrainedModel):
             return_dict=return_dict,
         )
 
+        if output.loss is not None and aux_loss is not None:
+            output.loss = output.loss + self.config.adapter_config.router_aux_loss_coef * aux_loss
+
         # It loss is above 500, print labels and logits for debugging
         if output.loss is not None and output.loss.item() > 500:
             logger.warning(
@@ -1950,4 +2128,5 @@ __all__ = [
     "MELTMLPAdapter",
     "MELTQFormerAdapter",
     "MELTConformerAdapter",
+    "MELTMoEAdapter",
 ]

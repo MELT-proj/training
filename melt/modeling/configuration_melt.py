@@ -41,6 +41,20 @@ class MELTAdapterConfig(PretrainedConfig):
             Kernel size for conformer convolutions (used by Conformer adapter).
         adapter_stride (`int`, *optional*, defaults to 2):
             Stride for conformer convolutions (used by Conformer adapter).
+        num_experts (`int`, *optional*, defaults to 8):
+            Number of experts (used by MoE adapter).
+        num_experts_per_tok (`int`, *optional*, defaults to 2):
+            Number of experts each token is routed to (used by MoE adapter).
+        moe_intermediate_size (`int`, *optional*, defaults to 1024):
+            Hidden size of each expert's SwiGLU FFN (used by MoE adapter).
+        use_shared_expert (`bool`, *optional*, defaults to `False`):
+            Whether to add an always-on shared expert in addition to the routed
+            top-k experts (used by MoE adapter).
+        shared_expert_intermediate_size (`int`, *optional*, defaults to 1024):
+            Hidden size of the shared expert's SwiGLU FFN (used by MoE adapter).
+        router_aux_loss_coef (`float`, *optional*, defaults to 0.01):
+            Coefficient for the router's load-balancing auxiliary loss, added to the
+            LM loss (used by MoE adapter).
     """
 
     model_type = "melt_adapter"
@@ -67,6 +81,12 @@ class MELTAdapterConfig(PretrainedConfig):
         layerdrop=0.0,
         adapter_kernel_size=3,
         adapter_stride=2,
+        num_experts=8,
+        num_experts_per_tok=2,
+        moe_intermediate_size=1024,
+        use_shared_expert=False,
+        shared_expert_intermediate_size=1024,
+        router_aux_loss_coef=0.01,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -89,6 +109,14 @@ class MELTAdapterConfig(PretrainedConfig):
         self.layerdrop = layerdrop
         self.adapter_kernel_size = adapter_kernel_size
         self.adapter_stride = adapter_stride
+
+        # MoE specific
+        self.num_experts = num_experts
+        self.num_experts_per_tok = num_experts_per_tok
+        self.moe_intermediate_size = moe_intermediate_size
+        self.use_shared_expert = use_shared_expert
+        self.shared_expert_intermediate_size = shared_expert_intermediate_size
+        self.router_aux_loss_coef = router_aux_loss_coef
 
 
 class MELTConfig(PretrainedConfig):

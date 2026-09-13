@@ -116,6 +116,12 @@ model:
     adapter_kernel_size: 3
     adapter_stride: 2
     mlp_hidden_size: null
+    num_experts: 8
+    num_experts_per_tok: 2
+    moe_intermediate_size: 1024
+    use_shared_expert: false
+    shared_expert_intermediate_size: 1024
+    router_aux_loss_coef: 0.01
 
   lora:
     enabled: false

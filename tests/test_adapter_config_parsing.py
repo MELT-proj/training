@@ -22,6 +22,12 @@ def test_adapter_defaults_in_training_config():
     assert ad.adapter_kernel_size == 3
     assert ad.adapter_stride == 2
     assert ad.mlp_hidden_size is None
+    assert ad.num_experts == 8
+    assert ad.num_experts_per_tok == 2
+    assert ad.moe_intermediate_size == 1024
+    assert ad.use_shared_expert is False
+    assert ad.shared_expert_intermediate_size == 1024
+    assert ad.router_aux_loss_coef == pytest.approx(0.01)
 
 
 def test_config_merge_parses_adapter_fields():
@@ -45,6 +51,12 @@ def test_config_merge_parses_adapter_fields():
                     "adapter_kernel_size": 5,
                     "adapter_stride": 3,
                     "mlp_hidden_size": 256,
+                    "num_experts": 16,
+                    "num_experts_per_tok": 4,
+                    "moe_intermediate_size": 2048,
+                    "use_shared_expert": True,
+                    "shared_expert_intermediate_size": 4096,
+                    "router_aux_loss_coef": 0.02,
                 }
             }
         }
@@ -67,3 +79,9 @@ def test_config_merge_parses_adapter_fields():
     assert ad.adapter_kernel_size == 5
     assert ad.adapter_stride == 3
     assert ad.mlp_hidden_size == 256
+    assert ad.num_experts == 16
+    assert ad.num_experts_per_tok == 4
+    assert ad.moe_intermediate_size == 2048
+    assert ad.use_shared_expert is True
+    assert ad.shared_expert_intermediate_size == 4096
+    assert ad.router_aux_loss_coef == pytest.approx(0.02)
