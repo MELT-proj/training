@@ -28,6 +28,21 @@
 #                                        independent -- trades recompute for
 #                                        activation memory, DDP's only route to
 #                                        it since FSDP2 gets it from accelerate)
+#   Duration       EPOCHS                                       (0-1 CLI override,
+#                                        trainer.num_train_epochs -- see the
+#                                        "One epoch" note below)
+#   Prompt style   TEMPLATE_TASK_OVERRIDE                         (0-2 CLI overrides,
+#                                        forces data.prompt_template_selection
+#                                        to "random" and data.template_task_override
+#                                        to this value, so every sample draws
+#                                        from TASK_TEMPLATES[<value>]
+#                                        (melt/training/data/audio/lhotse/
+#                                        helpers.py) regardless of what the
+#                                        config's own prompt_template_selection/
+#                                        prompt_template say -- without
+#                                        relabelling any source's tags.task,
+#                                        which keeps identifying the data
+#                                        mixture and the per-task WER/CER split)
 #
 # Every axis below defaults to EMPTY, which plan_arm.py reads as "inherit
 # the chosen CONFIG's own value" -- no CLI override, no assumption about
@@ -75,6 +90,8 @@ ADAPTER_LR="${ADAPTER_LR:-}"
 BATCH_DURATION="${BATCH_DURATION:-}"
 GRAD_ACCUM_STEPS="${GRAD_ACCUM_STEPS:-}"
 GRADIENT_CHECKPOINTING="${GRADIENT_CHECKPOINTING:-}"
+EPOCHS="${EPOCHS:-}"
+TEMPLATE_TASK_OVERRIDE="${TEMPLATE_TASK_OVERRIDE:-}"
 SEED="${SEED:-42}"
 
 # --- site / topology ----------------------------------------------------------
@@ -115,6 +132,7 @@ PLAN="$(python3 "${SCRIPT_DIR}/plan_arm.py" \
     --encoder-lr "$ENCODER_LR" --decoder-lr "$DECODER_LR" --adapter-lr "$ADAPTER_LR" \
     --batch-duration "$BATCH_DURATION" --grad-accum-steps "$GRAD_ACCUM_STEPS" \
     --gradient-checkpointing "$GRADIENT_CHECKPOINTING" \
+    --epochs "$EPOCHS" --template-task-override "$TEMPLATE_TASK_OVERRIDE" \
     --seed "$SEED")" || { echo "ERROR: plan_arm.py failed (see above)" >&2; exit 1; }
 eval "$PLAN"
 # PLAN sets: EXP_NAME, STEPS, EVAL_STEPS, SAVE_STEPS, SAVE_TOTAL_LIMIT,
@@ -126,16 +144,19 @@ export MELT_TIME="${MELT_TIME:-$TIME_DEFAULT}"
 # Paths in overrides are CONTAINER paths (/workspace/outputs/...), not host
 # ones (see infra/runners/submit-container.sh).
 #
-# One epoch, steps derived: campaign convention (2026-08-23) is that every
-# arm, MA and IFT alike, lets the step count fall out of num_train_epochs=1
-# rather than pinning max_steps per-arm, which is how two arms end up trained
-# for different amounts by accident.
+# One epoch by default, steps derived: campaign convention (2026-08-23) is
+# that every arm, MA and IFT alike, lets the step count fall out of
+# num_train_epochs rather than pinning max_steps per-arm, which is how two
+# arms end up trained for different amounts by accident. --trainer.
+# num_train_epochs is always in OVERRIDE_ARGS (plan_arm.py emits it
+# unconditionally, defaulting to the config's own value, 1 for every
+# ABL-*.yaml today) -- EPOCHS is how an arm deliberately deviates from that
+# convention.
 CMD=(infra/runners/submit-container.sh "$SITE" "$ACCELERATE_CONFIG"
     --config "$CONFIG"
     --run.exp_name "$EXP_NAME"
     --trainer.output_dir "/workspace/outputs/${EXP_NAME}"
     "${OVERRIDE_ARGS[@]}"
-    --trainer.num_train_epochs 1
     --trainer.eval_steps "$EVAL_STEPS"
     --trainer.save_steps "$SAVE_STEPS"
     --trainer.save_total_limit "$SAVE_TOTAL_LIMIT"

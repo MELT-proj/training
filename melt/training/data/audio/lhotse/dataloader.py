@@ -1467,6 +1467,7 @@ _EVAL_FORMAT_KEYS = (
     "apply_chat_template",
     "prompt_template",
     "prompt_template_selection",
+    "template_task_override",
     "chat_template_config",
 )
 

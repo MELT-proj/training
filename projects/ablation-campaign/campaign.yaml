@@ -72,6 +72,28 @@ arms:
     # max_tokens" section.
     exp_name: MA-700asr-w2vbF-llama1bInsF-mlpT-s42-8g-md60
 
+  - id: MA-700-verbatim-llama1b-ins
+    stage: MA
+    config: ABL-MA-700-asr.yaml     # same ASR mixture/bins/budget as
+                                    # MA-700-llama1b-ins -- only the prompt
+                                    # STYLE changes, via template_task_override
+                                    # below. tags.task stays "asr" (unchanged
+                                    # data/eval-set identity and per-task
+                                    # WER/CER grouping); only which
+                                    # TASK_TEMPLATES bucket gets drawn from
+                                    # changes. See melt/training/data/audio/
+                                    # lhotse/helpers.py's TASK_TEMPLATES and
+                                    # plan_arm.py's ArmAxes.template_task_override.
+    template_task_override: verbatim
+    epochs: 3
+    seed: 42
+    # 3x MA-700-llama1b-ins's own "06:00:00" (measured comfortably covering
+    # one epoch of this same config) minus one epoch's worth of the startup
+    # overhead that only happens once per job, then rounded up for margin.
+    # Unmeasured for 3 epochs specifically -- check the first run's actual
+    # rate before trusting this on a resume.
+    time: "18:00:00"
+
   - id: MA-700-llama1b-base
     stage: MA
     config: ABL-MA-700-asr.yaml     # deliberately the SAME config as the
