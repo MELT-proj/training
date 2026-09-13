@@ -108,14 +108,17 @@ arms:
                                     # here.
     adapter: moe
     template_task_override: verbatim
-    epochs: 3
+    epochs: 10                      # bumped from 3: routing through 8 experts
+                                    # needs more steps than a single dense MLP
+                                    # to give every expert enough signal to
+                                    # specialize before judging the arm.
     seed: 42
-    time: "18:00:00"                # same budget as MA-700-verbatim-llama1b-ins;
-                                    # the adapter is a tiny fraction of total
-                                    # FLOPs next to the encoder/decoder, so
-                                    # top-2-of-8 routing shouldn't move wall
-                                    # clock meaningfully. Unmeasured -- watch
-                                    # the first run's step rate.
+    time: "60:00:00"                 # 10x MA-700-llama1b-ins's measured
+                                    # 06:00:00/epoch (same linear scaling the
+                                    # 3-epoch sibling used: 3x6h=18h). Within
+                                    # acc_ehpc's 3-day cap with ~12h margin.
+                                    # Unmeasured for 10 epochs -- watch the
+                                    # first run's step rate.
 
   - id: MA-700-llama1b-base
     stage: MA
