@@ -3,7 +3,9 @@
 **Settled (2026-09-14/15):** the August MA baseline is a failed alignment and
 is not a lower bound; recipe work precedes every comparison; MA-stage
 generative WER is the selection metric for MA-stage hyperparameters; the
-`stack_factor` option is the one code change scheduled before the screen.
+`stack_factor` option is the one code change scheduled before the screen;
+the August failure is a coarse-feature plateau, not ignored audio (measured
+2026-09-15, §1a).
 **Open:** the recipe values themselves (decided by the runs below).
 **Owner:** PI decides the recipe at the week-2 gate.
 
@@ -13,13 +15,17 @@ The MA arms run in August (five languages, 700 h each, w2v-BERT 2.0 frozen,
 MLP adapter trainable, decoder frozen, adapter LR 2e-5, effective batch
 4800 s, one epoch ≈ 2,600 optimizer steps) ended with:
 
-- eval loss 2.6–3.1 nats per token, roughly what a 1B text LM scores on
-  lowercase unpunctuated transcripts with no audio;
+- eval loss 2.6–3.1 nats per token, which is 1.1–1.5 nats *below* the
+  measured no-audio floor of 4.0–4.3 (§1a): the audio was used, but only
+  coarsely;
 - generative WER 1.10–1.16, insertions outnumbering reference words;
 - hypotheses fluent and in-domain but unrelated to the audio, sometimes in
   the wrong language.
 
-The adapter learned "emit fluent text in the right register" and stopped.
+The adapter learned coarse audio-conditioned information (language
+identity, register, utterance length, perhaps partial lexical content),
+worth 1.1–1.5 nats, and stopped short of the frame-to-token alignment that
+transcription needs: a coarse-feature plateau.
 A 10× longer run (MoE adapter, verbatim prompt, same LR) left that plateau
 only after ~9,000 h seen, dropping from ~3.6 to ~2.6: the alignment
 transition, arriving very late.
@@ -42,8 +48,9 @@ Suspects, in order of the evidence:
 Two controls settle the diagnosis without training:
 
 1. **The no-audio floor.** Score the frozen backbone on the eval transcripts
-   with the same chat prompt and no audio (or shuffled audio). If MA loss
-   equals the floor, audio was ignored.
+   with the same chat prompt and no audio. **Measured 2026-09-15 (§1a): the
+   floor is 1.1–1.5 nats above the MA loss, so audio was not ignored.** What
+   the runs below must show is fine alignment, which loss alone cannot.
 2. **The text prior per language** (`02-backbones.md` §3), which also gives
    the ST upper bound through the cascade oracle.
 
@@ -87,6 +94,10 @@ progress).
 the interpretation the week-2 gate reads section 1 through. Board entry
 with the full numbers is at the top of `board.md`.
 
+*Strategy session, 2026-09-15:* §1's diagnosis, the Settled block and the
+step-0 interpretation rules were updated to this reading (a coarse-feature
+plateau; loss is read together with WER). PI confirmation still pending.
+
 ## 2. Step 0 — LibriSpeech
 
 Everything as in the campaign except the data: w2v-BERT 2.0 frozen, MLP
@@ -128,6 +139,10 @@ hypothesis/reference length ratio (so "does not stop" is distinguishable from
   epoch. SLAM-ASR's 2% used an ASR-fine-tuned encoder and a 7B decoder; a
   self-supervised w2v-BERT into a 1B decoder will land higher, and that is
   fine.
+- Loss is read together with WER, never alone. A working frozen-LLM ASR
+  should reach an eval loss well under 1 nat per token on dev-clean,
+  plausibly 0.2–0.5. A run whose loss drops while WER stays above 0.5 is
+  repeating the August coarse-signal plateau (§1a), not fixing the recipe.
 
 ## 3. The five-language interface screen (week 2)
 

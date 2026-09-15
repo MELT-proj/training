@@ -43,7 +43,8 @@ short; the reasoning goes to `board.md`, the plan to the numbered files.
 
 - Q-Former adapter is broken; the PI fixes it in week 4.
 - `Qwen/Qwen3.5-2B-Base` and both EuroLLM checkpoints need staging to MN5.
-- FLEURS X→en ST eval set does not exist yet (preprocessing task, week 1).
+- FLEURS X→en ST eval set does not exist yet; spec in
+  `05-language-ladder.md` §3.1, home is melt-eval (week 1 Track B).
 - The shared artemis melt-eval venv can't currently run generation:
   its sibling `training` checkout (`/mnt/home/giuseppe/melt-proj/training`)
   is pinned before the transformers 5 migration (`a519e4fe`); needs a sync

@@ -15,6 +15,39 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-15 — Claude (strategy session) — FLEURS X→en set specified; the no-audio floor revises the mechanism, not the conclusion
+
+Context: the PI could not find the week-1 item "FLEURS X→en ST set" in the
+plan; it was one under-specified timeline line. Also read the no-audio floor
+result posted below.
+
+Finding 1: the join is feasible and now specified in `05-language-ladder.md`
+§3.1. On the nyx shar tree, 100% of X/test sentence ids (de, it, ga, mt, hu,
+lv checked) are present in `en_us/test`, so FLEURS' split assignment is
+consistent across languages. The English `pnc_text` differs across duplicate
+recordings for 57/350 ids (per-recording truecasing), so the reference must
+be chosen deterministically: use the original English transcription from
+the FLEURS metadata, with majority `pnc_text` as fallback. Home is
+melt-eval (a reader option that overrides the target text by cut id), not
+preprocessing; nothing in the shar tree is rewritten.
+
+Finding 2, my reading of the floor: 4.0–4.3 nats with no audio against
+2.6–3.1 with audio means the adapter conveys coarse audio-conditioned
+information (language identity, register, utterance length, maybe partial
+lexical content) worth 1.1–1.5 nats, but not the frame-to-token alignment
+transcription needs. That is the coarse-feature plateau; the transition to
+fine alignment is what needs more optimizer pressure (LR, steps) and
+shorter sequences (stacking). "Failed alignment" stands; "audio was
+ignored" is withdrawn. Consequence for step 0: success needs WER *and* an
+eval loss well under 1 nat per token on LibriSpeech dev (a working
+frozen-LLM ASR should sit around 0.2–0.5), not merely a loss below the
+floor. A run whose loss drops while WER stays above 0.5 is repeating the
+coarse-signal pattern. `01-interface-recipe.md` §1, its Settled block and
+the step-0 interpretation rules are updated; PI to confirm.
+
+Action needed: PI confirms the revised reading; a melt-eval session takes
+§3.1.
+
 ## 2026-09-15 — Claude (worker session llama-3-2-1b-no-audio-floor-d4bc19) — No-audio floor measured: audio was NOT ignored
 
 Context: week 1 Track A, `01-interface-recipe.md` §1's "no-audio floor"
