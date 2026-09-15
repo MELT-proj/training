@@ -14,6 +14,7 @@ agent picking it up cold. Read it top to bottom once, then keep
 
 | file | what it holds |
 |---|---|
+| `agent-protocol.md` | the rules every session follows: machines, experiments, code, and how to record work; read before touching anything |
 | `timeline.md` | week-by-week plan with dates, per-track TODO lists, expected outcomes, gates |
 | `00-status.md` | living snapshot: what is running, what is blocked, the next decision |
 | `01-interface-recipe.md` | step 0 (LibriSpeech) and the five-language interface screen: LR, batch, frame stacking, prompt |
