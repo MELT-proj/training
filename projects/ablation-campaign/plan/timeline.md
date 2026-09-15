@@ -58,11 +58,15 @@ frame rate) or a multilingual-data problem? Decided by LibriSpeech step 0.
       ([PR #10](https://github.com/MELT-proj/eval/pull/10)): 19,463 samples
       / 63.41 h (test), 2,400 samples / 7.41 h (dev). ga has no `pnc_text`
       on either split -- see the board entry.
-- [ ] **FLEURS X→en ST frozen sets** in melt-eval, per
-      `05-language-ladder.md` §3.1: join each language's test audio with the
-      English FLEURS text of the same sentence id (split assignment verified
-      consistent on 2026-09-15), reference from the original English
-      transcription, zero-copy. Needed for ST on all 24; CoVoST2 covers ten.
+- [x] **FLEURS X→en ST frozen sets** in melt-eval, per
+      `05-language-ladder.md` §3.1 (done 2026-09-15,
+      [PR #11](https://github.com/MELT-proj/eval/pull/11)): join each
+      language's test audio with the English FLEURS text of the same
+      sentence id, reference from the original English transcription,
+      zero-copy. `fleurs24-st-xen-test` 18,816 samples/61.63 h (23 locales,
+      zero dropped), `fleurs24-st-xen-dev` 2,300 samples/7.14 h (100/lang).
+      CoVoST2 covers ten of the 24 for cross-corpus comparison. See the
+      board entry.
 - [ ] **Stage models on MN5** over `mn5transfer`: `Qwen/Qwen3.5-2B-Base`
       (absent from the artemis cache on 2026-09-15), `utter-project/EuroLLM-1.7B`,
       `utter-project/EuroLLM-1.7B-Instruct`. Confirm the EuroLLM ids on the Hub

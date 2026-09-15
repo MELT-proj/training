@@ -3,7 +3,7 @@
 Update this file whenever something starts, finishes, or blocks. Keep it
 short; the reasoning goes to `board.md`, the plan to the numbered files.
 
-**Last updated:** 2026-09-15, evening (no-audio floor measured; FLEURS-24 ASR frozen sets built).
+**Last updated:** 2026-09-15, night (FLEURS X→en ST frozen sets built).
 **Current week:** week 1 of `timeline.md` (2026-09-14 to 2026-09-20).
 
 ## Running on MN5
@@ -36,15 +36,23 @@ short; the reasoning goes to `board.md`, the plan to the numbered files.
 - FLEURS-24 ASR frozen sets in `melt-eval`: full `test` (19,463 samples,
   63.41 h, all 24 EU languages) and a 100/lang `validation` dev subset
   (2,400 samples, 7.41 h). Branch `claude/fleurs24-asr-frozen-sets` in
-  `melt-eval`, PR #10 open against `main`. See the board entry -- ga
-  (Irish) has no `pnc_text` on either split and falls back to plain text.
+  `melt-eval`, PR #10, **merged** 2026-09-15. ga (Irish) has no `pnc_text`
+  on either split and falls back to plain text.
+- FLEURS X→en ST frozen sets in `melt-eval` (`05-language-ladder.md` §3.1):
+  `fleurs24-st-xen-test` (18,816 samples, 61.63 h, 23 locales, zero
+  dropped) and `fleurs24-st-xen-dev` (2,300 samples, 7.14 h, 100/lang).
+  New `reference_map` reader option joins in the English FLEURS text by
+  sentence id. Branch `claude/fleurs-x-to-en-st` in `melt-eval`,
+  [PR #11](https://github.com/MELT-proj/eval/pull/11) open against `main`.
+  See the board entry -- one `cs_cz` sentence id has a PNC-pass leak
+  (unrelated to this set's correctness), flagged for the preprocessing
+  repo.
 
 ## Blocked / waiting
 
 - Q-Former adapter is broken; the PI fixes it in week 4.
 - `Qwen/Qwen3.5-2B-Base` and both EuroLLM checkpoints need staging to MN5.
-- FLEURS X→en ST eval set does not exist yet; spec in
-  `05-language-ladder.md` §3.1, home is melt-eval (week 1 Track B).
+- PR #11 (FLEURS X→en ST frozen sets, melt-eval) awaiting review/merge.
 - The shared artemis melt-eval venv can't currently run generation:
   its sibling `training` checkout (`/mnt/home/giuseppe/melt-proj/training`)
   is pinned before the transformers 5 migration (`a519e4fe`); needs a sync
@@ -53,7 +61,6 @@ short; the reasoning goes to `board.md`, the plan to the numbered files.
   `Wav2Vec2BertConfig`; all of `test_processing_melt.py`), likely
   transformers version skew; background tasks queued, not blocking week 1.
 - PR #126 (stack_factor) awaiting review/merge.
-- PR #10 (FLEURS-24 frozen sets, melt-eval) awaiting review/merge.
 - **No-audio floor result needs PI review**: contradicts the "audio was
   ignored" reading in `01-interface-recipe.md` §1 (see §1a and the
   2026-09-15 board entry). Does not block the LibriSpeech step-0 runs, but
