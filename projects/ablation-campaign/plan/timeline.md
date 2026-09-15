@@ -50,9 +50,12 @@ frame rate) or a multilingual-data problem? Decided by LibriSpeech step 0.
       encoder frames; `fc1` input becomes k × encoder width; masks and length
       bookkeeping follow). Unit tests. Tag into `EXP_NAME`.
       *Outcome:* frame rate becomes an axis available to every adapter.
-- [ ] **FLEURS-24 ASR frozen sets** in melt-eval: test split for all 24 EU
+- [x] **FLEURS-24 ASR frozen sets** in melt-eval: test split for all 24 EU
       languages, plus a small dev subset (≈100 utterances per language) for
-      in-training generative eval.
+      in-training generative eval. Done 2026-09-15
+      ([PR #10](https://github.com/MELT-proj/eval/pull/10)): 19,463 samples
+      / 63.41 h (test), 2,400 samples / 7.41 h (dev). ga has no `pnc_text`
+      on either split -- see the board entry.
 - [ ] **FLEURS X→en ST set construction** started in the preprocessing repo:
       join each language's test audio with the English FLEURS text of the same
       sentence id. Needed for ST on all 24; CoVoST2 covers only ten.
