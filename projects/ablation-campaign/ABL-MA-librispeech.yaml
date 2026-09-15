@@ -1,0 +1,333 @@
+# MELT Training Configuration -- LibriSpeech step 0 (plan/01-interface-recipe.md §2)
+# Following NeMo SpeechLM2 configuration structure
+#
+# Diagnoses whether the August MA recipe (adapter LR 2e-5, effective batch
+# 4800 s) or the recipe's step budget is why the campaign's multilingual MA
+# arms never left the "fluent but unrelated to the audio" plateau. Everything
+# here is the campaign's own architecture/data convention EXCEPT the data:
+# w2v-BERT 2.0 frozen, MLP adapter trainable, Llama-3.2-1B-Instruct frozen,
+# llama3 chat template, audio-only prompt, max_duration 60 / max_tokens 400 --
+# swapped from the five-language ASR mixture to LibriSpeech's three train
+# splits (clean/train.100 + clean/train.360 + other/train.500, ~961 h
+# measured, matching the ~960 h the plan quotes). L1-L4 (and L5, a second
+# seed of the best of L2-L4) vary only `optimization.adapter_lr` and the
+# `batch_duration`/`gradient_accumulation_steps` pair via the campaign.yaml
+# grid rows -- see that file's `MA-librispeech-l*` arms. Nothing else in this
+# file is a per-arm knob.
+#
+# Hand-written rather than rendered by build_campaign_config.py: that script
+# renders the Italian-anchored, N-language reference-matched mixture, which
+# LibriSpeech (one language, one corpus, fixed public splits) does not fit.
+# Hours/cuts/bucket bins below were measured directly from the shar tree with
+# infra/compute_mix_weights.py's shard_seconds/shar_manifest_files and
+# infra/bucket_bins.py's estimate_bins_from_durations (2026-09-15, nyx;
+# num_buckets 30 to match every other ABL-*.yaml). All 281,241 train cuts and
+# 5,567 validation cuts fall inside [0.5, 60] s already, so max_duration 60
+# drops nothing here; num_tokens tops out at 201 (p99 68), so max_tokens 400
+# is likewise non-binding -- LibriSpeech is not why either filter would ever
+# trigger, it is here only because "everything as in the campaign" applies.
+#
+# Usage:
+#   python src/train.py --config projects/ablation-campaign/ABL-MA-librispeech.yaml
+#   python3 projects/ablation-campaign/campaign.py run MA-librispeech-l1
+
+# =============================================================================
+# Run Configuration (non-TrainingArguments settings)
+# =============================================================================
+run:
+  exp_name: ABL-MA-librispeech
+  dry_run: false
+  # Same rationale as ABL-MA-700-asr.yaml: a worst-case forward+backward at
+  # max_duration/min_duration before step 1, so an OOM surfaces in the first
+  # minute rather than mid-run.
+  memory_preallocation: true
+
+# =============================================================================
+# Model Configuration
+# =============================================================================
+model:
+  encoder:
+    name: facebook/w2v-bert-2.0
+    freeze: true
+    max_audio_seq_len: 1500 # for frames of 20ms, this is 30s
+
+  decoder:
+    name: meta-llama/Llama-3.2-1B-Instruct
+    attn_implementation: flash_attention_2
+    # No bos_token here: melt/training/setup.py reads only eos_token and
+    # pad_token from this block. Llama's tokenizer already supplies
+    # <|begin_of_text|>.
+    #
+    # <|eot_id|> is Llama 3's turn terminator and lands inside the loss under
+    # the llama3 boundary config, so the model learns to stop. Do NOT use
+    # <|endoftext|>: it is absent from Llama's vocabulary.
+    eos_token: <|eot_id|>
+    # The pad slot Meta reserved for exactly this, so nothing grows the vocab.
+    pad_token: <|finetune_right_pad_id|>
+    audio_token: <|audio|>
+    audio_bos_token: <|audio_bos|>
+    audio_eos_token: <|audio_eos|>
+    freeze: true
+
+  adapter:
+    freeze: false
+    _type: mlp
+    # stack_factor default (1, 50 Hz) at step 0; the five-language screen
+    # (week 2) is what crosses it against 4.
+#   num_adapter_layers: 2
+#   adapter_kernel_size: 3
+#   adapter_stride: 2
+
+  ckpt: null  # Path to checkpoint to resume from
+
+# =============================================================================
+# Data Configuration
+# =============================================================================
+data:
+  sample_rate: 16000
+  # MA on an *instruct* backbone runs through the chat template with NO task
+  # instruction -- the user turn carries only the audio.
+  apply_chat_template: true
+  chat_template_config: llama3
+  prompt_template_selection: custom
+  prompt_template: "{audio_token}"
+  strict_text_field: true
+
+  train_ds:
+    # Measured 2026-09-15 (infra/compute_mix_weights.py, nyx): 100.591 +
+    # 363.606 + 496.858 h. All 281,241 cuts fall inside [0.5, 60] s already.
+    total_hours: 961.06
+    total_cuts: 281241
+    force_estimate: false
+
+    input_cfg:
+      # LibriSpeech en: 961.06 h across its three public train splits, mixed
+      # by their measured hours (not equal-weighted -- there is only one
+      # language here, so this is the whole train_ds, unlike the campaign's
+      # per-language groups).
+      #
+      # infra/check_training_config.py's W3 FAILs on these weights: it checks
+      # every mixture against the two-tier alpha/beta corpus-balancing policy
+      # (compute_mix_weights.py), which exists to keep one large *cross-corpus*
+      # source (e.g. YODAS) from swamping a smaller one within a language.
+      # That policy does not apply here -- clean/train.100, clean/train.360
+      # and other/train.500 are three splits of the SAME corpus/domain
+      # (LibriVox audiobook readings), not competing corpora, so weighting
+      # them by their plain measured hours (equivalent to concatenating all
+      # three and sampling uniformly by duration) is the right mixture, not a
+      # bug the alpha/beta re-emit would fix. Deliberate deviation, not the
+      # tool's known B3/C4 false positives -- do not re-emit this file with
+      # compute_mix_weights.py.
+      - type: group
+        weight: 1.00000000
+        tags:
+          task: asr
+          lang: en
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/train.100
+            weight: 0.10466727
+            tags:
+              task: asr
+              lang: en
+              text_field: custom.pnc_text
+            # 100.59 h of clean/train.100
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/train.360
+            weight: 0.37834047
+            tags:
+              task: asr
+              lang: en
+              text_field: custom.pnc_text
+            # 363.61 h of clean/train.360
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/other/train.500
+            weight: 0.51699226
+            tags:
+              task: asr
+              lang: en
+              text_field: custom.pnc_text
+            # 496.86 h of other/train.500
+
+    # Batch settings
+    batch_size: null  # Use batch_duration instead for dynamic batching
+    # 150, same headroom rationale as ABL-MA-700-asr.yaml at max_duration 60
+    # (see that file's history comment): with the campaign's default
+    # trainer.gradient_accumulation_steps: 4 at world_size 8 this is the
+    # 4800 s effective batch L1/L2 run at (the August recipe's own value).
+    # L3/L4 override gradient_accumulation_steps to 1 for the 1200 s point
+    # instead of changing this -- see campaign.yaml's MA-librispeech-l* rows.
+    batch_duration: 150  # seconds of audio per batch
+    # Deliberately unset, same reasoning as ABL-MA-700-asr.yaml: without it
+    # batch_duration means real audio seconds and estimate_steps_per_epoch's
+    # inflation factor is exactly 1.0.
+    quadratic_duration: null
+
+    # Bucketing for efficient batching
+    lhotse_sampler_type: dynamic_bucketing  # One among: dynamic_bucketing, dynamic, bucketing
+    num_buckets: 30
+    buffer_size: 10000
+    # Measured with infra/bucket_bins.py's estimate_bins_from_durations
+    # against the real train_ds distribution (nyx, 2026-09-15; all 281,241
+    # cuts, longest 29.74 s -- LibriSpeech never approaches the 60 s cap, so
+    # the top bucket is far tighter than the multilingual mixture's).
+    # infra/check_training_config.py's C4 warns the top bin (16.36 s) is
+    # narrower than the 1% tail above it (up to 29.74 s): a 1.8x pad-waste
+    # spread in that one bucket, from the equal-total-duration-per-bucket
+    # algorithm putting most of 30 buckets where 99% of the mass is. Same
+    # shape of tradeoff as ABL-MA-700-asr.yaml's accepted 1.54x top bucket,
+    # not an OOM risk (batch_duration 150 is far under the ~62 GB peak that
+    # caused the incident documented in that file). RE-MEASURE if
+    # max_duration/max_tokens changes.
+    bucket_duration_bins: [5.73, 7.91, 9.54, 10.71, 11.55, 12.13, 12.57, 12.92, 13.21, 13.46, 13.68, 13.87, 14.04, 14.21, 14.37, 14.51, 14.65, 14.78, 14.91, 15.04, 15.16, 15.28, 15.4, 15.53, 15.64, 15.77, 15.9, 16.07, 16.36]
+
+    # Sampling
+    shuffle: true
+    drop_last: false
+    seed: 42
+    shard_seed: 42
+
+    # Duration filtering -- campaign convention (ABL-MA-700-asr.yaml). Both
+    # are non-binding here: every LibriSpeech train cut is 0.5-29.74 s and
+    # every num_tokens value is <=201 (measured), well inside 400.
+    min_duration: 0.5
+    max_duration: 60.0
+    max_tokens: 400
+
+    # DataLoader settings
+    num_workers: 1
+    pin_memory: true
+    prefetch_factor: 2
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+  validation_ds:
+    # Repeated deliberately -- eval does not inherit this from data: (only the
+    # four chat-template keys are), so without it validation silently falls
+    # back to the raw, uppercase, unpunctuated supervision text.
+    strict_text_field: true
+
+    # Two named sets (dev_clean, dev_other) matching plan/01-interface-recipe.md
+    # §5's results table columns. 200/set, same in-training generative-eval
+    # cap as the campaign's five-language config.
+    max_samples: 200
+    # Measured 2026-09-15: clean/validation 5.388 h + other/validation 5.121 h.
+    total_hours: 10.51
+    total_cuts: 5567
+    force_estimate: false
+
+    input_cfg:
+      - type: lhotse_shar
+        name: dev_clean
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/validation
+        tags:
+          task: asr
+          lang: en
+          text_field: custom.pnc_text
+        # 5.39 h
+      - type: lhotse_shar
+        name: dev_other
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/other/validation
+        tags:
+          task: asr
+          lang: en
+          text_field: custom.pnc_text
+        # 5.12 h
+    batch_size: null
+    batch_duration: 300.0
+    lhotse_sampler_type: dynamic_bucketing
+    num_buckets: 30
+    # Measured the same way as train_ds's bins, over the 5,567 validation cuts
+    # (longest 35.16 s).
+    bucket_duration_bins: [2.65, 3.12, 3.56, 4.0, 4.41, 4.77, 5.14, 5.53, 5.92, 6.27, 6.64, 7.03, 7.46, 7.88, 8.35, 8.79, 9.29, 9.75, 10.23, 10.77, 11.48, 12.21, 13.26, 14.15, 15.29, 16.35, 17.8, 20.39, 25.97]
+    shuffle: false
+    drop_last: false
+    min_duration: 0.5
+    max_duration: 60.0
+    num_workers: 1
+    pin_memory: true
+    prefetch_factor: 1
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+# =============================================================================
+# Trainer Configuration
+# =============================================================================
+trainer:
+  output_dir: ${oc.env:OUTPUT_DIR}/librispeech_step0
+  overwrite_output_dir: true
+  seed: 42
+  do_train: true
+  do_eval: true
+  eval_on_start: true
+  average_tokens_across_devices: true
+
+  # Batch and accumulation
+  per_device_train_batch_size: -1  # Handled by Lhotse, set to 1
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 4
+
+  # LR schedule
+  lr_scheduler_type: cosine
+  # plan/01-interface-recipe.md §2: warmup moves from a fixed step count to a
+  # ~3% ratio so it stays comparable across L1/L2's 4800 s effective batch and
+  # L3/L4's 1200 s one (4x the optimizer steps for the same audio). HF's
+  # Trainer.get_warmup_steps only reads warmup_ratio when warmup_steps <= 0.
+  warmup_steps: 0
+  warmup_ratio: 0.03
+
+  # Duration
+  num_train_epochs: 1
+  max_steps: -1
+
+  # Logging
+  logging_strategy: steps
+  logging_steps: 2
+  report_to: wandb
+
+  # Evaluation -- eval_steps/save_steps below are placeholders; campaign.py
+  # always derives and overrides both from the arm's effective batch/steps
+  # (see plan_arm.py's derive_steps), so these values never actually train.
+  eval_strategy: steps
+  eval_steps: 100
+  batch_eval_metrics: true
+
+  # Evaluation decodes with generate() -- greedy, at most this many *new*
+  # tokens.
+  predict_with_generate: true
+  generation_max_length: 256
+  generation_num_beams: 1
+
+  # Checkpointing
+  save_strategy: steps
+  save_steps: 1000
+  save_total_limit: 5
+
+  # Performance
+  bf16: true
+  group_by_length: false  # Handled by Lhotse bucketing
+  dataloader_num_workers: 4  # Eval-only knob (train workers come from data.train_ds.num_workers)
+  remove_unused_columns: false
+  ddp_find_unused_parameters: false
+
+  max_grad_norm: 1.0
+
+evaluation:
+  compute_metrics: true
+  enable_whisper_normalization: true
+  # Reference/hypothesis pairs printed to stdout and logged to W&B each eval.
+  # 0 disables.
+  log_num_samples: 10
+
+optimization:
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+
+  # encoder_lr: 6e-6 # Not used since it's frozen
+  # decoder_lr: 2e-5 # Not used since it's frozen
+  # L1's own value (the August recipe, run as the control). L2-L4 override
+  # this per campaign.yaml's MA-librispeech-l* rows.
+  adapter_lr: 2e-5
+  min_lr_scale: 0.1

@@ -113,6 +113,45 @@ arms:
     checkpoint_count: 2
     time: "28:00:00"
 
+  # ------------------------------------------------- LibriSpeech step 0 (MA)
+  # plan/01-interface-recipe.md §2: is the August recipe (adapter LR 2e-5,
+  # effective batch 4800 s) or its step budget why the multilingual MA arms
+  # never leave the "fluent but unrelated to audio" plateau? L1 is the
+  # control; L2 isolates LR; L3 adds 4x the optimizer steps at the same LR;
+  # L4 pushes LR further at L3's step budget. L5 (second seed of the best of
+  # L2-L4) is added once that winner is known -- see the interpretation rules
+  # in the plan file. ~7 GPU-h each at the measured MA rate (~1,000
+  # audio-s/wall-s on 8 GPUs) for one ~961 h epoch.
+  - id: MA-librispeech-l1
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 2e-5      # the August recipe, as control (== config default)
+    seed: 42
+    time: "02:00:00"
+
+  - id: MA-librispeech-l2
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 2e-4      # LR alone, same 4800 s effective batch as L1
+    seed: 42
+    time: "02:00:00"
+
+  - id: MA-librispeech-l3
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 2e-4      # LR plus 4x more optimizer steps than L1/L2
+    grad_accum_steps: 1   # batch_duration 150 x 1 x 8 = 1200 s effective batch
+    seed: 42
+    time: "02:00:00"
+
+  - id: MA-librispeech-l4
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 1e-3      # upper end of the LR range, L3's step budget
+    grad_accum_steps: 1   # 1200 s effective batch, same as L3
+    seed: 42
+    time: "02:00:00"
+
   # --------------------------------------------------------------- IFT (stage 2)
   - id: IFT-700-llama1b-ins
     stage: IFT
