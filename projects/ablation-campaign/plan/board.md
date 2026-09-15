@@ -15,6 +15,61 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-15 — Claude (worker session llama-3-2-1b-no-audio-floor-d4bc19) — No-audio floor measured: audio was NOT ignored
+
+Context: week 1 Track A, `01-interface-recipe.md` §1's "no-audio floor"
+control. Wrote `no_audio_floor.py` + `no_audio_floor.sbatch` (new,
+committed): scores a frozen backbone on the MA validation transcripts,
+same chat-templated prompt and label masking the real collator uses, but
+`input_features=None` so no audio is ever read from disk (reuses the
+collator's own text/tag/template helpers directly instead of
+`MELTMapDataset`/`MELTDataCollator`, which call `cut.load_audio()`
+unconditionally). Validated with a CPU smoke test (8 cuts/lang, sdpa) inside
+the training container on nyx before spending cluster time. First submitted
+on artemis (job 331970); cancelled after ~2h queued behind another user's
+two jobs occupying all 4 GPUs on the only h100 node. Re-submitted on MN5
+under `acc_debug` QOS (job 45888659), completed in 1m20s. Both clusters'
+shared checkouts were left untouched — pushed the branch as a new ref and
+ran from a `git worktree`, removed after.
+
+Finding: scored frozen Llama-3.2-1B-Instruct on the exact 200-cuts/language
+eval subset (same seed) `MA-700asr-w2vbF-llama1bInsF-mlpT-s42-8g-md60`
+uses, and pulled that arm's own final (step 2600) `eval_<lang>_loss` from
+its `trainer_state.json` for a like-for-like comparison (confirmed via its
+`resolved_config.json`: `apply_chat_template: true`, `chat_template_config:
+llama3`, so both numbers are on the same eval formatting — the run finished
+2026-08-28, after the 2026-08-09 fix that made eval inherit the chat
+template):
+
+| lang | no-audio floor | MA eval_loss (with audio) | floor − with-audio |
+|---|---|---|---|
+| en | 4.073 | 2.948 | +1.125 |
+| de | 4.312 | 3.123 | +1.189 |
+| fr | 3.968 | 2.739 | +1.229 |
+| es | 4.040 | 2.659 | +1.381 |
+| it | 4.154 | 2.674 | +1.480 |
+
+**The floor is 1.1–1.5 nats/token *above* the observed MA loss on every
+language, not equal to it.** `01-interface-recipe.md` §1 and `00-status.md`
+both describe the 2.6–3.1 eval loss as "roughly what a 1B text LM scores
+... with no audio" — measured, it is not close; audio conditioning cuts the
+loss by ~3–4.4x in per-token perplexity versus no audio at all. So the
+adapter did not simply learn to ignore the audio and emit fluent filler;
+it learned *something* audio-conditioned that measurably helps next-token
+prediction, just not the right thing for correct transcription (WER stayed
+1.10–1.16, hypotheses fluent but unrelated to the reference). I've added
+the numbers and this reading to `01-interface-recipe.md` §1a rather than
+touching the Settled block myself.
+
+Action needed: PI review of the diagnosis in light of this — it doesn't
+overturn "the August baseline is a failed alignment" (WER is still
+catastrophic) but it does overturn "audio was ignored" as the explanation,
+which changes what a passing LibriSpeech screen run should look like (a run
+that only drops eval loss without moving WER may be repeating this same
+coarse-signal pattern rather than fixing the recipe).
+
+---
+
 ## 2026-09-15 — Claude (worker session fleurs-24-asr-frozen-sets) — FLEURS-24 ASR frozen sets built
 
 Context: week 1 Track B, `05-language-ladder.md` §3 / `timeline.md` week 1
