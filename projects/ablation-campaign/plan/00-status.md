@@ -8,6 +8,15 @@ short; the reasoning goes to `board.md`, the plan to the numbered files.
 
 ## Running on MN5
 
+- LibriSpeech step 0 (`01-interface-recipe.md` §2), jobs 45893574/76/77/78:
+  `MA-librispeech-l1` (adapter LR 2e-5, effective batch 4800 s, the August
+  recipe as control), `l2` (LR 2e-4, 4800 s), `l3` (LR 2e-4, 1200 s), `l4`
+  (LR 1e-3, 1200 s). Submitted 2026-09-15 from `claude/librispeech-step0-
+  l1-l4-60d122`; new base config `ABL-MA-librispeech.yaml` (hand-written,
+  not `build_campaign_config.py`-rendered -- LibriSpeech is one corpus, not
+  the campaign's N-language reference-matched mixture). All four queued
+  `acc_ehpc`, ~7 GPU-h/~1h wall each once scheduled. L5 (second seed of the
+  best of l2-l4) follows once these four have generative WER.
 - `MA-700asr-w2vbF-llama1bInsF-moeT-ep10-ttverbatim-…` — 10-epoch MA with the
   MoE adapter and the verbatim prompt, adapter LR 2e-5. Submitted 2026-09-13.
   Observed: loss plateau then a smooth drop from ~3.6 to ~2.6 after ~9,000 h
