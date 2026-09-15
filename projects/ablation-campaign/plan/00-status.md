@@ -3,7 +3,7 @@
 Update this file whenever something starts, finishes, or blocks. Keep it
 short; the reasoning goes to `board.md`, the plan to the numbered files.
 
-**Last updated:** 2026-09-15 (session that created this folder).
+**Last updated:** 2026-09-15, evening (stack_factor landed on a worker branch).
 **Current week:** week 1 of `timeline.md` (2026-09-14 to 2026-09-20).
 
 ## Running on MN5
@@ -25,12 +25,19 @@ short; the reasoning goes to `board.md`, the plan to the numbered files.
 - MA-700 Llama-Instruct (August recipe): WER 1.10–1.16, eval loss 2.6–3.1.
 - Data audit for 24 EU languages plus ru/uk/ca: `data/hours_by_language.csv`.
 - Adapter sizes measured: MLP 6.30M, Conformer 27.28M, MoE 33.57M (8.39M active).
+- `stack_factor` for the MLP adapter, with tests and the `-skN` EXP_NAME tag:
+  branch `claude/mlp-adapter-stack-factor-13e900`, commit `5822129`, not yet
+  pushed or merged. See the board entry.
 
 ## Blocked / waiting
 
 - Q-Former adapter is broken; the PI fixes it in week 4.
 - `Qwen/Qwen3.5-2B-Base` and both EuroLLM checkpoints need staging to MN5.
 - FLEURS X→en ST eval set does not exist yet (preprocessing task, week 1).
+- Two pre-existing test failures on `main` (sdpa propagation into
+  `Wav2Vec2BertConfig`; all of `test_processing_melt.py`), likely
+  transformers version skew; background tasks queued, not blocking week 1.
+- PR decision pending for the stack_factor branch (PI).
 
 ## Next decisions, in order
 

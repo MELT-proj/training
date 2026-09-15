@@ -46,7 +46,7 @@ frame rate) or a multilingual-data problem? Decided by LibriSpeech step 0.
       feeds the Fondue feasibility table in `06-fondue.md`.
 
 ### Track B — preparation
-- [ ] **`stack_factor` for the MLP adapter** (concatenate k consecutive
+- [x] **`stack_factor` for the MLP adapter** (done 2026-09-15, branch `claude/mlp-adapter-stack-factor-13e900`, awaiting PR) (concatenate k consecutive
       encoder frames; `fc1` input becomes k × encoder width; masks and length
       bookkeeping follow). Unit tests. Tag into `EXP_NAME`.
       *Outcome:* frame rate becomes an axis available to every adapter.

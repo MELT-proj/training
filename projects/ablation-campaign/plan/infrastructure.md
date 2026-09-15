@@ -100,7 +100,7 @@ anything time-sensitive.
   grid against SLURM and the output dirs; `plan` prints the exact command;
   `run` submits and appends to `arms.tsv` (timestamp, `EXP_NAME`, job id,
   command). `arms.tsv` is the ledger and is committed; do not hand-edit.
-- `EXP_NAME` grammar: `{STAGE}-{data}-{encoder}{F|T}-{decoder}{F|T}[-lora]-{adapter}{F|T}[-bdN][-gaN][-epN][-tt<template>]-{elr}-{dlr}-{lr}-s{seed}-{world}g`.
+- `EXP_NAME` grammar: `{STAGE}-{data}-{encoder}{F|T}-{decoder}{F|T}[-lora]-{adapter}{F|T}[-bdN][-gaN][-skN][-epN][-tt<template>]-{elr}-{dlr}-{lr}-s{seed}-{world}g`.
 - `build_campaign_config.py` renders the data axis (budget × task) from the
   Italian-anchored corpus template; run it where the data is, keep the
   `--cache` file, never train on a `--sample-shards` render.
