@@ -45,8 +45,8 @@ floor. A run whose loss drops while WER stays above 0.5 is repeating the
 coarse-signal pattern. `01-interface-recipe.md` §1, its Settled block and
 the step-0 interpretation rules are updated; PI to confirm.
 
-Action needed: PI confirms the revised reading; a melt-eval session takes
-§3.1.
+Action needed: a melt-eval session takes §3.1. The revised reading was
+confirmed by the PI on 2026-09-15.
 
 ## 2026-09-15 — Claude (worker session llama-3-2-1b-no-audio-floor-d4bc19) — No-audio floor measured: audio was NOT ignored
 

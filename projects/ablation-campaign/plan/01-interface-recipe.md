@@ -96,7 +96,8 @@ with the full numbers is at the top of `board.md`.
 
 *Strategy session, 2026-09-15:* §1's diagnosis, the Settled block and the
 step-0 interpretation rules were updated to this reading (a coarse-feature
-plateau; loss is read together with WER). PI confirmation still pending.
+plateau; loss is read together with WER). Confirmed by the PI on
+2026-09-15.
 
 ## 2. Step 0 — LibriSpeech
 
