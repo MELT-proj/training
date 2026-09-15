@@ -15,6 +15,57 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-15 — Claude (worker session fleurs-24-asr-frozen-sets) — FLEURS-24 ASR frozen sets built
+
+Context: week 1 Track B, `05-language-ladder.md` §3 / `timeline.md` week 1
+("FLEURS-24 ASR frozen sets in melt-eval"). Branch
+`claude/fleurs24-asr-frozen-sets` in `melt-eval`,
+[PR #10](https://github.com/MELT-proj/eval/pull/10).
+
+Finding / proposal: added `configs/fleurs24-asr-test.yaml` (full FLEURS
+`test`, all 24 EU languages) and `configs/fleurs24-asr-dev.yaml` (~100
+utterances/language from FLEURS `validation`, for the in-training generative
+round). Froze both against the real shar tree: `fleurs24-asr-test` is 19,463
+samples / 63.41 h with zero dropped-no-reference cuts; `fleurs24-asr-dev` is
+2,400 samples / 7.41 h. Copied to
+`/mnt/scratch-artemis/giuseppe/melt-data/eval-sets/{fleurs24-asr-test,fleurs24-asr-dev}/`.
+
+Checked `custom.pnc_text` coverage directly against the shar tree for all 24
+languages, both `test` and `validation` (not previously measured at this
+granularity): **23/24 are 100% covered; ga (Irish) has 0% on both splits**
+and silently falls back to plain, unpunctuated supervision text
+(`get_text_from_cut`, `strict=False`, the training repo's own default). Every
+other language's FLEURS reference is cased and punctuated; Irish's is not.
+Documented in both spec headers rather than worked around -- fixing it is the
+training repo's PNC-backfill/`strict_text_field` decision
+([[num-tokens-and-pnc-text-semantics]], [[silent-text-field-fallback]]), out
+of scope here. Worth remembering when Irish's ladder numbers look
+disproportionately bad or good: part of that could be transcript formatting,
+not the model.
+
+Also found: the shared artemis dev venv
+(`/mnt/scratch-artemis/giuseppe/venvs/melteval`) editable-installs
+`melt-proj` from `melt-eval`'s sibling checkout at
+`/mnt/home/giuseppe/melt-proj/training`, which is pinned at `74c7892`
+(2026-08-19) -- **before** the transformers 5 migration (`a519e4fe`,
+2026-09-01, PR #109). Importing `melt.training` there crashes
+(`ValueError: mutable default <class 'dict'> for field sub_configs`) against
+the venv's transformers 5.16.1. I froze the sets from nyx instead (training
+repo's own `.venv`, current `main`, melt-eval on `PYTHONPATH`) rather than
+touching that checkout, since it has unrelated uncommitted local changes
+(`.github/workflows/ci.yml`, `.gitignore`, `AGENTS.md`, `README.md`) and its
+scratch-side sibling (`/mnt/scratch-artemis/giuseppe/melt-proj-src/melt-eval`,
+on `claude/air-bench-support`) has unrelated in-progress work from another
+session. Did not touch either.
+
+Action needed: PI review/merge PR #10. Before anyone runs `inspect eval`
+(the generation step) against these frozen sets on artemis, sync
+`/mnt/home/giuseppe/melt-proj/training` to `main` (or otherwise past
+`a519e4fe`) -- generation will crash on import otherwise. FLEURS X→en ST set
+construction (the other week-1 Track B eval item) is still open.
+
+---
+
 ## 2026-09-15 — Claude (worker session mlp-adapter-stack-factor-13e900) — stack_factor PR opened
 
 Context: follow-up to the entry directly below, after the PI merged the

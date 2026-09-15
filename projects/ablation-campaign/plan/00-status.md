@@ -3,7 +3,7 @@
 Update this file whenever something starts, finishes, or blocks. Keep it
 short; the reasoning goes to `board.md`, the plan to the numbered files.
 
-**Last updated:** 2026-09-15, evening (stack_factor landed on a worker branch).
+**Last updated:** 2026-09-15, evening (FLEURS-24 ASR frozen sets built).
 **Current week:** week 1 of `timeline.md` (2026-09-14 to 2026-09-20).
 
 ## Running on MN5
@@ -28,16 +28,26 @@ short; the reasoning goes to `board.md`, the plan to the numbered files.
 - `stack_factor` for the MLP adapter, with tests and the `-skN` EXP_NAME tag:
   branch `claude/mlp-adapter-stack-factor-13e900`, PR #126 open against
   `main`. See the board entry.
+- FLEURS-24 ASR frozen sets in `melt-eval`: full `test` (19,463 samples,
+  63.41 h, all 24 EU languages) and a 100/lang `validation` dev subset
+  (2,400 samples, 7.41 h). Branch `claude/fleurs24-asr-frozen-sets` in
+  `melt-eval`, PR #10 open against `main`. See the board entry -- ga
+  (Irish) has no `pnc_text` on either split and falls back to plain text.
 
 ## Blocked / waiting
 
 - Q-Former adapter is broken; the PI fixes it in week 4.
 - `Qwen/Qwen3.5-2B-Base` and both EuroLLM checkpoints need staging to MN5.
 - FLEURS X→en ST eval set does not exist yet (preprocessing task, week 1).
+- The shared artemis melt-eval venv can't currently run generation:
+  its sibling `training` checkout (`/mnt/home/giuseppe/melt-proj/training`)
+  is pinned before the transformers 5 migration (`a519e4fe`); needs a sync
+  to `main` before `inspect eval` will import there. See the board entry.
 - Two pre-existing test failures on `main` (sdpa propagation into
   `Wav2Vec2BertConfig`; all of `test_processing_melt.py`), likely
   transformers version skew; background tasks queued, not blocking week 1.
 - PR #126 (stack_factor) awaiting review/merge.
+- PR #10 (FLEURS-24 frozen sets, melt-eval) awaiting review/merge.
 
 ## Next decisions, in order
 
