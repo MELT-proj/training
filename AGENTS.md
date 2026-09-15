@@ -160,7 +160,7 @@ To run the test suite on `nyx` or `artemis`, you can use:
 ```
 cd ~/melt-proj/training
 singularity exec --bind /mnt/scratch-nyx,/mnt/scratch-artemis \
-  /mnt/scratch-artemis/giuseppe/melt-data/melt_cuda126_lhotse2_td.sif \
+  /mnt/scratch-artemis/giuseppe/melt-data/melt_cuda126.sif \
   bash -c 'source /workspace/venv/bin/activate
     export PYTHONPATH=/mnt/scratch-nyx/giuseppe/container-extras:$PYTHONPATH
     export HF_HOME=/mnt/scratch-artemis/giuseppe/.cache/huggingface
@@ -197,7 +197,7 @@ export SINGULARITYENV_WANDB_MODE=disabled
 singularity exec \
   --bind "$(pwd)":/workspace/training,/mnt/scratch-nyx:/mnt/scratch-nyx,/mnt/scratch-artemis:/mnt/scratch-artemis \
   --pwd /workspace/training \
-  /mnt/scratch-artemis/giuseppe/melt-data/melt_cuda126_lhotse2_td.sif \
+  /mnt/scratch-artemis/giuseppe/melt-data/melt_cuda126.sif \
   bash -lc 'source /workspace/venv/bin/activate 2>/dev/null; python -m pytest tests/ --ignore=tests/integration -q -p no:cacheprovider -rf'
 EOF
 ```

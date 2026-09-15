@@ -109,28 +109,31 @@ read it.
 ### Which container image
 
 **The default is correct — you do not need to set `SINGULARITY_IMG`.** As of
-2026-08-10, `melt_cuda126.sif` is a symlink to the lhotse 2 image:
+2026-09-01, `melt_cuda126.sif` is a symlink to the transformers-5 image:
 
 ```
-melt_cuda126.sif -> melt_cuda126_lhotse2_td.sif
+melt_cuda126.sif -> melt_cuda126_tf5.sif
 ```
 
 so the site-file default resolves to a stack matching `main`:
 
-| image | lhotse | torchdata | works with `main` (≥0.5.0)? |
-|---|---|---|---|
-| `melt_cuda126.sif` → `…_lhotse2_td.sif` | 2.0.0a3 | 0.11.0 | **yes — the default** |
-| `melt_cuda126_lhotse2_td.sif` | 2.0.0a3 | 0.11.0 | yes (same file) |
-| `melt_cuda126_pre-lhotse2-20260804.sif` | 1.32.2 | absent | no — kept for reference only |
-| `melt_cuda126_pre-devel-20260411.sif` | — | — | no — kept for reference only |
+| image | lhotse | torchdata | transformers | works with `main` (≥0.6.2)? |
+|---|---|---|---|---|
+| `melt_cuda126.sif` → `…_tf5.sif` | 2.0.0a3 | 0.11.0 | 5.16.1 | **yes — the default** |
+| `melt_cuda126_tf5.sif` | 2.0.0a3 | 0.11.0 | 5.16.1 | yes (same file) |
+| `melt_cuda126_lhotse2_td.sif` | 2.0.0a3 | 0.11.0 | 4.57.1 | **no — pre-transformers5, superseded 2026-09-01** |
+| `melt_cuda126_pre-transformers5-20260901.sif` | 2.0.0a3 | 0.11.0 | 4.57.1 | no — the image retired by the 2026-09-01 promotion, kept for reference only |
+| `melt_cuda126_pre-lhotse2-20260804.sif` | 1.32.2 | absent | — | no — kept for reference only |
+| `melt_cuda126_pre-devel-20260411.sif` | — | — | — | no — kept for reference only |
 
-`pyproject.toml` pins `lhotse==2.0.0a3` and `torchdata>=0.11`, which only the
-promoted image satisfies. The pre-lhotse2 images are retained deliberately, but
-nothing on `main` runs on them.
-
-The `_lhotse2_td.sif` name still resolves — the campaign scripts under
-`tests/integration/lhotse2_campaign/` reference it directly — so both names
-work and neither costs extra disk.
+`pyproject.toml` pins `transformers>=5.16,<6` (bumped from 4.57.1 in commit
+`47ae271`), which only the promoted image satisfies. Any script or doc that
+still hardcodes `melt_cuda126_lhotse2_td.sif` by name is pinned to the
+pre-transformers5 snapshot and will hit `add_special_tokens` validation
+errors in `melt.training.setup.prepare_processor` (and in
+`tests/test_processing_melt.py`) — use the `melt_cuda126.sif` symlink instead
+so it keeps tracking whatever is currently promoted. The pre-lhotse2 images
+are retained deliberately, but nothing on `main` runs on them.
 
 To pin a specific image (a trial build, or reproducing an old run) override it
 as usual, and verify what you pinned before spending an allocation on it:
@@ -1270,7 +1273,8 @@ from the eval metrics in §B4.
 | `PermissionError: … '/workspace/outputs/<EXP>'` | shared `OUTPUT_DIR` owned by someone else — set your own (§B3) |
 | Permission denied under `/workspace/tmp` | same cause, `TMPDIR_HOST` — set your own (§B3) |
 | `SINGULARITY_IMG not found` | image not shipped, or site-file path is stale |
-| `ModuleNotFoundError: torchdata`, or a lhotse API error | running `main` against a pre-lhotse2 image — unset `SINGULARITY_IMG` to get the default, or point it at `melt_cuda126_lhotse2_td.sif` |
+| `ModuleNotFoundError: torchdata`, or a lhotse API error | running `main` against a pre-lhotse2 image — unset `SINGULARITY_IMG` to get the default, or point it at `melt_cuda126.sif` |
+| `ValueError`/`AssertionError` out of `tokenizer.add_special_tokens` (e.g. `Key extra_special_tokens is not a special token`) | running `main` against a pre-transformers5 image (`melt_cuda126_lhotse2_td.sif` or its `_pre-transformers5-*` alias, transformers 4.57.1) — unset `SINGULARITY_IMG` or point it at `melt_cuda126.sif` (transformers 5.16.1) |
 | Model load fails / tries to reach the Hub | weights not in `$HF_HOME` (§A3) |
 | `CUDA out of memory` during eval | eval batch too large — first batches are worst-case |
 | Output dir "not empty" | add `--trainer.overwrite_output_dir true`, or pick a new `EXP` |
