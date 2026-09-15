@@ -3,7 +3,7 @@
 Update this file whenever something starts, finishes, or blocks. Keep it
 short; the reasoning goes to `board.md`, the plan to the numbered files.
 
-**Last updated:** 2026-09-15, evening (Qwen3.5-2B IFT throughput measured; a completed-but-unrecorded Qwen MA+IFT pair discovered on MN5).
+**Last updated:** 2026-09-16, early hours (Qwen IFT throughput measured at 2 and 8 nodes; 16-node point queued on acc_ehpc, ETA >1 day).
 **Current week:** week 1 of `timeline.md` (2026-09-14 to 2026-09-20).
 
 ## Running on MN5
@@ -38,15 +38,16 @@ short; the reasoning goes to `board.md`, the plan to the numbered files.
   (2,400 samples, 7.41 h). Branch `claude/fleurs24-asr-frozen-sets` in
   `melt-eval`, PR #10 open against `main`. See the board entry -- ga
   (Irish) has no `pnc_text` on either split and falls back to plain text.
-- **Qwen3.5-2B IFT throughput measured** (`06-fondue.md` §2, MN5 job
-  45894977, acc_debug, 30 steps, eval/save off): steady state ~31 s/step
-  at 2 nodes x 4 GPUs, DDP, gradient_checkpointing. Cross-checked against a
-  full production `IFT-700-qwen35-2b-ins` run (job 45685241) that had
-  already completed 2026-09-12, unrecorded: 27.3 s/step whole-epoch
-  average, ~306 GPU-h for the 6,729.85 h arm. Replaces the "46 h budget
-  implies 25,000+" guess with ~15,000-17,000 GPU-h at 2-node topology
-  (extrapolated, no node-scaling correction to Fondue's 8-node topology --
-  see the board entry for what that still leaves open).
+- **Qwen3.5-2B IFT throughput measured** (`06-fondue.md` §2) at 2 nodes
+  (job 45894977: ~31 s/step) and 8 nodes -- Fondue's own planned topology
+  (job 45902184: ~32.3 s/step, essentially flat vs 2-node) -> ~17,800 GPU-h
+  for the ~330K h IFT pool, a directly measured-topology number replacing
+  the old unmeasured "46 h budget implies 25,000+" guess. Cross-checked
+  against a full production `IFT-700-qwen35-2b-ins` run (job 45685241) that
+  had already completed 2026-09-12, unrecorded: 27.3 s/step whole-epoch
+  average, ~306 GPU-h for the 6,729.85 h arm. A 16-node contingency point
+  (job 45902185) is queued on `acc_ehpc` (exceeds `acc_debug`'s 8-node cap),
+  ETA over a day out as of 2026-09-16 -- not blocking, see the board entry.
 
 ## Blocked / waiting
 

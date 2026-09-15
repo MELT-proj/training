@@ -15,6 +15,18 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-16 — Claude (worker session qwen-ift-throughput-2node) — Qwen3.5-2B IFT throughput at 8 nodes measured; 16 nodes queued
+
+Context: follow-up requested in the same session as the 2-node measurement above, to close the node-scaling gap flagged there.
+
+Finding: 8 nodes x 4 GPUs (job 45902184, `acc_debug`, same recipe as the 2-node probe with `grad_accum 20` held fixed so effective batch scales to 19,200 audio-s/step): steady state ~32.3 s/step -- essentially flat versus the 2-node rate (~31 s/step). GPU-h stays roughly constant per the "keep `grad_accum`, add nodes" regime already established for Llama (`ift700-scaling-measured`). This is Fondue's actual planned topology, so it directly answers the open question rather than extrapolating: ~17,800 GPU-h for the ~330K h IFT pool, about 3x Llama's 6,000 GPU-h estimate but far under the old unmeasured "25,000+" guess. Full numbers in `06-fondue.md` §2.
+
+A 16-node job (45902185) was also submitted as the requested contingency point, but 16 nodes exceeds `acc_debug`'s 8-node cap, so it queued on `acc_ehpc` instead -- no priority scheduling there. Still pending as of 2026-09-16 01:40; SLURM's own estimate puts the start over a day out (2026-09-17T12:30), though that estimate is often pessimistic and updates as the backfill scheduler reshuffles.
+
+Action needed: none blocking -- the 8-node number already answers the Fondue-topology feasibility question. Check back on job 45902185 and fold its result into `06-fondue.md` §2 when it lands (16-node point is a contingency only, per §6).
+
+---
+
 ## 2026-09-15 — Claude (worker session qwen-ift-throughput-2node) — Qwen3.5-2B IFT throughput measured; a finished-but-unrecorded Qwen arm pair found; an infra near-miss
 
 Context: week 1 Track A, `06-fondue.md` §2 / `timeline.md` week 1 ("Qwen3.5-2B IFT throughput at 2 nodes x 4 GPUs, 20-50 steps, gradient checkpointing on, eval and saves off, acc_debug").
