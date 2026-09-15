@@ -58,7 +58,10 @@ dataset_id=fleurs-de_en` isolate one language, matching how
 in both config headers.
 
 Environment note for whoever builds the MN5/next melt-eval venv (open Track
-B item this week): `uv pip install --prerelease=allow -e ".[shar,metrics,dev]"`
+B item this week): built a working one at
+`/mnt/scratch-nyx/giuseppe/venvs/melteval-fleurs-x-to-en-st` (nyx only,
+CPU -- reuse it for freezing rather than rebuilding). `uv pip install
+--prerelease=allow -e ".[shar,metrics,dev]"`
 resolved `inspect_ai==0.3.254` but its agent/ACP code path imports a
 third-party `acp` package (`acp.helpers`, `acp.schema`, ...) that is **not**
 declared in `inspect_ai`'s own dependencies and is *not* the `acp-sdk` PyPI
