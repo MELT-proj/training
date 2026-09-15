@@ -1,12 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=no-audio-floor
-#SBATCH --time=00:30:00
-#SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
-#SBATCH --gpus-per-node=1
-#SBATCH --qos=gpu-h100
-#SBATCH --partition=h100
 #SBATCH --output=logs/%x.%j.out
 #
 # One-off diagnostic job (plan/01-interface-recipe.md section 1, week 1
@@ -19,10 +13,23 @@
 # accelerate + train.py for a full training job; this is a single-process
 # forward-only score, nothing here trains or needs DDP/FSDP.
 #
+# Deliberately carries no cluster-specific #SBATCH scheduling flags (time,
+# qos, partition, account, gpus, cpus) -- artemis and MN5 disagree on all of
+# them (MN5 has no h100 partition and allocates acc nodes whole; artemis has
+# no acc_debug QOS). Pass them on the sbatch command line instead, the same
+# way infra/runners/sites/<site>.sh's SBATCH_ARGS does for the real launchers.
+#
 # Usage (from the repo root on the target site, HF_HOME/LOCAL_DATASETS_DIR/
 # OUTPUT_DIR/SINGULARITY_IMG exported the same way sites/<site>.sh does):
 #   mkdir -p logs
-#   sbatch projects/ablation-campaign/no_audio_floor.sbatch [config] [output]
+#   # artemis:
+#   sbatch --time=00:30:00 --gpus-per-node=1 --cpus-per-task=8 \
+#       --qos=gpu-h100 --partition=h100 \
+#       projects/ablation-campaign/no_audio_floor.sbatch [config] [output]
+#   # MN5 (acc_debug: 2h cap, priority 10000 -- schedules immediately):
+#   sbatch --time=00:20:00 --gpus-per-node=1 --cpus-per-task=80 \
+#       --account=epor48 --qos=acc_debug \
+#       projects/ablation-campaign/no_audio_floor.sbatch [config] [output]
 
 set -euo pipefail
 
