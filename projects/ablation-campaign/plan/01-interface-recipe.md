@@ -47,6 +47,46 @@ Two controls settle the diagnosis without training:
 2. **The text prior per language** (`02-backbones.md` §3), which also gives
    the ST upper bound through the cascade oracle.
 
+### 1a. No-audio floor — measured, and it does not match the assumption above
+
+`no_audio_floor.py` (2026-09-15, MN5 job 45888659) scores frozen
+Llama-3.2-1B-Instruct on the exact 200-cut-per-language eval subset
+`MA-700asr-w2vbF-llama1bInsF-mlpT-s42-8g-md60` uses (same seed, same
+chat-templated `"{audio_token}"` prompt, same assistant-span label masking),
+with `input_features=None` so no audio is read at all. Compared against that
+arm's own final (step 2600) `eval_<lang>_loss`:
+
+| lang | no-audio floor (nats/token) | MA eval_loss with audio | floor − with-audio |
+|---|---|---|---|
+| en | 4.073 | 2.948 | +1.125 |
+| de | 4.312 | 3.123 | +1.189 |
+| fr | 3.968 | 2.739 | +1.229 |
+| es | 4.040 | 2.659 | +1.381 |
+| it | 4.154 | 2.674 | +1.480 |
+| overall (token-weighted) | 4.133 | — | — |
+
+**This contradicts the line above it and the framing in `00-status.md`**
+("eval loss 2.6–3.1 ... roughly what a 1B text LM scores ... with no
+audio"): the floor is *not* close to the observed loss, it is 1.1–1.5
+nats/token *above* it, consistently across all five languages. Audio was
+not ignored — conditioning on it lowers the loss by a factor of
+e^1.1..1.5 ≈ 3–4.4x in per-token perplexity versus no audio at all. That
+signal just is not the right signal for correct tokens: WER stayed at
+1.10–1.16 and hypotheses were fluent but unrelated to the audio. Read as:
+the adapter learned something coarse (e.g. "audio present -> respond in
+this register/language") that measurably helps next-token prediction
+without helping transcription. This does not by itself say the recipe is
+fine -- WER is still catastrophic and the suspects table above still holds
+end to end -- but "the adapter did nothing" is no longer the failure mode to
+assume; whatever it did learn should factor into interpreting the
+LibriSpeech screen below (e.g. a run that drops the loss further without
+moving WER would be repeating this same coarse-signal pattern, not
+progress).
+
+**Action needed (flagged, not resolved here):** PI review -- this changes
+the interpretation the week-2 gate reads section 1 through. Board entry
+with the full numbers is at the top of `board.md`.
+
 ## 2. Step 0 — LibriSpeech
 
 Everything as in the campaign except the data: w2v-BERT 2.0 frozen, MLP

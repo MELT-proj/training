@@ -3,7 +3,7 @@
 Update this file whenever something starts, finishes, or blocks. Keep it
 short; the reasoning goes to `board.md`, the plan to the numbered files.
 
-**Last updated:** 2026-09-15, evening (FLEURS-24 ASR frozen sets built).
+**Last updated:** 2026-09-15, evening (no-audio floor measured; FLEURS-24 ASR frozen sets built).
 **Current week:** week 1 of `timeline.md` (2026-09-14 to 2026-09-20).
 
 ## Running on MN5
@@ -23,6 +23,11 @@ short; the reasoning goes to `board.md`, the plan to the numbered files.
 - Campaign tooling: `campaign.yaml` grid, `campaign.py plan/run/status`,
   `arms.tsv` ledger, parameterised launchers, DDP for MA, host-RAM wall fixed.
 - MA-700 Llama-Instruct (August recipe): WER 1.10–1.16, eval loss 2.6–3.1.
+- **No-audio floor measured** (`01-interface-recipe.md` §1a, MN5 job
+  45888659): frozen-backbone floor is 4.0–4.3 nats/token per language, 1.1–1.5
+  *above* the MA eval loss above, not equal to it as assumed. Audio was not
+  ignored; whatever the adapter learned lowers loss without fixing WER. Needs
+  PI review (see Blocked/waiting).
 - Data audit for 24 EU languages plus ru/uk/ca: `data/hours_by_language.csv`.
 - Adapter sizes measured: MLP 6.30M, Conformer 27.28M, MoE 33.57M (8.39M active).
 - `stack_factor` for the MLP adapter, with tests and the `-skN` EXP_NAME tag:
@@ -48,6 +53,10 @@ short; the reasoning goes to `board.md`, the plan to the numbered files.
   transformers version skew; background tasks queued, not blocking week 1.
 - PR #126 (stack_factor) awaiting review/merge.
 - PR #10 (FLEURS-24 frozen sets, melt-eval) awaiting review/merge.
+- **No-audio floor result needs PI review**: contradicts the "audio was
+  ignored" reading in `01-interface-recipe.md` §1 (see §1a and the
+  2026-09-15 board entry). Does not block the LibriSpeech step-0 runs, but
+  should factor into how their results get read.
 
 ## Next decisions, in order
 

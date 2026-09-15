@@ -28,11 +28,13 @@ unmeasured at the real topology, expected several times more.
 frame rate) or a multilingual-data problem? Decided by LibriSpeech step 0.
 
 ### Track A — GPU
-- [ ] **No-audio floor.** Text-only NLL of the frozen backbone
-      (Llama-3.2-1B-Instruct) on the campaign validation transcripts with the
-      MA chat prompt and no audio (or shuffled audio). One short job.
-      *Outcome:* a per-language floor to set against the August MA eval loss
-      (2.6–3.1). If they match, audio was ignored.
+- [x] **No-audio floor** (done 2026-09-15, MN5 job 45888659). Text-only NLL
+      of the frozen backbone (Llama-3.2-1B-Instruct) on the campaign
+      validation transcripts with the MA chat prompt and no audio.
+      *Outcome:* floor is 4.0–4.3 nats/token per language, **1.1–1.5 above**
+      the August MA eval loss (2.6–3.1), not matching it — audio was not
+      ignored. See `01-interface-recipe.md` §1a and the board entry; flagged
+      for PI review, does not block LibriSpeech step 0 below.
 - [ ] **LibriSpeech step 0**, five MA runs (`01-interface-recipe.md` §2):
       L1 current recipe (adapter LR 2e-5, batch 4800 s), L2 LR 2e-4 / 4800 s,
       L3 LR 2e-4 / 1200 s, L4 LR 1e-3 / 1200 s, plus a second seed of the
