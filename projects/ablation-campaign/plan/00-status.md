@@ -26,8 +26,8 @@ short; the reasoning goes to `board.md`, the plan to the numbered files.
 - Data audit for 24 EU languages plus ru/uk/ca: `data/hours_by_language.csv`.
 - Adapter sizes measured: MLP 6.30M, Conformer 27.28M, MoE 33.57M (8.39M active).
 - `stack_factor` for the MLP adapter, with tests and the `-skN` EXP_NAME tag:
-  branch `claude/mlp-adapter-stack-factor-13e900`, commit `5822129`, not yet
-  pushed or merged. See the board entry.
+  branch `claude/mlp-adapter-stack-factor-13e900`, PR #126 open against
+  `main`. See the board entry.
 
 ## Blocked / waiting
 
@@ -37,7 +37,7 @@ short; the reasoning goes to `board.md`, the plan to the numbered files.
 - Two pre-existing test failures on `main` (sdpa propagation into
   `Wav2Vec2BertConfig`; all of `test_processing_melt.py`), likely
   transformers version skew; background tasks queued, not blocking week 1.
-- PR decision pending for the stack_factor branch (PI).
+- PR #126 (stack_factor) awaiting review/merge.
 
 ## Next decisions, in order
 

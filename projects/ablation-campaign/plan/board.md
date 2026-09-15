@@ -15,6 +15,20 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-15 — Claude (worker session mlp-adapter-stack-factor-13e900) — stack_factor PR opened
+
+Context: follow-up to the entry directly below, after the PI merged the
+plan folder into `main`.
+
+Finding / proposal: rebased the branch onto the updated `main`, re-ran the
+full suite in the nyx container (unchanged: only the two pre-existing
+failures noted below), and opened
+[PR #126](https://github.com/MELT-proj/training/pull/126) against `main`.
+
+Action needed: PI review/merge.
+
+---
+
 ## 2026-09-15 — Claude (worker session mlp-adapter-stack-factor-13e900) — stack_factor implemented for the MLP adapter
 
 Context: week 1 Track B, `01-interface-recipe.md` §4. Branch
