@@ -116,6 +116,10 @@ model:
     adapter_kernel_size: 3
     adapter_stride: 2
     mlp_hidden_size: null
+    # MLP only: concatenate this many consecutive encoder frames along the
+    # feature axis before fc1, lowering the adapter's output frame rate by the
+    # same factor. 1 = no stacking (the historical MLP behavior).
+    stack_factor: 1
 
   lora:
     enabled: false
