@@ -162,6 +162,11 @@ DEFAULT_ENCODER_LR = "6e-6"
 DEFAULT_DECODER_LR = "2e-5"
 DEFAULT_ADAPTER_LR = "2e-4"
 
+# Same fallback reasoning as the LR constants above: no ABL-*.yaml declares
+# model.adapter.stack_factor (the key is new), so every existing config omits
+# it and this is the value melt/training/config.py's DEFAULT_CONFIG fills in.
+DEFAULT_STACK_FACTOR = 1
+
 
 def die(msg: str) -> None:
     print(f"ERROR: {msg}", file=sys.stderr)
@@ -307,6 +312,16 @@ class ArmAxes:
     world_size: int
     adapter: str = ""
     adapter_freeze: str = ""
+    # stack_factor: how many consecutive encoder frames the MLP adapter
+    # concatenates before fc1 (`melt/modeling/modeling_melt.py`'s
+    # MELTMLPAdapter); a no-op for the other adapter types, which downsample
+    # through their own knobs instead. Same inherit-or-override rule as every
+    # other axis, but tagged into EXP_NAME only when overridden -- like
+    # batch_duration/grad_accum_steps below, not like the always-present LR
+    # tags -- since every arm composed before this axis existed has no value
+    # for it to differ from, and tagging it unconditionally would rename (and
+    # orphan the output directory of) all of them.
+    stack_factor: str = ""
     encoder: str = ""
     encoder_freeze: str = ""
     decoder: str = ""
@@ -438,6 +453,7 @@ def plan(args: ArmAxes) -> ArmPlan:
     # what it already declares unless a human says so.
     cfg_adapter_type = get(cfg, "model.adapter._type")
     cfg_adapter_freeze = bool(get(cfg, "model.adapter.freeze"))
+    cfg_stack_factor = get(cfg, "model.adapter.stack_factor", DEFAULT_STACK_FACTOR)
     cfg_encoder_name = get(cfg, "model.encoder.name")
     cfg_encoder_freeze = bool(get(cfg, "model.encoder.freeze"))
     cfg_decoder_name = get(cfg, "model.decoder.name")
@@ -465,6 +481,7 @@ def plan(args: ArmAxes) -> ArmPlan:
     encoder_freeze = as_bool(args.encoder_freeze) if args.encoder_freeze else cfg_encoder_freeze
     decoder_freeze = as_bool(args.decoder_freeze) if args.decoder_freeze else cfg_decoder_freeze
     decoder_lora = as_bool(args.decoder_lora) if args.decoder_lora else cfg_decoder_lora
+    stack_factor_effective = int(args.stack_factor) if args.stack_factor else int(cfg_stack_factor)
 
     overrides: list[str] = []
 
@@ -557,6 +574,15 @@ def plan(args: ArmAxes) -> ArmPlan:
     if args.adapter_freeze and adapter_freeze != cfg_adapter_freeze:
         overrides += ["--model.adapter.freeze", str(adapter_freeze).lower()]
 
+    # See ArmAxes's comment on stack_factor for why this is only emitted (and
+    # only tagged into EXP_NAME below) when it actually differs from the
+    # config -- same rule as batch_duration/grad_accum_steps just below.
+    stack_factor_overridden = bool(args.stack_factor) and (
+        stack_factor_effective != int(cfg_stack_factor)
+    )
+    if stack_factor_overridden:
+        overrides += ["--model.adapter.stack_factor", str(stack_factor_effective)]
+
     # batch_duration/grad_accum_steps overrides -- see ArmAxes's comment on
     # why these two are coupled. Only emitted (and only tagged into EXP_NAME
     # below) when they actually differ from the config, same rule as every
@@ -624,12 +650,16 @@ def plan(args: ArmAxes) -> ArmPlan:
     if grad_accum_overridden:
         batch_grad_tags.append(f"ga{grad_accum_effective}")
 
+    # Same "only when overridden" rule, for the same reason (see ArmAxes).
+    stack_factor_tags = [f"sk{stack_factor_effective}"] if stack_factor_overridden else []
+
     composed_name = "-".join([
         args.stage,
         data_tag(args.config, args.stage),
         f"{encoder_tag(encoder_effective)}{'F' if encoder_freeze else 'T'}",
         f"{decoder_tag(decoder_effective)}{'F' if decoder_freeze else 'T'}" + ("-lora" if decoder_lora else ""),
         f"{adapter_effective}{'F' if adapter_freeze else 'T'}",
+        *stack_factor_tags,
         *batch_grad_tags,
         lr_tag(encoder_lr_effective, "elr"),
         lr_tag(decoder_lr_effective, "dlr"),
@@ -668,6 +698,7 @@ def main() -> None:
     p.add_argument("--world-size", required=True, type=int)
     p.add_argument("--adapter", required=True)
     p.add_argument("--adapter-freeze", required=True)
+    p.add_argument("--stack-factor", required=True, help="empty string means: use the config's own value, no override")
     p.add_argument("--encoder", required=True)
     p.add_argument("--encoder-freeze", required=True)
     p.add_argument("--decoder", required=True)
@@ -688,6 +719,7 @@ def main() -> None:
         world_size=args.world_size,
         adapter=args.adapter,
         adapter_freeze=args.adapter_freeze,
+        stack_factor=args.stack_factor,
         encoder=args.encoder,
         encoder_freeze=args.encoder_freeze,
         decoder=args.decoder,

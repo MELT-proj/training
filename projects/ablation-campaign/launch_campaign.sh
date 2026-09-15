@@ -19,8 +19,11 @@
 #   Data           CONFIG               one YAML per budget x task (~550 lines,
 #                                        rendered by build_campaign_config.py --
 #                                        never write a new one per arm)
-#   Architecture   ADAPTER, ADAPTER_FREEZE, ENCODER, ENCODER_FREEZE,
-#                  DECODER, DECODER_FREEZE, DECODER_LORA     (2-7 CLI overrides)
+#   Architecture   ADAPTER, ADAPTER_FREEZE, STACK_FACTOR, ENCODER, ENCODER_FREEZE,
+#                  DECODER, DECODER_FREEZE, DECODER_LORA     (2-8 CLI overrides;
+#                  STACK_FACTOR only affects the MLP adapter -- see
+#                  plan_arm.py's ArmAxes and melt/modeling/modeling_melt.py's
+#                  MELTMLPAdapter)
 #   Optimisation   ENCODER_LR, DECODER_LR, ADAPTER_LR         (0-3 CLI overrides)
 #   Batch/accum    BATCH_DURATION, GRAD_ACCUM_STEPS            (0-2 CLI overrides,
 #                                        coupled -- see plan_arm.py's ArmAxes)
@@ -64,6 +67,7 @@ ACCELERATE_CONFIG="${ACCELERATE_CONFIG:-config/accelerate/ddp.yaml}"
 # overrides that key and always feeds the *requested* value into EXP_NAME.
 ADAPTER="${ADAPTER:-}"
 ADAPTER_FREEZE="${ADAPTER_FREEZE:-}"
+STACK_FACTOR="${STACK_FACTOR:-}"
 ENCODER="${ENCODER:-}"
 ENCODER_FREEZE="${ENCODER_FREEZE:-}"
 DECODER="${DECODER:-}"
@@ -109,6 +113,7 @@ PLAN="$(python3 "${SCRIPT_DIR}/plan_arm.py" \
     --stage "$STAGE" \
     --world-size "$WORLD_SIZE" \
     --adapter "$ADAPTER" --adapter-freeze "$ADAPTER_FREEZE" \
+    --stack-factor "$STACK_FACTOR" \
     --encoder "$ENCODER" --encoder-freeze "$ENCODER_FREEZE" \
     --decoder "$DECODER" --decoder-freeze "$DECODER_FREEZE" \
     --decoder-lora "$DECODER_LORA" \

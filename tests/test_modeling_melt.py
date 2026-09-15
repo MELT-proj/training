@@ -76,12 +76,21 @@ class TestAdapterOutputFeaturesShape:
         config = MagicMock(spec=MELTConfig)
         config.adapter_config = MagicMock()
         config.adapter_config._type = "mlp"
+        # Explicit, not left to the MagicMock's auto-vivified default: an
+        # unset attribute on a plain MagicMock() is truthy and not an int, so
+        # `self.stack_factor <= 1` etc. would silently take an unintended
+        # branch rather than raising.
+        config.adapter_config.stack_factor = 1
         config.audio_encoder_config = MagicMock()
         config.audio_encoder_config.hidden_size = 768
         config.audio_encoder_config.output_hidden_size = 768
         config.text_decoder_config = MagicMock()
         config.text_decoder_config.hidden_size = 1024
         return config
+
+    def _stacked_mlp_config(self, mlp_config, stack_factor):
+        mlp_config.adapter_config.stack_factor = stack_factor
+        return mlp_config
 
     @pytest.fixture
     def qformer_config(self):
@@ -164,6 +173,81 @@ class TestAdapterOutputFeaturesShape:
         actual_output = adapter(input_features)
 
         assert actual_output.shape == predicted_shape
+
+    # -- stack_factor -----------------------------------------------------
+    # Concatenates k consecutive encoder frames along the feature axis before
+    # fc1, lowering the adapter's own output frame rate by k
+    # (`plan/01-interface-recipe.md` §4).
+
+    def test_stack_factor_widens_fc1_input(self, mlp_config):
+        """fc1 takes k x encoder hidden size, not just the encoder hidden size."""
+        adapter = MELTMLPAdapter(self._stacked_mlp_config(mlp_config, stack_factor=4))
+        assert adapter.fc1.in_features == 768 * 4
+
+    def test_stack_factor_one_matches_pre_stacking_behavior(self, mlp_config):
+        """stack_factor=1 (the default) is exactly the old, unstacked adapter."""
+        adapter = MELTMLPAdapter(self._stacked_mlp_config(mlp_config, stack_factor=1))
+        assert adapter.fc1.in_features == 768
+
+    def test_stack_factor_downsamples_exact_multiple(self, mlp_config):
+        """seq_len an exact multiple of k: output length is exactly seq_len / k."""
+        adapter = MELTMLPAdapter(self._stacked_mlp_config(mlp_config, stack_factor=4))
+
+        batch_size, seq_len = 2, 48
+        input_features = torch.randn(batch_size, seq_len, 768)
+        attention_mask = torch.ones(batch_size, seq_len)
+
+        output_shape, output_mask = adapter._get_output_features_shape(
+            input_features.shape, attention_mask
+        )
+
+        assert output_shape == (batch_size, 12, 1024)
+        assert output_mask.shape == (batch_size, 12)
+        assert output_mask.bool().all()
+
+        actual_output = adapter(input_features)
+        assert actual_output.shape == output_shape
+
+    def test_stack_factor_pads_a_non_multiple_seq_len(self, mlp_config):
+        """seq_len 50 with k=4 pads to 52 frames, i.e. ceil(50/4) = 13 output frames."""
+        adapter = MELTMLPAdapter(self._stacked_mlp_config(mlp_config, stack_factor=4))
+
+        batch_size, seq_len = 2, 50
+        input_features = torch.randn(batch_size, seq_len, 768)
+
+        output_shape, _ = adapter._get_output_features_shape(input_features.shape, None)
+        assert output_shape == (batch_size, 13, 1024)
+
+        actual_output = adapter(input_features)
+        assert actual_output.shape == output_shape
+
+    def test_stack_factor_subsamples_the_attention_mask(self, mlp_config):
+        """Per-example valid length is subsampled by k, as a prefix mask."""
+        adapter = MELTMLPAdapter(self._stacked_mlp_config(mlp_config, stack_factor=4))
+
+        batch_size, seq_len = 2, 48
+        input_features = torch.randn(batch_size, seq_len, 768)
+        attention_mask = torch.zeros(batch_size, seq_len, dtype=torch.long)
+        attention_mask[0, :48] = 1  # full 48 frames -> ceil(48/4) = 12
+        attention_mask[1, :10] = 1  # 10 frames -> ceil(10/4) = 3
+
+        output_shape, output_mask = adapter._get_output_features_shape(
+            input_features.shape, attention_mask
+        )
+
+        assert output_shape == (batch_size, 12, 1024)
+        assert output_mask.sum(-1).tolist() == [12, 3]
+        # A prefix, not scattered.
+        assert output_mask[1, :3].all() and not output_mask[1, 3:].any()
+
+    def test_stack_factor_without_attention_mask(self, mlp_config):
+        adapter = MELTMLPAdapter(self._stacked_mlp_config(mlp_config, stack_factor=4))
+        input_features = torch.randn(2, 48, 768)
+
+        output_shape, output_mask = adapter._get_output_features_shape(input_features.shape, None)
+
+        assert output_shape == (2, 12, 1024)
+        assert output_mask is None
 
     def test_qformer_adapter_downsampling(self, qformer_config):
         """Q-Former adapter should downsample sequence by downsample_rate."""
