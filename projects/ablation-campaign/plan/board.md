@@ -15,6 +15,206 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-16 — Claude (worker session text-prior-tool-spec) — Full text-prior numbers: all 6 backbones × 24 languages, reference table
+
+Context: the PI asked for the actual numbers and exact computation basis
+posted here directly, not just the summary in the two entries above, so a
+future week's agent can judge from this page alone whether anything needs
+recomputing rather than re-deriving it from the raw JSON on artemis.
+
+**Computed on:**
+
+- Code: melt-eval branch `claude/text-prior-tool` @ `5b72eb9`
+  ([PR #14](https://github.com/MELT-proj/eval/pull/14) — teacher-forced
+  rows 1–4 only, no cascade oracle); training repo `main` @ `aff49df`
+  (includes the `ga` `LANGUAGE_ISO_TO_NAME` fix, `b5f4962`).
+- Data: production `fleurs24-asr-dev` (24 EU languages, 100 samples/lang,
+  2,400 total, confirmed uniform — no drops anywhere) and
+  `fleurs24-st-xen-dev` (23 source locales → en, 100/locale, 2,300 total)
+  on artemis scratch (`/mnt/scratch-artemis/giuseppe/melt-data/eval-sets/`).
+  **Not** the ru/uk-extended versions from PR #12/#13 (not deployed to
+  this production copy yet) and **not** the `-test` splits.
+- Method: bare `AutoModelForCausalLM` (no `MELTForCausalLM`, no
+  `<|audio|>` token, no vocab resize) + each backbone's native tokenizer.
+  Two numbers per sample: **raw** = `tokenizer(reference)` alone, no chat
+  template, every token scored (a pure LM prior, BOS included via each
+  tokenizer's own default); **conditioned** = `[user, assistant]` rendered
+  via the training repo's `apply_chat_template_to_texts` with the
+  canonical instruction (`"{audio_token} Transcribe this audio in
+  {lang}."` for ASR, `"{audio_token} Translate this audio to {lang}."`
+  for ST, `audio_token=""` since these backbones never learned one),
+  assistant turn masked in via `mask_non_assistant_tokens`. Formulas:
+  `bits_per_char = (nats_per_token × num_target_tokens) / ln(2) /
+  len(reference_string)`; `tokens_per_word = num_target_tokens /
+  len(reference_string.split())`. One sample at a time, no batching.
+- Chat template per backbone: Llama family `llama3` (base borrows
+  Instruct's template via `--chat-template-from`); Qwen and EuroLLM
+  families `chatml` (Qwen-Base ships its own, no borrowing; EuroLLM-base
+  borrows -Instruct's). See `02-backbones.md` §3.1 for how each was
+  verified.
+- `ga` (Irish) has no `pnc_text` in the source data (pre-existing gap,
+  `fleurs24-asr-test.yaml` header), so its reference text is
+  lowercase/unpunctuated, not the same textual basis as the other 23 —
+  read its numbers as "still clearly the hardest tier," not literally
+  comparable character-for-character.
+- Jobs: artemis, `dionysus`, h100/gpu-h100, job ids in the 332113–332137
+  range (12 successful runs; see the entry above for the two that needed
+  a retry and why — a partial shared HF cache and a shell-quoting slip,
+  neither a tool bug).
+
+**What would justify recomputing:** a change to `text_prior.py`'s scoring
+logic or the canonical instruction strings; the `ga` `pnc_text` gap
+closing (changes its raw-text basis); needing `-test` numbers instead of
+`-dev` for what actually goes in the paper; ru/uk landing in the
+production frozen sets (adds 2 more languages, doesn't change these 24).
+Re-running is cheap — 6–33 min per backbone per task on one H100 (elapsed
+times in the entry above) — each JSON's own `model`/
+`chat_template_config`/`chat_template_from`/`frozen_set` fields record
+exactly what produced it, so a diff against a re-run is a diff against
+those fields plus the numbers, not a guess.
+
+**ASR raw bits/char**
+
+| lang | Llama-1B-base | Llama-1B-ins | Qwen-2B-base | Qwen-2B-ins | EuroLLM-1.7B-base | EuroLLM-1.7B-ins |
+|---|---|---|---|---|---|---|
+| bg | 1.538 | 2.310 | 1.282 | 1.344 | 1.152 | 1.163 |
+| cs | 1.533 | 2.096 | 1.372 | 1.440 | 1.255 | 1.260 |
+| da | 1.555 | 1.906 | 1.335 | 1.404 | 1.222 | 1.243 |
+| de | 1.142 | 1.251 | 0.988 | 1.027 | 0.983 | 0.984 |
+| el | 1.328 | 1.857 | 1.097 | 1.146 | 1.033 | 1.039 |
+| en | 0.987 | 1.072 | 0.948 | 0.974 | 1.006 | 1.020 |
+| es | 1.198 | 1.284 | 1.042 | 1.075 | 1.036 | 1.045 |
+| et | 2.155 | 2.756 | 1.666 | 1.788 | 1.380 | 1.395 |
+| fi | 1.626 | 1.853 | 1.406 | 1.480 | 1.247 | 1.260 |
+| fr | 1.053 | 1.157 | 0.894 | 0.926 | 0.904 | 0.908 |
+| ga | 2.263 | 2.753 | 2.104 | 2.214 | 1.640 | 1.606 |
+| hr | 1.696 | 2.156 | 1.383 | 1.434 | 1.440 | 1.446 |
+| hu | 1.503 | 1.815 | 1.400 | 1.466 | 1.265 | 1.282 |
+| it | 1.177 | 1.333 | 0.991 | 1.039 | 0.963 | 0.978 |
+| lt | 2.146 | 2.746 | 1.535 | 1.600 | 1.341 | 1.354 |
+| lv | 2.224 | 2.847 | 1.632 | 1.741 | 1.358 | 1.376 |
+| mt | 2.392 | 3.066 | 1.971 | 2.079 | 1.408 | 1.429 |
+| nl | 1.274 | 1.484 | 1.152 | 1.216 | 1.069 | 1.078 |
+| pl | 1.370 | 1.668 | 1.178 | 1.247 | 1.077 | 1.087 |
+| pt | 1.256 | 1.354 | 1.079 | 1.126 | 1.061 | 1.076 |
+| ro | 1.373 | 1.588 | 1.203 | 1.262 | 1.096 | 1.098 |
+| sk | 1.880 | 2.511 | 1.443 | 1.522 | 1.270 | 1.296 |
+| sl | 1.876 | 2.422 | 1.468 | 1.537 | 1.285 | 1.298 |
+| sv | 1.449 | 1.693 | 1.380 | 1.453 | 1.206 | 1.220 |
+
+**ASR conditioned bits/char**
+
+| lang | Llama-1B-base | Llama-1B-ins | Qwen-2B-base | Qwen-2B-ins | EuroLLM-1.7B-base | EuroLLM-1.7B-ins |
+|---|---|---|---|---|---|---|
+| bg | 2.168 | 2.146 | 1.557 | 1.373 | 1.712 | 1.619 |
+| cs | 2.257 | 1.947 | 1.775 | 1.479 | 2.036 | 1.885 |
+| da | 2.247 | 1.783 | 1.697 | 1.451 | 1.914 | 1.758 |
+| de | 1.732 | 1.324 | 1.353 | 1.118 | 1.636 | 1.426 |
+| el | 1.931 | 1.871 | 1.387 | 1.237 | 1.630 | 1.494 |
+| en | 1.628 | 1.260 | 1.421 | 1.141 | 1.761 | 1.510 |
+| es | 1.754 | 1.337 | 1.410 | 1.167 | 1.705 | 1.475 |
+| et | 2.806 | 2.453 | 1.955 | 1.704 | 2.054 | 1.937 |
+| fi | 2.232 | 1.739 | 1.736 | 1.496 | 1.896 | 1.771 |
+| fr | 1.660 | 1.167 | 1.255 | 1.012 | 1.616 | 1.390 |
+| ga | 2.990 | 2.871 | 2.355 | 2.265 | 2.190 | 2.100 |
+| hr | 2.364 | 2.040 | 1.698 | 1.474 | 2.040 | 1.930 |
+| hu | 2.146 | 1.736 | 1.695 | 1.472 | 1.925 | 1.768 |
+| it | 1.758 | 1.340 | 1.356 | 1.119 | 1.634 | 1.413 |
+| lt | 2.790 | 2.585 | 1.848 | 1.597 | 2.040 | 1.951 |
+| lv | 2.917 | 2.833 | 1.921 | 1.700 | 2.090 | 1.998 |
+| mt | 3.013 | 3.113 | 2.125 | 2.002 | 1.976 | 1.911 |
+| nl | 1.916 | 1.454 | 1.488 | 1.272 | 1.761 | 1.550 |
+| pl | 2.031 | 1.597 | 1.552 | 1.317 | 1.821 | 1.684 |
+| pt | 1.843 | 1.376 | 1.471 | 1.208 | 1.765 | 1.552 |
+| ro | 1.961 | 1.452 | 1.474 | 1.271 | 1.689 | 1.548 |
+| sk | 2.516 | 2.304 | 1.786 | 1.524 | 1.980 | 1.809 |
+| sl | 2.556 | 2.222 | 1.784 | 1.537 | 1.988 | 1.887 |
+| sv | 2.088 | 1.592 | 1.725 | 1.483 | 1.904 | 1.671 |
+
+**ASR raw tokens/word**
+
+| lang | Llama-1B-base | Llama-1B-ins | Qwen-2B-base | Qwen-2B-ins | EuroLLM-1.7B-base | EuroLLM-1.7B-ins |
+|---|---|---|---|---|---|---|
+| bg | 2.601 | 2.601 | 2.097 | 2.097 | 1.892 | 1.892 |
+| cs | 2.131 | 2.131 | 2.153 | 2.153 | 1.995 | 1.995 |
+| da | 2.049 | 2.049 | 1.765 | 1.765 | 1.682 | 1.682 |
+| de | 1.899 | 1.899 | 1.537 | 1.537 | 1.554 | 1.554 |
+| el | 2.551 | 2.551 | 2.393 | 2.393 | 2.121 | 2.121 |
+| en | 1.207 | 1.207 | 1.167 | 1.167 | 1.288 | 1.288 |
+| es | 1.584 | 1.584 | 1.346 | 1.346 | 1.376 | 1.376 |
+| et | 3.040 | 3.040 | 2.643 | 2.643 | 2.228 | 2.228 |
+| fi | 3.487 | 3.487 | 2.801 | 2.801 | 2.446 | 2.446 |
+| fr | 1.670 | 1.670 | 1.431 | 1.431 | 1.482 | 1.482 |
+| ga | 2.294 | 2.294 | 2.163 | 2.163 | 1.713 | 1.713 |
+| hr | 2.515 | 2.515 | 2.152 | 2.152 | 1.927 | 1.927 |
+| hu | 3.036 | 3.036 | 2.338 | 2.338 | 2.174 | 2.174 |
+| it | 1.833 | 1.833 | 1.452 | 1.452 | 1.470 | 1.470 |
+| lt | 3.356 | 3.356 | 2.569 | 2.569 | 2.179 | 2.179 |
+| lv | 3.362 | 3.362 | 2.715 | 2.715 | 2.114 | 2.114 |
+| mt | 3.381 | 3.381 | 3.109 | 3.109 | 2.529 | 2.529 |
+| nl | 1.887 | 1.887 | 1.592 | 1.592 | 1.475 | 1.475 |
+| pl | 2.639 | 2.639 | 2.082 | 2.082 | 1.733 | 1.733 |
+| pt | 1.700 | 1.700 | 1.418 | 1.418 | 1.420 | 1.420 |
+| ro | 2.160 | 2.160 | 1.801 | 1.801 | 1.761 | 1.761 |
+| sk | 2.548 | 2.548 | 2.232 | 2.232 | 1.986 | 1.986 |
+| sl | 2.447 | 2.447 | 2.144 | 2.144 | 1.851 | 1.851 |
+| sv | 2.094 | 2.094 | 1.813 | 1.813 | 1.752 | 1.752 |
+
+**ASR conditioned tokens/word**
+
+| lang | Llama-1B-base | Llama-1B-ins | Qwen-2B-base | Qwen-2B-ins | EuroLLM-1.7B-base | EuroLLM-1.7B-ins |
+|---|---|---|---|---|---|---|
+| bg | 2.826 | 2.826 | 2.548 | 2.548 | 2.185 | 2.185 |
+| cs | 2.413 | 2.413 | 2.717 | 2.717 | 2.361 | 2.361 |
+| da | 2.311 | 2.311 | 2.288 | 2.288 | 2.013 | 2.013 |
+| de | 2.141 | 2.141 | 2.021 | 2.021 | 1.855 | 1.855 |
+| el | 2.777 | 2.777 | 2.845 | 2.845 | 2.415 | 2.415 |
+| en | 1.440 | 1.440 | 1.635 | 1.635 | 1.578 | 1.578 |
+| es | 1.791 | 1.791 | 1.759 | 1.759 | 1.639 | 1.639 |
+| et | 3.372 | 3.372 | 3.306 | 3.306 | 2.649 | 2.649 |
+| fi | 3.828 | 3.828 | 3.485 | 3.485 | 2.899 | 2.899 |
+| fr | 1.898 | 1.898 | 1.887 | 1.887 | 1.765 | 1.765 |
+| ga | 2.507 | 2.507 | 2.588 | 2.588 | 1.977 | 1.977 |
+| hr | 2.775 | 2.775 | 2.672 | 2.672 | 2.270 | 2.270 |
+| hu | 3.318 | 3.318 | 2.902 | 2.902 | 2.526 | 2.526 |
+| it | 2.056 | 2.056 | 1.898 | 1.898 | 1.756 | 1.756 |
+| lt | 3.671 | 3.671 | 3.199 | 3.199 | 2.585 | 2.585 |
+| lv | 3.670 | 3.670 | 3.332 | 3.332 | 2.504 | 2.504 |
+| mt | 3.654 | 3.654 | 3.654 | 3.654 | 2.871 | 2.871 |
+| nl | 2.129 | 2.129 | 2.077 | 2.077 | 1.777 | 1.777 |
+| pl | 2.932 | 2.932 | 2.669 | 2.669 | 2.128 | 2.128 |
+| pt | 1.927 | 1.927 | 1.873 | 1.873 | 1.707 | 1.707 |
+| ro | 2.374 | 2.374 | 2.231 | 2.231 | 2.028 | 2.028 |
+| sk | 2.821 | 2.821 | 2.777 | 2.777 | 2.336 | 2.336 |
+| sl | 2.717 | 2.717 | 2.685 | 2.685 | 2.197 | 2.197 |
+| sv | 2.346 | 2.346 | 2.318 | 2.318 | 2.074 | 2.074 |
+
+Fertility (tokens/word) is identical between base and instruct within a
+family, in every language, both raw and conditioned — expected, not a
+bug: base/instruct share a tokenizer, so this depends only on the
+reference text, never on model weights. Included as a cross-check anyone
+reading this table can verify at a glance.
+
+**ST(→en) overall (2,300 samples, all target-language English — no
+per-language breakdown, since every ST record has `lang=en` regardless of
+source locale, per `get_tags_from_cut`'s convention)**
+
+| backbone | raw BPC | cond BPC | raw tok/word | cond tok/word | raw nats/tok | cond nats/tok |
+|---|---|---|---|---|---|---|
+| Llama-1B-base | 1.007 | 1.679 | 1.242 | 1.489 | 3.411 | 4.744 |
+| Llama-1B-ins | 1.094 | 1.250 | 1.242 | 1.489 | 3.702 | 3.531 |
+| Qwen-2B-base | 0.959 | 1.464 | 1.208 | 1.701 | 3.340 | 3.619 |
+| Qwen-2B-ins | 0.986 | 1.158 | 1.208 | 1.701 | 3.435 | 2.863 |
+| EuroLLM-1.7B-base | 1.023 | 1.801 | 1.330 | 1.636 | 3.236 | 4.628 |
+| EuroLLM-1.7B-ins | 1.039 | 1.572 | 1.330 | 1.636 | 3.287 | 4.041 |
+
+Action needed: none — this is a reference post, not a task. Fold into
+`02-backbones.md` §5's results table once the backbone decision needs it,
+or once ru/uk + cascade oracle + `-test` numbers land and a fuller table
+is worth building from scratch rather than patched onto this one.
+
+---
+
 ## 2026-09-16 — Claude (worker session text-prior-tool-spec) — Text-prior tool run on all six backbones; two infra traps, no tool bugs
 
 Context: continuation of the same-day session that built `melteval
