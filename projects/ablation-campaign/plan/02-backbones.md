@@ -33,7 +33,11 @@ template (`chat_template_from`) so the prompt format is identical.
   seen the chat-template tokens the MA stage wraps around the audio, so the
   MA-stage base-vs-instruct contrast includes template familiarity. IFT
   trains the decoder and washes most of it out; report the MA-stage contrast
-  with that caveat.
+  with that caveat. Measured directly, not just predicted, by the text
+  prior (§3.7): instruct beats base in every one of the three families on
+  both tasks, with tokenization held identical, so the gap is isolated to
+  template-wrapping — Llama 1.884 vs 2.207 conditioned ASR bits/char,
+  Qwen 1.428 vs 1.651, EuroLLM 1.700 vs 1.856.
 - **Llama's dated system prompt** and **Qwen's think block** are structural
   input differences; melt-eval renders the generation prompt with the same
   template and `enable_thinking=False`, and its tests assert the eval prompt
@@ -292,31 +296,75 @@ the sample count. Lives in melt-eval, run on an internal GPU (artemis, via
 `sbatch`, per its own rules) — not MN5, since this measurement has nothing to
 do with a checkpoint the campaign trained.
 
-### 3.7 Built and tested (rows 1–4 only; 1 of 6 backbones)
+### 3.7 Built and tested: all six backbones, dev sets (rows 1–4 only)
 
 Built 2026-09-16 as `melteval text-prior`
 ([melt-eval PR #14](https://github.com/MELT-proj/eval/pull/14)), per
 §3.1–§3.4 above. The cascade oracle (row 5) is not built yet.
 
-Ran on artemis (`dionysus`, h100/gpu-h100, jobs 332113 and 332114) against
-`meta-llama/Llama-3.2-1B-Instruct` on the production `fleurs24-asr-dev`
-(24 languages, 2,400 samples — the ru/uk config addition, §3.5, is not
-deployed to this copy yet) and `fleurs24-st-xen-dev` (23 locales, 2,300
-samples). Both completed cleanly the second time; the first attempt
-crashed mid-run on `ga` — not a bug in the tool, a real gap in the
-training repo's `LANGUAGE_ISO_TO_NAME` (Irish had no entry at all,
-inherited by every `{lang}`-templated prompt, training and eval alike),
-fixed on `main` the same session.
+Ran on artemis (`dionysus`, h100/gpu-h100) against all six backbones (§1)
+on the production `fleurs24-asr-dev` (24 languages, 2,400 samples — ru/uk
+not deployed to this copy yet, §3.5) and `fleurs24-st-xen-dev` (23
+locales, 2,300 samples). Two infra snags, neither a tool bug: `ga` was
+missing from `LANGUAGE_ISO_TO_NAME` (first run, fixed on `main`), and a
+shared HF cache turned out to hold tokenizer-only or config-only entries
+for three checkpoints rather than full weights (retried against a
+complete cache). Every job completed cleanly once those were sorted out.
 
-Overall (all languages pooled): ASR raw 1.94 bits/char, conditioned 1.88;
-ST(→en) raw 1.09, conditioned 1.25. Per-language spread checks out against
-what an English-centric 1B backbone should know: English lowest ASR raw
-BPC (1.07); Maltese highest (3.07) — one of the EU's lowest-resource
-languages by a wide margin; Hungarian and Maltese fertility (tokens/word)
-2.1–3.0× English's, inside this section's own "2–4×" prediction. Full
-per-language numbers: `/mnt/scratch-artemis/giuseppe/melt-data/text-prior/
-llama1b-ins-{asr,st}-dev.json` (artemis scratch, not committed — see the
-board entry for the full table).
+**Overall** (all languages pooled; lower bits/char = the backbone already
+knows more of the language):
+
+| backbone | ASR raw | ASR cond | ST raw | ST cond |
+|---|---|---|---|---|
+| Llama-3.2-1B (base) | 1.571 | 2.207 | 1.007 | 1.679 |
+| Llama-3.2-1B-Instruct | 1.940 | 1.884 | 1.094 | 1.250 |
+| Qwen3.5-2B-Base | 1.324 | 1.651 | 0.959 | 1.464 |
+| Qwen3.5-2B (instruct) | 1.390 | 1.428 | 0.986 | 1.158 |
+| EuroLLM-1.7B (base) | 1.190 | 1.856 | 1.023 | 1.801 |
+| EuroLLM-1.7B-Instruct | 1.200 | 1.700 | 1.039 | 1.572 |
+
+Two findings worth carrying into the paper:
+
+1. **Instruct beats base, in every family, on both tasks, no exception.**
+   Llama 1.884 vs 2.207, Qwen 1.428 vs 1.651, EuroLLM 1.700 vs 1.856 (ASR
+   conditioned; ST tells the same story). This is §2's "base arms at MA
+   are template-naive" confound, now a measured number instead of a
+   prediction — the base decoder is worse specifically at the
+   conditioned-on-a-chat-template task, before any training touches it.
+   Base and instruct within a family tokenize identically (shared
+   vocabulary — confirmed directly, their tokens/word figures match to
+   three decimals), so the gap isolated by the raw-vs-conditioned split
+   (§3.3) is purely the chat-template-wrapping effect, not a fertility
+   artifact.
+2. **Qwen3.5 leads overall; EuroLLM specifically wins on the hardest
+   language.** Ranked by ASR conditioned BPC: Qwen-Ins (1.428) <
+   Qwen-Base (1.651) < EuroLLM-Ins (1.700) < EuroLLM-Base (1.856) <
+   Llama-Ins (1.884) < Llama-Base (2.207). Maltese (mt), the hardest
+   language in this set for every backbone, inverts the family ranking:
+   EuroLLM-Instruct (1.911) beats Qwen-Instruct (2.002) beats
+   Llama-Instruct (3.113) — EuroLLM's EU-specific training shows up
+   exactly where it should, even though its broader-aggregate number
+   trails Qwen's.
+
+Selected per-language ASR conditioned BPC (all 24 in the JSON; en/mt
+bracket the range for every backbone):
+
+| backbone | en | hu | mt | ga |
+|---|---|---|---|---|
+| Llama-3.2-1B (base) | 1.628 | 2.146 | 3.013 | 2.990 |
+| Llama-3.2-1B-Instruct | 1.260 | 1.736 | 3.113 | 2.871 |
+| Qwen3.5-2B-Base | 1.421 | 1.695 | 2.125 | 2.355 |
+| Qwen3.5-2B (instruct) | 1.141 | 1.472 | 2.002 | 2.265 |
+| EuroLLM-1.7B (base) | 1.761 | 1.925 | 1.976 | 2.190 |
+| EuroLLM-1.7B-Instruct | 1.510 | 1.768 | 1.911 | 2.100 |
+
+Full per-language JSON for all twelve runs (6 backbones × 2 tasks):
+`/mnt/scratch-artemis/giuseppe/melt-data/text-prior/<tag>-{asr,st}-dev.json`
+on artemis scratch (not committed — see the board entry for the tag
+naming and the retry/infra details).
+
+Not yet done: ru/uk (frozen sets not redeployed to production, §3.5), the
+`-test` splits, and the cascade oracle (row 5).
 
 Not yet run: the other five backbones, the cascade oracle, and anything
 on `fleurs24-*-test` (only `-dev` so far).

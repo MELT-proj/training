@@ -3,13 +3,13 @@
 Update this file whenever something starts, finishes, or blocks. Keep it
 short; the reasoning goes to `board.md`, the plan to the numbered files.
 
-**Last updated:** 2026-09-16 (text-prior tool built and tested on artemis
-for Llama-3.2-1B-Instruct, PR #14; a live `LANGUAGE_ISO_TO_NAME` gap for
-Irish found and fixed; ru/uk added to the FLEURS melt-eval configs, PR #12
-+ PR #13; PR #11 merged; text-prior tool spec drafted, `02-backbones.md`
-§3; Qwen3.5-2B-Base and both EuroLLM checkpoints staged to MN5, offline
-loads verified; Qwen IFT throughput measured at 2 and 8 nodes, 16-node
-queued).
+**Last updated:** 2026-09-16 (text-prior tool built and run on all six
+backbones on artemis, PR #14 -- Qwen3.5 leads overall, EuroLLM wins on
+Maltese, instruct beats base in every family; a live `LANGUAGE_ISO_TO_NAME`
+gap for Irish found and fixed; ru/uk added to the FLEURS melt-eval configs,
+PR #12 + PR #13; PR #11 merged; Qwen3.5-2B-Base and both EuroLLM
+checkpoints staged to MN5, offline loads verified; Qwen IFT throughput
+measured at 2 and 8 nodes, 16-node queued).
 **Current week:** week 1 of `timeline.md` (2026-09-14 to 2026-09-20).
 
 ## Running on MN5
@@ -86,19 +86,22 @@ queued).
   (checked its `tokenizer_config.json`) and has no `DECODER_PROFILES` entry
   yet -- see Blocked/waiting. Also surfaced a ru/uk gap in the FLEURS
   melt-eval configs, closed same-day (see Done).
-- **Text-prior tool built and tested** (`02-backbones.md` §3.7,
-  [melt-eval PR #14](https://github.com/MELT-proj/eval/pull/14)): rows 1-4
-  only (teacher-forced NLL/BPC/fertility), not the cascade oracle. Ran for
-  real on artemis (`dionysus`, h100/gpu-h100) against
-  `meta-llama/Llama-3.2-1B-Instruct`, `fleurs24-asr-dev` (24 langs) and
-  `fleurs24-st-xen-dev` (23 locales) -- both completed clean on the second
-  try. First try surfaced a real bug: `LANGUAGE_ISO_TO_NAME`
-  (`melt/training/data/audio/lhotse/helpers.py`) had no entry for Irish at
-  all, the only gap among 26 target languages; fixed (`main`, `b5f4962`).
-  Results check out: English lowest BPC, Maltese highest, Hungarian/Maltese
-  fertility 2.1-3.0x English's, matching `02-backbones.md`'s own predicted
-  range. Full numbers in the board entry. 5 of 6 backbones and the cascade
-  oracle still to go.
+- **Text-prior tool built and tested on all six backbones**
+  (`02-backbones.md` §3.7, [melt-eval PR #14](https://github.com/MELT-proj/eval/pull/14)):
+  rows 1-4 only (teacher-forced NLL/BPC/fertility), not the cascade
+  oracle. 12 runs on artemis (`dionysus`, h100/gpu-h100) -- all six
+  backbones × `fleurs24-asr-dev` (24 langs) + `fleurs24-st-xen-dev`
+  (23 locales) -- all completed clean. Two infra snags fixed along the
+  way, neither a tool bug: `LANGUAGE_ISO_TO_NAME` had no entry for Irish
+  (fixed, `main` `b5f4962`); a shared HF cache held tokenizer-only or
+  config-only entries for three checkpoints, not full weights (retried
+  against complete ones). **Qwen3.5 leads overall** (conditioned ASR BPC
+  1.428 instruct / 1.651 base), **EuroLLM wins specifically on Maltese**
+  (1.911 vs Qwen's 2.002), and **instruct beats base in every family on
+  both tasks with no exception** -- a direct measurement of the
+  "template-naive base" confound (`02-backbones.md` §2). Full table in
+  the board entry. Still to go: ru/uk, the `-test` splits, the cascade
+  oracle.
 - **Backbone checkpoints staged to MN5**: `Qwen/Qwen3.5-2B-Base` (4.3G) and
   both `utter-project/EuroLLM-1.7B` checkpoints (3.1G each) downloaded on nyx,
   rsynced to `mn5transfer:/gpfs/scratch/epor48/hf_cache/hub/`, and offline

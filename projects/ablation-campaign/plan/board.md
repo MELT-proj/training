@@ -15,6 +15,108 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-16 — Claude (worker session text-prior-tool-spec) — Text-prior tool run on all six backbones; two infra traps, no tool bugs
+
+Context: continuation of the same-day session that built `melteval
+text-prior` and tested it on 1 of 6 backbones. The PI asked directly to
+finish the remaining five once the h100 GPUs were free again.
+
+Finding 1, two more real checkpoints needed staging. Only
+`meta-llama/Llama-3.2-1B-Instruct` and `Qwen/Qwen3.5-2B` (instruct) were
+on artemis already; `meta-llama/Llama-3.2-1B` (base), `Qwen/Qwen3.5-2B-Base`
+and both EuroLLM-1.7B checkpoints were not. The PI pointed at
+`/mnt/scratch-artemis/giuseppe/.cache/huggingface/hub` as already having
+everything -- checked directly rather than assumed: it had Llama base +
+instruct and Qwen-instruct, but not Qwen-Base or either EuroLLM-1.7B
+checkpoint. Fetched only the genuinely missing three (~10.5G, not the
+original ~15.2G plan) from nyx's local cache (already there from the
+2026-09-16 MN5-staging session) into that same shared cache.
+
+Finding 2, the real trap: two of the "already there" checkpoints in that
+shared cache turned out to be **partial** -- `Llama-3.2-1B` (base) had
+only `tokenizer_config.json`/`tokenizer.json`/`special_tokens_map.json`,
+no `config.json` and no weights; `Qwen/Qwen3.5-2B` (instruct) had only
+`config.json`, nothing else. Both jobs failed in under a minute on
+`OSError: We couldn't connect to huggingface.co ... and couldn't find
+[the files] in the cached files` (`HF_HUB_OFFLINE=1` blocks the online
+fallback, correctly). Not a tool bug -- the shared cache is exactly what
+its name says, an accumulation of whatever partial fetches various past
+sessions/users needed for their own purposes (tokenizer-only, config-only
+checks), not a guarantee of complete weights for any given model. Fixed
+by consolidating into the site's own default cache
+(`/mnt/scratch-artemis/giuseppe/melt-data/hf_cache`) instead, which
+already had a genuinely complete `Qwen/Qwen3.5-2B` (proven by the
+Llama-Instruct runs earlier that day using the same cache) -- just needed
+to add a complete `Llama-3.2-1B` (rsynced from nyx) alongside it.
+
+Finding 3, my own mistake along the way: a batch resubmission of the 4
+failed jobs used `VAR=val VAR=val OUT=... && command` shell syntax --
+the trailing `&&` turns the `VAR=val` prefix into a standalone assignment
+statement in the *current* shell rather than an exported prefix on the
+following command, so `MELT_PARTITION`/`MELT_QOS`/`PYTHONPATH` never
+reached `sbatch` or the job. Silently fell back to the site defaults
+(`a6000`/`gpu-short` instead of `h100`/`gpu-h100`) and, more importantly,
+lost the `PYTHONPATH` override -- all 4 jobs failed in 2 seconds on
+`melteval: error: argument command: invalid choice: 'text-prior'`,
+because without `PYTHONPATH` the shared venv's editable install resolved
+to the *other* concurrent session's dirty `claude/air-bench-support`
+checkout (the one flagged as off-limits in the first board entry today),
+which has no `text-prior` subcommand. Caught immediately from the job log
+-- no partial output was written, nothing from that checkout was actually
+executed beyond an argparse rejection. Refiled as a proper script with
+explicit `export` statements; all 4 completed clean on the retry.
+
+Finding 4, the real results -- full 6 × 2 (ASR/ST) × dev-set sweep,
+12 runs, all clean. Overall ASR conditioned bits/char (lower = backbone
+already knows more of the language):
+
+| backbone | ASR cond | ST cond |
+|---|---|---|
+| Llama-3.2-1B (base) | 2.207 | 1.679 |
+| Llama-3.2-1B-Instruct | 1.884 | 1.250 |
+| Qwen3.5-2B-Base | 1.651 | 1.464 |
+| Qwen3.5-2B (instruct) | 1.428 | 1.158 |
+| EuroLLM-1.7B (base) | 1.856 | 1.801 |
+| EuroLLM-1.7B-Instruct | 1.700 | 1.572 |
+
+Two things worth the paper's attention, folded into `02-backbones.md` §2
+and §3.7:
+
+1. Instruct beats base in **every** family, on **both** tasks, no
+   exception -- and base/instruct tokenize identically within a family
+   (tokens/word matches to 3 decimals), so the gap is isolated cleanly to
+   chat-template familiarity, not a fertility artifact. This turns §2's
+   "base arms at MA are template-naive" from a stated caveat into a
+   measured number, before any arm has trained.
+2. Qwen3.5 leads the aggregate ranking (Qwen-Ins < Qwen-Base < EuroLLM-Ins
+   < EuroLLM-Base < Llama-Ins < Llama-Base), but Maltese -- the hardest
+   language here for every backbone -- inverts the top of it: EuroLLM-Ins
+   (1.911) beats Qwen-Ins (2.002) beats Llama-Ins (3.113). EuroLLM's
+   EU-specific training earns its keep exactly on the language it should,
+   even while trailing in aggregate against a broader-multilingual
+   competitor.
+
+ru/uk show up as `--` in every backbone (not `0` or an error) -- expected,
+not a bug: the production `fleurs24-asr-dev`/`fleurs24-st-xen-dev` copies
+on artemis scratch don't have the PR #12/#13 ru/uk rows deployed yet (see
+the earlier board entry today).
+
+Full per-language JSON for all 12 runs:
+`/mnt/scratch-artemis/giuseppe/melt-data/text-prior/<tag>-{asr,st}-dev.json`
+on artemis scratch. Tags: `llama1b-base`, `llama1b-ins`,
+`qwen35-2b-base`, `qwen35-2b-ins`, `eurollm17b-base`, `eurollm17b-ins`.
+
+Action needed: review/merge melt-eval PR #14 (and #12/#13, still open).
+Whoever redeploys the ru/uk frozen sets to production should re-run these
+same 12 commands afterward for the +ru/uk numbers. The cascade oracle
+(row 5) and the `-test` splits are still open work, not blocking anything
+in the current week. The two isolated artemis clones
+(`agent-worktrees/melt-eval-text-prior`, `.../training-text-prior`) and
+the consolidated `melt-data/hf_cache` entries for all six backbones can
+be reused directly for either.
+
+---
+
 ## 2026-09-16 — Claude (worker session text-prior-tool-spec) — Text-prior tool built and tested end to end; a real language-table bug found and fixed; an artemis near-miss avoided
 
 Context: the PI asked directly to build and test `melteval text-prior` on

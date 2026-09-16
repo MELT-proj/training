@@ -119,19 +119,27 @@ Settled.
       second seed before the screen.
 
 ### Track B — preparation
-- [ ] **Text-prior tool built** in melt-eval (`02-backbones.md` §3): bits per
+- [x] **Text-prior tool built** in melt-eval (`02-backbones.md` §3): bits per
       character and tokens per word on the FLEURS-24 references, with and
       without the IFT instruction, for ASR transcripts and English ST
       references. Run on all six backbones on an internal GPU.
       *Outcome:* the 6 × 24 prior table, a first ranking of backbones by
       language coverage before any training.
-      *Progress (2026-09-16, pulled ahead of schedule on the PI's direct
-      request):* built and PR'd ([melt-eval #14](https://github.com/MELT-proj/eval/pull/14)),
-      rows 1–4 only (no cascade oracle yet). Tested end to end on artemis
-      for 1 of 6 backbones (Llama-3.2-1B-Instruct, ASR + ST dev sets) --
-      found and fixed a real `LANGUAGE_ISO_TO_NAME` gap for Irish along the
-      way. See `02-backbones.md` §3.7 and the board entry. Remaining:
-      5 backbones, the cascade oracle, the `-test` splits.
+      *Done 2026-09-16, pulled ahead of schedule on the PI's direct
+      request:* built and PR'd ([melt-eval #14](https://github.com/MELT-proj/eval/pull/14)),
+      run on all six backbones against both dev sets (12 runs total).
+      Qwen3.5 leads overall, EuroLLM wins specifically on Maltese, and
+      instruct beats base in every family on both tasks with no exception
+      (a direct measurement of the "template-naive base" confound above).
+      Two infra snags along the way, not tool bugs: a missing
+      `LANGUAGE_ISO_TO_NAME` entry for Irish (fixed) and a shared HF
+      cache with partial (tokenizer/config-only) entries for three
+      checkpoints (retried against complete ones). See `02-backbones.md`
+      §3.7 and the board entry for the full table.
+      *Left beyond this checkbox's original scope:* ru/uk (frozen sets not
+      yet redeployed to production, §3.5), the cascade oracle (a separate
+      mechanism, §3.2, not part of this item's own description), and the
+      `-test` splits (this ran on `-dev`).
 - [ ] **Fondue config drafted** (`06-fondue.md` §3): language set incl. ru/uk,
       two-tier mixture weights (alpha/beta), filters, eval subset. Not frozen.
 - [ ] **Raclette config drafted**: same mixture at 25K h, big-run batch,
