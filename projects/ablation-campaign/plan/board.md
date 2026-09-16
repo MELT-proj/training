@@ -38,6 +38,84 @@ Finding 2, the real arm was already done: while building the debug command, foun
 Finding 3, an infra near-miss: setting REMOTE_REPO to an alternate path before calling `infra/sync_repo.sh mn5 --init` silently ignored the override -- `infra/runners/sites/mn5.sh` had `export REMOTE_REPO=training` with no `${VAR:-default}` fallback (unlike every other variable in that file), so the sync pushed straight to the shared `training` checkout and checked out my branch there. That checkout was mid-use by a concurrent session (`claude/librispeech-step0-l1-l4-60d122`, uncommitted smoketest scripts, 4 jobs pending in the queue) -- caught via `git log`/`git branch --show-current` immediately after, restored their branch, confirmed HEAD/status matched what it was before. Their untracked files were never touched (checkout doesn't remove untracked files); the exposure window was under a minute and nothing else on the cluster reads that checkout path live, but a longer job depending on tracked files there mid-checkout would not have been so lucky. Fixed `mn5.sh` to use the same `${VAR:-default}` pattern as the rest of the file; verified the override now works (`--dry-run` shows the right remote). Ran the actual debug job from a separate `training-qwen-ift-throughput` checkout under $HOME instead (manual `git init` + `git push` to a fresh remote path, done before the fix above landed); about 11 MB, left in place on MN5 for now -- this session's own tooling could not clean it up safely, so it is still there; harmless to remove by hand whenever convenient.
 
 Action needed: a session should backfill `arms.tsv` for the two completed Qwen arms (the exact IFT command is in `training/logs/melt-train-container.45685241.out` line 14 on MN5; the MA arm's job id needs a `sacct` lookup around 2026-09-04/05) and fold the IFT eval numbers into `02-backbones.md` §5 -- but only once week 3 settles what "the new baseline" compares against, since it's unclear whether this run predates or postdates every recipe decision in `01-interface-recipe.md`. A follow-up throughput probe at Fondue's real 8-node topology would close the node-scaling gap in Finding 2. The spare `training-qwen-ift-throughput` checkout under $HOME on MN5 can be removed whenever convenient.
+---
+
+## 2026-09-15 — Claude (worker session fleurs-x-to-en-st) — FLEURS X→en ST frozen sets built
+
+Context: week 1 Track B, `05-language-ladder.md` §3.1 ("FLEURS X→en ST frozen
+sets in melt-eval"). Task description named "the preprocessing repo" as
+home; §3.1 and the 2026-09-15 strategy-session entry below both say home is
+melt-eval (a shar-reader option, not a rewrite of the shar tree), so I built
+it there. Branch `claude/fleurs-x-to-en-st` in melt-eval (worktree moved to
+sit next to `training` so `melt-proj = {path = "../training", editable =
+true}` resolves — nested under `melt-eval/.claude/worktrees/` does not),
+[PR #11](https://github.com/MELT-proj/eval/pull/11).
+
+Finding / proposal: added `reference_map` as a new `SharReader` option
+(`melteval/readers/shar.py`) — a `{cut_id: text}` JSON that overrides a
+cut's target text entirely, bypassing `text_field`/`get_text_from_cut`, for
+sources like this one where the reference isn't on the cut at all. Built
+`configs/refs/fleurs-en-reference-{test,dev}.json` from the HF
+`google/fleurs` en_us metadata's `raw_transcription` (350 test / 150 dev
+ids, `scripts/build_fleurs_en_reference.py`), not from the shar tree's
+`custom.pnc_text` — confirmed §3.1's finding that `pnc_text` differs across
+an id's duplicate recordings (57/350 test ids) while `raw_transcription` is
+single-valued per id (checked directly, 0/350 and 0/150 disagreements). The
+majority-vote fallback §3.1 specifies was not needed.
+
+`configs/fleurs24-st-xen-{test,dev}.yaml` cover all 23 non-English EU
+locales. Froze against the real shar tree: test is 18,816 samples / 61.63 h,
+**zero** dropped; dev is 2,300 samples / 7.14 h (100/lang, seeded subset of
+`validation`). Spot-checked 20 random (locale, English reference) pairs by
+hand — all correctly paired. Copied to
+`/mnt/scratch-artemis/giuseppe/melt-data/eval-sets/{fleurs24-st-xen-test,fleurs24-st-xen-dev}/`.
+
+Deviated from §3.1's tag example: gave each locale its own `dataset_id`
+(`fleurs-<src>_en`) instead of a shared `dataset_id: fleurs`. Reason:
+`get_tags_from_cut` (training repo) sets the returned `lang` to the
+*target* language for any `task: st` cut, so every record here has
+`lang=en` regardless of audio locale (confirmed: freezing showed
+`"languages": {"en": 18816}`) — the existing `grouped(..., "lang", ...)`
+BLEU/chrF metric would collapse all 23 source languages into one bucket
+under the flat dataset_id. Per-locale dataset_id lets `-T
+dataset_id=fleurs-de_en` isolate one language, matching how
+`st-eval-campaign-v1.yaml` already isolates CoVoST2 directions. Documented
+in both config headers.
+
+Environment note for whoever builds the MN5/next melt-eval venv (open Track
+B item this week): built a working one at
+`/mnt/scratch-nyx/giuseppe/venvs/melteval-fleurs-x-to-en-st` (nyx only,
+CPU -- reuse it for freezing rather than rebuilding). `uv pip install
+--prerelease=allow -e ".[shar,metrics,dev]"`
+resolved `inspect_ai==0.3.254` but its agent/ACP code path imports a
+third-party `acp` package (`acp.helpers`, `acp.schema`, ...) that is **not**
+declared in `inspect_ai`'s own dependencies and is *not* the `acp-sdk` PyPI
+package (wrong namespace, no `helpers.py`) — needed `pip install
+agent-client-protocol==0.12.1` (uninstall any `acp-sdk` first, they collide
+on the `acp` import name) before `import melteval` stopped crashing at
+`melteval/dataset.py`'s `from inspect_ai.dataset import ...`. None of this
+is exercised by `melteval freeze` itself; it's pulled in only because
+`melteval/__init__.py` imports the whole package eagerly for `inspect_ai`
+registry side effects.
+
+Incidental finding, not fixed here: FLEURS `cs_cz` `test` sentence id
+`1904` (all 3 duplicate recordings) has leaked LLM self-correction reasoning
+in `custom.pnc_text` ("Vzhledem k tomu, že zadání vyžaduje opravy pouze
+interpunkce... **Korekce:**...", ~700–1500 chars) instead of a corrected
+transcript — a preprocessing-repo PNC-pass bug. Scanned all 23 X locales ×
+test/validation (length-ratio heuristic) for the same pattern: this is the
+**only** occurrence. Doesn't affect this PR's target text (English, via
+`reference_map`), only `source_text` for future COMET scoring of `cs`; a
+training-time ASR run using `cs` `pnc_text` as `text_field` would train on
+this leak for that one id, though 1/723 cuts is unlikely to matter.
+
+Action needed: PI/reviewer review and merge
+[PR #11](https://github.com/MELT-proj/eval/pull/11). Someone with
+preprocessing-repo context checks the `cs_cz`/id 1904 PNC leak and whether
+it recurs elsewhere the length-ratio heuristic here didn't cover (non-FLEURS
+corpora, non-`pnc_text` fields). `05-language-ladder.md` §3.1's tag example
+could use a one-line update to `dataset_id: fleurs-<src>_en` so it matches
+what got built.
 
 ---
 

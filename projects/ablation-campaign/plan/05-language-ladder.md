@@ -130,13 +130,16 @@ reference must be chosen deterministically per id.
   obtained: the majority `pnc_text` among the id's `en_us` recordings, ties
   broken by the lowest recording index. Never the lowercase supervision
   text, which would make chrF/COMET incomparable with published numbers.
-- Mechanism: a reader option in melt-eval's shar reader (for example
-  `reference_map: <path to the json>`) that overrides the target text by
-  cut id, with tags `task: st`, `lang: <x>`, `src_lang: <x>`,
-  `tgt_lang: en`, `dataset_id: fleurs`. The audio stays a locator into
-  `fleurs/<locale>/test`, zero-copy. Do not rewrite shar manifests: that
-  invalidates the `.idx` files, and this set is an evaluation artefact, not
-  training data.
+- Mechanism (built 2026-09-15, `melt-eval` PR #11): `reference_map` on
+  `SharReader` (`<path to the json>`) overrides the target text by cut id,
+  with tags `task: st`, `src_lang: <x>`, `tgt_lang: en`, `dataset_id:
+  fleurs-<x>_en` -- per-locale, not a shared `dataset_id: fleurs`, because
+  `get_tags_from_cut` returns the *target* language as `lang` for any
+  `task: st` cut, so a shared dataset_id would collapse all locales into
+  one `lang=en` bucket under the `grouped(..., "lang", ...)` BLEU/chrF
+  metric. The audio stays a locator into `fleurs/<locale>/test`, zero-copy.
+  Do not rewrite shar manifests: that invalidates the `.idx` files, and
+  this set is an evaluation artefact, not training data.
 - Specs: `fleurs24-st-xen-test` (23 locales, English excluded) and a
   `fleurs24-st-xen-dev` subset of about 100 utterances per language from
   `validation`, sharing sentence ids with the ASR dev subset where possible
