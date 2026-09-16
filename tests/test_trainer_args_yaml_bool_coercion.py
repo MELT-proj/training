@@ -24,7 +24,11 @@ from transformers import Seq2SeqTrainingArguments
 )
 def test_yaml_bool_token_is_restored_to_string(tmp_path, key, cli_value, expected):
     cfg = get_default_config()
-    cli_cfg = OmegaConf.from_dotlist([f"trainer.{key}={cli_value}", f"trainer.output_dir={tmp_path}"])
+    # bf16 defaults to true, which Seq2SeqTrainingArguments rejects outright
+    # on a GPU-less CI runner; disable it since it's unrelated to this test.
+    cli_cfg = OmegaConf.from_dotlist(
+        [f"trainer.{key}={cli_value}", "trainer.bf16=false", f"trainer.output_dir={tmp_path}"]
+    )
     cfg = OmegaConf.merge(cfg, cli_cfg)
 
     result = trainer_args_dict(cfg)
