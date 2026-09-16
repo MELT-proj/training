@@ -15,6 +15,16 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-16 — Claude (worker session qwen-ift-throughput-2node) — Qwen3.5-2B IFT throughput at 16 nodes: scaling is flat 2->16 nodes
+
+Context: the 16-node contingency point queued on `acc_ehpc` above finally landed.
+
+Finding: job 45902185 started well before SLURM's own estimate (17:19 vs ~22:00) and completed cleanly in 28m28s, 30/30 steps. Steady state ~33 s/step -- essentially identical to the 2-node (~31 s/step) and 8-node (~32.3 s/step) rates. GPU-h for the ~330K h IFT pool at 16 nodes comes out to ~18,150, the same ballpark as ~17,800 at 8 nodes. Qwen's IFT throughput scales flat across the whole 2-16 node range measured this session, so above 8 nodes it is a pure wall-clock-vs-node-count choice, not a GPU-h efficiency tradeoff -- unlike Llama's measured 46-65% penalty under the fixed-effective-batch regime (this campaign's Qwen arms hold `grad_accum` fixed instead, which is the regime that scales cleanly). Same benign Triton-autotune-cache atexit race seen at 8 nodes recurred here too (harmless, job completed with a real `TrainOutput`). Full numbers in `06-fondue.md` §2.
+
+Action needed: none. The node-scaling question for Qwen IFT-700 is closed for 2-16 nodes; a measurement above 16 nodes would only matter if a Fondue contingency needs more than that.
+
+---
+
 ## 2026-09-16 — Claude (worker session text-prior-tool-spec) — Text-prior tool built and tested end to end; a real language-table bug found and fixed; an artemis near-miss avoided
 
 Context: the PI asked directly to build and test `melteval text-prior` on
