@@ -15,6 +15,100 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-16 — Claude (worker session text-prior-tool-spec) — Text-prior tool built and tested end to end; a real language-table bug found and fixed; an artemis near-miss avoided
+
+Context: the PI asked directly to build and test `melteval text-prior` on
+a free GPU on `dionysus` (artemis, `partition=h100 qos=gpu-h100`) --
+jumping ahead of week 2's "Text-prior tool built" item on the PI's own
+instruction (`02-backbones.md` §3.1-§3.6 was the spec from earlier the
+same day).
+
+Finding 1, the tool: built `melteval/text_prior.py` + a `text-prior` CLI
+subcommand + `infra/run_text_prior.sbatch`/`submit_text_prior.sh`
+([melt-eval PR #14](https://github.com/MELT-proj/eval/pull/14)), covering
+rows 1-4 of the spec's table (raw + conditioned NLL/BPC, fertility) -- not
+the cascade oracle, a separate mechanism per spec §3.2, not built this
+session. CPU-validated on nyx before spending GPU time (3-sample slices,
+`meta-llama/Llama-3.2-1B-Instruct`): Hungarian's tokens/word came out
+~3x English's, matching the spec's own predicted 2-4x fertility gap --
+good sign the mechanics were right before the real run.
+
+Finding 2, a real bug the test surfaced: the first GPU attempt (job
+332112) crashed 10 languages into the 24-language ASR dev set, on `ga`.
+Not a bug in the new tool -- `apply_chat_template_to_texts` correctly
+raised on an unmapped language code, and the training repo's
+`LANGUAGE_ISO_TO_NAME` (`melt/training/data/audio/lhotse/helpers.py`) had
+**no entry for Irish at all**, the only gap among all 26 target languages
+(checked systematically against the dict, not just patched and moved on).
+This is a live gap, not hypothetical: any `{lang}`-templated prompt for
+`ga` -- training or eval -- would hit the same raise; `fleurs24-asr-{test,
+dev}.yaml` already tag `ga_ie` cuts `lang: ga`. Fixed with one dict entry (`"ga": "Irish"`), training repo `main`
+(`b5f4962`, merged up through `aff49df` alongside a concurrent session's
+`04-regime.md` work landing at the same time -- no conflict, different
+files).
+
+Finding 3, an infra near-miss avoided: the artemis melt-eval checkout at
+`/mnt/scratch-artemis/giuseppe/melt-proj-src/melt-eval` (the one the
+shared `melteval` venv is editable-installed from) was mid-work on branch
+`claude/air-bench-support` -- dozens of modified/untracked files, not
+committed, presumably a concurrent session's WIP (no matching open PR).
+Did not touch it. Instead cloned isolated copies for this session's own
+use: `/mnt/scratch-artemis/giuseppe/agent-worktrees/melt-eval-text-prior`
+(my branch) and `.../training-text-prior` (main, with the `ga` fix), and
+pointed the SLURM job at them via `PYTHONPATH` while still using the
+shared venv's installed torch/transformers (not modified). Both isolated
+clones are left in place -- small, harmless, reusable for the next
+backbone; remove whenever convenient.
+
+Finding 4, the real results. Second GPU attempt (job 332113, ASR;
+332114, ST) completed cleanly, `meta-llama/Llama-3.2-1B-Instruct` against
+the production `fleurs24-asr-dev` (24 langs, 2,400 samples) and
+`fleurs24-st-xen-dev` (23 locales, 2,300 samples) -- the ru/uk config
+addition (PR #12/#13) isn't deployed to these production copies yet, so
+this run is the pre-ru/uk 24/23-language scope. ~10 and ~7 minutes wall on
+one H100, one sample at a time, no batching (as spec'd -- correctness
+over throughput for a once-per-backbone measurement).
+
+Overall: ASR raw 1.940 bits/char, conditioned 1.884 (110,014 / 122,014
+target tokens over 2,400 samples); ST(->en) raw 1.094, conditioned 1.250
+(57,937 / 69,437 tokens over 2,300). Per-language spread is the real
+validation -- an English-centric 1B backbone should and does know English
+best and the EU's smallest/least-resourced languages worst:
+
+| lang | raw BPC | cond BPC | raw tok/word | cond tok/word |
+|---|---|---|---|---|
+| en | 1.072 | 1.260 | 1.207 | 1.440 |
+| es | 1.284 | 1.337 | 1.584 | 1.791 |
+| fr | 1.157 | 1.167 | 1.670 | 1.898 |
+| de | 1.251 | 1.324 | 1.899 | 2.141 |
+| hu | 1.815 | 1.736 | 3.036 | 3.318 |
+| mt | 3.066 | 3.113 | 3.381 | 3.654 |
+| ga | 2.753 | 2.871 | 2.294 | 2.507 |
+| lv | 2.847 | 2.833 | 3.362 | 3.670 |
+
+(all 24 languages in the JSON output, not just these 8.) Maltese highest
+BPC of all 24 -- plausible, it's one of the smallest-population EU
+languages and typologically an outlier (Semitic, Latin-scripted) among
+its neighbours. Hungarian and Maltese fertility land at 2.1-3.0x
+English's, inside the "2-4x" this section's own prose already predicted.
+`ga`'s numbers sit on a different textual basis than the other 23 (no
+`pnc_text`, lowercase/unpunctuated fallback -- known gap, `fleurs24-asr-
+test.yaml` header) so don't read its exact position as a clean signal,
+only its general "high" cluster. Full per-language JSON for both tasks:
+`/mnt/scratch-artemis/giuseppe/melt-data/text-prior/llama1b-ins-{asr,
+st}-dev.json` (artemis scratch, not committed anywhere -- regenerate with
+the same two `sbatch` commands if lost, they're cheap: ~10 GPU-minutes
+each).
+
+Action needed: review/merge melt-eval PR #14. A session runs the
+remaining five backbones (same two commands, swap `--model` and
+`--chat-template-config`/`--chat-template-from` per `02-backbones.md`
+§3.1's table) to get the real 6x24 prior table week 2 wants. The cascade
+oracle (row 5) still needs building. The two isolated artemis clones can
+be reused for that rather than re-cloned.
+
+---
+
 ## 2026-09-16 — Claude (strategy session) — The MA:IFT hours ratio was missing from the plan; now `04-regime.md` §6
 
 Context: the PI raised that no arm ever chose the split between MA hours and

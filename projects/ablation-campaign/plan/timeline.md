@@ -125,6 +125,13 @@ Settled.
       references. Run on all six backbones on an internal GPU.
       *Outcome:* the 6 × 24 prior table, a first ranking of backbones by
       language coverage before any training.
+      *Progress (2026-09-16, pulled ahead of schedule on the PI's direct
+      request):* built and PR'd ([melt-eval #14](https://github.com/MELT-proj/eval/pull/14)),
+      rows 1–4 only (no cascade oracle yet). Tested end to end on artemis
+      for 1 of 6 backbones (Llama-3.2-1B-Instruct, ASR + ST dev sets) --
+      found and fixed a real `LANGUAGE_ISO_TO_NAME` gap for Irish along the
+      way. See `02-backbones.md` §3.7 and the board entry. Remaining:
+      5 backbones, the cascade oracle, the `-test` splits.
 - [ ] **Fondue config drafted** (`06-fondue.md` §3): language set incl. ru/uk,
       two-tier mixture weights (alpha/beta), filters, eval subset. Not frozen.
 - [ ] **Raclette config drafted**: same mixture at 25K h, big-run batch,

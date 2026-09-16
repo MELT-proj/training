@@ -292,6 +292,35 @@ the sample count. Lives in melt-eval, run on an internal GPU (artemis, via
 `sbatch`, per its own rules) — not MN5, since this measurement has nothing to
 do with a checkpoint the campaign trained.
 
+### 3.7 Built and tested (rows 1–4 only; 1 of 6 backbones)
+
+Built 2026-09-16 as `melteval text-prior`
+([melt-eval PR #14](https://github.com/MELT-proj/eval/pull/14)), per
+§3.1–§3.4 above. The cascade oracle (row 5) is not built yet.
+
+Ran on artemis (`dionysus`, h100/gpu-h100, jobs 332113 and 332114) against
+`meta-llama/Llama-3.2-1B-Instruct` on the production `fleurs24-asr-dev`
+(24 languages, 2,400 samples — the ru/uk config addition, §3.5, is not
+deployed to this copy yet) and `fleurs24-st-xen-dev` (23 locales, 2,300
+samples). Both completed cleanly the second time; the first attempt
+crashed mid-run on `ga` — not a bug in the tool, a real gap in the
+training repo's `LANGUAGE_ISO_TO_NAME` (Irish had no entry at all,
+inherited by every `{lang}`-templated prompt, training and eval alike),
+fixed on `main` the same session.
+
+Overall (all languages pooled): ASR raw 1.94 bits/char, conditioned 1.88;
+ST(→en) raw 1.09, conditioned 1.25. Per-language spread checks out against
+what an English-centric 1B backbone should know: English lowest ASR raw
+BPC (1.07); Maltese highest (3.07) — one of the EU's lowest-resource
+languages by a wide margin; Hungarian and Maltese fertility (tokens/word)
+2.1–3.0× English's, inside this section's own "2–4×" prediction. Full
+per-language numbers: `/mnt/scratch-artemis/giuseppe/melt-data/text-prior/
+llama1b-ins-{asr,st}-dev.json` (artemis scratch, not committed — see the
+board entry for the full table).
+
+Not yet run: the other five backbones, the cascade oracle, and anything
+on `fleurs24-*-test` (only `-dev` so far).
+
 ## 4. Decision rule for the backbone (week-5 gate)
 
 Ranked, in this order, with the noise estimate from the seed replicates:
