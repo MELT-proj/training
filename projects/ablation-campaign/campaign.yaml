@@ -152,6 +152,18 @@ arms:
     seed: 42
     time: "02:00:00"
 
+  # L5: second seed of the best of L2-L4. Measured (dev-clean, final epoch):
+  # L1 loss 3.072/WER 1.12, L2 loss 3.012/WER 1.084, L3 loss 2.943/WER 1.076,
+  # L4 loss 2.625/WER 1.04 -- L4 wins clearly and was still declining fastest
+  # at epoch end, so it is the noise check.
+  - id: MA-librispeech-l5
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 1e-3
+    grad_accum_steps: 1
+    seed: 43
+    time: "02:00:00"
+
   # --------------------------------------------------------------- IFT (stage 2)
   - id: IFT-700-llama1b-ins
     stage: IFT
