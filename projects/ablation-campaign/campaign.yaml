@@ -164,6 +164,30 @@ arms:
     seed: 43
     time: "02:00:00"
 
+  # Diagnostic, not a campaign comparison point: L4's loss delta accelerated
+  # through the back half of its one epoch (-0.03/step early -> -0.108 near
+  # epoch 0.8) before flattening in the last ~10% -- consistent with the
+  # SLAM-ASR plateau-then-drop caught mid-transition, not a dead recipe. A
+  # fresh 3-epoch run at L4's LR/batch re-derives the cosine schedule over
+  # the full 3-epoch horizon, so LR stays higher for longer through exactly
+  # the region L4 showed acceleration in, testing "does it just need more
+  # gradient updates" without confounding decoder/encoder capacity or data
+  # volume. ~21-24 GPU-h (3x L4). Deliberately breaks the one-epoch
+  # convention (agent-protocol.md §3) via the documented `--` passthrough,
+  # not a new campaign axis -- submit as:
+  #   campaign.py run MA-librispeech-l4-ep3 -- --trainer.num_train_epochs 3
+  # eval_steps/save_steps stay at the single-epoch cadence (262), so this
+  # evaluates ~3x more often than a normal arm; harmless at this scale.
+  # New seed (44, continuing l1-l4's 42 / l5's 43) so the composed exp_name
+  # cannot collide with l4's already-completed run directory.
+  - id: MA-librispeech-l4-ep3
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 1e-3
+    grad_accum_steps: 1
+    seed: 44
+    time: "03:00:00"
+
   # --------------------------------------------------------------- IFT (stage 2)
   - id: IFT-700-llama1b-ins
     stage: IFT
