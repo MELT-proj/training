@@ -3,7 +3,7 @@
 Update this file whenever something starts, finishes, or blocks. Keep it
 short; the reasoning goes to `board.md`, the plan to the numbered files.
 
-**Last updated:** 2026-09-15, night (FLEURS X→en ST frozen sets built).
+**Last updated:** 2026-09-16, early hours (Qwen IFT throughput measured at 2 and 8 nodes, 16-node queued; FLEURS X→en ST frozen sets built, PR #10 merged).
 **Current week:** week 1 of `timeline.md` (2026-09-14 to 2026-09-20).
 
 ## Running on MN5
@@ -47,6 +47,16 @@ short; the reasoning goes to `board.md`, the plan to the numbered files.
   See the board entry -- one `cs_cz` sentence id has a PNC-pass leak
   (unrelated to this set's correctness), flagged for the preprocessing
   repo.
+- **Qwen3.5-2B IFT throughput measured** (`06-fondue.md` §2) at 2 nodes
+  (job 45894977: ~31 s/step) and 8 nodes -- Fondue's own planned topology
+  (job 45902184: ~32.3 s/step, essentially flat vs 2-node) -> ~17,800 GPU-h
+  for the ~330K h IFT pool, a directly measured-topology number replacing
+  the old unmeasured "46 h budget implies 25,000+" guess. Cross-checked
+  against a full production `IFT-700-qwen35-2b-ins` run (job 45685241) that
+  had already completed 2026-09-12, unrecorded: 27.3 s/step whole-epoch
+  average, ~306 GPU-h for the 6,729.85 h arm. A 16-node contingency point
+  (job 45902185) is queued on `acc_ehpc` (exceeds `acc_debug`'s 8-node cap),
+  ETA over a day out as of 2026-09-16 -- not blocking, see the board entry.
 
 ## Blocked / waiting
 
@@ -65,6 +75,21 @@ short; the reasoning goes to `board.md`, the plan to the numbered files.
   ignored" reading in `01-interface-recipe.md` §1 (see §1a and the
   2026-09-15 board entry). Does not block the LibriSpeech step-0 runs, but
   should factor into how their results get read.
+- **A completed Qwen MA-700 + IFT-700 pair on MN5 is off the ledger**: the
+  current-recipe `MA-700-qwen35-2b-ins` (done 2026-09-05) and
+  `IFT-700-qwen35-2b-ins` (done 2026-09-12, full eval scores in its
+  `trainer_state.json`) arms both finished but are in neither `arms.tsv`
+  nor this file. Needs a session to backfill `arms.tsv`, fold the eval
+  numbers into `02-backbones.md` §5 once week 3's recipe-confirmation
+  methodology is settled, and reconcile with the "old baseline" note above
+  (this may already be the new-recipe number, not the August one). See the
+  board entry.
+- ~~`infra/sync_repo.sh` cannot target an alternate `REMOTE_REPO` on MN5~~ (fixed
+  this session): `infra/runners/sites/mn5.sh` hardcoded
+  `REMOTE_REPO=training` (no `:-` fallback, unlike every other var in that
+  file), so an env override was silently ignored and a push landed on the
+  shared checkout. Caused a near-miss (see the board entry); now uses the
+  same `${VAR:-default}` pattern as the rest of the file.
 
 ## Next decisions, in order
 

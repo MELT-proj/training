@@ -42,10 +42,15 @@ frame rate) or a multilingual-data problem? Decided by LibriSpeech step 0.
       *Outcome:* dev-clean/dev-other generative WER per run, step at which the
       loss leaves the plateau, gap to the floor. Success bar: under 10% WER on
       test-clean and a transition inside the epoch.
-- [ ] **Qwen3.5-2B IFT throughput** at 2 nodes × 4 GPUs, 20–50 steps,
-      gradient checkpointing on, eval and saves off (`acc_debug`).
-      *Outcome:* a measured s/step to replace the unverified 46 h budget;
-      feeds the Fondue feasibility table in `06-fondue.md`.
+- [x] **Qwen3.5-2B IFT throughput** at 2 nodes × 4 GPUs, 20–50 steps,
+      gradient checkpointing on, eval and saves off (`acc_debug`). Done
+      2026-09-15, MN5 job 45894977: steady state ~31 s/step (DDP,
+      batch_duration 30, grad_accum 20, effective batch 4800 audio-s/step).
+      Cross-checked against the full production IFT-700-qwen35-2b-ins arm
+      (job 45685241), which turned out to have already completed on
+      2026-09-12 unrecorded: 5048 steps, 27.3 s/step whole-epoch average
+      (includes eval/checkpoint overhead), ~306 GPU-h for the 6,729.85 h
+      mix. See `06-fondue.md` §2 and the board entry.
 
 ### Track B — preparation
 - [x] **`stack_factor` for the MLP adapter** (done 2026-09-15, [PR #126](https://github.com/MELT-proj/training/pull/126)) (concatenate k consecutive

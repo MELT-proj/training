@@ -34,13 +34,58 @@ doubling:
 |---|---|---|
 | MA over 247K h ASR, adapter only (~1,000 audio-s per wall-s on 8 GPUs) | ~3,800 | ~5 days |
 | IFT over ~330K h, Llama-3.2-1B (5.73 s/step at 3,840 s effective) | ~6,000 | ~8 days |
-| IFT, Qwen3.5-2B with gradient checkpointing | **unmeasured**; the 46 h budget for 6.7K h implies 25,000+ | ~5 weeks |
+| IFT, Qwen3.5-2B with gradient checkpointing, 8 nodes x 4 GPUs, DDP, `batch_duration 30`/`grad_accum 20` (effective batch 19,200 audio-s/step) | **measured** 32.3 s/step at 8 nodes (see below) -> ~17,800 | ~23.1 days |
 
-The Qwen line is the planning risk: it is measured in week 1
-(`timeline.md`). If Qwen wins the backbone comparison, the options are more
-nodes (16 nodes at `grad_accum 4` doubles the effective batch again and needs
-its own LR point in Raclette), a smaller data budget, or a Llama-class
-Fondue with Qwen reported at campaign scale.
+**Qwen, measured 2026-09-15/16 (week 1, `timeline.md`, plus a same-session
+follow-up):** four data points across three topologies, all well under the
+old "46 h budget implies 25,000+" back-of-envelope, which was never a
+measurement -- `46:00:00` was a conservative SLURM wall-time *request*
+sized to cover a whole one-shot run, not an observed rate.
+- **Clean acc_debug probe** (job 45894977, `IFT-700-qwen35-2b-throughput-debug`,
+  30 steps, eval/save off, `--trainer.max_steps 30`): steady state ~31 s/step,
+  converged by step ~15 (tqdm's own closing line: `30/30 [28:02<00:00,
+  30.82s/it]`; delta between step 10 and step 30 gives 31.5 s/step).
+- **Cross-check against the real arm**: the full `IFT-700-qwen35-2b-ins`
+  production run (exp_name
+  `IFT-700-w2vbF-qwen35_2bInsT-mlpF-bd30-ga20-elr6e6-dlr2e5-lr2e4-s1337-8g`,
+  job 45685241) turned out to have **already completed** on MN5 on
+  2026-09-12 -- 5,048 steps (one full epoch over the 6,729.85 h mix), closing
+  average 27.3 s/step (includes `eval_on_start`, 7 eval rounds and 7
+  checkpoint saves, so it is the *upper* bound the "never trust the closing
+  average" rule warns about, yet it still reads faster than the clean debug
+  probe -- most likely sample variance in which cuts a 30-step debug window
+  happens to draw, not a real effect). Wall 38h19m at world_size 8 -> **~306
+  GPU-h for the 6,729.85 h arm**. This run and its MA-stage parent
+  (`MA-700asr-w2vbF-qwen35_2bInsF-mlpT-bd30-ga20-elr6e6-dlr2e5-lr2e5-s42-8g`,
+  done 2026-09-05) were not recorded in `arms.tsv` or `00-status.md` -- see
+  the board entry.
+- **8 nodes x 4 GPUs, measured 2026-09-15/16** (job 45902184, `acc_debug`,
+  same recipe with `grad_accum 20` held fixed so effective batch scales
+  with world_size to 19,200 audio-s/step): steady state ~32.3 s/step,
+  essentially flat versus the 2-node rate above (31 s/step) -- GPU-h stays
+  ~constant per the "keep `grad_accum` and add nodes" regime
+  (`ift700-scaling-measured`), same as Llama's own scaling. This IS
+  Fondue's planned topology, so it replaces the earlier same-topology
+  extrapolation: 330,000 / 6,729.85 ~= 49x the data, at 5.333 audio-h/step
+  (19,200 audio-s / 3600) -> ~61,900 steps -> wall ~555 h (~23.1 days) on
+  32 GPUs -> ~17,800 GPU-h, a directly measured-topology number, not an
+  extrapolation. About 3x Llama's 6,000 GPU-h Fondue estimate, but far
+  under the old unmeasured "25,000+" guess.
+- **16 nodes x 4 GPUs, submitted 2026-09-15** (job 45902185): exceeds
+  `acc_debug`'s 8-node cap, so it queued on `acc_ehpc` instead (no
+  priority scheduling); still pending as of 2026-09-16 01:40, SLURM's own
+  estimate puts the start over a day out (`2026-09-17T12:30`, itself often
+  pessimistic). This is the 16-node contingency point in §6, not needed to
+  answer the 8-node feasibility question above -- update here once it
+  lands.
+
+The Qwen line was the week-1 planning risk; it is now measured at Fondue's
+own planned topology (8 nodes), which is the number that matters for the
+decision table in §3. The 16-node point above is only relevant if Qwen
+needs to scale further (contingency in §6); if Qwen wins the backbone
+comparison at the 8-node number, no LR retune from Raclette is forced by
+this measurement alone -- Raclette still owns the actual LR choice, this
+only says the topology is affordable.
 
 MN5 caps one job at three days, so Fondue is a chain of resumes
 (`--dependency=afterany`, same topology, `MELT_GPUS_PER_NODE` pinned).
