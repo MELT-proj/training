@@ -3,7 +3,7 @@
 Update this file whenever something starts, finishes, or blocks. Keep it
 short; the reasoning goes to `board.md`, the plan to the numbered files.
 
-**Last updated:** 2026-09-16 (Qwen3.5-2B-Base and both EuroLLM checkpoints staged to MN5, offline loads verified; Qwen IFT throughput measured at 2 and 8 nodes, 16-node queued; FLEURS X→en ST frozen sets built, PR #10 merged).
+**Last updated:** 2026-09-16 (text-prior tool spec drafted, `02-backbones.md` §3; Qwen3.5-2B-Base and both EuroLLM checkpoints staged to MN5, offline loads verified; Qwen IFT throughput measured at 2 and 8 nodes, 16-node queued; FLEURS X→en ST frozen sets built, PR #10 merged).
 **Current week:** week 1 of `timeline.md` (2026-09-14 to 2026-09-20).
 
 ## Running on MN5
@@ -57,6 +57,15 @@ short; the reasoning goes to `board.md`, the plan to the numbered files.
   average, ~306 GPU-h for the 6,729.85 h arm. A 16-node contingency point
   (job 45902185) is queued on `acc_ehpc` (exceeds `acc_debug`'s 8-node cap),
   ETA over a day out as of 2026-09-16 -- not blocking, see the board entry.
+- **Text-prior tool spec drafted** (`02-backbones.md` §3.1–3.6): two
+  mechanisms, not one -- a new standalone `melteval text-prior` CLI command
+  for teacher-forced NLL/BPC/fertility (inspect_ai's Task/Solver/Scorer
+  triad has no logprob-of-a-given-continuation path, confirmed against
+  `scorers.py`), and a new solver on the existing `st` task for the cascade
+  oracle. Chat-template-per-backbone verified directly, not assumed:
+  `Qwen/Qwen3.5-2B-Base` ships its own (no borrowing); EuroLLM base does not
+  (checked its `tokenizer_config.json`) and has no `DECODER_PROFILES` entry
+  yet. Surfaces two prerequisites, see Blocked/waiting.
 - **Backbone checkpoints staged to MN5**: `Qwen/Qwen3.5-2B-Base` (4.3G) and
   both `utter-project/EuroLLM-1.7B` checkpoints (3.1G each) downloaded on nyx,
   rsynced to `mn5transfer:/gpfs/scratch/epor48/hf_cache/hub/`, and offline
@@ -67,7 +76,15 @@ short; the reasoning goes to `board.md`, the plan to the numbered files.
 ## Blocked / waiting
 
 - Q-Former adapter is broken; the PI fixes it in week 4.
-- PR #11 (FLEURS X→en ST frozen sets, melt-eval) awaiting review/merge.
+- PR #11 (FLEURS X→en ST frozen sets, melt-eval) awaiting review/merge --
+  also now a hard dependency for the ST/cascade-oracle half of the
+  text-prior tool (`02-backbones.md` §3.5).
+- **Two gaps found while spec'ing the text-prior tool** (`02-backbones.md`
+  §3.5, §3.1), both mechanical, neither blocking the ASR half: ru/uk are not
+  in the FLEURS ASR melt-eval configs despite FLEURS audio existing for
+  both (`data/hours_by_language.csv`); EuroLLM has no `DECODER_PROFILES`
+  entry in `plan_arm.py` (needed for week 3's MA arms too, not just this
+  tool).
 - The shared artemis melt-eval venv can't currently run generation:
   its sibling `training` checkout (`/mnt/home/giuseppe/melt-proj/training`)
   is pinned before the transformers 5 migration (`a519e4fe`); needs a sync

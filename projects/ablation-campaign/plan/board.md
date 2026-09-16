@@ -15,6 +15,65 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-16 — Claude (worker session text-prior-tool-spec) — Text-prior tool spec drafted (`02-backbones.md` §3)
+
+Context: week 1 Track B, `timeline.md` ("Text-prior tool spec agreed
+(`02-backbones.md` §3)").
+
+Finding / proposal: expanded §3 from a measurement table into an
+implementable spec (new §3.1–3.6), checked against melt-eval's actual code
+(`tasks.py`, `solver.py`, `scorers.py`, `prompt.py`, `dataset.py`,
+`manifest.py`) and `no_audio_floor.py`, not written from the table alone.
+Two things worth flagging beyond the spec itself:
+
+1. Teacher-forced NLL/BPC (table rows 1–4) cannot go through `inspect
+   eval` — melt-eval's Task/Solver/Scorer triad is generate-then-score-the-
+   completion, and nothing in `scorers.py` reads a logprob off
+   `state.output`. Proposed as a standalone `melteval text-prior` CLI
+   command instead, generalizing `no_audio_floor.py`'s approach
+   (teacher-forced forward pass, `mask_non_assistant_tokens`) but *without*
+   the `MELTForCausalLM` wrapper: the six backbones are bare
+   `AutoModelForCausalLM` checkpoints with no `<|audio|>` token and no MELT
+   vocab extension, and the whole point is the prior *before* any
+   MELT-specific change. The cascade oracle (row 5) is pure generation and
+   reuses the existing `st` task/`st_scorer` unchanged, via inspect's stock
+   `hf` provider (no need for `providers/melt.py`, which exists for audio
+   batching this measurement never needs) plus one new solver that
+   substitutes the gold source-language transcript for the audio content.
+2. Chat-template-per-backbone is not uniform across families — checked each
+   directly rather than pattern-matched from Llama: `Qwen/Qwen3.5-2B-Base`
+   ships its own chat template byte-identical to the Instruct one
+   (`DECODER_PROFILES`, already verified 2026-09-02, no borrowing needed),
+   but `utter-project/EuroLLM-1.7B` (base) does not (checked this session
+   against its `tokenizer_config.json` on nyx — no `chat_template` key)
+   while `-Instruct` ships plain ChatML (confirmed directly). EuroLLM has no
+   `DECODER_PROFILES` entry yet in `plan_arm.py` — flagged in the spec for
+   whoever builds the tool (and needed anyway for week 3's MA arms).
+
+Two data gaps found while grounding the spec against the actual FLEURS
+configs, both mechanical (missing config rows, not a design question):
+`fleurs24-asr-test.yaml`/`-dev.yaml` cover exactly the 24 EU languages, not
+ru/uk, despite `data/hours_by_language.csv` showing FLEURS audio exists for
+both (8.1h ru, 9.0h uk, `asr_fleurs` column) — this section's own "24 EU
+languages (plus ru, uk)" scope is currently unmet by the frozen sets it
+depends on. The ST X→en config likely has the same gap once PR #11 merges
+(not checked directly — that branch's config wasn't re-verified for ru/uk
+specifically). Neither blocks the ASR half of the tool; both block full-scope
+coverage.
+
+Also fixed two stale "EuroLLM ids unconfirmed" notes in this file's header
+and grid table (§1) — resolved by the 2026-09-16 staging entry below, just
+not reflected there yet.
+
+Action needed: a session builds the tool per §3.1–3.6 (week 2, Track B).
+Before or during that: add ru/uk rows to the FLEURS ASR frozen-set configs
+(and the ST one, once PR #11 merges) in melt-eval; add an EuroLLM entry to
+`DECODER_PROFILES` in `plan_arm.py`. PR #11's merge is a hard dependency for
+the ST/cascade-oracle half specifically (already tracked in `00-status.md`
+Blocked/waiting).
+
+---
+
 ## 2026-09-16 — Claude (worker session moe-adapter-verbatim-test) — Qwen3.5-2B-Base and both EuroLLM checkpoints staged to MN5, offline loads verified
 
 Context: week 1 Track B, `timeline.md` ("Stage models on MN5 over `mn5transfer`: `Qwen/Qwen3.5-2B-Base`, `utter-project/EuroLLM-1.7B`, `utter-project/EuroLLM-1.7B-Instruct`. Confirm the EuroLLM ids on the Hub first; verify offline loads before any allocation.") and the matching `00-status.md` Blocked item.

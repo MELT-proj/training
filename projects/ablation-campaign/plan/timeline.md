@@ -77,7 +77,12 @@ frame rate) or a multilingual-data problem? Decided by LibriSpeech step 0.
       `utter-project/EuroLLM-1.7B-Instruct`. Hub ids confirmed before
       downloading; offline load verified inside the container on `alogin1`
       for all three. See the board entry.
-- [ ] **Text-prior tool spec** agreed (`02-backbones.md` §3).
+- [x] **Text-prior tool spec** agreed (`02-backbones.md` §3). Done
+      2026-09-16: two mechanisms (standalone teacher-forced scorer for
+      NLL/BPC/fertility; a new solver on the existing `st` task for the
+      cascade oracle), chat-template-per-backbone verified directly. Surfaces
+      two prerequisites for week 2's build -- see the board entry and
+      `00-status.md` Blocked/waiting.
 - [ ] **Eyeball 20 Qwen hypotheses** from the running IFT arm's eval tables
       for a leaked think block.
 
