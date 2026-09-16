@@ -34,11 +34,23 @@ class ChatTemplateConfig:
         assistant_start: Token sequence that opens an assistant turn
             (e.g. ``"<|im_start|>assistant\\n"``).
         assistant_end: Token sequence that closes an assistant turn
-            (e.g. ``"<|im_end|>\\n"``).
+            (e.g. ``"<|im_end|>\\n"``). May carry trailing template
+            boilerplate (a newline, say) after the actual special token, so
+            label masking can match it as a literal substring of the render.
+        turn_end_token: The bare special token that ends an assistant turn
+            (e.g. ``"<|im_end|>"``), with none of ``assistant_end``'s
+            trailing boilerplate. This is what generation must stop on --
+            see :func:`~melt.training.setup.prepare_melt_config`, which adds
+            its id to ``text_decoder_config.eos_token_id``. A backbone's own
+            ``config.json`` typically carries only its raw pretraining EOS
+            (Qwen's ``<|endoftext|>``, not ``<|im_end|>``), which is why
+            generation on a freshly-built ChatML decoder never stopped at the
+            end of a turn (issue #124).
     """
 
     assistant_start: str
     assistant_end: str
+    turn_end_token: str
 
 
 CHAT_TEMPLATE_CONFIGS: dict[str, ChatTemplateConfig] = {
@@ -46,6 +58,7 @@ CHAT_TEMPLATE_CONFIGS: dict[str, ChatTemplateConfig] = {
     "chatml": ChatTemplateConfig(
         assistant_start="<|im_start|>assistant\n",
         assistant_end="<|im_end|>\n",
+        turn_end_token="<|im_end|>",
     ),
     # NOTE on Qwen 3 / 3.5: they open the assistant turn with an empty reasoning
     # block, `<|im_start|>assistant\n<think>\n\n</think>\n\n`, and
@@ -60,6 +73,7 @@ CHAT_TEMPLATE_CONFIGS: dict[str, ChatTemplateConfig] = {
     "llama3": ChatTemplateConfig(
         assistant_start="<|start_header_id|>assistant<|end_header_id|>\n\n",
         assistant_end="<|eot_id|>",
+        turn_end_token="<|eot_id|>",
     ),
 }
 
