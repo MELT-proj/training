@@ -141,5 +141,7 @@ MN5, offline loads verified; Qwen IFT throughput measured at 2 and 8 nodes,
 
 ## Open questions parked here
 
-- Whether Fondue's MA stage uses the full 247K h ASR pool or a subset; decided
-  by where the ladder's MA-stage WER saturates.
+- Whether Fondue's MA stage uses the full 247K h ASR pool, a subset, or none
+  at all (a single stage): decided by the MA:IFT ratio sweep
+  (`04-regime.md` §6, week 6) together with the ladder's MA-stage curves.
+  Default is full MA if the sweep misses the 2026-10-25 freeze.

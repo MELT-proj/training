@@ -195,9 +195,17 @@ regime fraction.
 - [ ] Evaluate the six backbone IFTs: in-domain, FLEURS-24, cascade oracle,
       text-ability retention. Second seed on the two leading backbones.
 - [ ] **IFT for the top three or four audio stacks** from the MA crossing.
+- [ ] **MA runs at 100 and 300 h/lang** for the ratio study (`04-regime.md`
+      §6), full schedules each, not checkpoints of the 700 h run. ~20 GPU-h,
+      and independent of the regime decision so they can go early.
+- [ ] **R9 and R10**, the decoder-frozen regime runs (`04-regime.md` §3),
+      if not already queued in week 4.
 - [ ] Q-Former arms of the crossing, if fixed.
 
 ### Track B — preparation
+- [ ] **Per-task budgets in `build_campaign_config.py`** and the ratio IFT
+      renders: ASR at 600, 400 and 0 h/lang with ST fixed at 700
+      (`04-regime.md` §6).
 - [ ] Ladder configs final; mixed-tier, repetition and Russian probe configs.
 - [ ] Raclette config final (batch on the order of one audio hour per step,
       three LR points, big-run topology).
@@ -217,6 +225,11 @@ go into the paper as ablations, not into Fondue.
       big-run batch and topology. Choose LR on loss at matched steps and
       FLEURS-24 dev CER.
 - [ ] Seed replicates for the headline backbone pair.
+- [ ] **MA:IFT ratio sweep under the winning regime** (`04-regime.md` §6):
+      IFT from the 0/100/300/700 h MA points, plus the zero-IFT evaluation
+      probe. Queue on Monday; feeds Fondue's "MA data budget and stage
+      split" row before the freeze if the queue allows, otherwise the
+      default holds.
 
 ### Track B — preparation
 - [ ] Fill the decision table in `06-fondue.md` §3 and mark it frozen.
@@ -230,7 +243,11 @@ go into the paper as ablations, not into Fondue.
 ### Track A — GPU
 - [ ] **Fondue MA starts** (Monday). ~5 days on 8 nodes at the measured MA
       rate if MA uses the full ASR pool; less if the ladder showed MA
-      saturating earlier (`06-fondue.md` §3, decision "MA data budget").
+      saturating earlier, or not at all if the ratio sweep says so
+      (`06-fondue.md` §3, decision "MA data budget and stage split").
+- [ ] **Ratio sweep, runner-up regime**, the two points P0 and P3
+      (`04-regime.md` §6): the interaction check. First thing to cut if the
+      queue is tight and the winning backbone is Qwen-class.
 - [ ] **Ladder tiers 10, 30, 100**: MA plus IFT each, on the winning
       backbone and stack (`05-language-ladder.md`).
 

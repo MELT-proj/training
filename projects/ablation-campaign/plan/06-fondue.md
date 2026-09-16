@@ -101,7 +101,7 @@ Checkpoint cadence bounds a failure's cost; keep two checkpoints.
 | language set | EU-24 + ru + uk (+ ca?) | Russian probe, `05-language-ladder.md` | ru, uk in (settled); ca open |
 | mixture weights | two-tier alpha/beta (the config builder already implements it); values to choose | ladder and repetition probe | open |
 | epochs for the tail | 1–4× repetition of languages under 100 h | repetition probe | open |
-| MA data budget | full 247K h vs a subset where MA-stage WER saturates | ladder MA-stage curves, step-0 transition | open |
+| MA data budget and stage split | full 247K h of ASR in MA, a subset, or — if the decoder-frozen regime wins and the no-MA point matches — a single stage with instructions from the start | the MA:IFT ratio sweep (`04-regime.md` §6, week 6), ladder MA-stage curves, step-0 transition; default if the sweep misses the freeze: full MA, as today | open |
 | effective batch and LR | batch ~ one audio hour per step; LR from Raclette | Raclette | open |
 | topology | 8 nodes × 4 GPUs, `grad_accum 4`; 16 nodes as contingency | scaling test | open |
 | checkpoint and eval cadence | checkpoints every ~6 h of wall clock; in-training generative eval on a FLEURS-24 dev subset of ~50 utterances per language | eval cost | open |

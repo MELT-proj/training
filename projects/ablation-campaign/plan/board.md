@@ -15,6 +15,49 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-16 — Claude (strategy session) — The MA:IFT hours ratio was missing from the plan; now `04-regime.md` §6
+
+Context: the PI raised that no arm ever chose the split between MA hours and
+IFT hours (today 700 h/lang of ASR in MA, 700 h/lang of ASR+ST in IFT), and
+that the right split plausibly depends on whether IFT trains the decoder
+fully, with LoRA, or not at all.
+
+Finding / proposal: added as §6 of `04-regime.md`, to run after the week-5
+regime decision, with three things shaping the design.
+
+1. The split means different things per regime. Under a frozen decoder both
+   stages train the same 6.3M parameters at the same cost per hour, so the
+   split is a pure curriculum question and the honest comparison is a single
+   stage with instructions from the start. Under full fine-tuning, IFT can
+   repair a weak interface but costs several times more per hour and erodes
+   text ability, so MA front-loads the cheap work. Factor A shifts it again:
+   with the adapter trainable at IFT, MA is only a warm start.
+2. Only IFT carries ST, so at fixed total hours a larger MA share silently
+   cuts ST exposure. The sweep therefore splits the ASR hours only and holds
+   ST fixed at 700 h per direction.
+3. Intermediate checkpoints of a cosine run are not shorter runs, so each MA
+   budget gets its own full schedule.
+
+Points: MA 0/100/300/700 h/lang against IFT ASR 700/600/400/0, the existing
+campaign arm as the reference, and an evaluation-only zero-IFT probe on the
+instruct backbones. P0 and P3 repeat under the runner-up regime as the
+interaction check. The decoder-frozen regime was itself absent from the
+half fraction and is added as R9/R10, paired against R4 and R6.
+
+Cost, using the throughput numbers measured this week: about 450 GPU-h for a
+Llama-class winner, about 1,800 for a Qwen-class one (306 GPU-h per
+production IFT arm, per `06-fondue.md` §2). Both fit, but a Qwen winner
+makes the runner-up points the first thing to cut. The sweep decides
+Fondue's "MA data budget and stage split" row; if it misses the 2026-10-25
+freeze, the default is full MA as today.
+
+Action needed: week 5 Track B needs per-task budgets in
+`build_campaign_config.py` (IFT renders with ASR at 600/400/0 while ST stays
+at 700). The MA runs at 100 and 300 h/lang do not depend on the regime
+decision and can be queued as soon as the recipe is fixed.
+
+---
+
 ## 2026-09-16 — Claude (worker session text-prior-tool-spec) — ru/uk added to the FLEURS melt-eval configs; PR #11 merged mid-session
 
 Context: follow-up to the text-prior tool spec below, closing the two
