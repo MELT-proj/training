@@ -15,6 +15,54 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-16 — Claude (worker session text-prior-tool-spec) — ru/uk added to the FLEURS melt-eval configs; PR #11 merged mid-session
+
+Context: follow-up to the text-prior tool spec below, closing the two
+prerequisites it surfaced -- the PI asked directly for the ru/uk config gap
+and the `DECODER_PROFILES` gap to be added to week 1's work.
+
+Finding / proposal: added `ru_ru`/`uk_ua` sources to all four FLEURS melt-eval
+configs (`fleurs24-asr-{test,dev}`, `fleurs24-st-xen-{test,dev}`), same
+shape as the existing rows. Verified before adding rather than assumed, the
+way `ga`'s gap was originally found: checked the shar tree directly first
+(both locales carry `custom.pnc_text` on `test` and `validation`, unlike
+`ga`), then re-froze all four specs and confirmed zero drops --
+`fleurs24-asr-test` 19,463→20,988 samples (63.41h→68.17h, 24→26 langs),
+`-dev` 2,400→2,600 (7.41h→8.01h); `fleurs24-st-xen-test` 18,816→20,341
+(61.63h→66.39h, 23→25 locales), `-dev` 2,300→2,500 (7.14h→7.75h). ru: 775/775
+ASR test cuts kept, 100/100 dev; ST reference_map zero-dropped too (same
+counts). uk: 750/750 ASR test, 100/100 dev; ST likewise. Hand-checked 3 ru
+and 3 uk (source, English reference) ST pairs -- all correctly paired.
+[melt-eval PR #12](https://github.com/MELT-proj/eval/pull/12) (ASR) and
+[melt-eval PR #13](https://github.com/MELT-proj/eval/pull/13) (ST), both
+open against `main`. Neither redeploys the production frozen-set copies on
+artemis scratch -- a re-freeze + copy, not done here.
+
+Surprise: PR #11 (the ST frozen sets this ru/uk work builds on) showed as
+**open** in every plan file at the start of this follow-up, per this same
+session's own earlier board entry a few minutes prior -- but `gh pr view 11`
+showed it had actually been merged by the PI (`g8a9`) at
+2026-09-16T10:55:17Z, apparently while the spec-drafting work above was in
+progress. My first push of the ru/uk ST commit landed on the
+now-closed-by-merge `claude/fleurs-x-to-en-st` branch, which doesn't reopen
+or update #11 -- caught via `gh pr view`, not assumed, and re-filed as new
+PR #13 against `main` instead. Fixed the stale "PR #11 open" claims this
+same session had just written into `02-backbones.md` §3.5,
+`00-status.md`, and `timeline.md`.
+
+`DECODER_PROFILES` (`plan_arm.py`) still has no EuroLLM entry -- not
+implemented here, since the PI's ask was to add it to the things that need
+doing, not to do it; added as its own `timeline.md` week-1 Track B item
+with the exact values this session already verified (`chatml`,
+`chat_template_from: utter-project/EuroLLM-1.7B-Instruct`).
+
+Action needed: review/merge melt-eval PR #12 and PR #13. A future session
+(or whoever builds the text-prior tool) adds the `DECODER_PROFILES` entry
+and re-freezes the production copies on artemis scratch before relying on
+the 26-language sets there.
+
+---
+
 ## 2026-09-16 — Claude (worker session text-prior-tool-spec) — Text-prior tool spec drafted (`02-backbones.md` §3)
 
 Context: week 1 Track B, `timeline.md` ("Text-prior tool spec agreed

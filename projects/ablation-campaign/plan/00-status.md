@@ -3,7 +3,11 @@
 Update this file whenever something starts, finishes, or blocks. Keep it
 short; the reasoning goes to `board.md`, the plan to the numbered files.
 
-**Last updated:** 2026-09-16 (text-prior tool spec drafted, `02-backbones.md` §3; Qwen3.5-2B-Base and both EuroLLM checkpoints staged to MN5, offline loads verified; Qwen IFT throughput measured at 2 and 8 nodes, 16-node queued; FLEURS X→en ST frozen sets built, PR #10 merged).
+**Last updated:** 2026-09-16 (ru/uk added to the FLEURS melt-eval configs,
+PR #12 + PR #13; PR #11 merged; text-prior tool spec drafted,
+`02-backbones.md` §3; Qwen3.5-2B-Base and both EuroLLM checkpoints staged to
+MN5, offline loads verified; Qwen IFT throughput measured at 2 and 8 nodes,
+16-node queued).
 **Current week:** week 1 of `timeline.md` (2026-09-14 to 2026-09-20).
 
 ## Running on MN5
@@ -43,10 +47,23 @@ short; the reasoning goes to `board.md`, the plan to the numbered files.
   dropped) and `fleurs24-st-xen-dev` (2,300 samples, 7.14 h, 100/lang).
   New `reference_map` reader option joins in the English FLEURS text by
   sentence id. Branch `claude/fleurs-x-to-en-st` in `melt-eval`,
-  [PR #11](https://github.com/MELT-proj/eval/pull/11) open against `main`.
-  See the board entry -- one `cs_cz` sentence id has a PNC-pass leak
-  (unrelated to this set's correctness), flagged for the preprocessing
-  repo.
+  [PR #11](https://github.com/MELT-proj/eval/pull/11), **merged**
+  2026-09-16. See the board entry -- one `cs_cz` sentence id has a
+  PNC-pass leak (unrelated to this set's correctness), flagged for the
+  preprocessing repo.
+- **ru/uk added to the FLEURS melt-eval configs** (both ASR and ST X→en,
+  test and dev): closes the gap the text-prior tool spec surfaced
+  (`02-backbones.md` §3.5). Checked directly first (both locales carry
+  `custom.pnc_text`, unlike `ga`; the ST `reference_map` covers their
+  sentence ids with zero drops, same as the other 23), then re-froze all
+  four configs to confirm: ASR test 19,463→20,988 samples (63.41h→68.17h),
+  ASR dev 2,400→2,600 (7.41h→8.01h), ST test 18,816→20,341
+  (61.63h→66.39h), ST dev 2,300→2,500 (7.14h→7.75h).
+  [melt-eval PR #12](https://github.com/MELT-proj/eval/pull/12) (ASR) and
+  [melt-eval PR #13](https://github.com/MELT-proj/eval/pull/13) (ST), both
+  open against `main`. Does not redeploy the production frozen-set copies
+  on artemis scratch -- whoever next consumes the 26-language set should
+  re-run `melteval freeze` and copy over.
 - **Qwen3.5-2B IFT throughput measured** (`06-fondue.md` §2) at 2 nodes
   (job 45894977: ~31 s/step) and 8 nodes -- Fondue's own planned topology
   (job 45902184: ~32.3 s/step, essentially flat vs 2-node) -> ~17,800 GPU-h
@@ -65,7 +82,8 @@ short; the reasoning goes to `board.md`, the plan to the numbered files.
   oracle. Chat-template-per-backbone verified directly, not assumed:
   `Qwen/Qwen3.5-2B-Base` ships its own (no borrowing); EuroLLM base does not
   (checked its `tokenizer_config.json`) and has no `DECODER_PROFILES` entry
-  yet. Surfaces two prerequisites, see Blocked/waiting.
+  yet -- see Blocked/waiting. Also surfaced a ru/uk gap in the FLEURS
+  melt-eval configs, closed same-day (see Done).
 - **Backbone checkpoints staged to MN5**: `Qwen/Qwen3.5-2B-Base` (4.3G) and
   both `utter-project/EuroLLM-1.7B` checkpoints (3.1G each) downloaded on nyx,
   rsynced to `mn5transfer:/gpfs/scratch/epor48/hf_cache/hub/`, and offline
@@ -76,15 +94,16 @@ short; the reasoning goes to `board.md`, the plan to the numbered files.
 ## Blocked / waiting
 
 - Q-Former adapter is broken; the PI fixes it in week 4.
-- PR #11 (FLEURS X→en ST frozen sets, melt-eval) awaiting review/merge --
-  also now a hard dependency for the ST/cascade-oracle half of the
-  text-prior tool (`02-backbones.md` §3.5).
-- **Two gaps found while spec'ing the text-prior tool** (`02-backbones.md`
-  §3.5, §3.1), both mechanical, neither blocking the ASR half: ru/uk are not
-  in the FLEURS ASR melt-eval configs despite FLEURS audio existing for
-  both (`data/hours_by_language.csv`); EuroLLM has no `DECODER_PROFILES`
-  entry in `plan_arm.py` (needed for week 3's MA arms too, not just this
-  tool).
+- PR #12 and PR #13 (ru/uk added to the FLEURS ASR and ST melt-eval
+  configs) awaiting review/merge.
+- **EuroLLM has no `DECODER_PROFILES` entry** (`plan_arm.py`): `chatml`,
+  `chat_template_from: utter-project/EuroLLM-1.7B-Instruct` for the base
+  checkpoint, verified directly against both checkpoints'
+  `tokenizer_config.json` while drafting the text-prior tool spec
+  (`02-backbones.md` §3.1) but not yet added to the dict. Needed for the
+  text-prior tool and week 3's EuroLLM MA arms; tracked as a `timeline.md`
+  week-1 item. (The ru/uk frozen-set gap the same spec surfaced is now
+  closed, see Done.)
 - The shared artemis melt-eval venv can't currently run generation:
   its sibling `training` checkout (`/mnt/home/giuseppe/melt-proj/training`)
   is pinned before the transformers 5 migration (`a519e4fe`); needs a sync

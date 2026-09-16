@@ -65,10 +65,12 @@ interface vs translation ability lost or never present.
 It lives in melt-eval, as a text-only measurement over the same frozen sets,
 so references and prompts are byte-identical to the speech eval. Needs one
 GPU for an afternoon on an internal machine; no MN5 time. It is two
-mechanisms, not one tool (§3.2), and has two data gaps to close before it
-can cover the full 24+ru+uk scope above (§3.5). Design below, checked
-against melt-eval's actual code (`~/melt-proj/melt-eval`) and the training
-repo's `no_audio_floor.py`, not written from the table alone.
+mechanisms, not one tool (§3.2); the frozen sets now cover the full
+24+ru+uk scope (§3.5), and one prerequisite remains before it can run on
+all six backbones — an EuroLLM entry in `DECODER_PROFILES` (§3.1,
+`timeline.md` week 1). Design below, checked against melt-eval's actual
+code (`~/melt-proj/melt-eval`) and the training repo's `no_audio_floor.py`,
+not written from the table alone.
 
 ### 3.1 What is scored: bare backbones, not MELT checkpoints
 
@@ -235,53 +237,51 @@ would change the character count the "tokenizer-independent" claim rests on,
 and FLEURS `pnc_text` casing/punctuation is what IFT actually trains the
 decoder to produce.
 
-### 3.5 Inputs: reuse the FLEURS-24 frozen sets, two gaps to close first
+### 3.5 Inputs: reuse the FLEURS-24 frozen sets
 
 No new freezing for the ASR rows: `fleurs24-asr-{test,dev}` (melt-eval
 [PR #10](https://github.com/MELT-proj/eval/pull/10), **merged**) already
-carries the transcript in `target` for all 24 EU languages, byte-identical
-to what the language ladder scores against. For the ST rows and the cascade
-oracle: `fleurs24-st-xen-{test,dev}`
-([PR #11](https://github.com/MELT-proj/eval/pull/11), **open, not yet
-merged** — a hard dependency for the ST/cascade half of this tool, not for
-the ASR half) carries the English reference in `target` and, load-bearing
+carries the transcript in `target`, byte-identical to what the language
+ladder scores against. For the ST rows and the cascade oracle:
+`fleurs24-st-xen-{test,dev}` ([PR #11](https://github.com/MELT-proj/eval/pull/11),
+**merged** 2026-09-16) carries the English reference in `target` and, load-bearing
 for the cascade oracle specifically, the source-language transcript in
 `source_text` (`source_text_field: custom.pnc_text` in that config) — no new
 manifest field needed, `record.source_text` is already read into
 `metadata["source_text"]` by `melteval/dataset.py`.
 
-Two gaps, both mechanical — no design decision, just missing rows — found by
-checking `fleurs24-asr-test.yaml` against `data/hours_by_language.csv` while
-drafting this:
+ru/uk are now in all four configs too
+([PR #12](https://github.com/MELT-proj/eval/pull/12) ASR,
+[PR #13](https://github.com/MELT-proj/eval/pull/13) ST, both open against
+`main` as of 2026-09-16) — they were missing when this spec was first
+drafted (checked against `data/hours_by_language.csv`, which shows FLEURS
+audio exists for both: `asr_fleurs` 8.1 h ru, 9.0 h uk), closing the gap
+between this section's stated scope ("24 EU languages (plus ru, uk)") and
+what the frozen sets actually covered. Checked directly before adding,
+the way `ga`'s gap (next paragraph) was found: both locales carry
+`custom.pnc_text` on `test` and `validation` (unlike `ga`), and the ST
+`reference_map` — built from all `en_us` sentence ids, not
+per-source-language — covers ru/uk's ids with zero drops, same as the
+other 23. Test grows to 20,988 ASR / 20,341 ST samples (26 / 25 languages);
+dev to 2,600 ASR / 2,500 ST (100 per language throughout). Not yet
+redeployed to the production frozen-set copies on artemis scratch — whoever
+first runs this tool for real should re-run `melteval freeze` and copy over
+rather than trust an already-materialized directory.
 
-- **ru/uk are not in either FLEURS config.** Both configs list exactly the
-  24 EU languages; `data/hours_by_language.csv` shows FLEURS audio exists
-  for both (`asr_fleurs` 8.1 h ru, 9.0 h uk) but no `lhotse_shar` block reads
-  it. This section's own scope ("24 EU languages (plus ru, uk)") is
-  currently unmet by the frozen sets it depends on. Adding them is two more
-  blocks per config, same shape as the existing 24
-  (`shar_path: .../fleurs/ru_ru/test`, `.../uk_ua/test`); for the ST config,
-  two more `reference_map` blocks against the *same*
-  `configs/refs/fleurs-en-reference-{test,dev}.json` (built from all
-  `en_us` ids, not per-source-language, so it already covers whatever ids
-  ru/uk share with English). Unverified: whether `ru_ru`/`uk_ua` shar
-  actually carries `custom.pnc_text` — check before assuming the field name
-  that works for the other 24 works here too (`ga`'s gap, next bullet, is
-  exactly this kind of surprise).
-- **`ga` has no `pnc_text`** (documented already, `fleurs24-asr-test.yaml`
-  header): its `target` falls back to lowercase, unpunctuated supervision
-  text. Its raw/conditioned BPC is therefore not on the same textual basis
-  as the other languages — expect it to look different and do not read that
-  as a backbone signal.
+**`ga` has no `pnc_text`** (documented already, `fleurs24-asr-test.yaml`
+header): its `target` falls back to lowercase, unpunctuated supervision
+text. Its raw/conditioned BPC is therefore not on the same textual basis
+as the other languages — expect it to look different and do not read that
+as a backbone signal.
 
 The manifest schema is shared between `dev` and `test`, so running on `test`
 later needs no rework, only a different `--frozen-set` path.
 
 ### 3.6 Scale and where it lives
 
-Dev subsets (`fleurs24-asr-dev`: 2,400 samples / 24 langs; `fleurs24-st-xen-dev`:
-2,300 / 23 langs) are the right size for this tool's first pass: six backbones
-× roughly 4,700 forward-pass samples (raw + conditioned, ASR + ST) plus
+Dev subsets (`fleurs24-asr-dev`: 2,600 samples / 26 langs; `fleurs24-st-xen-dev`:
+2,500 / 25 langs) are the right size for this tool's first pass: six backbones
+× roughly 5,100 forward-pass samples (raw + conditioned, ASR + ST) plus
 generation for the cascade oracle is the "one GPU afternoon, no MN5 time"
 this section already promises, and dev is roughly 8× cheaper than test for
 the same per-language coverage. Re-run on `fleurs24-asr-test`/

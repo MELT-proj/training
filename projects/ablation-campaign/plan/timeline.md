@@ -80,9 +80,22 @@ frame rate) or a multilingual-data problem? Decided by LibriSpeech step 0.
 - [x] **Text-prior tool spec** agreed (`02-backbones.md` §3). Done
       2026-09-16: two mechanisms (standalone teacher-forced scorer for
       NLL/BPC/fertility; a new solver on the existing `st` task for the
-      cascade oracle), chat-template-per-backbone verified directly. Surfaces
-      two prerequisites for week 2's build -- see the board entry and
-      `00-status.md` Blocked/waiting.
+      cascade oracle), chat-template-per-backbone verified directly. Surfaced
+      two prerequisites for week 2's build; the ru/uk one is closed below,
+      the `DECODER_PROFILES` one is its own item below -- see the board
+      entry and `00-status.md` Blocked/waiting.
+- [x] **ru/uk added to the FLEURS melt-eval configs** (done 2026-09-16,
+      closing the gap the text-prior tool spec surfaced above):
+      [melt-eval#12](https://github.com/MELT-proj/eval/pull/12) (ASR test +
+      dev) and [melt-eval#13](https://github.com/MELT-proj/eval/pull/13) (ST
+      X→en test + dev), both open against `main`. Verified by re-freezing:
+      zero dropped cuts for either locale on any of the four sets.
+- [ ] **Add EuroLLM to `DECODER_PROFILES`** (`plan_arm.py`): `chatml`,
+      `chat_template_from: utter-project/EuroLLM-1.7B-Instruct` for the base
+      checkpoint -- verified directly against both checkpoints'
+      `tokenizer_config.json` while drafting the text-prior tool spec
+      (`02-backbones.md` §3.1, 2026-09-16), not yet added to the dict itself.
+      Needed for the text-prior tool and for week 3's EuroLLM MA arms.
 - [ ] **Eyeball 20 Qwen hypotheses** from the running IFT arm's eval tables
       for a leaked think block.
 
