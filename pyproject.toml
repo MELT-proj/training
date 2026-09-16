@@ -101,3 +101,4 @@ flash-attn = { url = "https://github.com/Dao-AILab/flash-attention/releases/down
 [[tool.uv.index]]
 name = "pytorch"
 url = "https://download.pytorch.org/whl/cu126"
+explicit = true
