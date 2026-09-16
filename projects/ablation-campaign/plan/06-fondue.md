@@ -71,21 +71,28 @@ sized to cover a whole one-shot run, not an observed rate.
   32 GPUs -> ~17,800 GPU-h, a directly measured-topology number, not an
   extrapolation. About 3x Llama's 6,000 GPU-h Fondue estimate, but far
   under the old unmeasured "25,000+" guess.
-- **16 nodes x 4 GPUs, submitted 2026-09-15** (job 45902185): exceeds
-  `acc_debug`'s 8-node cap, so it queued on `acc_ehpc` instead (no
-  priority scheduling); still pending as of 2026-09-16 01:40, SLURM's own
-  estimate puts the start over a day out (`2026-09-17T12:30`, itself often
-  pessimistic). This is the 16-node contingency point in §6, not needed to
-  answer the 8-node feasibility question above -- update here once it
-  lands.
+- **16 nodes x 4 GPUs, measured 2026-09-16** (job 45902185, `acc_ehpc`,
+  same recipe with `grad_accum 20` held fixed, effective batch 38,400
+  audio-s/step): started sooner than SLURM's own estimate (17:19, not
+  ~22:00), completed cleanly in 28m28s. Steady state ~33 s/step --
+  essentially the same as 2 and 8 nodes. **Scaling is flat from 2 to 16
+  nodes**: GPU-h for the ~330K h IFT pool comes out to ~18,150 at 16 nodes,
+  the same ballpark as ~17,800 at 8 nodes and ~15,000-17,000 extrapolated
+  at 2 nodes. Node count above 8 is therefore a pure wall-clock-vs-node-
+  count choice for Qwen IFT, not a GPU-h efficiency tradeoff (unlike
+  Llama's measured 46-65% penalty for the fixed-effective-batch regime --
+  this campaign's Qwen arms use the fixed-`grad_accum` regime instead,
+  which is why it scales cleanly here).
 
 The Qwen line was the week-1 planning risk; it is now measured at Fondue's
-own planned topology (8 nodes), which is the number that matters for the
-decision table in §3. The 16-node point above is only relevant if Qwen
-needs to scale further (contingency in §6); if Qwen wins the backbone
-comparison at the 8-node number, no LR retune from Raclette is forced by
-this measurement alone -- Raclette still owns the actual LR choice, this
-only says the topology is affordable.
+own planned topology (8 nodes) and its 16-node contingency, both flat with
+2 nodes, which settles the number that matters for the decision table in
+§3: node count is a wall-clock lever, not a GPU-h risk, for at least this
+range. If Qwen wins the backbone comparison, 16 nodes is a straightforward
+way to halve Fondue's wall clock at roughly the same total cost -- no LR
+retune from Raclette is forced by this measurement alone, Raclette still
+owns the actual LR choice, this only says every topology in range is
+affordable.
 
 MN5 caps one job at three days, so Fondue is a chain of resumes
 (`--dependency=afterany`, same topology, `MELT_GPUS_PER_NODE` pinned).
