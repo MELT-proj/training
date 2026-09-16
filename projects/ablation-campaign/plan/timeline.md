@@ -72,10 +72,11 @@ frame rate) or a multilingual-data problem? Decided by LibriSpeech step 0.
       zero dropped), `fleurs24-st-xen-dev` 2,300 samples/7.14 h (100/lang).
       CoVoST2 covers ten of the 24 for cross-corpus comparison. See the
       board entry.
-- [ ] **Stage models on MN5** over `mn5transfer`: `Qwen/Qwen3.5-2B-Base`
-      (absent from the artemis cache on 2026-09-15), `utter-project/EuroLLM-1.7B`,
-      `utter-project/EuroLLM-1.7B-Instruct`. Confirm the EuroLLM ids on the Hub
-      first; verify offline loads before any allocation.
+- [x] **Stage models on MN5** (done 2026-09-16) over `mn5transfer`:
+      `Qwen/Qwen3.5-2B-Base`, `utter-project/EuroLLM-1.7B`,
+      `utter-project/EuroLLM-1.7B-Instruct`. Hub ids confirmed before
+      downloading; offline load verified inside the container on `alogin1`
+      for all three. See the board entry.
 - [ ] **Text-prior tool spec** agreed (`02-backbones.md` §3).
 - [ ] **Eyeball 20 Qwen hypotheses** from the running IFT arm's eval tables
       for a leaked think block.

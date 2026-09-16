@@ -15,6 +15,18 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-16 — Claude (worker session moe-adapter-verbatim-test) — Qwen3.5-2B-Base and both EuroLLM checkpoints staged to MN5, offline loads verified
+
+Context: week 1 Track B, `timeline.md` ("Stage models on MN5 over `mn5transfer`: `Qwen/Qwen3.5-2B-Base`, `utter-project/EuroLLM-1.7B`, `utter-project/EuroLLM-1.7B-Instruct`. Confirm the EuroLLM ids on the Hub first; verify offline loads before any allocation.") and the matching `00-status.md` Blocked item.
+
+Finding: confirmed all three repo ids exist and are ungated via the Hub API before downloading anything, resolving the open question in `00-status.md` ("EuroLLM checkpoint ids on the Hub are unconfirmed") — `utter-project/EuroLLM-1.7B` and `-Instruct` are exactly the ids already assumed everywhere else in the plan. Downloaded on nyx (`hf download`, nyx has outbound internet unlike MN5) into the local HF cache: `Qwen/Qwen3.5-2B-Base` 4.3G (12 files), `utter-project/EuroLLM-1.7B` 3.1G, `utter-project/EuroLLM-1.7B-Instruct` 3.1G (9 files each), 11.22G total. Both EuroLLM checkpoints ship only `pytorch_model.bin`, no safetensors — same shape as the known `.bin`-offline trap, not new. rsynced to `mn5transfer:/gpfs/scratch/epor48/hf_cache/hub/` (`--no-owner --no-group --partial`, dry-run first): exit 0, sizes matched on the far side.
+
+Verified offline load on `alogin1` inside the promoted container (`melt_cuda126.sif`, `HF_HUB_OFFLINE=1`, `HF_HOME=/gpfs/scratch/epor48/hf_cache`): `AutoConfig`/`AutoTokenizer`/`AutoModelForCausalLM.from_pretrained` succeeded for all three with no Hub contact. `Qwen/Qwen3.5-2B-Base`: `model_type qwen3_5`, 1,881,825,088 params, vocab 248,077 — loads fine under the promoted transformers-5 image (the `qwen3_5` model type gap was specific to the old `4.57.1` pin, per `qwen35-transformers-support-gap`; not an issue here). `utter-project/EuroLLM-1.7B` and `-Instruct`: `model_type llama`, 1,656,850,432 params each, vocab 128,000 (architecture identical between base and instruct, as expected). Ran this on the login node CPU only, no `sbatch` — it's a config/tokenizer/weight-file parse check, not GPU work, same class of check as the `lhotse`/`torch`/`torchdata` version probe in `docs/hpc_runbook.md`. Deleted the two small helper files (`verify_offline_load.py`, `run_verify.sh`) from `/gpfs/scratch/epor48/` after use.
+
+Action needed: none. All three checkpoints are staged and load offline; the backbone grid in `02-backbones.md` and the Fondue backbone options in `06-fondue.md` §3 can now be scheduled against them without risking a load failure minutes into a queued job.
+
+---
+
 ## 2026-09-16 — Claude (worker session qwen-ift-throughput-2node) — Qwen3.5-2B IFT throughput at 8 nodes measured; 16 nodes queued
 
 Context: follow-up requested in the same session as the 2-node measurement above, to close the node-scaling gap flagged there.

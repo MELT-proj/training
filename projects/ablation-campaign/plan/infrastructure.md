@@ -162,10 +162,10 @@ anything time-sensitive.
 
 ## 6. Models and where they are
 
-Staged on MN5 (`/gpfs/scratch/epor48/hf_cache`) as of 2026-09-15:
+Staged on MN5 (`/gpfs/scratch/epor48/hf_cache`) as of 2026-09-16:
 `facebook/w2v-bert-2.0`, `facebook/mms-1b`, `meta-llama/Llama-3.2-1B` and
-`-Instruct`, `Qwen/Qwen3.5-2B`. **Not yet staged:** `Qwen/Qwen3.5-2B-Base`
-(also absent from the artemis cache), `utter-project/EuroLLM-1.7B` and
-`-Instruct`, Whisper-large-v3, mHuBERT-147 (the last two have artemis
-launchers; confirm they are on MN5 before the crossing). Verify each with
-`HF_HUB_OFFLINE=1` inside the container.
+`-Instruct`, `Qwen/Qwen3.5-2B`, `Qwen/Qwen3.5-2B-Base`,
+`utter-project/EuroLLM-1.7B` and `-Instruct` (offline load verified for the
+last three, board entry 2026-09-16). **Not yet staged:** Whisper-large-v3,
+mHuBERT-147 (both have artemis launchers; confirm they are on MN5 before the
+crossing). Verify each with `HF_HUB_OFFLINE=1` inside the container.

@@ -3,7 +3,7 @@
 Update this file whenever something starts, finishes, or blocks. Keep it
 short; the reasoning goes to `board.md`, the plan to the numbered files.
 
-**Last updated:** 2026-09-16, early hours (Qwen IFT throughput measured at 2 and 8 nodes, 16-node queued; FLEURS X→en ST frozen sets built, PR #10 merged).
+**Last updated:** 2026-09-16 (Qwen3.5-2B-Base and both EuroLLM checkpoints staged to MN5, offline loads verified; Qwen IFT throughput measured at 2 and 8 nodes, 16-node queued; FLEURS X→en ST frozen sets built, PR #10 merged).
 **Current week:** week 1 of `timeline.md` (2026-09-14 to 2026-09-20).
 
 ## Running on MN5
@@ -57,11 +57,16 @@ short; the reasoning goes to `board.md`, the plan to the numbered files.
   average, ~306 GPU-h for the 6,729.85 h arm. A 16-node contingency point
   (job 45902185) is queued on `acc_ehpc` (exceeds `acc_debug`'s 8-node cap),
   ETA over a day out as of 2026-09-16 -- not blocking, see the board entry.
+- **Backbone checkpoints staged to MN5**: `Qwen/Qwen3.5-2B-Base` (4.3G) and
+  both `utter-project/EuroLLM-1.7B` checkpoints (3.1G each) downloaded on nyx,
+  rsynced to `mn5transfer:/gpfs/scratch/epor48/hf_cache/hub/`, and offline
+  load verified inside the container on `alogin1` (`HF_HUB_OFFLINE=1`) --
+  `qwen3_5`/1.88B params and `llama`/1.66B params respectively. The EuroLLM
+  Hub ids are now confirmed, not assumed. See the board entry.
 
 ## Blocked / waiting
 
 - Q-Former adapter is broken; the PI fixes it in week 4.
-- `Qwen/Qwen3.5-2B-Base` and both EuroLLM checkpoints need staging to MN5.
 - PR #11 (FLEURS X→en ST frozen sets, melt-eval) awaiting review/merge.
 - The shared artemis melt-eval venv can't currently run generation:
   its sibling `training` checkout (`/mnt/home/giuseppe/melt-proj/training`)
@@ -100,7 +105,5 @@ short; the reasoning goes to `board.md`, the plan to the numbered files.
 
 ## Open questions parked here
 
-- EuroLLM checkpoint ids on the Hub are unconfirmed (`utter-project/EuroLLM-1.7B`,
-  `-Instruct` assumed).
 - Whether Fondue's MA stage uses the full 247K h ASR pool or a subset; decided
   by where the ladder's MA-stage WER saturates.
