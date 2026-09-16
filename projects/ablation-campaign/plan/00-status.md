@@ -9,7 +9,7 @@ Maltese, instruct beats base in every family; a live `LANGUAGE_ISO_TO_NAME`
 gap for Irish found and fixed; ru/uk added to the FLEURS melt-eval configs,
 PR #12 + PR #13; PR #11 merged; Qwen3.5-2B-Base and both EuroLLM
 checkpoints staged to MN5, offline loads verified; Qwen IFT throughput
-measured at 2 and 8 nodes, 16-node queued).
+measured at 2, 8 and 16 nodes -- scaling is flat).
 **Current week:** week 1 of `timeline.md` (2026-09-14 to 2026-09-20).
 
 ## Running on MN5
@@ -66,16 +66,15 @@ measured at 2 and 8 nodes, 16-node queued).
   open against `main`. Does not redeploy the production frozen-set copies
   on artemis scratch -- whoever next consumes the 26-language set should
   re-run `melteval freeze` and copy over.
-- **Qwen3.5-2B IFT throughput measured** (`06-fondue.md` §2) at 2 nodes
-  (job 45894977: ~31 s/step) and 8 nodes -- Fondue's own planned topology
-  (job 45902184: ~32.3 s/step, essentially flat vs 2-node) -> ~17,800 GPU-h
-  for the ~330K h IFT pool, a directly measured-topology number replacing
-  the old unmeasured "46 h budget implies 25,000+" guess. Cross-checked
-  against a full production `IFT-700-qwen35-2b-ins` run (job 45685241) that
-  had already completed 2026-09-12, unrecorded: 27.3 s/step whole-epoch
-  average, ~306 GPU-h for the 6,729.85 h arm. A 16-node contingency point
-  (job 45902185) is queued on `acc_ehpc` (exceeds `acc_debug`'s 8-node cap),
-  ETA over a day out as of 2026-09-16 -- not blocking, see the board entry.
+- **Qwen3.5-2B IFT throughput measured** (`06-fondue.md` §2) at 2, 8 and
+  16 nodes: ~31, ~32.3 and ~33 s/step respectively -- essentially flat
+  scaling across the whole range. Fondue's own 8-node topology costs
+  ~17,800 GPU-h for the ~330K h IFT pool; 16 nodes is ~18,150, same
+  ballpark, so above 8 nodes it's a wall-clock lever, not a GPU-h cost.
+  Replaces the old unmeasured "46 h budget implies 25,000+" guess.
+  Cross-checked against a full production `IFT-700-qwen35-2b-ins` run (job
+  45685241) that had already completed 2026-09-12, unrecorded: 27.3 s/step
+  whole-epoch average, ~306 GPU-h for the 6,729.85 h arm.
 - **Text-prior tool spec drafted** (`02-backbones.md` §3.1–3.6): two
   mechanisms, not one -- a new standalone `melteval text-prior` CLI command
   for teacher-forced NLL/BPC/fertility (inspect_ai's Task/Solver/Scorer
