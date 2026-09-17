@@ -24,9 +24,64 @@ def _config_value(config, key: str, default):
     return default if value is None else value
 
 
+#: A hypothesis more than this many times the reference's word count is
+#: treated as decoding runaway (a repetition loop hitting the generation
+#: budget) rather than an unusually long transcription. Fixed per
+#: `plan/01-interface-recipe.md` §2b's pre-flight resolution, 2026-09-17.
+RUNAWAY_LENGTH_RATIO = 2.0
+
+
+def _mean_length_ratio(refs: list[str], preds: list[str]) -> float:
+    """Mean of each pair's ``len(pred.split()) / len(ref.split())``.
+
+    Empty references have no well-defined ratio and are excluded rather than
+    treated as infinite or skipped-as-zero, either of which would distort the
+    mean over one pathological sample.
+    """
+    ratios = [
+        len(pred.split()) / len(ref.split())
+        for ref, pred in zip(refs, preds)
+        if ref.split()
+    ]
+    return sum(ratios) / len(ratios) if ratios else 0.0
+
+
+def _runaway_fraction(refs: list[str], preds: list[str]) -> float:
+    """Share of pairs whose hypothesis exceeds `RUNAWAY_LENGTH_RATIO` times the
+    reference's word count -- the signal a repetition loop leaves behind
+    (`plan/01-interface-recipe.md` §2b): most of a loop's excess length is
+    the same phrase repeated past where the reference would have ended, so it
+    shows up as insertions regardless of what the loop happens to repeat.
+    Reference-empty pairs cannot be runaway by this definition and are
+    excluded from both the count and the denominator, same as
+    `_mean_length_ratio`.
+    """
+    considered = [(ref, pred) for ref, pred in zip(refs, preds) if ref.split()]
+    if not considered:
+        return 0.0
+    runaway = sum(
+        1
+        for ref, pred in considered
+        if len(pred.split()) > RUNAWAY_LENGTH_RATIO * len(ref.split())
+    )
+    return runaway / len(considered)
+
+
 class TrainingEvaluator:
     """Computes WER and CER during evaluation, with optional per-language and
     per-task breakdowns.
+
+    The overall metrics also include ``substitution_rate``,
+    ``deletion_rate`` and ``insertion_rate`` (which sum to ``wer``),
+    ``length_ratio`` (mean hypothesis/reference word-count ratio) and
+    ``runaway_fraction`` (share of hypotheses more than
+    ``RUNAWAY_LENGTH_RATIO``x the reference's word count) -- all computed
+    over the whole evaluated set, not just the ``log_num_samples`` logged for
+    display. Added per `plan/01-interface-recipe.md` §2b's pre-flight
+    resolution (2026-09-17): a handful of decoding-runaway hypotheses can
+    dominate an aggregate WER/insertion count without showing up in it, so
+    the campaign's stop condition reads `runaway_fraction` directly instead
+    of inferring it from `wer` alone.
 
     Predictions arrive as *generated token ids* -- ``MELTTrainer.prediction_step``
     decodes each batch with ``generate()`` rather than taking the argmax of a
@@ -262,9 +317,21 @@ class TrainingEvaluator:
             ]
 
             # --- Overall metrics ---
+            # process_words once rather than jiwer.wer(refs, preds) separately:
+            # its .wer is identical (verified against jiwer's own wer()), and
+            # this is also where substitution/deletion/insertion come from, so
+            # the four numbers stay consistent with each other by construction
+            # (substitution_rate + deletion_rate + insertion_rate == wer).
+            word_measures = jiwer.process_words(refs, preds)
+            n_ref_words = sum(len(ref.split()) for ref in refs)
             r: dict[str, float] = {
-                "wer": jiwer.wer(refs, preds),
+                "wer": word_measures.wer,
                 "cer": jiwer.cer(refs, preds),
+                "substitution_rate": word_measures.substitutions / n_ref_words,
+                "deletion_rate": word_measures.deletions / n_ref_words,
+                "insertion_rate": word_measures.insertions / n_ref_words,
+                "length_ratio": _mean_length_ratio(refs, preds),
+                "runaway_fraction": _runaway_fraction(refs, preds),
             }
 
             # --- Per-language metrics ---
