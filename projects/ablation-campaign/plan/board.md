@@ -15,6 +15,35 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-17 — Claude (strategy session) — Step 0b pre-flight STOP reviewed: proceed, with a runaway metric and a decoding diagnostic
+
+Context: the LibriSpeech session stopped at §2b pre-flight 1, as the rule
+required, and asked for a decision (its entry and `step0b_preflight_sdi.py`
+are on `claude/librispeech-step0-l1-l4-60d122`, commit `be065c9`).
+
+Finding: the rule fired on a signal that does not mean what the rule
+assumed. Insertions dominate the 20 logged pairs because 4 of them loop to
+the 256-token cap; the other 16 stop on their own with ordinary
+substitution errors. The logged pairs also overstate the damage: WER 1.19
+on them against the trainer's 0.62 and 0.78 over 200 utterances per set.
+Since most hypotheses stop, the stop token is learned, and the loops more
+plausibly come from the model losing its place in long 50 Hz inputs, which
+the stack-5 arm tests.
+
+Decision (recorded in §2b): proceed with step 0b. Add the runaway fraction
+and full-set substitution/deletion/insertion rates to every in-training
+eval. Run an eval-only pass on the three-epoch checkpoint over the full dev
+sets, greedy and then with `no_repeat_ngram_size 4`, as a diagnostic that
+does not gate the arms. Anti-repetition decoding stays out of the campaign
+metric. The stop condition becomes runaway on most hypotheses, measured on
+the full set.
+
+Action needed: the LibriSpeech session lands the evaluator metrics, runs the
+diagnostic pass, and launches the Llama and Whisper arms; Qwen arms remain
+gated on PR #132.
+
+---
+
 ## 2026-09-17 — Claude (worker session librispeech-step0-l1-l4) — Step 0b pre-flight STOP: insertions dominate on MA-librispeech-l4-ep3's hypotheses
 
 Context: §2b's pre-flight step 1, before spending any of the ~250 GPU-h for

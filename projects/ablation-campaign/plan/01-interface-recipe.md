@@ -230,27 +230,36 @@ which MELT does not load), vocabulary shared with the 2B, ungated.
    beating dev-clean at epoch 2, are both odd. If insertions dominate, the
    problem is decoding, which no schedule fixes: stop and report.
 
-   **Run 2026-09-17, on the final ([eval_dev_clean]/[eval_dev_other] step
-   8652) 10+10 logged sample pairs, normalized exactly as
-   `melt/training/metrics.py`'s `TrainingEvaluator` does:**
+   **Result, 2026-09-17, and the rule revised.** The check fired: on the 20
+   hypothesis pairs the trainer logs (10 per set), WER 1.19 with
+   substitution 39%, deletion 10%, insertion 50%. But 4 of the 20 are
+   repetition loops running to the 256-token cap, and those 4 carry about
+   60% of all insertions. The other 16 stop on their own at a length ratio
+   near 1.0 with ordinary substitution-dominated errors. The 20 logged pairs
+   are also not representative: the trainer's own score over the full 200
+   utterances per set was 0.62 and 0.78, not 1.19. Three conclusions:
 
-   | | n | WER | S | D | I | length ratio |
-   |---|---|---|---|---|---|---|
-   | all 20 | 20 | 1.19 | 39.5% | 10.2% | **50.4%** | 1.478 |
-   | excl. 2 worst runaway | 18 | 0.79 | 58.0% | 17.0% | 25.1% | 1.064 |
+   - A handful of loops can dominate an insertion count, so "insertions
+     dominate" was the wrong trigger. The stop condition is now **runaway
+     on most hypotheses**, measured over the full eval set.
+   - Most hypotheses stop correctly, so the stop token is learned. An
+     undertrained stop token is a weaker explanation for the loops than the
+     model losing its place in long audio at 50 Hz, which the stacking arm
+     tests directly.
+   - Anti-repetition decoding (`repetition_penalty`, `no_repeat_ngram_size`)
+     is **not** adopted in the campaign metric. It would hide a failure
+     that is itself evidence about alignment, suppress legitimate repeated
+     words, and differ by language and tokenizer. It may be measured once,
+     as a diagnostic.
 
-   **Insertions dominate on the full sample -- the stop condition triggers.**
-   4/20 (20%) are decoding runaway (repetition loops hitting
-   `generation_max_length: 256`, e.g. `dev_clean[9]`: 47-word ref, 344-word
-   hyp, "on the left hand, on the right hand," ×~24); these 4 hold ~60% of
-   all insertions. The other 16 (80%) show ordinary substitution-dominated
-   ASR errors with length ratio near 1.0. **STOPPED here** -- no arm below
-   submitted. Two untested candidate fixes, not adjudicated: a
-   training-side one (more schedule/steps, which step 0b's own arms would
-   test) and a decoding-side one (`repetition_penalty` /
-   `no_repeat_ngram_size` in `generation_config`, untouched by anything
-   step 0b varies and far cheaper to test). Full 20-pair breakdown and
-   the board entry.
+   Step 0b therefore proceeds, with the runaway fraction added to every
+   eval (see Metrics) and the diagnostic pass below.
+1b. Eval-only pass on `MA-librispeech-l4-ep3`'s final checkpoint over the
+   full dev-clean and dev-other sets, greedy as in training, every
+   hypothesis saved: substitution, deletion and insertion rates, runaway
+   fraction, and runaway against utterance duration. Then the same pass
+   with `no_repeat_ngram_size: 4`, to size how much of the WER the loops
+   explain. Runs in parallel with the arms and does not gate them.
 2. A dry run confirming the warmup-stable-decay kwargs reach the scheduler.
 3. For the Qwen arms only: **PR #132 merged** (issue #124: Qwen checkpoints
    carry no `eos_token_id`, so generation never stops and WER is
@@ -265,6 +274,13 @@ which MELT does not load), vocabulary shared with the 2B, ungated.
 - **Secondary:** WER and CER on the full dev-clean and dev-other sets for the
   final checkpoint; substitution, deletion, insertion; length ratio; eval
   loss; decoder positions per audio second.
+- **Runaway fraction, at every in-training eval** (added 2026-09-17): the
+  share of hypotheses more than twice the reference's word count, alongside
+  substitution, deletion and insertion rates over the whole eval set, not
+  the logged sample. The trainer already scores with `jiwer`, so
+  `jiwer.process_words` supplies the rates. If this does not land as a small
+  change, the arms launch without it and the eval-only pass of pre-flight
+  1b is repeated on each arm's final checkpoint instead.
 
 ### Decision rules, fixed before the runs
 
