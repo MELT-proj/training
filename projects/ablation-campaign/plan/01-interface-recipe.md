@@ -229,6 +229,28 @@ which MELT does not load), vocabulary shared with the 2B, ungated.
    and 20 hypotheses read by eye. A loss of 0.90 with 62% WER, and dev-other
    beating dev-clean at epoch 2, are both odd. If insertions dominate, the
    problem is decoding, which no schedule fixes: stop and report.
+
+   **Run 2026-09-17, on the final ([eval_dev_clean]/[eval_dev_other] step
+   8652) 10+10 logged sample pairs, normalized exactly as
+   `melt/training/metrics.py`'s `TrainingEvaluator` does:**
+
+   | | n | WER | S | D | I | length ratio |
+   |---|---|---|---|---|---|---|
+   | all 20 | 20 | 1.19 | 39.5% | 10.2% | **50.4%** | 1.478 |
+   | excl. 2 worst runaway | 18 | 0.79 | 58.0% | 17.0% | 25.1% | 1.064 |
+
+   **Insertions dominate on the full sample -- the stop condition triggers.**
+   4/20 (20%) are decoding runaway (repetition loops hitting
+   `generation_max_length: 256`, e.g. `dev_clean[9]`: 47-word ref, 344-word
+   hyp, "on the left hand, on the right hand," ×~24); these 4 hold ~60% of
+   all insertions. The other 16 (80%) show ordinary substitution-dominated
+   ASR errors with length ratio near 1.0. **STOPPED here** -- no arm below
+   submitted. Two untested candidate fixes, not adjudicated: a
+   training-side one (more schedule/steps, which step 0b's own arms would
+   test) and a decoding-side one (`repetition_penalty` /
+   `no_repeat_ngram_size` in `generation_config`, untouched by anything
+   step 0b varies and far cheaper to test). Full 20-pair breakdown and
+   the board entry.
 2. A dry run confirming the warmup-stable-decay kwargs reach the scheduler.
 3. For the Qwen arms only: **PR #132 merged** (issue #124: Qwen checkpoints
    carry no `eos_token_id`, so generation never stops and WER is

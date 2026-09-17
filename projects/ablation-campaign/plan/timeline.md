@@ -64,6 +64,11 @@ frame rate) or a multilingual-data problem? Decided by LibriSpeech step 0.
       replicate, LR 2e-3, 600 s batch, stack 5, Whisper encoder, and
       Qwen3.5-2B against Qwen3.5-4B at stack 5. ~250 GPU-h. The two Qwen
       arms wait for PR #132 and for Qwen3.5-4B staged on MN5.
+      **Blocked 2026-09-17 at pre-flight step 1**: insertions dominate
+      (50.4% of edits, n=20) on `MA-librispeech-l4-ep3`'s final hypotheses
+      -- driven by decoding runaway (repetition loops) on 4/20 samples, not
+      uniform collapse. No arm submitted; see the board entry. PI / Fondue
+      Orchestrator decide next step before the eight arms above launch.
       *Outcome:* audio hours to 10% dev-clean WER per arm, which sets the
       week-2 screen's budget and removes settled factors from its grid.
 

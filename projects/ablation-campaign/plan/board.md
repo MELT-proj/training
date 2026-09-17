@@ -15,6 +15,67 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-17 — Claude (worker session librispeech-step0-l1-l4) — Step 0b pre-flight STOP: insertions dominate on MA-librispeech-l4-ep3's hypotheses
+
+Context: §2b's pre-flight step 1, before spending any of the ~250 GPU-h for
+the R/R-seed/R-lr2e3/R-b600/R-k5/W/Q2-k5/Q4-k5 arms. Merged `main` (picked
+up §2b, commit `d060e6a`) into `claude/librispeech-step0-l1-l4-60d122`.
+Computed substitution/deletion/insertion rates and the hypothesis/reference
+length ratio on the 20 sample pairs logged at `MA-librispeech-l4-ep3`'s
+final eval (step 8652, epoch 3.0: 10 `dev_clean` + 10 `dev_other`, from
+`logs/melt-train-container.45969297.out`), normalized exactly as
+`melt/training/metrics.py`'s `TrainingEvaluator` does (`BasicTextNormalizer`,
+then `jiwer`), and read all 20 by eye.
+
+Finding: **insertions dominate** (S 39.5% / D 10.2% / **I 50.4%** of all
+edits, n=20, aggregate WER 1.19 on this subsample) -- the pre-flight's
+literal stop condition. Reading the hypotheses shows why: 4 of 20 (20%,
+`dev_clean[0]`, `dev_clean[6]`, `dev_clean[9]`, `dev_other[1]`) are not
+transcription errors but **decoding runaway** -- the model gets stuck
+repeating a short phrase or n-gram until the generation budget
+(`generation_max_length: 256`) cuts it off, e.g. `dev_clean[9]`: ref 47
+words, hyp 344 words, 297 of the 302 edits are insertions, almost entirely
+"on the left hand, on the right hand," repeated ~24 times; `dev_other[1]`:
+"which is a constant and always so as not considering the idea of god,"
+repeated ~13 times. These 4 examples alone are ~60% of all insertions
+counted. **The other 16 (80%) do not show this pattern**: length ratio near
+1.0, errors are the ordinary substitution/deletion mix of an imperfect but
+genuinely-attempting ASR system (e.g. `dev_clean[7]`: WER 0.33, S13/D3/I3;
+`dev_other[8]`: WER 0.30, S11/D1/I1). Excluding just the 2 most extreme
+runaway examples (`dev_clean[9]`, `dev_other[1]`) flips the composition to
+S 58.0% / D 17.0% / I 25.1%, n=18, WER 0.786, length ratio 1.064 -- the
+normal pattern the 2b design assumed.
+
+Per §2b's rule as written ("if insertions dominate ... STOP and report; no
+schedule change fixes a decoding problem"), this is a literal trigger. But
+flagging the nuance rather than reinterpreting: this does not look like
+uniform decoding collapse (in which case no arm below would be worth
+running) -- it looks like a repetition-loop failure mode concentrated on a
+minority of utterances, plausibly longer/harder ones, on top of a majority
+that are already producing real, substitution-dominated transcription
+attempts. That is also consistent with the loss/WER story so far (0.90
+loss, 62% WER at the full 200-set): a large fraction of the loss
+improvement is real per-token calibration, and a subset of catastrophic
+sequences drag the corpus WER down.
+
+Two candidate explanations, not adjudicated here: (a) a training-side
+problem (undertrained EOS probability at this schedule/step count -- more
+schedule/steps might reduce it, testable by R/R-lr2e3/etc. as planned), or
+(b) a pure decoding-side problem (greedy generation with no repetition
+penalty or `no_repeat_ngram_size` -- fixable with a generation-config
+change alone, no retraining, and orthogonal to everything §2b's arms vary).
+(b) is not excluded by anything measured here and would be far cheaper to
+test than any of the 8 arms.
+
+Action needed: PI / Fondue Orchestrator decide before I launch step 0b's
+GPU arms. Not submitted: no `campaign.yaml` rows added, no jobs on
+`arms.tsv` for R/R-seed/R-lr2e3/R-b600/R-k5/W/Q2-k5/Q4-k5. Messaged Fondue
+Orchestrator directly per §2b's instructions. Full 20-pair breakdown and
+the analysis script are with this session; ask if the raw numbers are
+needed beyond what's here.
+
+---
+
 ## 2026-09-17 — Claude (strategy session) — Step 0 inconclusive; step 0b designed with the PI (`01-interface-recipe.md` §2b)
 
 Context: read the LibriSpeech step-0 entry on branch
