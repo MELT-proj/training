@@ -188,6 +188,71 @@ arms:
     seed: 44
     time: "03:00:00"
 
+  # -------------------------------------------------- Step 0b (01-interface-recipe.md sec2b)
+  # Common to all of R/R-seed/R-lr2e3/R-b600/R-k5/W: adapter LR 1e-3, three
+  # epochs, warmup-stable-decay (num_decay_steps = round(0.2 x each arm's
+  # own derived steps) -- differs by arm since R-b600 halves world_size and
+  # doubles steps, so it is passed as a per-submission `--` override, not
+  # baked into these rows), min_lr_ratio 0.1, decay_type cosine, and eval
+  # max_samples 500/set (200 made the epoch-3 trajectory noisy). All via the
+  # same `--` passthrough l4-ep3 uses, not new campaign axes:
+  #   campaign.py run MA-librispeech-r -- --trainer.num_train_epochs 3 \
+  #     --data.validation_ds.max_samples 500 \
+  #     --trainer.lr_scheduler_type warmup_stable_decay \
+  #     --trainer.lr_scheduler_kwargs '{"num_decay_steps": N, "min_lr_ratio": 0.1, "decay_type": "cosine"}'
+  # A0 (schedule reference) is MA-librispeech-l4-ep3 above -- not rerun.
+  - id: MA-librispeech-r
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 1e-3
+    grad_accum_steps: 1   # 1200 s effective batch, same as l4-ep3/A0
+    seed: 45
+    time: "03:00:00"
+
+  - id: MA-librispeech-r-seed
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 1e-3
+    grad_accum_steps: 1
+    seed: 46              # noise check against MA-librispeech-r (seed 45)
+    time: "03:00:00"
+
+  - id: MA-librispeech-r-lr2e3
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 2e-3      # R's peak LR pushed further
+    grad_accum_steps: 1
+    seed: 47
+    time: "03:00:00"
+
+  - id: MA-librispeech-r-b600
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 1e-3
+    grad_accum_steps: 1   # batch_duration 150 x 1 x 4 = 600 s effective batch
+    nodes: 1
+    gpus_per_node: 4      # world_size 4, half of R's 8 -> ~2x the steps
+    seed: 48
+    time: "08:00:00"
+
+  - id: MA-librispeech-r-k5
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 1e-3
+    grad_accum_steps: 1
+    stack_factor: 5        # 50 Hz -> 10 Hz, as SLAM-ASR does
+    seed: 49
+    time: "03:00:00"
+
+  - id: MA-librispeech-w
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 1e-3
+    grad_accum_steps: 1
+    encoder: openai/whisper-large-v3   # supervised-ASR encoder control, stack 1 (default)
+    seed: 50
+    time: "06:00:00"       # Whisper pads every cut to its fixed 30 s window, slower per step
+
   # --------------------------------------------------------------- IFT (stage 2)
   - id: IFT-700-llama1b-ins
     stage: IFT
