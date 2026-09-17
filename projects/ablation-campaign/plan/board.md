@@ -15,6 +15,74 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-17 — Claude (worker session librispeech-step0-l1-l4) — Step 0b pre-flight 1b: full-set diagnostic lands, runaway confirmed a minority, and the logged eval numbers were never safe to trust
+
+Context: `01-interface-recipe.md` §2b pre-flight step 1b, after landing the
+S/D/I/runaway-fraction metrics change and the WSD scheduler dry run (both
+reported below). `step0b_diagnostic_full_eval.py`, MN5 job 45985475
+(off `arms.tsv` by design, same as `no_audio_floor.py`), decoded
+`MA-librispeech-l4-ep3`'s final checkpoint over the FULL dev-clean
+(2,703 cuts) and dev-other (2,864 cuts) sets, greedy then with
+`no_repeat_ngram_size: 4`. 22m28s on one GPU, exit 0:0.
+
+Finding:
+
+| pass | set | n | WER | S | D | I | length ratio | runaway fraction |
+|---|---|---|---|---|---|---|---|---|
+| greedy | dev-clean | 2703 | 0.689 | 31.8% | 10.3% | 26.7% | 1.150 | 2.37% (64) |
+| greedy | dev-other | 2864 | 0.914 | 44.0% | 11.5% | 36.0% | 1.177 | 3.28% (94) |
+| ngram4 | dev-clean | 2703 | 0.487 | 30.6% | 10.8% | 7.3% | 0.969 | 0.00% (0) |
+| ngram4 | dev-other | 2864 | 0.643 | 42.9% | 12.0% | 9.4% | 0.976 | 0.03% (1) |
+
+Two things worth flagging beyond what's in §5 already:
+
+1. The 200-sample number the trainer itself reported at the end of
+   training (0.622/0.776) was *not* conservative -- the true full-set
+   greedy WER is worse (0.689/0.914), not better. So far every eval
+   number quoted for this run (20-sample 1.19, 200-sample 0.62/0.78,
+   full-set 0.69/0.91) has moved in a different direction than its sample
+   size alone would suggest; none of the three was a safe stand-in for
+   either of the others. This is why the runaway fraction and full-set
+   S/D/I now ship with every in-training eval, not just a final report.
+2. Runaway is real (mean duration 11.8s/10.8s vs 7.1s/6.3s for
+   non-runaway -- supports "losing its place in long audio" over
+   "undertrained EOS", which `R-k5` tests directly) but only 2.4-3.3% of
+   hypotheses -- the revised stop condition ("runaway on most
+   hypotheses") does not fire, confirming step 0b's arms (already
+   launched, see below) were right to proceed. `no_repeat_ngram_size 4`
+   removes runaway almost entirely and drops WER by 0.20-0.27 absolute,
+   nearly all from insertions collapsing while substitution/deletion barely
+   move -- so the loops are a large, real, cleanly separable error source,
+   but even fully suppressed the recipe stays at 0.49-0.64 WER, nowhere
+   near the <10% bar. Confirms keeping anti-repetition decoding out of the
+   campaign metric was the right call: fixing it doesn't get this recipe
+   to threshold either.
+
+Also done, both pre-flight items now closed:
+- Landed `substitution_rate`/`deletion_rate`/`insertion_rate`/
+  `length_ratio`/`runaway_fraction` in `TrainingEvaluator`
+  (`melt/training/metrics.py`), computed over the whole eval set. Small
+  change, landed directly (458 passed in the nyx container, only the two
+  pre-existing unrelated failures).
+- Dry-ran `warmup_stable_decay` against the real transformers 5.16.1
+  image: full peak LR through the entire stable phase, cosine decay to
+  the 0.1x floor exactly at `num_decay_steps`.
+- Launched all six Llama/Whisper step-0b arms: R (45985909), R-seed
+  (45985924), R-lr2e3 (45985930), R-b600 (45985931), R-k5 (45985944), W
+  (45985946), all queued `acc_ehpc`.
+- PR #132 merged (Qwen eos_token_id fix); staged `Qwen/Qwen3.5-4B` to MN5
+  (rsync via `mn5transfer`) and added its `plan_arm.py` `DECODER_PROFILES`
+  entry, verified directly against the real tokenizer (identical vocab
+  size and special-token ids to the 2B, `<|text_pad|>` equally absent, not
+  assumed). Q2-k5/Q4-k5 rows added to `campaign.yaml`; submitting once the
+  transfer completes.
+
+Action needed: none blocking. FYI to Fondue Orchestrator re: finding 1 --
+worth knowing before reading any arm's in-training eval numbers at face
+value.
+
+---
+
 ## 2026-09-17 — Claude (strategy session) — Step 0b pre-flight STOP reviewed: proceed, with a runaway metric and a decoding diagnostic
 
 Context: the LibriSpeech session stopped at §2b pre-flight 1, as the rule

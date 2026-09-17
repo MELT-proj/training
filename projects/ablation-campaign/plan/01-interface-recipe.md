@@ -401,3 +401,50 @@ ever align" is not answered by this -- the question for week 2 is whether
 the five-language screen's step/LR budget needs to grow to let this
 transition complete, or whether it completes given more wall-clock at the
 125 h/screen budget too.
+
+### Step 0b pre-flight 1b: full-set decoding diagnostic
+
+Not part of the L1-L5 grid. Per §2b's pre-flight step 1b (the Fondue
+Orchestrator's resolution of the "insertions dominate" STOP, main commit
+`ad07b3f`): `step0b_diagnostic_full_eval.py` decoded `MA-librispeech-l4-ep3`'s
+final checkpoint over the *entire* dev-clean (2,703 cuts) and dev-other
+(2,864 cuts) sets -- not the 20 samples the trainer logs, and not even the
+200/set cap training itself used -- greedy as in training, then again with
+`no_repeat_ngram_size: 4`. MN5 job 45985475, off `arms.tsv` by design (same
+as `no_audio_floor.py`), 22m28s on one GPU.
+
+| pass | set | n | WER | S | D | I | length ratio | runaway fraction |
+|---|---|---|---|---|---|---|---|---|
+| greedy | dev-clean | 2703 | 0.689 | 31.8% | 10.3% | 26.7% | 1.150 | 2.37% (64) |
+| greedy | dev-other | 2864 | 0.914 | 44.0% | 11.5% | 36.0% | 1.177 | 3.28% (94) |
+| no_repeat_ngram_size 4 | dev-clean | 2703 | 0.487 | 30.6% | 10.8% | 7.3% | 0.969 | 0.00% (0) |
+| no_repeat_ngram_size 4 | dev-other | 2864 | 0.643 | 42.9% | 12.0% | 9.4% | 0.976 | 0.03% (1) |
+
+Runaway hypotheses are markedly longer-duration on average: mean 11.79 s
+(clean) / 10.84 s (other) against 7.06 s / 6.29 s for non-runaway pairs --
+supporting "losing its place in long 50 Hz audio" over "undertrained EOS"
+(`R-k5`, stack_factor 5, tests this directly).
+
+Two findings, both load-bearing:
+
+1. **The full-set greedy WER (0.689/0.914) is *worse* than the 200-sample
+   number training itself reported (0.622/0.776), not better.** The 20
+   logged samples spiked to 1.19 by drawing disproportionately from
+   longer/harder cuts; the 200-sample subset happened to land easier than
+   the full set. Neither logged number is a safe stand-in for the true
+   full-set score -- this is exactly why the runaway fraction and full-set
+   S/D/I now ship with every in-training eval (`melt/training/metrics.py`),
+   not just at the end of a run.
+2. **Runaway is real but a minority (2.4-3.3% of hypotheses), confirming
+   the revised stop condition does not fire.** `no_repeat_ngram_size 4`
+   removes it almost entirely (0.00%/0.03%) and drops WER by 0.20-0.27
+   absolute (29-30% relative) -- nearly all of that from the insertion rate
+   collapsing (26.7%->7.3%, 36.0%->9.4%), while substitution and deletion
+   barely move (31.8%->30.6%, 44.0%->42.9% substitution; both deletion
+   rates flat). The repetition loops are a large, cleanly separable, and
+   currently unclaimed chunk of the measured WER -- but even with them
+   fully suppressed, WER stays at 0.49-0.64, nowhere near the <10% bar.
+   Consistent with the decision already recorded above: anti-repetition
+   decoding is a real lever but stays out of the campaign metric, since
+   fixing it would not have gotten this recipe to threshold either, and it
+   would flatter every future arm's WER by the same uncontrolled amount.
