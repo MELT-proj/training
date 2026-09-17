@@ -3,20 +3,12 @@
 Update this file whenever something starts, finishes, or blocks. Keep it
 short; the reasoning goes to `board.md`, the plan to the numbered files.
 
-**Last updated:** 2026-09-15, evening (FLEURS-24 ASR frozen sets built).
+**Last updated:** 2026-09-17 (LibriSpeech step 0 complete: L1-L5 plus an
+epoch-extension diagnostic).
 **Current week:** week 1 of `timeline.md` (2026-09-14 to 2026-09-20).
 
 ## Running on MN5
 
-- LibriSpeech step 0 (`01-interface-recipe.md` §2), jobs 45893574/76/77/78:
-  `MA-librispeech-l1` (adapter LR 2e-5, effective batch 4800 s, the August
-  recipe as control), `l2` (LR 2e-4, 4800 s), `l3` (LR 2e-4, 1200 s), `l4`
-  (LR 1e-3, 1200 s). Submitted 2026-09-15 from `claude/librispeech-step0-
-  l1-l4-60d122`; new base config `ABL-MA-librispeech.yaml` (hand-written,
-  not `build_campaign_config.py`-rendered -- LibriSpeech is one corpus, not
-  the campaign's N-language reference-matched mixture). All four queued
-  `acc_ehpc`, ~7 GPU-h/~1h wall each once scheduled. L5 (second seed of the
-  best of l2-l4) follows once these four have generative WER.
 - `MA-700asr-w2vbF-llama1bInsF-moeT-ep10-ttverbatim-…` — 10-epoch MA with the
   MoE adapter and the verbatim prompt, adapter LR 2e-5. Submitted 2026-09-13.
   Observed: loss plateau then a smooth drop from ~3.6 to ~2.6 after ~9,000 h
@@ -29,6 +21,17 @@ short; the reasoning goes to `board.md`, the plan to the numbered files.
 
 ## Done
 
+- LibriSpeech step 0 (`01-interface-recipe.md` §2): L1-L4 all reproduce the
+  August plateau (WER>1.0, no transition inside one epoch) -- rules out
+  multilingual data as the sole cause. L4 (LR 1e-3, 1200 s effective batch)
+  is clearly best (WER 1.040/1.056 clean/other); L5 (second seed) replicates
+  within ~0.02 WER, so it's a real recipe effect. Diagnostic
+  `MA-librispeech-l4-ep3` (fresh 3-epoch run at L4's LR/batch) shows the
+  plateau DOES break with more gradient updates: WER falls to 0.622/0.776
+  by epoch 3 -- still short of <10%, but a real, large transition. Bottleneck
+  looks like schedule length (cosine decay cutting the transition off at 1
+  epoch), not a hard capacity ceiling. Full numbers in
+  `01-interface-recipe.md` §5; branch `claude/librispeech-step0-l1-l4-60d122`.
 - Campaign tooling: `campaign.yaml` grid, `campaign.py plan/run/status`,
   `arms.tsv` ledger, parameterised launchers, DDP for MA, host-RAM wall fixed.
 - MA-700 Llama-Instruct (August recipe): WER 1.10–1.16, eval loss 2.6–3.1.
@@ -60,7 +63,11 @@ short; the reasoning goes to `board.md`, the plan to the numbered files.
 
 ## Next decisions, in order
 
-1. Week 1 gate: recipe vs data, from LibriSpeech step 0.
+1. Week 1 gate: recipe vs data, from LibriSpeech step 0 -- answered (recipe,
+   not data; see Done above). Open follow-up: does the five-language screen
+   (week 2, 125 h/language) need a longer schedule/more steps than its
+   current budget to let the same transition complete, or does more
+   wall-clock at that budget suffice? PI decides before the screen launches.
 2. Week 2 gate: the interface recipe.
 3. Week 5 gate: backbone and regime.
 4. 2026-10-25: Fondue freeze.

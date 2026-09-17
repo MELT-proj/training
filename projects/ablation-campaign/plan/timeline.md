@@ -33,10 +33,15 @@ frame rate) or a multilingual-data problem? Decided by LibriSpeech step 0.
       MA chat prompt and no audio (or shuffled audio). One short job.
       *Outcome:* a per-language floor to set against the August MA eval loss
       (2.6–3.1). If they match, audio was ignored.
-- [ ] **LibriSpeech step 0**, five MA runs (`01-interface-recipe.md` §2):
+- [x] **LibriSpeech step 0**, five MA runs (`01-interface-recipe.md` §2):
       L1 current recipe (adapter LR 2e-5, batch 4800 s), L2 LR 2e-4 / 4800 s,
       L3 LR 2e-4 / 1200 s, L4 LR 1e-3 / 1200 s, plus a second seed of the
-      best. ~7 GPU-h each.
+      best. ~7 GPU-h each. Done 2026-09-17: all five reproduce the August
+      plateau (WER>1.0, no in-epoch transition); L4 best, L5 confirms it's a
+      real effect. A post-hoc 3-epoch diagnostic at L4's LR/batch broke the
+      plateau (WER down to 0.622/0.776 dev-clean/other by epoch 3, still
+      short of <10%) -- bottleneck looks like schedule length, not capacity.
+      See `01-interface-recipe.md` §5 and the 2026-09-17 board entry.
       *Outcome:* dev-clean/dev-other generative WER per run, step at which the
       loss leaves the plateau, gap to the floor. Success bar: under 10% WER on
       test-clean and a transition inside the epoch.

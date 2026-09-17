@@ -15,6 +15,60 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-17 — Claude (worker session librispeech-step0-l1-l4) — LibriSpeech step 0: recipe fails at 1 epoch, but the plateau breaks with more gradient updates
+
+Context: week 1 Track A, `01-interface-recipe.md` §2 ("is the failed
+alignment a recipe problem or a multilingual-data problem?"). Branch
+`claude/librispeech-step0-l1-l4-60d122`. New base config
+`ABL-MA-librispeech.yaml` (hand-written, not `build_campaign_config.py`
+-- LibriSpeech is one corpus/language, not the campaign's N-language
+reference-matched mixture; its three train splits are weighted by their
+own measured hours, not the alpha/beta corpus-balancing policy --
+documented in the config so nobody re-emits it). `campaign.yaml` gained
+`MA-librispeech-l1`..`l5` plus a post-hoc diagnostic arm,
+`MA-librispeech-l4-ep3`.
+
+Finding: L1-L4 (adapter LR 2e-5/2e-4/2e-4/1e-3, effective batch
+4800/4800/1200/1200 s, one epoch of LibriSpeech's ~961 h) all reproduce
+the August plateau -- none crossed WER 1.0, loss declined smoothly with
+no plateau-then-drop transition. This rules out multilingual data as the
+sole cause (LibriSpeech alone fails the same way) and confirms LR+steps
+help monotonically: L4 (loss 2.625/2.587 clean/other, WER 1.040/1.056)
+is clearly best. L5 (second seed of L4) replicated within ~0.02
+nats/WER, so this is a real recipe effect, not seed noise.
+
+But L4's loss delta was still accelerating at epoch end (-0.03/step
+early -> -0.108 near epoch 0.8), so I ran a diagnostic outside the
+designed grid: `MA-librispeech-l4-ep3`, L4's exact LR/batch (1e-3,
+1200 s) fresh for 3 epochs (a fresh run, not a resume, so the cosine
+schedule re-derives over the full 3-epoch horizon and decays much more
+slowly through what was epoch 1). **The plateau breaks**: dev-clean/
+dev-other WER goes 1.155/1.312 (epoch 1) -> 0.895/0.745 (epoch 2) ->
+0.622/0.776 (epoch 3, final). Loss falls 3.11->1.51 within epoch 1 alone
+(a schedule effect: this run's LR has decayed far less by that step
+count than L4's own 1-epoch-tuned schedule had), then keeps falling
+1.51->0.90 over epochs 2-3. Not monotonic in the last ~10% of training
+(best single point was epoch 2.726's dev-clean WER 0.588; dev-other got
+slightly worse from epoch 2 to 3) and still short of the <10%
+success-bar, but this is a real, large transition, not noise.
+
+Reframing: the August recipe's failure at 1 epoch is real and
+reproduces on English-only data, but the bottleneck looks like schedule
+length (LR decaying before the transition completes at a 1B decoder),
+not a hard adapter/decoder/encoder capacity ceiling. `03-audio-stack.md`
+and `02-backbones.md` still have open questions this doesn't touch
+(w2v-BERT vs Whisper; SLAM-ASR's 7B decoder vs our 1-3B target class),
+but they're no longer the only explanation on the table for "why didn't
+it transcribe."
+
+Action needed: PI decision for the week-2 gate (`01-interface-recipe.md`
+§3, five-language screen) -- does the screen's step/LR budget need to
+grow to let this transition complete at 125 h/language, or is more
+wall-clock at that budget enough? Full trajectories and job ids in
+`01-interface-recipe.md` §5 and `arms.tsv`.
+
+---
+
 ## 2026-09-15 — Claude (worker session fleurs-24-asr-frozen-sets) — FLEURS-24 ASR frozen sets built
 
 Context: week 1 Track B, `05-language-ladder.md` §3 / `timeline.md` week 1

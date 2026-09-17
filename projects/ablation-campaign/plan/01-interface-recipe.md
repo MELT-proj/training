@@ -146,3 +146,36 @@ dynamic §1 cites) -- "transition step" is reported as none for all four.
 | L3 | `MA-librispeech-w2vbF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr2e4-s42-8g` | 1.076 | 1.087 | none | L2's LR + 4x steps (1200 s batch). Loss 2.943/2.842. Marginally better than L2 -- steps alone do not break the plateau either. |
 | L4 | `MA-librispeech-w2vbF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr1e3-s42-8g` | 1.040 | 1.056 | none | L3's steps, LR pushed to 1e-3. Loss 2.625/2.587, clearly the best of the four and still declining fastest at epoch end (loss delta accelerating over the back half of training, unlike L1-L3). Per the interpretation rules ("L4 better than L3 -> keep going up"), the open question for week 2 is whether an even higher LR or a longer run clears the plateau. |
 | L5 | `MA-librispeech-w2vbF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr1e3-s43-8g` | 1.053 | 1.058 | none | Second seed of L4. Loss 2.64/2.593 (clean/other) -- within ~0.02 nats and ~0.02 WER of L4 (2.625/2.587, 1.040/1.056). Tight seed noise; L4's improvement over L1-L3 is a real recipe effect, not seed luck. |
+
+### Post-hoc diagnostic: does the plateau break with more gradient updates?
+
+Not part of the L1-L5 grid. L4's loss delta accelerated through the back half
+of its one epoch (-0.03/step early -> -0.108 near epoch 0.8) before
+flattening in the final ~10% -- plausibly the SLAM-ASR plateau-then-drop
+caught mid-transition, confounded by L4's own cosine schedule being tuned to
+fully decay by end of epoch 1. `MA-librispeech-l4-ep3` reruns L4's exact
+LR/batch (1e-3, 1200 s) fresh for 3 epochs (seed 44, so the schedule is
+re-derived over the full 3-epoch horizon and LR decays more slowly through
+epoch 1) -- ~2h24m wall, single 8-GPU allocation. Measured 2026-09-17:
+
+| epoch | dev-clean loss | dev-clean WER | dev-other loss | dev-other WER |
+|---|---|---|---|---|
+| 1.0 | 1.509 | 1.155 | 1.746 | 1.312 |
+| 2.0 | 0.989 | 0.895 | 1.244 | 0.745 |
+| 3.0 (final) | 0.901 | 0.622 | 1.146 | 0.776 |
+
+**The plateau breaks.** WER falls from >1.1 (worse than L4's own 1-epoch
+result -- expected, since this run's LR has decayed less by the same step
+count) to 0.62-0.78 by epoch 3: a real, large transition, not noise (loss
+drops 3.11->1.51 within epoch 1 alone, then continues 1.51->0.90 over
+epochs 2-3). Still short of the <10% success-bar, and dev-clean/dev-other
+diverge slightly in epoch 3 (0.622 vs 0.776, and the single best point in
+the whole run was epoch 2.726's dev-clean WER 0.588 -- the trajectory is not
+perfectly monotonic this late), so this is not "solved," but it reframes the
+diagnosis: **the bottleneck at 1e-3/1200 s was schedule length (LR decayed
+before the transition completed), not adapter/decoder capacity or the
+encoder.** The August recipe's failure is real, but "does a small decoder
+ever align" is not answered by this -- the question for week 2 is whether
+the five-language screen's step/LR budget needs to grow to let this
+transition complete, or whether it completes given more wall-clock at the
+125 h/screen budget too.
