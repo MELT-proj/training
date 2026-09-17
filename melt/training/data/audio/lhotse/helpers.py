@@ -189,6 +189,7 @@ LANGUAGE_ISO_TO_NAME: dict[str, str] = {
     "fa": "Persian",
     "fi": "Finnish",
     "fr": "French",
+    "ga": "Irish",
     "hr": "Croatian",
     "hu": "Hungarian",
     "id": "Indonesian",

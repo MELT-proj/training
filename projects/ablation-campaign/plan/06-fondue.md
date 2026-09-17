@@ -34,13 +34,65 @@ doubling:
 |---|---|---|
 | MA over 247K h ASR, adapter only (~1,000 audio-s per wall-s on 8 GPUs) | ~3,800 | ~5 days |
 | IFT over ~330K h, Llama-3.2-1B (5.73 s/step at 3,840 s effective) | ~6,000 | ~8 days |
-| IFT, Qwen3.5-2B with gradient checkpointing | **unmeasured**; the 46 h budget for 6.7K h implies 25,000+ | ~5 weeks |
+| IFT, Qwen3.5-2B with gradient checkpointing, 8 nodes x 4 GPUs, DDP, `batch_duration 30`/`grad_accum 20` (effective batch 19,200 audio-s/step) | **measured** 32.3 s/step at 8 nodes (see below) -> ~17,800 | ~23.1 days |
 
-The Qwen line is the planning risk: it is measured in week 1
-(`timeline.md`). If Qwen wins the backbone comparison, the options are more
-nodes (16 nodes at `grad_accum 4` doubles the effective batch again and needs
-its own LR point in Raclette), a smaller data budget, or a Llama-class
-Fondue with Qwen reported at campaign scale.
+**Qwen, measured 2026-09-15/16 (week 1, `timeline.md`, plus a same-session
+follow-up):** four data points across three topologies, all well under the
+old "46 h budget implies 25,000+" back-of-envelope, which was never a
+measurement -- `46:00:00` was a conservative SLURM wall-time *request*
+sized to cover a whole one-shot run, not an observed rate.
+- **Clean acc_debug probe** (job 45894977, `IFT-700-qwen35-2b-throughput-debug`,
+  30 steps, eval/save off, `--trainer.max_steps 30`): steady state ~31 s/step,
+  converged by step ~15 (tqdm's own closing line: `30/30 [28:02<00:00,
+  30.82s/it]`; delta between step 10 and step 30 gives 31.5 s/step).
+- **Cross-check against the real arm**: the full `IFT-700-qwen35-2b-ins`
+  production run (exp_name
+  `IFT-700-w2vbF-qwen35_2bInsT-mlpF-bd30-ga20-elr6e6-dlr2e5-lr2e4-s1337-8g`,
+  job 45685241) turned out to have **already completed** on MN5 on
+  2026-09-12 -- 5,048 steps (one full epoch over the 6,729.85 h mix), closing
+  average 27.3 s/step (includes `eval_on_start`, 7 eval rounds and 7
+  checkpoint saves, so it is the *upper* bound the "never trust the closing
+  average" rule warns about, yet it still reads faster than the clean debug
+  probe -- most likely sample variance in which cuts a 30-step debug window
+  happens to draw, not a real effect). Wall 38h19m at world_size 8 -> **~306
+  GPU-h for the 6,729.85 h arm**. This run and its MA-stage parent
+  (`MA-700asr-w2vbF-qwen35_2bInsF-mlpT-bd30-ga20-elr6e6-dlr2e5-lr2e5-s42-8g`,
+  done 2026-09-05) were not recorded in `arms.tsv` or `00-status.md` -- see
+  the board entry.
+- **8 nodes x 4 GPUs, measured 2026-09-15/16** (job 45902184, `acc_debug`,
+  same recipe with `grad_accum 20` held fixed so effective batch scales
+  with world_size to 19,200 audio-s/step): steady state ~32.3 s/step,
+  essentially flat versus the 2-node rate above (31 s/step) -- GPU-h stays
+  ~constant per the "keep `grad_accum` and add nodes" regime
+  (`ift700-scaling-measured`), same as Llama's own scaling. This IS
+  Fondue's planned topology, so it replaces the earlier same-topology
+  extrapolation: 330,000 / 6,729.85 ~= 49x the data, at 5.333 audio-h/step
+  (19,200 audio-s / 3600) -> ~61,900 steps -> wall ~555 h (~23.1 days) on
+  32 GPUs -> ~17,800 GPU-h, a directly measured-topology number, not an
+  extrapolation. About 3x Llama's 6,000 GPU-h Fondue estimate, but far
+  under the old unmeasured "25,000+" guess.
+- **16 nodes x 4 GPUs, measured 2026-09-16** (job 45902185, `acc_ehpc`,
+  same recipe with `grad_accum 20` held fixed, effective batch 38,400
+  audio-s/step): started sooner than SLURM's own estimate (17:19, not
+  ~22:00), completed cleanly in 28m28s. Steady state ~33 s/step --
+  essentially the same as 2 and 8 nodes. **Scaling is flat from 2 to 16
+  nodes**: GPU-h for the ~330K h IFT pool comes out to ~18,150 at 16 nodes,
+  the same ballpark as ~17,800 at 8 nodes and ~15,000-17,000 extrapolated
+  at 2 nodes. Node count above 8 is therefore a pure wall-clock-vs-node-
+  count choice for Qwen IFT, not a GPU-h efficiency tradeoff (unlike
+  Llama's measured 46-65% penalty for the fixed-effective-batch regime --
+  this campaign's Qwen arms use the fixed-`grad_accum` regime instead,
+  which is why it scales cleanly here).
+
+The Qwen line was the week-1 planning risk; it is now measured at Fondue's
+own planned topology (8 nodes) and its 16-node contingency, both flat with
+2 nodes, which settles the number that matters for the decision table in
+§3: node count is a wall-clock lever, not a GPU-h risk, for at least this
+range. If Qwen wins the backbone comparison, 16 nodes is a straightforward
+way to halve Fondue's wall clock at roughly the same total cost -- no LR
+retune from Raclette is forced by this measurement alone, Raclette still
+owns the actual LR choice, this only says every topology in range is
+affordable.
 
 MN5 caps one job at three days, so Fondue is a chain of resumes
 (`--dependency=afterany`, same topology, `MELT_GPUS_PER_NODE` pinned).
@@ -56,7 +108,7 @@ Checkpoint cadence bounds a failure's cost; keep two checkpoints.
 | language set | EU-24 + ru + uk (+ ca?) | Russian probe, `05-language-ladder.md` | ru, uk in (settled); ca open |
 | mixture weights | two-tier alpha/beta (the config builder already implements it); values to choose | ladder and repetition probe | open |
 | epochs for the tail | 1–4× repetition of languages under 100 h | repetition probe | open |
-| MA data budget | full 247K h vs a subset where MA-stage WER saturates | ladder MA-stage curves, step-0 transition | open |
+| MA data budget and stage split | full 247K h of ASR in MA, a subset, or — if the decoder-frozen regime wins and the no-MA point matches — a single stage with instructions from the start | the MA:IFT ratio sweep (`04-regime.md` §6, week 6), ladder MA-stage curves, step-0 transition; default if the sweep misses the freeze: full MA, as today | open |
 | effective batch and LR | batch ~ one audio hour per step; LR from Raclette | Raclette | open |
 | topology | 8 nodes × 4 GPUs, `grad_accum 4`; 16 nodes as contingency | scaling test | open |
 | checkpoint and eval cadence | checkpoints every ~6 h of wall clock; in-training generative eval on a FLEURS-24 dev subset of ~50 utterances per language | eval cost | open |

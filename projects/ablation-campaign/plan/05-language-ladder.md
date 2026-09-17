@@ -93,7 +93,7 @@ to `build_campaign_config.py` (week 3).
 | ASR in-domain / zero-shot | FLEURS test | 24 | CER, WER |
 | ASR out-of-domain | CV22 test | 23 (no hr) | CER, WER |
 | ASR | VoxPopuli test | 15 | CER, WER |
-| ST X→en | FLEURS X→en, built from sentence ids | 24 | chrF, COMET, BLEU |
+| ST X→en | FLEURS X→en, built per §3.1 | 23 (all but en) | chrF, COMET, BLEU |
 | ST X→en | CoVoST2 X→en test | 10, several tiny | chrF, COMET, BLEU |
 
 Both hypothesis and reference go through the same multilingual normaliser
@@ -101,6 +101,61 @@ Both hypothesis and reference go through the same multilingual normaliser
 on truecased text and FLEURS references are cased. Score corpus-level.
 Anchor every table with published Whisper-large-v3 and SeamlessM4T-v2
 per-language FLEURS numbers so P is interpretable.
+
+### 3.1 Building the FLEURS X→en set (week 1, Track B; home: melt-eval)
+
+**Why it is possible.** FLEURS is sentence-parallel and every shar cut's
+`id` is the FLEURS sentence id, shared across locales. The X→en reference
+for a cut is therefore the English text of the same id. Measured on the nyx
+shar tree on 2026-09-15: for `de_de`, `it_it`, `ga_ie`, `mt_mt`, `hu_hu`
+and `lv_lv` test, **100% of sentence ids are present in `en_us/test`**
+(343–348 ids and 842–926 cuts per language against 350 English ids), so the
+split assignment is consistent across languages and no cross-split lookup
+is needed.
+
+**The reference is not unique per id after truecasing.** Across the
+duplicate recordings of one English sentence, the lowercase supervision text
+is identical (0 of 350 ids differ) but `custom.pnc_text` differs for 57 of
+350 ids, because the PNC pass rewrote each recording separately (for
+example "and which was made famous" against "which was made famous"). The
+reference must be chosen deterministically per id.
+
+**Design.**
+
+- Reference text: FLEURS' original cased English transcription for the
+  sentence id (`raw_transcription` in the HF `google/fleurs` en_us metadata,
+  350 test and 150 validation sentences, text only), fetched once on a
+  machine with internet and stored as a small `{id: text}` JSON beside the
+  frozen sets or under melt-eval `configs/refs/`. Fallback if that cannot be
+  obtained: the majority `pnc_text` among the id's `en_us` recordings, ties
+  broken by the lowest recording index. Never the lowercase supervision
+  text, which would make chrF/COMET incomparable with published numbers.
+- Mechanism (built 2026-09-15, `melt-eval` PR #11): `reference_map` on
+  `SharReader` (`<path to the json>`) overrides the target text by cut id,
+  with tags `task: st`, `src_lang: <x>`, `tgt_lang: en`, `dataset_id:
+  fleurs-<x>_en` -- per-locale, not a shared `dataset_id: fleurs`, because
+  `get_tags_from_cut` returns the *target* language as `lang` for any
+  `task: st` cut, so a shared dataset_id would collapse all locales into
+  one `lang=en` bucket under the `grouped(..., "lang", ...)` BLEU/chrF
+  metric. The audio stays a locator into `fleurs/<locale>/test`, zero-copy.
+  Do not rewrite shar manifests: that invalidates the `.idx` files, and
+  this set is an evaluation artefact, not training data.
+- Specs: `fleurs24-st-xen-test` (23 locales, English excluded) and a
+  `fleurs24-st-xen-dev` subset of about 100 utterances per language from
+  `validation`, sharing sentence ids with the ASR dev subset where possible
+  so both tasks score the same audio.
+- Prompt: the IFT ST prompt (`Translate this audio to English.`) rendered
+  through melt-eval's parity layer.
+- Scoring: chrF and COMET on the raw reference; BLEU with sacrebleu's
+  default tokenizer. The ASR normaliser is not applied to ST.
+- Verification before use: sample counts (23 locales × about 350 ids ×
+  about 2.5 recordings, so roughly 20K), zero dropped-no-reference, and a
+  manual spot check of 20 random (audio locale, English reference) pairs.
+- Optional, same recipe: en→X sets for de, et, lv, sl, sv (English audio,
+  X reference), matching the CoVoST2 en→X training directions.
+
+Locales: `bg_bg cs_cz da_dk de_de el_gr en_us es_419 et_ee fi_fi fr_fr ga_ie
+hr_hr hu_hu it_it lt_lt lv_lv mt_mt nl_nl pl_pl pt_br ro_ro sk_sk sl_si sv_se`.
 
 ## 4. Analysis
 

@@ -28,11 +28,13 @@ unmeasured at the real topology, expected several times more.
 frame rate) or a multilingual-data problem? Decided by LibriSpeech step 0.
 
 ### Track A — GPU
-- [ ] **No-audio floor.** Text-only NLL of the frozen backbone
-      (Llama-3.2-1B-Instruct) on the campaign validation transcripts with the
-      MA chat prompt and no audio (or shuffled audio). One short job.
-      *Outcome:* a per-language floor to set against the August MA eval loss
-      (2.6–3.1). If they match, audio was ignored.
+- [x] **No-audio floor** (done 2026-09-15, MN5 job 45888659). Text-only NLL
+      of the frozen backbone (Llama-3.2-1B-Instruct) on the campaign
+      validation transcripts with the MA chat prompt and no audio.
+      *Outcome:* floor is 4.0–4.3 nats/token per language, **1.1–1.5 above**
+      the August MA eval loss (2.6–3.1), not matching it — audio was not
+      ignored. See `01-interface-recipe.md` §1a and the board entry; flagged
+      for PI review, does not block LibriSpeech step 0 below.
 - [x] **LibriSpeech step 0**, five MA runs (`01-interface-recipe.md` §2):
       L1 current recipe (adapter LR 2e-5, batch 4800 s), L2 LR 2e-4 / 4800 s,
       L3 LR 2e-4 / 1200 s, L4 LR 1e-3 / 1200 s, plus a second seed of the
@@ -45,10 +47,25 @@ frame rate) or a multilingual-data problem? Decided by LibriSpeech step 0.
       *Outcome:* dev-clean/dev-other generative WER per run, step at which the
       loss leaves the plateau, gap to the floor. Success bar: under 10% WER on
       test-clean and a transition inside the epoch.
-- [ ] **Qwen3.5-2B IFT throughput** at 2 nodes × 4 GPUs, 20–50 steps,
-      gradient checkpointing on, eval and saves off (`acc_debug`).
-      *Outcome:* a measured s/step to replace the unverified 46 h budget;
-      feeds the Fondue feasibility table in `06-fondue.md`.
+- [x] **Qwen3.5-2B IFT throughput** at 2 nodes × 4 GPUs, 20–50 steps,
+      gradient checkpointing on, eval and saves off (`acc_debug`). Done
+      2026-09-15, MN5 job 45894977: steady state ~31 s/step (DDP,
+      batch_duration 30, grad_accum 20, effective batch 4800 audio-s/step).
+      Cross-checked against the full production IFT-700-qwen35-2b-ins arm
+      (job 45685241), which turned out to have already completed on
+      2026-09-12 unrecorded: 5048 steps, 27.3 s/step whole-epoch average
+      (includes eval/checkpoint overhead), ~306 GPU-h for the 6,729.85 h
+      mix. See `06-fondue.md` §2 and the board entry.
+- [ ] **Step 0b** (`01-interface-recipe.md` §2b), added 2026-09-17 because
+      step 0 was inconclusive. Pre-flight first, no GPU: substitution,
+      deletion and insertion rates on the three-epoch L4 run's hypotheses,
+      and a dry run of the warmup-stable-decay scheduler. Then eight
+      LibriSpeech MA arms at three epochs: warmup-stable-decay, its seed
+      replicate, LR 2e-3, 600 s batch, stack 5, Whisper encoder, and
+      Qwen3.5-2B against Qwen3.5-4B at stack 5. ~250 GPU-h. The two Qwen
+      arms wait for PR #132 and for Qwen3.5-4B staged on MN5.
+      *Outcome:* audio hours to 10% dev-clean WER per arm, which sets the
+      week-2 screen's budget and removes settled factors from its grid.
 
 ### Track B — preparation
 - [x] **`stack_factor` for the MLP adapter** (done 2026-09-15, [PR #126](https://github.com/MELT-proj/training/pull/126)) (concatenate k consecutive
@@ -61,14 +78,39 @@ frame rate) or a multilingual-data problem? Decided by LibriSpeech step 0.
       ([PR #10](https://github.com/MELT-proj/eval/pull/10)): 19,463 samples
       / 63.41 h (test), 2,400 samples / 7.41 h (dev). ga has no `pnc_text`
       on either split -- see the board entry.
-- [ ] **FLEURS X→en ST set construction** started in the preprocessing repo:
-      join each language's test audio with the English FLEURS text of the same
-      sentence id. Needed for ST on all 24; CoVoST2 covers only ten.
-- [ ] **Stage models on MN5** over `mn5transfer`: `Qwen/Qwen3.5-2B-Base`
-      (absent from the artemis cache on 2026-09-15), `utter-project/EuroLLM-1.7B`,
-      `utter-project/EuroLLM-1.7B-Instruct`. Confirm the EuroLLM ids on the Hub
-      first; verify offline loads before any allocation.
-- [ ] **Text-prior tool spec** agreed (`02-backbones.md` §3).
+- [x] **FLEURS X→en ST frozen sets** in melt-eval, per
+      `05-language-ladder.md` §3.1 (done 2026-09-15,
+      [PR #11](https://github.com/MELT-proj/eval/pull/11)): join each
+      language's test audio with the English FLEURS text of the same
+      sentence id, reference from the original English transcription,
+      zero-copy. `fleurs24-st-xen-test` 18,816 samples/61.63 h (23 locales,
+      zero dropped), `fleurs24-st-xen-dev` 2,300 samples/7.14 h (100/lang).
+      CoVoST2 covers ten of the 24 for cross-corpus comparison. See the
+      board entry.
+- [x] **Stage models on MN5** (done 2026-09-16) over `mn5transfer`:
+      `Qwen/Qwen3.5-2B-Base`, `utter-project/EuroLLM-1.7B`,
+      `utter-project/EuroLLM-1.7B-Instruct`. Hub ids confirmed before
+      downloading; offline load verified inside the container on `alogin1`
+      for all three. See the board entry.
+- [x] **Text-prior tool spec** agreed (`02-backbones.md` §3). Done
+      2026-09-16: two mechanisms (standalone teacher-forced scorer for
+      NLL/BPC/fertility; a new solver on the existing `st` task for the
+      cascade oracle), chat-template-per-backbone verified directly. Surfaced
+      two prerequisites for week 2's build; the ru/uk one is closed below,
+      the `DECODER_PROFILES` one is its own item below -- see the board
+      entry and `00-status.md` Blocked/waiting.
+- [x] **ru/uk added to the FLEURS melt-eval configs** (done 2026-09-16,
+      closing the gap the text-prior tool spec surfaced above):
+      [melt-eval#12](https://github.com/MELT-proj/eval/pull/12) (ASR test +
+      dev) and [melt-eval#13](https://github.com/MELT-proj/eval/pull/13) (ST
+      X→en test + dev), both open against `main`. Verified by re-freezing:
+      zero dropped cuts for either locale on any of the four sets.
+- [ ] **Add EuroLLM to `DECODER_PROFILES`** (`plan_arm.py`): `chatml`,
+      `chat_template_from: utter-project/EuroLLM-1.7B-Instruct` for the base
+      checkpoint -- verified directly against both checkpoints'
+      `tokenizer_config.json` while drafting the text-prior tool spec
+      (`02-backbones.md` §3.1, 2026-09-16), not yet added to the dict itself.
+      Needed for the text-prior tool and for week 3's EuroLLM MA arms.
 - [ ] **Eyeball 20 Qwen hypotheses** from the running IFT arm's eval tables
       for a leaked think block.
 
@@ -88,16 +130,37 @@ Settled.
       extra seeds at the best corner; one 2e-5 control. Twelve runs, ~60 GPU-h.
       *Outcome:* MA-stage generative WER per language, loss transition step,
       per-run FLEURS-24 zero-shot CER from melt-eval on the final checkpoint.
+      *Revised 2026-09-17:* waits for step 0b. Budget becomes at least 1.5×
+      the best LibriSpeech arm's hours-to-threshold and never under one
+      epoch of 700 h per language; 125 h per language is ~1,900 steps, below
+      where the transition appeared. Settled factors leave the grid. Launch
+      moves to about Tue 2026-09-22; the gate stays Sun 2026-09-27 if the
+      queue allows.
 - [ ] If step 0 was ambiguous, re-run the deciding LibriSpeech pair with the
-      second seed before the screen.
+      second seed before the screen. *Superseded by step 0b (week 1).*
 
 ### Track B — preparation
-- [ ] **Text-prior tool built** in melt-eval (`02-backbones.md` §3): bits per
+- [x] **Text-prior tool built** in melt-eval (`02-backbones.md` §3): bits per
       character and tokens per word on the FLEURS-24 references, with and
       without the IFT instruction, for ASR transcripts and English ST
       references. Run on all six backbones on an internal GPU.
       *Outcome:* the 6 × 24 prior table, a first ranking of backbones by
       language coverage before any training.
+      *Done 2026-09-16, pulled ahead of schedule on the PI's direct
+      request:* built and PR'd ([melt-eval #14](https://github.com/MELT-proj/eval/pull/14)),
+      run on all six backbones against both dev sets (12 runs total).
+      Qwen3.5 leads overall, EuroLLM wins specifically on Maltese, and
+      instruct beats base in every family on both tasks with no exception
+      (a direct measurement of the "template-naive base" confound above).
+      Two infra snags along the way, not tool bugs: a missing
+      `LANGUAGE_ISO_TO_NAME` entry for Irish (fixed) and a shared HF
+      cache with partial (tokenizer/config-only) entries for three
+      checkpoints (retried against complete ones). See `02-backbones.md`
+      §3.7 and the board entry for the full table.
+      *Left beyond this checkbox's original scope:* ru/uk (frozen sets not
+      yet redeployed to production, §3.5), the cascade oracle (a separate
+      mechanism, §3.2, not part of this item's own description), and the
+      `-test` splits (this ran on `-dev`).
 - [ ] **Fondue config drafted** (`06-fondue.md` §3): language set incl. ru/uk,
       two-tier mixture weights (alpha/beta), filters, eval subset. Not frozen.
 - [ ] **Raclette config drafted**: same mixture at 25K h, big-run batch,
@@ -168,9 +231,17 @@ regime fraction.
 - [ ] Evaluate the six backbone IFTs: in-domain, FLEURS-24, cascade oracle,
       text-ability retention. Second seed on the two leading backbones.
 - [ ] **IFT for the top three or four audio stacks** from the MA crossing.
+- [ ] **MA runs at 100 and 300 h/lang** for the ratio study (`04-regime.md`
+      §6), full schedules each, not checkpoints of the 700 h run. ~20 GPU-h,
+      and independent of the regime decision so they can go early.
+- [ ] **R9 and R10**, the decoder-frozen regime runs (`04-regime.md` §3),
+      if not already queued in week 4.
 - [ ] Q-Former arms of the crossing, if fixed.
 
 ### Track B — preparation
+- [ ] **Per-task budgets in `build_campaign_config.py`** and the ratio IFT
+      renders: ASR at 600, 400 and 0 h/lang with ST fixed at 700
+      (`04-regime.md` §6).
 - [ ] Ladder configs final; mixed-tier, repetition and Russian probe configs.
 - [ ] Raclette config final (batch on the order of one audio hour per step,
       three LR points, big-run topology).
@@ -190,6 +261,11 @@ go into the paper as ablations, not into Fondue.
       big-run batch and topology. Choose LR on loss at matched steps and
       FLEURS-24 dev CER.
 - [ ] Seed replicates for the headline backbone pair.
+- [ ] **MA:IFT ratio sweep under the winning regime** (`04-regime.md` §6):
+      IFT from the 0/100/300/700 h MA points, plus the zero-IFT evaluation
+      probe. Queue on Monday; feeds Fondue's "MA data budget and stage
+      split" row before the freeze if the queue allows, otherwise the
+      default holds.
 
 ### Track B — preparation
 - [ ] Fill the decision table in `06-fondue.md` §3 and mark it frozen.
@@ -203,7 +279,11 @@ go into the paper as ablations, not into Fondue.
 ### Track A — GPU
 - [ ] **Fondue MA starts** (Monday). ~5 days on 8 nodes at the measured MA
       rate if MA uses the full ASR pool; less if the ladder showed MA
-      saturating earlier (`06-fondue.md` §3, decision "MA data budget").
+      saturating earlier, or not at all if the ratio sweep says so
+      (`06-fondue.md` §3, decision "MA data budget and stage split").
+- [ ] **Ratio sweep, runner-up regime**, the two points P0 and P3
+      (`04-regime.md` §6): the interaction check. First thing to cut if the
+      queue is tight and the winning backbone is Qwen-class.
 - [ ] **Ladder tiers 10, 30, 100**: MA plus IFT each, on the winning
       backbone and stack (`05-language-ladder.md`).
 

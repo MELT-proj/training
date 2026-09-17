@@ -38,8 +38,8 @@ export SINGULARITY_BIN=singularity
 # git over SSH needs no internet on the far end. `mn5` is an ssh alias each
 # person defines in their own ~/.ssh/config, so no username is baked in.
 # REMOTE_REPO is relative to the remote $HOME, so it holds for any account.
-export REMOTE_SSH=mn5
-export REMOTE_REPO=training
+export REMOTE_SSH="${REMOTE_SSH:-mn5}"
+export REMOTE_REPO="${REMOTE_REPO:-training}"
 
 # --- misc -----------------------------------------------------------------
 # Compute nodes have no internet: pre-download models (infra/setup/download_hf_models.sh)

@@ -32,4 +32,4 @@ Rows: the 24 EU languages, then ru, ca, uk.
 | LibriSpeech dev + test, People's Speech test | en | ASR |
 | CoVoST2 X→en dev + test | de es fr it nl pt sv sl lv et (+ ca ru and non-EU) | ST |
 | CoVoST2 en→X dev + test | de et lv sl sv (+ non-EU) | ST, English audio |
-| FLEURS X→en | **does not exist yet**; build by joining sentence ids | ST |
+| FLEURS X→en | **does not exist yet**; build per `05-language-ladder.md` §3.1 | ST |
