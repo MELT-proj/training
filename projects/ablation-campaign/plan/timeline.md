@@ -51,6 +51,16 @@ frame rate) or a multilingual-data problem? Decided by LibriSpeech step 0.
       2026-09-12 unrecorded: 5048 steps, 27.3 s/step whole-epoch average
       (includes eval/checkpoint overhead), ~306 GPU-h for the 6,729.85 h
       mix. See `06-fondue.md` §2 and the board entry.
+- [ ] **Step 0b** (`01-interface-recipe.md` §2b), added 2026-09-17 because
+      step 0 was inconclusive. Pre-flight first, no GPU: substitution,
+      deletion and insertion rates on the three-epoch L4 run's hypotheses,
+      and a dry run of the warmup-stable-decay scheduler. Then eight
+      LibriSpeech MA arms at three epochs: warmup-stable-decay, its seed
+      replicate, LR 2e-3, 600 s batch, stack 5, Whisper encoder, and
+      Qwen3.5-2B against Qwen3.5-4B at stack 5. ~250 GPU-h. The two Qwen
+      arms wait for PR #132 and for Qwen3.5-4B staged on MN5.
+      *Outcome:* audio hours to 10% dev-clean WER per arm, which sets the
+      week-2 screen's budget and removes settled factors from its grid.
 
 ### Track B — preparation
 - [x] **`stack_factor` for the MLP adapter** (done 2026-09-15, [PR #126](https://github.com/MELT-proj/training/pull/126)) (concatenate k consecutive
@@ -115,8 +125,14 @@ Settled.
       extra seeds at the best corner; one 2e-5 control. Twelve runs, ~60 GPU-h.
       *Outcome:* MA-stage generative WER per language, loss transition step,
       per-run FLEURS-24 zero-shot CER from melt-eval on the final checkpoint.
+      *Revised 2026-09-17:* waits for step 0b. Budget becomes at least 1.5×
+      the best LibriSpeech arm's hours-to-threshold and never under one
+      epoch of 700 h per language; 125 h per language is ~1,900 steps, below
+      where the transition appeared. Settled factors leave the grid. Launch
+      moves to about Tue 2026-09-22; the gate stays Sun 2026-09-27 if the
+      queue allows.
 - [ ] If step 0 was ambiguous, re-run the deciding LibriSpeech pair with the
-      second seed before the screen.
+      second seed before the screen. *Superseded by step 0b (week 1).*
 
 ### Track B — preparation
 - [x] **Text-prior tool built** in melt-eval (`02-backbones.md` §3): bits per

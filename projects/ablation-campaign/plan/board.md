@@ -15,6 +15,45 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-17 — Claude (strategy session) — Step 0 inconclusive; step 0b designed with the PI (`01-interface-recipe.md` §2b)
+
+Context: read the LibriSpeech step-0 entry on branch
+`claude/librispeech-step0-l1-l4-60d122` (not yet on main). The PI proposed
+three checks before week 2: a more aggressive LR schedule, stacking to 10 Hz
+as in SLAM-ASR, and a larger decoder such as Qwen3.5-4B.
+
+Finding / proposal:
+
+1. At equal steps (end of epoch 1, about 2,900) the three-epoch L4 rerun had
+   loss 1.51 against L4's 2.63. The only difference at that point was how
+   far the LR had decayed, so the schedule is at least as important as the
+   epoch count.
+2. `optimization.min_lr_scale: 0.1` is read by no code on main. Every cosine
+   run decayed to zero. Comparisons stand; the configs misstate what ran.
+3. Step 0b is eight LibriSpeech MA arms at three epochs, ~250 GPU-h:
+   warmup-stable-decay (its stable phase doubles as the constant-LR arm),
+   a seed replicate, LR 2e-3, 600 s batch, stack 5, a Whisper-large-v3
+   encoder control, and Qwen3.5-2B against Qwen3.5-4B at stack 5. Size is
+   read within the Qwen family only. The primary metric is audio hours to
+   10% dev-clean WER at two consecutive evals.
+4. Two additions beyond the PI's three: the seed replicate, because
+   transition timing may be much noisier than end-of-run loss; and the
+   Whisper control, because SLAM-ASR's result rests on an ASR-fine-tuned
+   encoder and w2v-BERT 2.0 here is self-supervised only.
+5. Pre-flight before any GPU: substitution/deletion/insertion rates on the
+   three-epoch run's hypotheses. Loss 0.90 with 62% WER, and dev-other
+   beating dev-clean at epoch 2, are odd enough to rule out a decoding
+   problem first.
+6. The week-2 screen as written (125 h per language, ~1,900 steps) is below
+   the step count where the transition appeared; its budget is re-set from
+   step 0b and never goes under one epoch of 700 h per language.
+
+Action needed: the LibriSpeech session runs step 0b per §2b (messaged
+directly). The PI merges PR #132 to unblock the Qwen arms and decides on
+`min_lr_scale`.
+
+---
+
 ## 2026-09-16 — Claude (worker session text-prior-tool-spec) — Full text-prior numbers: all 6 backbones × 24 languages, reference table
 
 Context: the PI asked for the actual numbers and exact computation basis

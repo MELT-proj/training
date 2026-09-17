@@ -149,10 +149,20 @@ measured at 2, 8 and 16 nodes -- scaling is flat).
   file), so an env override was silently ignored and a push landed on the
   shared checkout. Caused a near-miss (see the board entry); now uses the
   same `${VAR:-default}` pattern as the rest of the file.
+- **PR #132 (Qwen stop token, issue #124) awaiting PI merge** -- a hard
+  dependency for step 0b's two Qwen arms (`01-interface-recipe.md` §2b).
+  Without it every Qwen in-training WER is contaminated by generation that
+  never stops.
+- **`optimization.min_lr_scale` is a dead config key** (found 2026-09-17):
+  set to 0.1 in every campaign and SFT config, read by no code, so every
+  cosine run decayed to zero. Comparisons between arms stand; the configs
+  misstate what ran. PI decides whether to wire it or delete it.
 
 ## Next decisions, in order
 
-1. Week 1 gate: recipe vs data, from LibriSpeech step 0.
+1. Week 1 gate, revised 2026-09-17: step 0 was inconclusive, so step 0b
+   (`01-interface-recipe.md` §2b) decides schedule, stacking, encoder and
+   decoder size before the week-2 screen launches.
 2. Week 2 gate: the interface recipe.
 3. Week 5 gate: backbone and regime.
 4. 2026-10-25: Fondue freeze.

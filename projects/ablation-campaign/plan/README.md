@@ -96,6 +96,7 @@ session, post to `board.md` instead if you think one is wrong.
 | 2026-09-15 | this `plan/` folder is committed; the repository is being made private | this file |
 | 2026-09-15 | the August MA failure is a coarse-feature plateau, not ignored audio (no-audio floor measured); step 0 reads loss together with WER | `01-interface-recipe.md` §1a |
 | 2026-09-16 | the MA:IFT hours ratio is a named study, run after the regime decision, splitting ASR hours only while ST hours stay fixed; the decoder-frozen IFT regime joins the regime comparison as R9/R10 | `04-regime.md` §3, §6 |
+| 2026-09-17 | step 0 was inconclusive; step 0b (schedule, stacking to 10 Hz, decoder size, plus a seed replicate and an encoder control) runs before the week-2 screen, whose budget is then re-set from step 0b's hours-to-threshold | `01-interface-recipe.md` §2b |
 
 ## Conventions for editing this folder
 
