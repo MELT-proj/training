@@ -120,6 +120,18 @@ DECODER_PROFILES = {
         "pad_token": "<|text_pad|>",
         "chat_template_config": "chatml",
     },
+    # Step 0b's decoder-size control (plan/01-interface-recipe.md §2b, Q4-k5
+    # against Q2-k5). Verified directly against the real downloaded
+    # tokenizer_config.json (2026-09-17), not assumed from "shares the 2B's
+    # vocabulary": identical vocab size (248,077), identical token ids for
+    # <|endoftext|> (248044) and <|im_end|> (248046), <|text_pad|> equally
+    # absent. Same MELT-convention override as Qwen/Qwen3.5-2B above, for the
+    # same reason -- the whole Qwen3.x/3.5 line shares it.
+    "Qwen/Qwen3.5-4B": {
+        "eos_token": "<|endoftext|>",
+        "pad_token": "<|text_pad|>",
+        "chat_template_config": "chatml",
+    },
 }
 
 # Short tags for EXP_NAME. Unknown names fall back to a sanitised slug (see
@@ -132,6 +144,7 @@ DECODER_TAGS = {
     "Qwen/Qwen3-1.7B": "qwen1_7b",
     "Qwen/Qwen3.5-2B": "qwen35_2bIns",
     "Qwen/Qwen3.5-2B-Base": "qwen35_2bBase",
+    "Qwen/Qwen3.5-4B": "qwen35_4bIns",
 }
 
 # Wall-clock defaults. 06:00:00 for the 700 h arm: measured

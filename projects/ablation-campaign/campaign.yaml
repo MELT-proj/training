@@ -253,6 +253,41 @@ arms:
     seed: 50
     time: "06:00:00"       # Whisper pads every cut to its fixed 30 s window, slower per step
 
+  # Decoder-size control, gated on PR #132 (merged 2026-09-17: Qwen chat-
+  # formatted decoders never stopped generation) plus Qwen/Qwen3.5-4B staged
+  # to MN5 and a DECODER_PROFILES entry for it (plan_arm.py, added
+  # 2026-09-17, verified against the real tokenizer -- same vocab as the 2B,
+  # <|text_pad|> equally absent). Same batch_duration 30 the existing
+  # MA-700-qwen35-2b-ins arm needed for a frozen Qwen3.5-2B decoder under
+  # DDP (campaign.yaml, above); grad_accum_steps 5 instead of that arm's 20
+  # gives 30 x 5 x 8 = 1200 s effective batch, matching R. stack_factor 5 is
+  # what makes the 4B affordable at all (see the sec2b comment on
+  # MA-librispeech-r-k5) -- read size only from Q4-k5 against Q2-k5, since
+  # Llama-vs-Qwen already confounds size with family/attention type.
+  - id: MA-librispeech-q2-k5
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    decoder: Qwen/Qwen3.5-2B
+    adapter_lr: 1e-3
+    batch_duration: 30
+    grad_accum_steps: 5    # 30 x 5 x 8 = 1200 s effective batch
+    gradient_checkpointing: false
+    stack_factor: 5
+    seed: 51
+    time: "04:00:00"
+
+  - id: MA-librispeech-q4-k5
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    decoder: Qwen/Qwen3.5-4B
+    adapter_lr: 1e-3
+    batch_duration: 30
+    grad_accum_steps: 5
+    gradient_checkpointing: false
+    stack_factor: 5
+    seed: 52
+    time: "05:00:00"       # ~2x the 2B's decoder; wider margin until measured
+
   # --------------------------------------------------------------- IFT (stage 2)
   - id: IFT-700-llama1b-ins
     stage: IFT
