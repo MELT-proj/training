@@ -141,6 +141,17 @@ frame rate) or a multilingual-data problem? Decided by LibriSpeech step 0.
       Needed for the text-prior tool and for week 3's EuroLLM MA arms.
 - [ ] **Eyeball 20 Qwen hypotheses** from the running IFT arm's eval tables
       for a leaked think block.
+- [ ] **`wsd-50hz-whisper`'s threshold-crossing step**, from its existing
+      in-training eval history: the first `global_step` and audio-hour count
+      at which each dev set went below WER 0.10. No GPU. It is the only
+      hours-to-threshold number step 0b will produce, and the week-2 screen
+      budget is derived from it (`01-interface-recipe.md` §2b, Consequence).
+- [ ] **Whisper-large-v3's own WER** on the same normalised dev-clean and
+      dev-other, as a reference line for the arm above. A decode, no
+      training; artemis preferred so it does not queue behind MN5 work.
+      *Outcome:* `wsd-50hz-whisper`'s 0.038/0.061 restated as the fraction
+      of the encoder's own ability the projector recovers, which is the
+      form `03-audio-stack.md` §0 needs.
 - [ ] **Backfill `arms.tsv`** with the completed-but-unrecorded Qwen pair
       (`MA-700-qwen35-2b-ins`, done 2026-09-05, and `IFT-700-qwen35-2b-ins`,
       done 2026-09-12, whose full eval scores sit in its `trainer_state.json`).
@@ -187,6 +198,10 @@ Settled.
       now runs in week 3, so its four Q-Former arms need the adapter
       instantiable by then. If it slips, the crossing launches without them
       and they join as a late addition at the same recipe.
+- [ ] **MoE adapter branch merged to `main`** with its aux-loss logging,
+      moved up from week 4 for the same reason: the MoE is one of the four
+      adapters in the week-3 crossing, so it must be on `main` before the
+      sixteen arms are rendered.
 - [ ] **Fondue config drafted** (`06-fondue.md` §3): language set incl. ru/uk,
       two-tier mixture weights (alpha/beta), filters, eval subset. Not frozen.
 - [ ] **Raclette config drafted**: same mixture at 25K h, big-run batch,
@@ -250,7 +265,6 @@ audio stacks, regime fraction.
       encoder, and that assumption is stated in `04-regime.md`.
 
 ### Track B — preparation
-- [ ] MoE adapter branch merged to `main` with its aux-loss logging.
 - [ ] Ladder eval pipeline: melt-eval configs for FLEURS-24 ASR, FLEURS X→en,
       CV22 test, CoVoST2 X→en where it exists; COMET rescoring environment on
       an internal GPU.
