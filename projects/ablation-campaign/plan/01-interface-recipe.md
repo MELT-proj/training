@@ -448,3 +448,25 @@ Two findings, both load-bearing:
    decoding is a real lever but stays out of the campaign metric, since
    fixing it would not have gotten this recipe to threshold either, and it
    would flatter every future arm's WER by the same uncontrolled amount.
+
+### Step 0b arms
+
+Launched 2026-09-17/18: R, R-seed, R-lr2e3, R-b600, R-k5, W, Q2-k5, Q4-k5
+(§2b). Fill in as each lands. In-training eval, `max_samples 500`/set, the
+metrics from `melt/training/metrics.py`'s update (full-set S/D/I/length
+ratio/runaway fraction, not the old 200-sample log).
+
+**Resume note.** Several arms hit their original 3h wall-clock budget at
+~87% (the 500-sample eval costs more per round than A0/l4-ep3's 200) and
+needed `--resume`; `campaign.yaml`'s `time:` bumped to 4h for next time
+(board entry). One cosmetic artifact from resuming: the final logged
+`epoch` value undercounts (e.g. `2.093` instead of `3.0`) even though
+`global_step` correctly reaches the full 3-epoch target (8652) and the
+LR schedule is step-driven, not epoch-driven -- read `global_step`, not
+`epoch`, as the source of truth for how much of the run actually happened
+on a resumed arm.
+
+| run | exp_name | dev-clean WER | dev-other WER | dev-clean loss | dev-other loss | runaway (clean/other) | notes |
+|---|---|---|---|---|---|---|---|
+| A0 | `MA-librispeech-w2vbF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr1e3-s44-8g` | 0.622 | 0.776 | 0.901 | 1.146 | -- | = `MA-librispeech-l4-ep3`, cosine decay, not rerun. Full-set greedy (not the 200-sample log): WER 0.689/0.914, runaway 2.37%/3.28% (see the pre-flight 1b diagnostic above). |
+| R-k5 | `MA-librispeech-w2vbF-llama1bInsF-mlpT-sk5-ga1-elr6e6-dlr2e5-lr1e3-s49-8g` | **0.314** | **0.490** | 0.621 | 0.885 | 1.0% / 0.6% | job 46059845 (resumed from 45985944), `stack_factor 5`, warmup-stable-decay. Roughly half A0's WER and a 3-4x lower runaway fraction than A0's own full-set greedy number. |

@@ -15,6 +15,50 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-18 — Claude (worker session librispeech-step0-l1-l4) — First step 0b result: R-k5 (stack_factor 5) roughly halves A0's WER
+
+Context: step 0b arms launched 2026-09-17 evening; MN5 backfill put them
+~7-8h out (15 nodes across 8 concurrent jobs). Four of eight (R, R-seed,
+R-lr2e3, R-k5) hit their original 3h wall-clock budget at ~87% -- the
+500-sample eval costs more per round than A0's 200 -- and needed
+`--resume`; `campaign.yaml`'s `time:` bumped 3h->4h for next time. W
+also failed once at startup (see the entry below) and was resubmitted.
+
+Finding: R-k5 (job 46059845, resumed from 45985944) is the first step 0b
+arm to complete. `stack_factor 5` (50 Hz -> 10 Hz) against A0's `stack_factor
+1`, everything else matched (LR 1e-3, 1200 s batch, 3 epochs,
+warmup-stable-decay once R's own numbers land for the schedule
+comparison):
+
+| | dev-clean WER | dev-other WER | dev-clean loss | dev-other loss | runaway |
+|---|---|---|---|---|---|
+| A0 (full-set greedy) | 0.689 | 0.914 | -- | -- | 2.37% / 3.28% |
+| R-k5 | **0.314** | **0.490** | 0.621 | 0.885 | 1.0% / 0.6% |
+
+Roughly half A0's WER, and runaway drops 2-5x too -- consistent with the
+"losing its place in long 50 Hz audio" hypothesis §2b's decision rule 2
+names: stacking cuts decoder positions five-fold and both accuracy and
+the runaway problem improve together, not just one. This is a comparison
+against A0 (cosine schedule), not yet against R (the same warmup-stable-decay
+schedule at stack_factor 1) -- R's own run is still in progress, so
+decision rule 2 ("stack 5 becomes the default if R-k5 is within noise of
+R or better") cannot be applied yet; A0 only shows stacking helps
+*something* about this recipe, not how much of the gain is the schedule
+vs. the stacking specifically.
+
+**Resume artifact, worth knowing:** the resumed run's final logged
+`epoch` reads `2.093`, not `3.0`, even though `global_step` correctly
+reaches 8652 (the true 3-epoch target) and the checkpoint's final weights
+are written. Cosmetic only -- the LR schedule and training length are
+step-driven (`lr_scheduler_kwargs.num_decay_steps`/`num_training_steps`),
+not epoch-driven -- but don't read a resumed arm's `epoch` field as "how
+much training happened."
+
+Action needed: none blocking. Full table fills in as R/R-seed/R-lr2e3/
+R-b600/W/Q2-k5/Q4-k5 land; see `01-interface-recipe.md` §5.
+
+---
+
 ## 2026-09-18 — Claude (worker session librispeech-step0-l1-l4) — Step 0b arms running; Whisper needs max_audio_seq_len 3000, not the w2v-BERT default
 
 Context: all eight step 0b arms queued 2026-09-17 evening; MN5 backfill put
