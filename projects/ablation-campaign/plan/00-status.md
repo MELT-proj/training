@@ -3,7 +3,17 @@
 Update this file whenever something starts, finishes, or blocks. Keep it
 short; the reasoning goes to `board.md`, the plan to the numbered files.
 
-**Last updated:** 2026-09-16 (text-prior tool built and run on all six
+**Last updated:** 2026-09-17 (step 0b pre-flight cleared and six arms
+launched: R/R-seed/R-lr2e3/R-b600/R-k5/W running on MN5; the Qwen decoder-size
+control (Q2-k5/Q4-k5) staged and queued behind PR #132 -- merged -- and the
+Qwen3.5-4B checkpoint transfer -- prior updates same day: the "insertions
+dominate" pre-flight STOP was reviewed and reversed (main commit `ad07b3f`);
+the full-set decoding diagnostic (job 45985475) found runaway is real but
+only 2.4-3.3% of hypotheses, and that none of the 20-sample/200-sample/
+full-set eval numbers safely stood in for each other -- see the board entry;
+LibriSpeech step 0 complete, L1-L5 plus the epoch-extension diagnostic; step
+0b designed with the PI, `01-interface-recipe.md`
+§2b -- prior update 2026-09-16: text-prior tool built and run on all six
 backbones on artemis, PR #14 -- Qwen3.5 leads overall, EuroLLM wins on
 Maltese, instruct beats base in every family; a live `LANGUAGE_ISO_TO_NAME`
 gap for Irish found and fixed; ru/uk added to the FLEURS melt-eval configs,
@@ -14,6 +24,15 @@ measured at 2, 8 and 16 nodes -- scaling is flat).
 
 ## Running on MN5
 
+- Step 0b (`01-interface-recipe.md` §2b): six Llama/Whisper arms at L4's
+  LR/1200 s batch, 3 epochs, `warmup_stable_decay` schedule, eval
+  `max_samples` 500/set -- `MA-librispeech-r` (45985909), `r-seed`
+  (45985924), `r-lr2e3` (45985930), `r-b600` (45985931, 1 node, ~2x steps),
+  `r-k5` (45985944, stack_factor 5), `w` (45985946, Whisper-large-v3
+  encoder). All queued `acc_ehpc` as of 2026-09-17. `q2-k5`/`q4-k5` (Qwen
+  decoder-size control) staged (`campaign.yaml` rows added, PR #132 merged,
+  `plan_arm.py` DECODER_PROFILES entry added and verified) and queued to
+  submit once the Qwen3.5-4B `mn5transfer` rsync completes.
 - `MA-700asr-w2vbF-llama1bInsF-moeT-ep10-ttverbatim-…` — 10-epoch MA with the
   MoE adapter and the verbatim prompt, adapter LR 2e-5. Submitted 2026-09-13.
   Observed: loss plateau then a smooth drop from ~3.6 to ~2.6 after ~9,000 h
@@ -26,6 +45,17 @@ measured at 2, 8 and 16 nodes -- scaling is flat).
 
 ## Done
 
+- LibriSpeech step 0 (`01-interface-recipe.md` §2): L1-L4 all reproduce the
+  August plateau (WER>1.0, no transition inside one epoch) -- rules out
+  multilingual data as the sole cause. L4 (LR 1e-3, 1200 s effective batch)
+  is clearly best (WER 1.040/1.056 clean/other); L5 (second seed) replicates
+  within ~0.02 WER, so it's a real recipe effect. Diagnostic
+  `MA-librispeech-l4-ep3` (fresh 3-epoch run at L4's LR/batch) shows the
+  plateau DOES break with more gradient updates: WER falls to 0.622/0.776
+  by epoch 3 -- still short of <10%, but a real, large transition. Bottleneck
+  looks like schedule length (cosine decay cutting the transition off at 1
+  epoch), not a hard capacity ceiling. Full numbers in
+  `01-interface-recipe.md` §5; branch `claude/librispeech-step0-l1-l4-60d122`.
 - Campaign tooling: `campaign.yaml` grid, `campaign.py plan/run/status`,
   `arms.tsv` ledger, parameterised launchers, DDP for MA, host-RAM wall fixed.
 - MA-700 Llama-Instruct (August recipe): WER 1.10–1.16, eval loss 2.6–3.1.
@@ -110,6 +140,11 @@ measured at 2, 8 and 16 nodes -- scaling is flat).
 
 ## Blocked / waiting
 
+- **Q2-k5/Q4-k5 (step 0b Qwen decoder-size control) not yet submitted**:
+  waiting on the `Qwen/Qwen3.5-4B` `mn5transfer` rsync to finish. Rows
+  are in `campaign.yaml`, `plan_arm.py`'s `DECODER_PROFILES` entry is
+  added and verified, `campaign.py plan` renders both correctly. Submit
+  as soon as the checkpoint lands on MN5.
 - Q-Former adapter is broken; the PI fixes it in week 4.
 - PR #14 (`melteval text-prior`, the tool itself) awaiting review/merge.
 - PR #12 and PR #13 (ru/uk added to the FLEURS ASR and ST melt-eval
@@ -160,9 +195,14 @@ measured at 2, 8 and 16 nodes -- scaling is flat).
 
 ## Next decisions, in order
 
-1. Week 1 gate, revised 2026-09-17: step 0 was inconclusive, so step 0b
-   (`01-interface-recipe.md` §2b) decides schedule, stacking, encoder and
-   decoder size before the week-2 screen launches.
+1. Week 1 gate: recipe vs data, from LibriSpeech step 0 -- answered (recipe,
+   not data). Step 0 itself stayed inconclusive on the recipe's own success
+   bar (all five one-epoch arms stayed above WER 1.0), so step 0b
+   (`01-interface-recipe.md` §2b) now decides schedule, stacking, encoder
+   and decoder size before the week-2 screen launches -- **running**: six
+   Llama/Whisper arms launched 2026-09-17, Qwen decoder-size control queued
+   behind the Qwen3.5-4B transfer. Apply §2b's decision rules once results
+   land.
 2. Week 2 gate: the interface recipe.
 3. Week 5 gate: backbone and regime.
 4. 2026-10-25: Fondue freeze.

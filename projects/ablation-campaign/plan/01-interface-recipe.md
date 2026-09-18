@@ -355,10 +355,140 @@ same output rate.
 
 Fill in as the runs land. Quote experiment names, not job ids.
 
+Measured 2026-09-16, `MA-librispeech-l1`..`l4` (jobs on `arms.tsv`), final-epoch
+in-training generative eval, 200 utterances/set. None crossed WER 1.0 or the
+<10% success bar; loss declined smoothly and monotonically in every run, with
+no plateau-then-drop transition inside the epoch (unlike the SLAM-ASR
+dynamic §1 cites) -- "transition step" is reported as none for all four.
+
 | run | exp_name | dev-clean WER | dev-other WER | transition step | notes |
 |---|---|---|---|---|---|
-| L1 | | | | | |
-| L2 | | | | | |
-| L3 | | | | | |
-| L4 | | | | | |
-| L5 | | | | | |
+| L1 | `MA-librispeech-w2vbF-llama1bInsF-mlpT-elr6e6-dlr2e5-lr2e5-s42-8g` | 1.120 | 1.137 | none | August recipe control; loss 3.072/2.968 (clean/other). Reproduces the August plateau (WER>1.0) on LibriSpeech alone -- not a multilingual-data artifact. |
+| L2 | `MA-librispeech-w2vbF-llama1bInsF-mlpT-elr6e6-dlr2e5-lr2e4-s42-8g` | 1.084 | 1.075 | none | LR alone (10x L1). Loss 3.012/2.914. Small improvement over L1, not the "L2 works" break the interpretation rules describe. |
+| L3 | `MA-librispeech-w2vbF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr2e4-s42-8g` | 1.076 | 1.087 | none | L2's LR + 4x steps (1200 s batch). Loss 2.943/2.842. Marginally better than L2 -- steps alone do not break the plateau either. |
+| L4 | `MA-librispeech-w2vbF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr1e3-s42-8g` | 1.040 | 1.056 | none | L3's steps, LR pushed to 1e-3. Loss 2.625/2.587, clearly the best of the four and still declining fastest at epoch end (loss delta accelerating over the back half of training, unlike L1-L3). Per the interpretation rules ("L4 better than L3 -> keep going up"), the open question for week 2 is whether an even higher LR or a longer run clears the plateau. |
+| L5 | `MA-librispeech-w2vbF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr1e3-s43-8g` | 1.053 | 1.058 | none | Second seed of L4. Loss 2.64/2.593 (clean/other) -- within ~0.02 nats and ~0.02 WER of L4 (2.625/2.587, 1.040/1.056). Tight seed noise; L4's improvement over L1-L3 is a real recipe effect, not seed luck. |
+
+### Post-hoc diagnostic: does the plateau break with more gradient updates?
+
+Not part of the L1-L5 grid. L4's loss delta accelerated through the back half
+of its one epoch (-0.03/step early -> -0.108 near epoch 0.8) before
+flattening in the final ~10% -- plausibly the SLAM-ASR plateau-then-drop
+caught mid-transition, confounded by L4's own cosine schedule being tuned to
+fully decay by end of epoch 1. `MA-librispeech-l4-ep3` reruns L4's exact
+LR/batch (1e-3, 1200 s) fresh for 3 epochs (seed 44, so the schedule is
+re-derived over the full 3-epoch horizon and LR decays more slowly through
+epoch 1) -- ~2h24m wall, single 8-GPU allocation. Measured 2026-09-17:
+
+| epoch | dev-clean loss | dev-clean WER | dev-other loss | dev-other WER |
+|---|---|---|---|---|
+| 1.0 | 1.509 | 1.155 | 1.746 | 1.312 |
+| 2.0 | 0.989 | 0.895 | 1.244 | 0.745 |
+| 3.0 (final) | 0.901 | 0.622 | 1.146 | 0.776 |
+
+**The plateau breaks.** WER falls from >1.1 (worse than L4's own 1-epoch
+result -- expected, since this run's LR has decayed less by the same step
+count) to 0.62-0.78 by epoch 3: a real, large transition, not noise (loss
+drops 3.11->1.51 within epoch 1 alone, then continues 1.51->0.90 over
+epochs 2-3). Still short of the <10% success-bar, and dev-clean/dev-other
+diverge slightly in epoch 3 (0.622 vs 0.776, and the single best point in
+the whole run was epoch 2.726's dev-clean WER 0.588 -- the trajectory is not
+perfectly monotonic this late), so this is not "solved," but it reframes the
+diagnosis: **the bottleneck at 1e-3/1200 s was schedule length (LR decayed
+before the transition completed), not adapter/decoder capacity or the
+encoder.** The August recipe's failure is real, but "does a small decoder
+ever align" is not answered by this -- the question for week 2 is whether
+the five-language screen's step/LR budget needs to grow to let this
+transition complete, or whether it completes given more wall-clock at the
+125 h/screen budget too.
+
+### Step 0b pre-flight 1b: full-set decoding diagnostic
+
+Not part of the L1-L5 grid. Per §2b's pre-flight step 1b (the Fondue
+Orchestrator's resolution of the "insertions dominate" STOP, main commit
+`ad07b3f`): `step0b_diagnostic_full_eval.py` decoded `MA-librispeech-l4-ep3`'s
+final checkpoint over the *entire* dev-clean (2,703 cuts) and dev-other
+(2,864 cuts) sets -- not the 20 samples the trainer logs, and not even the
+200/set cap training itself used -- greedy as in training, then again with
+`no_repeat_ngram_size: 4`. MN5 job 45985475, off `arms.tsv` by design (same
+as `no_audio_floor.py`), 22m28s on one GPU.
+
+| pass | set | n | WER | S | D | I | length ratio | runaway fraction |
+|---|---|---|---|---|---|---|---|---|
+| greedy | dev-clean | 2703 | 0.689 | 31.8% | 10.3% | 26.7% | 1.150 | 2.37% (64) |
+| greedy | dev-other | 2864 | 0.914 | 44.0% | 11.5% | 36.0% | 1.177 | 3.28% (94) |
+| no_repeat_ngram_size 4 | dev-clean | 2703 | 0.487 | 30.6% | 10.8% | 7.3% | 0.969 | 0.00% (0) |
+| no_repeat_ngram_size 4 | dev-other | 2864 | 0.643 | 42.9% | 12.0% | 9.4% | 0.976 | 0.03% (1) |
+
+Runaway hypotheses are markedly longer-duration on average: mean 11.79 s
+(clean) / 10.84 s (other) against 7.06 s / 6.29 s for non-runaway pairs --
+supporting "losing its place in long 50 Hz audio" over "undertrained EOS"
+(`R-k5`, stack_factor 5, tests this directly).
+
+Two findings, both load-bearing:
+
+1. **The full-set greedy WER (0.689/0.914) is *worse* than the 200-sample
+   number training itself reported (0.622/0.776), not better.** The 20
+   logged samples spiked to 1.19 by drawing disproportionately from
+   longer/harder cuts; the 200-sample subset happened to land easier than
+   the full set. Neither logged number is a safe stand-in for the true
+   full-set score -- this is exactly why the runaway fraction and full-set
+   S/D/I now ship with every in-training eval (`melt/training/metrics.py`),
+   not just at the end of a run.
+2. **Runaway is real but a minority (2.4-3.3% of hypotheses), confirming
+   the revised stop condition does not fire.** `no_repeat_ngram_size 4`
+   removes it almost entirely (0.00%/0.03%) and drops WER by 0.20-0.27
+   absolute (29-30% relative) -- nearly all of that from the insertion rate
+   collapsing (26.7%->7.3%, 36.0%->9.4%), while substitution and deletion
+   barely move (31.8%->30.6%, 44.0%->42.9% substitution; both deletion
+   rates flat). The repetition loops are a large, cleanly separable, and
+   currently unclaimed chunk of the measured WER -- but even with them
+   fully suppressed, WER stays at 0.49-0.64, nowhere near the <10% bar.
+   Consistent with the decision already recorded above: anti-repetition
+   decoding is a real lever but stays out of the campaign metric, since
+   fixing it would not have gotten this recipe to threshold either, and it
+   would flatter every future arm's WER by the same uncontrolled amount.
+
+### Step 0b arms
+
+Launched 2026-09-17/18: R, R-seed, R-lr2e3, R-b600, R-k5, W, Q2-k5, Q4-k5
+(§2b). Fill in as each lands. In-training eval, `max_samples 500`/set, the
+metrics from `melt/training/metrics.py`'s update (full-set S/D/I/length
+ratio/runaway fraction, not the old 200-sample log).
+
+**Resume note.** Several arms hit their original 3h wall-clock budget at
+~87% (the 500-sample eval costs more per round than A0/l4-ep3's 200) and
+needed `--resume`; `campaign.yaml`'s `time:` bumped to 4h for next time
+(board entry). One cosmetic artifact from resuming: the final logged
+`epoch` value undercounts (e.g. `2.093` instead of `3.0`) even though
+`global_step` correctly reaches the full 3-epoch target (8652) and the
+LR schedule is step-driven, not epoch-driven -- read `global_step`, not
+`epoch`, as the source of truth for how much of the run actually happened
+on a resumed arm.
+
+| run | exp_name | dev-clean WER | dev-other WER | dev-clean loss | dev-other loss | runaway (clean/other) | notes |
+|---|---|---|---|---|---|---|---|
+| A0 | `MA-librispeech-w2vbF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr1e3-s44-8g` | 0.622 | 0.776 | 0.901 | 1.146 | -- | = `MA-librispeech-l4-ep3`, cosine decay, not rerun. Full-set greedy (not the 200-sample log): WER 0.689/0.914, runaway 2.37%/3.28% (see the pre-flight 1b diagnostic above). |
+| R-k5 | `MA-librispeech-w2vbF-llama1bInsF-mlpT-sk5-ga1-elr6e6-dlr2e5-lr1e3-s49-8g` | **0.314** | **0.490** | 0.621 | 0.885 | 1.0% / 0.6% | job 46059845 (resumed from 45985944), `stack_factor 5`, warmup-stable-decay. Roughly half A0's WER and a 3-4x lower runaway fraction than A0's own full-set greedy number. |
+| R-seed | `MA-librispeech-w2vbF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr1e3-s46-8g` | 0.441 | 0.666 | 0.750 | 1.012 | 1.4% / 1.4% | job 46059832 (resumed from 45985924), seed 46. Worse than R-k5 as expected (`stack_factor 1`, same as A0/L4). |
+| R | `MA-librispeech-w2vbF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr1e3-s45-8g` | 0.549 | 0.664 | 0.775 | 1.022 | 2.0% / 1.4% | job 46059069 (resumed from 45985909), seed 45, `stack_factor 1`, warmup-stable-decay. Beats A0 (cosine, same steps): 0.549 vs 0.689 clean, 0.664 vs 0.914 other. R/R-seed spread is large on dev-clean (0.549 vs 0.441, 0.11 absolute) and tiny on dev-other (0.664 vs 0.666) -- noisier than the ~0.02 spread measured on the one-epoch L4/L5 pair. |
+| R-lr2e3 | `MA-librispeech-w2vbF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr2e3-s47-8g` | 0.437 | 0.599 | 0.665 | 0.927 | 1.0% / 1.2% | job 46059833 (resumed from 45985930), peak LR 2e-3. Better than R (LR 1e-3) on both sets. |
+
+**Decision rules applied to the numbers above** (not adjudicated here, per
+the Orchestrator's instruction -- flagging what the raw numbers say against
+each rule as written):
+
+- **Rule 1 (schedule).** "Warmup-stable-decay becomes the MA default if R
+  beats A0 at equal steps by more than the R/R-seed spread." R beats A0 by
+  0.14 (clean) / 0.25 (other); the R/R-seed spread is 0.11 (clean) / 0.002
+  (other). R's margin over A0 exceeds the spread on both sets -- the rule
+  as written triggers, though the spread itself (0.11 on dev-clean) is
+  large enough that a single extra seed pair is a thin basis for "the
+  spread." "LR 2e-3 is adopted if it reaches the threshold in fewer audio
+  hours without loss spikes" -- R-lr2e3 beats R on both sets at the same
+  step count, but nothing has reached the <10% threshold yet, so this half
+  of the rule has no threshold-crossing to measure against.
+- **Rule 2 (stacking).** "Stack 5 becomes the default if R-k5 is within
+  noise of R or better." R-k5 (0.314/0.490) clearly beats R (0.549/0.664)
+  by more than the measured R/R-seed spread on both sets -- the rule
+  triggers unambiguously.

@@ -35,10 +35,15 @@ frame rate) or a multilingual-data problem? Decided by LibriSpeech step 0.
       the August MA eval loss (2.6–3.1), not matching it — audio was not
       ignored. See `01-interface-recipe.md` §1a and the board entry; flagged
       for PI review, does not block LibriSpeech step 0 below.
-- [ ] **LibriSpeech step 0**, five MA runs (`01-interface-recipe.md` §2):
+- [x] **LibriSpeech step 0**, five MA runs (`01-interface-recipe.md` §2):
       L1 current recipe (adapter LR 2e-5, batch 4800 s), L2 LR 2e-4 / 4800 s,
       L3 LR 2e-4 / 1200 s, L4 LR 1e-3 / 1200 s, plus a second seed of the
-      best. ~7 GPU-h each.
+      best. ~7 GPU-h each. Done 2026-09-17: all five reproduce the August
+      plateau (WER>1.0, no in-epoch transition); L4 best, L5 confirms it's a
+      real effect. A post-hoc 3-epoch diagnostic at L4's LR/batch broke the
+      plateau (WER down to 0.622/0.776 dev-clean/other by epoch 3, still
+      short of <10%) -- bottleneck looks like schedule length, not capacity.
+      See `01-interface-recipe.md` §5 and the 2026-09-17 board entry.
       *Outcome:* dev-clean/dev-other generative WER per run, step at which the
       loss leaves the plateau, gap to the floor. Success bar: under 10% WER on
       test-clean and a transition inside the epoch.
@@ -59,6 +64,17 @@ frame rate) or a multilingual-data problem? Decided by LibriSpeech step 0.
       replicate, LR 2e-3, 600 s batch, stack 5, Whisper encoder, and
       Qwen3.5-2B against Qwen3.5-4B at stack 5. ~250 GPU-h. The two Qwen
       arms wait for PR #132 and for Qwen3.5-4B staged on MN5.
+      Pre-flight step 1's initial "insertions dominate" (50.4%, n=20) read
+      was reviewed and reversed 2026-09-17 (board entries, main commit
+      `ad07b3f`): a full-set diagnostic (job 45985475) found runaway is
+      real but only 2.4-3.3% of hypotheses (revised stop condition does not
+      fire), and that none of the 20-sample/200-sample/full-set eval
+      numbers were safe stand-ins for each other. Both pre-flight items
+      closed (metrics change landed, scheduler dry run confirmed). Six
+      Llama/Whisper arms launched: R (45985909), R-seed (45985924),
+      R-lr2e3 (45985930), R-b600 (45985931), R-k5 (45985944), W (45985946).
+      Q2-k5/Q4-k5 staged (PR #132 merged, Qwen3.5-4B rsync to MN5 in
+      progress) and queued to submit once the transfer lands.
       *Outcome:* audio hours to 10% dev-clean WER per arm, which sets the
       week-2 screen's budget and removes settled factors from its grid.
 

@@ -113,6 +113,194 @@ arms:
     checkpoint_count: 2
     time: "28:00:00"
 
+  # ------------------------------------------------- LibriSpeech step 0 (MA)
+  # plan/01-interface-recipe.md §2: is the August recipe (adapter LR 2e-5,
+  # effective batch 4800 s) or its step budget why the multilingual MA arms
+  # never leave the "fluent but unrelated to audio" plateau? L1 is the
+  # control; L2 isolates LR; L3 adds 4x the optimizer steps at the same LR;
+  # L4 pushes LR further at L3's step budget. L5 (second seed of the best of
+  # L2-L4) is added once that winner is known -- see the interpretation rules
+  # in the plan file. ~7 GPU-h each at the measured MA rate (~1,000
+  # audio-s/wall-s on 8 GPUs) for one ~961 h epoch.
+  - id: MA-librispeech-l1
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 2e-5      # the August recipe, as control (== config default)
+    seed: 42
+    time: "02:00:00"
+
+  - id: MA-librispeech-l2
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 2e-4      # LR alone, same 4800 s effective batch as L1
+    seed: 42
+    time: "02:00:00"
+
+  - id: MA-librispeech-l3
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 2e-4      # LR plus 4x more optimizer steps than L1/L2
+    grad_accum_steps: 1   # batch_duration 150 x 1 x 8 = 1200 s effective batch
+    seed: 42
+    time: "02:00:00"
+
+  - id: MA-librispeech-l4
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 1e-3      # upper end of the LR range, L3's step budget
+    grad_accum_steps: 1   # 1200 s effective batch, same as L3
+    seed: 42
+    time: "02:00:00"
+
+  # L5: second seed of the best of L2-L4. Measured (dev-clean, final epoch):
+  # L1 loss 3.072/WER 1.12, L2 loss 3.012/WER 1.084, L3 loss 2.943/WER 1.076,
+  # L4 loss 2.625/WER 1.04 -- L4 wins clearly and was still declining fastest
+  # at epoch end, so it is the noise check.
+  - id: MA-librispeech-l5
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 1e-3
+    grad_accum_steps: 1
+    seed: 43
+    time: "02:00:00"
+
+  # Diagnostic, not a campaign comparison point: L4's loss delta accelerated
+  # through the back half of its one epoch (-0.03/step early -> -0.108 near
+  # epoch 0.8) before flattening in the last ~10% -- consistent with the
+  # SLAM-ASR plateau-then-drop caught mid-transition, not a dead recipe. A
+  # fresh 3-epoch run at L4's LR/batch re-derives the cosine schedule over
+  # the full 3-epoch horizon, so LR stays higher for longer through exactly
+  # the region L4 showed acceleration in, testing "does it just need more
+  # gradient updates" without confounding decoder/encoder capacity or data
+  # volume. ~21-24 GPU-h (3x L4). Deliberately breaks the one-epoch
+  # convention (agent-protocol.md §3) via the documented `--` passthrough,
+  # not a new campaign axis -- submit as:
+  #   campaign.py run MA-librispeech-l4-ep3 -- --trainer.num_train_epochs 3
+  # eval_steps/save_steps stay at the single-epoch cadence (262), so this
+  # evaluates ~3x more often than a normal arm; harmless at this scale.
+  # New seed (44, continuing l1-l4's 42 / l5's 43) so the composed exp_name
+  # cannot collide with l4's already-completed run directory.
+  - id: MA-librispeech-l4-ep3
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 1e-3
+    grad_accum_steps: 1
+    seed: 44
+    time: "03:00:00"
+
+  # -------------------------------------------------- Step 0b (01-interface-recipe.md sec2b)
+  # Common to all of R/R-seed/R-lr2e3/R-b600/R-k5/W: adapter LR 1e-3, three
+  # epochs, warmup-stable-decay (num_decay_steps = round(0.2 x each arm's
+  # own derived steps) -- differs by arm since R-b600 halves world_size and
+  # doubles steps, so it is passed as a per-submission `--` override, not
+  # baked into these rows), min_lr_ratio 0.1, decay_type cosine, and eval
+  # max_samples 500/set (200 made the epoch-3 trajectory noisy). All via the
+  # same `--` passthrough l4-ep3 uses, not new campaign axes:
+  #   campaign.py run MA-librispeech-r -- --trainer.num_train_epochs 3 \
+  #     --data.validation_ds.max_samples 500 \
+  #     --trainer.lr_scheduler_type warmup_stable_decay \
+  #     --trainer.lr_scheduler_kwargs '{"num_decay_steps": N, "min_lr_ratio": 0.1, "decay_type": "cosine"}'
+  # `time:` on R/R-seed/R-lr2e3/R-k5 bumped 03:00:00 -> 04:00:00 (2026-09-18):
+  # the eval max_samples bump from l4-ep3's 200 to 500/set adds enough
+  # per-round generation cost that all four hit the 3h wall clock at ~87%
+  # (jobs 45985909/24/30/44) and needed `--resume`. No change needed to
+  # R-b600 (8h, ~2x steps but comfortable margin observed) or W (6h, not
+  # yet a binding constraint).
+  # A0 (schedule reference) is MA-librispeech-l4-ep3 above -- not rerun.
+  - id: MA-librispeech-r
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 1e-3
+    grad_accum_steps: 1   # 1200 s effective batch, same as l4-ep3/A0
+    seed: 45
+    time: "04:00:00"
+
+  - id: MA-librispeech-r-seed
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 1e-3
+    grad_accum_steps: 1
+    seed: 46              # noise check against MA-librispeech-r (seed 45)
+    time: "04:00:00"
+
+  - id: MA-librispeech-r-lr2e3
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 2e-3      # R's peak LR pushed further
+    grad_accum_steps: 1
+    seed: 47
+    time: "04:00:00"
+
+  - id: MA-librispeech-r-b600
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 1e-3
+    grad_accum_steps: 1   # batch_duration 150 x 1 x 4 = 600 s effective batch
+    nodes: 1
+    gpus_per_node: 4      # world_size 4, half of R's 8 -> ~2x the steps
+    seed: 48
+    time: "08:00:00"
+
+  - id: MA-librispeech-r-k5
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 1e-3
+    grad_accum_steps: 1
+    stack_factor: 5        # 50 Hz -> 10 Hz, as SLAM-ASR does
+    seed: 49
+    time: "04:00:00"
+
+  - id: MA-librispeech-w
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 1e-3
+    grad_accum_steps: 1
+    encoder: openai/whisper-large-v3   # supervised-ASR encoder control, stack 1 (default)
+    seed: 50
+    time: "06:00:00"       # Whisper pads every cut to its fixed 30 s window, slower per step
+    # Job 45985946 (2026-09-18) failed at startup: Whisper-large-v3 only
+    # accepts exactly 3000 frames (its fixed 30 s window), not the
+    # w2v-BERT-tuned model.encoder.max_audio_seq_len default of 1500 --
+    # there is no campaign axis for this yet, so every submission of this
+    # arm (and any future Whisper arm in 03-audio-stack.md's crossing)
+    # needs `-- --model.encoder.max_audio_seq_len 3000` passed explicitly.
+    # Resubmitted as job 46050285 with it.
+
+  # Decoder-size control, gated on PR #132 (merged 2026-09-17: Qwen chat-
+  # formatted decoders never stopped generation) plus Qwen/Qwen3.5-4B staged
+  # to MN5 and a DECODER_PROFILES entry for it (plan_arm.py, added
+  # 2026-09-17, verified against the real tokenizer -- same vocab as the 2B,
+  # <|text_pad|> equally absent). Same batch_duration 30 the existing
+  # MA-700-qwen35-2b-ins arm needed for a frozen Qwen3.5-2B decoder under
+  # DDP (campaign.yaml, above); grad_accum_steps 5 instead of that arm's 20
+  # gives 30 x 5 x 8 = 1200 s effective batch, matching R. stack_factor 5 is
+  # what makes the 4B affordable at all (see the sec2b comment on
+  # MA-librispeech-r-k5) -- read size only from Q4-k5 against Q2-k5, since
+  # Llama-vs-Qwen already confounds size with family/attention type.
+  - id: MA-librispeech-q2-k5
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    decoder: Qwen/Qwen3.5-2B
+    adapter_lr: 1e-3
+    batch_duration: 30
+    grad_accum_steps: 5    # 30 x 5 x 8 = 1200 s effective batch
+    gradient_checkpointing: false
+    stack_factor: 5
+    seed: 51
+    time: "04:00:00"
+
+  - id: MA-librispeech-q4-k5
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    decoder: Qwen/Qwen3.5-4B
+    adapter_lr: 1e-3
+    batch_duration: 30
+    grad_accum_steps: 5
+    gradient_checkpointing: false
+    stack_factor: 5
+    seed: 52
+    time: "05:00:00"       # ~2x the 2B's decoder; wider margin until measured
+
   # --------------------------------------------------------------- IFT (stage 2)
   - id: IFT-700-llama1b-ins
     stage: IFT

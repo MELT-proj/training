@@ -35,6 +35,10 @@ MODELS=(
   # comparison of formatting rather than of tuning.
   "Qwen/Qwen3.5-2B-Base"
   "Qwen/Qwen3.5-2B"
+  # Step 0b's decoder-size control (plan/01-interface-recipe.md §2b, Q4-k5
+  # against Q2-k5). Multimodal repo (image-text-to-text); the vision tower
+  # ships alongside the text model but MELT never loads it. ~9.3 GB.
+  "Qwen/Qwen3.5-4B"
   "utter-project/EuroLLM-1.7B"
   "utter-project/EuroLLM-1.7B-Instruct"
   "meta-llama/Llama-3.2-1B"
