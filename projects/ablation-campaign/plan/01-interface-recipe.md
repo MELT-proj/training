@@ -470,3 +470,4 @@ on a resumed arm.
 |---|---|---|---|---|---|---|---|
 | A0 | `MA-librispeech-w2vbF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr1e3-s44-8g` | 0.622 | 0.776 | 0.901 | 1.146 | -- | = `MA-librispeech-l4-ep3`, cosine decay, not rerun. Full-set greedy (not the 200-sample log): WER 0.689/0.914, runaway 2.37%/3.28% (see the pre-flight 1b diagnostic above). |
 | R-k5 | `MA-librispeech-w2vbF-llama1bInsF-mlpT-sk5-ga1-elr6e6-dlr2e5-lr1e3-s49-8g` | **0.314** | **0.490** | 0.621 | 0.885 | 1.0% / 0.6% | job 46059845 (resumed from 45985944), `stack_factor 5`, warmup-stable-decay. Roughly half A0's WER and a 3-4x lower runaway fraction than A0's own full-set greedy number. |
+| R-seed | `MA-librispeech-w2vbF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr1e3-s46-8g` | 0.441 | 0.666 | 0.750 | 1.012 | 1.4% / 1.4% | job 46059832 (resumed from 45985924), seed 46 -- the noise check against `R` (seed 45), still in progress. Worse than R-k5, as expected (`stack_factor 1`, same as A0/L4). |
