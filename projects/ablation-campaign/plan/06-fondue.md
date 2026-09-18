@@ -106,12 +106,13 @@ Checkpoint cadence bounds a failure's cost; keep two checkpoints.
 | audio stack, frame rate | week-6 confirmation | `03-audio-stack.md` | open |
 | regime (adapter at IFT, full vs LoRA, MA data, MA length) | week-5 winner | `04-regime.md` | open |
 | language set | EU-24 + ru + uk (+ ca?) | Russian probe, `05-language-ladder.md` | ru, uk in (settled); ca open |
-| mixture weights | two-tier alpha/beta (the config builder already implements it); values to choose | ladder and repetition probe | **drafted 2026-09-18:** alpha=0.5/beta=0.5 for MA (the paper's own pretraining setting, arXiv:2509.14128 §3.3.1); alpha=0.2/beta=0.5 for IFT (the paper's named fine-tuning-stage alpha). Reasoning and the concrete boost/repetition numbers this implies (e.g. mt's ASR tail at ~53× its 12.3 unique h under MA's weights) are in `plan/fondue-ma-draft.yaml` and `plan/fondue-ift-draft.yaml`. Not frozen — the repetition probe and ladder may move it. |
+| mixture weights | two-tier alpha/beta (the config builder already implements it); values to choose | ladder and repetition probe | **drafted 2026-09-18:** alpha=0.5/beta=0.5 for MA (the paper's own pretraining setting, arXiv:2509.14128 §3.3.1); alpha=0.2/beta=0.5 for IFT (the paper's named fine-tuning-stage alpha). Reasoning and the concrete boost/repetition numbers this implies (e.g. mt's ASR tail at ~53× its 12.3 unique h under MA's weights) are in `fondue-ma-draft.yaml` and `fondue-ift-draft.yaml`. Not frozen — the repetition probe and ladder may move it. |
 | epochs for the tail | 1–4× repetition of languages under 100 h | repetition probe | open |
 | MA data budget and stage split | full 247K h of ASR in MA, a subset, or — if the decoder-frozen regime wins and the no-MA point matches — a single stage with instructions from the start | the MA:IFT ratio sweep (`04-regime.md` §6, week 6), ladder MA-stage curves, step-0 transition; default if the sweep misses the freeze: full MA, as today | open |
 | effective batch and LR | batch ~ one audio hour per step; LR from Raclette | Raclette | open |
-| topology | 8 nodes × 4 GPUs, `grad_accum 4`; 16 nodes as contingency | scaling test | open |
-| checkpoint and eval cadence | checkpoints every ~6 h of wall clock; in-training generative eval on a FLEURS-24 dev subset of ~50 utterances per language | eval cost | open — the **subset itself** is drafted: the frozen `fleurs24-asr-dev` set (melt-eval PR #10, 24 EU languages, 100/lang, plus ru/uk once PR #12/13 redeploy). The **cadence** (eval_steps/save_steps) stays open, gated on the batch/topology rows above. |
+| topology | 8 nodes × 4 GPUs; 16 nodes as contingency. **`grad_accum` follows the backbone, not the node count:** the Llama IFT arms run 4, every Qwen arm in `campaign.yaml` runs 20, and the two differ 5× in effective batch. §2's Llama row is a `grad_accum 4` extrapolation and its Qwen rows are `grad_accum 20` measurements; do not read one against the other | scaling test, and the backbone row above | open |
+| FLEURS in the training pool | in, or excluded as every ablation arm excludes it (`build_campaign_config.py --exclude-corpus fleurs`) | added 2026-09-18: §1's ~247K ASR total sums `asr_fleurs`, so Fondue as costed trains on FLEURS while the campaign it is compared against does not — and FLEURS-24 is the zero-shot benchmark and the drafted in-training eval set. Excluding it costs little (the tail languages' FLEURS hours are small) and keeps the benchmark clean; including it needs a different eval subset | **open, and it was not a row until now** |
+| checkpoint and eval cadence | checkpoints every ~6 h of wall clock; in-training generative eval on a FLEURS-24 dev subset of 100 utterances per language, matching the frozen set | eval cost | open — the **subset itself** is drafted: the frozen `fleurs24-asr-dev` set (melt-eval PR #10, 24 EU languages, 100/lang, plus ru/uk once PR #12/13 redeploy). The **cadence** (eval_steps/save_steps) stays open, gated on the batch/topology rows above. |
 | filters | `max_duration 60`, `max_tokens 400`, as the campaign | settled |
 
 ## 4. Raclette — the pilot
@@ -124,7 +125,7 @@ Raclette sets it: the Fondue mixture at ~25K h (5–10% of the pool), the
 Fondue batch and topology, three LR points, chosen on loss at matched steps
 and FLEURS-24 dev CER. About a tenth of Fondue's cost; runs in week 6.
 
-**Drafted 2026-09-18** (`plan/raclette-draft.yaml`): the mixture is
+**Drafted 2026-09-18** (`raclette-draft.yaml`): the mixture is
 `fondue-ift-draft.yaml`'s own weighted pool (alpha=0.2/beta=0.5) with
 `total_hours` lowered to ~25,000 (≈7.6% of the ~330K h IFT pool) — the
 sampling *proportions* don't change, only the epoch length. Batch and
@@ -151,14 +152,14 @@ a fourth axis rather than three points on one parameter.
 
 ## 5. Preparation checklist
 
-- [x] Fondue config drafted (week 2, `plan/fondue-ma-draft.yaml` +
-      `plan/fondue-ift-draft.yaml`) — the decidable parts only (language
+- [x] Fondue config drafted (week 2, `fondue-ma-draft.yaml` +
+      `fondue-ift-draft.yaml`) — the decidable parts only (language
       set, mixture mechanism and weights, filters, eval subset); every
       gated field is an explicit placeholder. Dry-run at full scale on MN5
       (week 3) still owed: dataloader build time, bucket bins on the full
       distribution, exposure audit, host-RAM trace over the first hour, and
       confirming the ~40 unverified corpus paths the draft flags.
-- [x] Raclette config drafted (week 2, `plan/raclette-draft.yaml`: mixture,
+- [x] Raclette config drafted (week 2, `raclette-draft.yaml`: mixture,
       three LR points and their reasoning). Final (week 5, once batch/
       topology are set) and run (week 6) still owed.
 - [ ] Launch and resume chain tested on a short run (week 6).
