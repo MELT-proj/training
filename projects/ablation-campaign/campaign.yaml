@@ -200,6 +200,12 @@ arms:
   #     --data.validation_ds.max_samples 500 \
   #     --trainer.lr_scheduler_type warmup_stable_decay \
   #     --trainer.lr_scheduler_kwargs '{"num_decay_steps": N, "min_lr_ratio": 0.1, "decay_type": "cosine"}'
+  # `time:` on R/R-seed/R-lr2e3/R-k5 bumped 03:00:00 -> 04:00:00 (2026-09-18):
+  # the eval max_samples bump from l4-ep3's 200 to 500/set adds enough
+  # per-round generation cost that all four hit the 3h wall clock at ~87%
+  # (jobs 45985909/24/30/44) and needed `--resume`. No change needed to
+  # R-b600 (8h, ~2x steps but comfortable margin observed) or W (6h, not
+  # yet a binding constraint).
   # A0 (schedule reference) is MA-librispeech-l4-ep3 above -- not rerun.
   - id: MA-librispeech-r
     stage: MA
@@ -207,7 +213,7 @@ arms:
     adapter_lr: 1e-3
     grad_accum_steps: 1   # 1200 s effective batch, same as l4-ep3/A0
     seed: 45
-    time: "03:00:00"
+    time: "04:00:00"
 
   - id: MA-librispeech-r-seed
     stage: MA
@@ -215,7 +221,7 @@ arms:
     adapter_lr: 1e-3
     grad_accum_steps: 1
     seed: 46              # noise check against MA-librispeech-r (seed 45)
-    time: "03:00:00"
+    time: "04:00:00"
 
   - id: MA-librispeech-r-lr2e3
     stage: MA
@@ -223,7 +229,7 @@ arms:
     adapter_lr: 2e-3      # R's peak LR pushed further
     grad_accum_steps: 1
     seed: 47
-    time: "03:00:00"
+    time: "04:00:00"
 
   - id: MA-librispeech-r-b600
     stage: MA
@@ -242,7 +248,7 @@ arms:
     grad_accum_steps: 1
     stack_factor: 5        # 50 Hz -> 10 Hz, as SLAM-ASR does
     seed: 49
-    time: "03:00:00"
+    time: "04:00:00"
 
   - id: MA-librispeech-w
     stage: MA
