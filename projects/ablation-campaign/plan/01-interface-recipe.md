@@ -470,4 +470,25 @@ on a resumed arm.
 |---|---|---|---|---|---|---|---|
 | A0 | `MA-librispeech-w2vbF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr1e3-s44-8g` | 0.622 | 0.776 | 0.901 | 1.146 | -- | = `MA-librispeech-l4-ep3`, cosine decay, not rerun. Full-set greedy (not the 200-sample log): WER 0.689/0.914, runaway 2.37%/3.28% (see the pre-flight 1b diagnostic above). |
 | R-k5 | `MA-librispeech-w2vbF-llama1bInsF-mlpT-sk5-ga1-elr6e6-dlr2e5-lr1e3-s49-8g` | **0.314** | **0.490** | 0.621 | 0.885 | 1.0% / 0.6% | job 46059845 (resumed from 45985944), `stack_factor 5`, warmup-stable-decay. Roughly half A0's WER and a 3-4x lower runaway fraction than A0's own full-set greedy number. |
-| R-seed | `MA-librispeech-w2vbF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr1e3-s46-8g` | 0.441 | 0.666 | 0.750 | 1.012 | 1.4% / 1.4% | job 46059832 (resumed from 45985924), seed 46 -- the noise check against `R` (seed 45), still in progress. Worse than R-k5, as expected (`stack_factor 1`, same as A0/L4). |
+| R-seed | `MA-librispeech-w2vbF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr1e3-s46-8g` | 0.441 | 0.666 | 0.750 | 1.012 | 1.4% / 1.4% | job 46059832 (resumed from 45985924), seed 46. Worse than R-k5 as expected (`stack_factor 1`, same as A0/L4). |
+| R | `MA-librispeech-w2vbF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr1e3-s45-8g` | 0.549 | 0.664 | 0.775 | 1.022 | 2.0% / 1.4% | job 46059069 (resumed from 45985909), seed 45, `stack_factor 1`, warmup-stable-decay. Beats A0 (cosine, same steps): 0.549 vs 0.689 clean, 0.664 vs 0.914 other. R/R-seed spread is large on dev-clean (0.549 vs 0.441, 0.11 absolute) and tiny on dev-other (0.664 vs 0.666) -- noisier than the ~0.02 spread measured on the one-epoch L4/L5 pair. |
+| R-lr2e3 | `MA-librispeech-w2vbF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr2e3-s47-8g` | 0.437 | 0.599 | 0.665 | 0.927 | 1.0% / 1.2% | job 46059833 (resumed from 45985930), peak LR 2e-3. Better than R (LR 1e-3) on both sets. |
+
+**Decision rules applied to the numbers above** (not adjudicated here, per
+the Orchestrator's instruction -- flagging what the raw numbers say against
+each rule as written):
+
+- **Rule 1 (schedule).** "Warmup-stable-decay becomes the MA default if R
+  beats A0 at equal steps by more than the R/R-seed spread." R beats A0 by
+  0.14 (clean) / 0.25 (other); the R/R-seed spread is 0.11 (clean) / 0.002
+  (other). R's margin over A0 exceeds the spread on both sets -- the rule
+  as written triggers, though the spread itself (0.11 on dev-clean) is
+  large enough that a single extra seed pair is a thin basis for "the
+  spread." "LR 2e-3 is adopted if it reaches the threshold in fewer audio
+  hours without loss spikes" -- R-lr2e3 beats R on both sets at the same
+  step count, but nothing has reached the <10% threshold yet, so this half
+  of the rule has no threshold-crossing to measure against.
+- **Rule 2 (stacking).** "Stack 5 becomes the default if R-k5 is within
+  noise of R or better." R-k5 (0.314/0.490) clearly beats R (0.549/0.664)
+  by more than the measured R/R-seed spread on both sets -- the rule
+  triggers unambiguously.

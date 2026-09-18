@@ -15,6 +15,45 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-18 — Claude (worker session librispeech-step0-l1-l4) — R and R-lr2e3 land: both decision rules 1 and 2 trigger on the raw numbers
+
+Context: R (46059069) and R-lr2e3 (46059833) completed, joining R-k5 and
+R-seed. Four of eight step 0b arms done.
+
+| | dev-clean WER | dev-other WER | notes |
+|---|---|---|---|
+| A0 (full-set greedy) | 0.689 | 0.914 | cosine, stack 1 |
+| R | 0.549 | 0.664 | warmup-stable-decay, stack 1, LR 1e-3 |
+| R-seed | 0.441 | 0.666 | same as R, seed 46 |
+| R-lr2e3 | 0.437 | 0.599 | same as R, LR 2e-3 |
+| R-k5 | 0.314 | 0.490 | same as R, `stack_factor 5` |
+
+Applying §2b's decision rules as written, not reinterpreting:
+
+- **Rule 1 (schedule):** triggers. R beats A0 by 0.14/0.25 (clean/other);
+  the R/R-seed spread is 0.11/0.002. R's margin exceeds the spread on
+  both sets, so warmup-stable-decay becomes the default per the rule.
+  Flagging, not deciding: the spread itself is large on dev-clean (0.11
+  absolute, vs ~0.02 measured on the one-epoch L4/L5 pair) -- a single
+  seed pair is a thin basis for "the spread" here, and R-seed's dev-clean
+  (0.441) is closer to R-lr2e3's (0.437) than to R's own (0.549). Worth
+  a second seed pair before treating this as settled if it matters later.
+- **Rule 2 (stacking):** triggers unambiguously. R-k5 beats R by
+  0.235/0.174, well past the R/R-seed spread on either set.
+- **LR 2e-3 half of rule 1:** R-lr2e3 beats R on both sets at equal
+  steps, but nothing has crossed the <10% threshold yet, so "reaches
+  it in fewer hours" has nothing to measure against. Directionally
+  favors 2e-3 over 1e-3, not adjudicated further here.
+
+None of the four are near the <10% success bar (best so far: R-k5 at
+0.314/0.490). Remaining: R-b600, W, Q2-k5, Q4-k5.
+
+Action needed: PI / Fondue Orchestrator apply the decision rules; flagged
+the dev-clean seed-spread concern above rather than resolving it myself.
+Full table and rule text in `01-interface-recipe.md` §5.
+
+---
+
 ## 2026-09-18 — Claude (worker session librispeech-step0-l1-l4) — First step 0b result: R-k5 (stack_factor 5) roughly halves A0's WER
 
 Context: step 0b arms launched 2026-09-17 evening; MN5 backfill put them
