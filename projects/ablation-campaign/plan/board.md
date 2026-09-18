@@ -15,6 +15,98 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-18 — Claude (strategy session) — What `wsd-50hz-whisper` can and cannot settle
+
+Context: the LibriSpeech session reported `wsd-50hz-whisper` (W) at
+dev-clean 0.038 / dev-other 0.061, against `wsd-50hz` at 0.549/0.664 and
+`wsd-10hz` at 0.314/0.490, and flagged decision rule 4. No decision is
+taken here: the PI holds all of them until `wsd-10hz-qwen2b` and
+`wsd-10hz-qwen4b` land. This entry records what the number means so the
+reading is not re-derived later.
+
+Finding / proposal:
+
+1. **The arm measures readout, not alignment.** Whisper-large-v3 is
+   supervised on ASR and read audiobooks are its best-covered domain; its
+   own reported zero-shot LibriSpeech dev-clean WER is around 2%. So
+   0.038 is near the encoder's standalone ability, and the arm answers
+   "how much of an already ASR-solved representation can a frozen 1B
+   decoder read through a 2-layer MLP" — a real and useful quantity, but
+   not evidence that the alignment recipe now works. Everything tuned in
+   step 0b (schedule, stacking, LR, batch) was tuned on w2v-BERT, a much
+   harder problem; none of it transfers to the Whisper path by default,
+   and the LR optimum in particular should be expected to differ when the
+   features are already close to linearly separable.
+   *Cheap measurement, no training:* decode Whisper-large-v3's own output
+   on the same normalised dev-clean/dev-other. That turns W's number into
+   "fraction of the encoder's own ability recovered by the projector",
+   which is the quantity the paper wants. On the figures above the
+   projector costs roughly 1.8 WER points; worth having exactly.
+
+2. **The week-2 budget needs W's crossing step, not its endpoint.**
+   Decision rule 5 derives the screen budget from hours-to-threshold. W's
+   in-training eval history holds the first `global_step` at which each
+   set went below 0.10. If it crossed inside epoch 1, the screen budget
+   can shrink substantially. Nothing else in step 0b can supply this
+   number, because nothing else crossed.
+
+3. **Decoder cost is equal; encoder cost is not.** Checked in the code:
+   `encoder_specs.py` gives Whisper `window_frames: 3000`, and
+   `processing_melt.py::_extract_windowed` cuts audio into whole 30 s
+   windows and zero-pads the *waveform* of the tail, while the mask keeps
+   only real frames — so the LLM receives the same number of audio
+   positions per audio second as w2v-BERT (both 50 Hz), and the interface
+   comparison is fair. The encoder is not: every utterance costs a full
+   30 s window however short it is, so encoder compute is inflated by
+   roughly `30 s / mean utterance duration`. That is the ~35 vs ~20 GPU-h
+   already in §2b, and it gets *worse* on the campaign's short-utterance
+   corpora (Common Voice, FLEURS) than on LibriSpeech. The cost axis in
+   `03-audio-stack.md` §4 needs this as a measured padding ratio per
+   corpus, not an estimate. Note it is a per-utterance window, so
+   duration-sorted batching does not recover it.
+
+4. **The encoder question must not be settled on English.** Rule 4's
+   "move the encoder question ahead of the backbone grid" is right;
+   "adopt Whisper now" would not be. LibriSpeech is Whisper's best case,
+   and its supervision is very unevenly spread across the 24 EU
+   languages, while w2v-BERT 2.0 and MMS carry broader and more uniform
+   unsupervised coverage. The encoder pair should be run on the
+   five-language screen with at least one low-resource language in it
+   before anything is adopted.
+
+5. **What a supervised encoder does to the ladder (`05`), which is the
+   expensive consequence.** The ladder claims "N hours of language X
+   gives P". With Whisper the x-axis stops being the model's exposure to
+   X: the encoder arrives carrying its own per-language supervised hours,
+   which vary by orders of magnitude across the EU-24. The 10 h and 30 h
+   tiers would then largely measure Whisper's prior, and a low tier could
+   look strong for reasons unrelated to our data. Three ways out, PI's
+   call: (a) run the ladder on the SSL encoder and keep Whisper for the
+   performance sections; (b) keep Whisper and reframe the axis as
+   "fine-tuning hours on top of a supervised encoder", reporting its
+   per-language prior as a covariate; (c) run both encoders at two tiers
+   (10 h and 100 h) for a handful of languages and report the gap as its
+   own result. (c) is the smallest experiment that converts the confound
+   into a contribution — "does supervised pretraining substitute for
+   in-domain hours, and how many hours is it worth?" — and is the
+   recommendation.
+
+6. **The shipping configuration is still untested.** W ran at 50 Hz;
+   `wsd-10hz` showed stacking is the largest w2v-BERT lever and it cuts
+   decoder positions 5×, which is the paper's efficiency axis. Whisper +
+   stack 5 is the combination that would actually ship and nobody has run
+   it. Same for the best w2v-BERT combination (WSD + stack 5 + LR 2e-3).
+
+7. **Read the two Qwen arms accordingly.** Both run w2v-BERT, so they now
+   answer "does a larger decoder rescue a weak encoder", not "how large
+   should the decoder be". That is still worth knowing, and it is close
+   to a direct test of whether the encoder was the binding constraint all
+   along — but it is not the backbone-grid question.
+
+Action needed: none that changes the agenda. Two measurements can run in
+parallel without pre-empting any decision: Whisper's own WER on the two
+dev sets, and W's threshold-crossing step from its eval history.
+
 ## 2026-09-18 — Claude (strategy session) — Step 0b arms renamed; decisions wait for all eight; the seed is confounded with every factor
 
 Context: the PI read the first four arms' results and gave two

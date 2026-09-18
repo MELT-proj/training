@@ -46,6 +46,7 @@ interaction is assumed small and is stated as an assumption.
 | supervised vs self-supervised encoder pretraining (Whisper vs the rest) | report; it is part of what the section measures |
 | spec-augment default differs (MMS on, others off) | pin it explicitly in every arm |
 | waveform vs feature input, and encoder compute | goes into the cost axis, not hidden |
+| Whisper's fixed 30 s input window | every utterance costs a full window of encoder compute whatever its duration (`encoder_specs.py` `window_frames: 3000`; `processing_melt.py::_extract_windowed` pads the tail waveform). The *decoder* side is unaffected — the mask keeps only real frames, so positions per audio second stay 50 Hz as for w2v-BERT. Measure the padding ratio (`30 s / mean utterance duration`) per corpus and put it in the cost axis; it is larger on Common Voice and FLEURS than on LibriSpeech, and duration-sorted batching does not recover it because the window is per utterance |
 | MoE aux-loss weight and router LR | the MoE's router barely moves at 2e-5; the crossing runs it at the recipe LR, and its aux loss is logged |
 
 The running 10-epoch MoE arm at 2e-5 does not count as MoE evidence: it
@@ -57,7 +58,10 @@ Per stack, from `resolved_config.json` and SLURM accounting:
 
 - encoder + adapter parameters (and active parameters for the MoE);
 - decoder positions per audio second (the frame rate after the adapter);
-- training GPU-h per 1,000 audio hours for MA and for IFT;
+- training GPU-h per 1,000 audio hours for MA and for IFT, with the
+  window-padding ratio reported alongside it for any fixed-window encoder,
+  since that cost is corpus-dependent and does not appear in the parameter
+  count (see §3);
 - eval throughput in utterances per second at batch 16 sorted by duration.
 
 The figure that sells the pipeline: CER (in-domain mean, and FLEURS-24 mean

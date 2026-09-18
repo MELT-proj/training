@@ -167,7 +167,12 @@ measured at 2, 8 and 16 nodes -- scaling is flat).
    finish**, because each arm drew its own seed, so a contrast read early
    can be a seed draw. Arms are now named descriptively (`wsd-10hz`,
    `wsd-50hz-whisper` and so on); the mapping from the old letters is in
-   §2b.
+   §2b. Six of eight have landed; `wsd-10hz-qwen2b` and `wsd-10hz-qwen4b`
+   timed out partway and are resumed. `wsd-50hz-whisper` is the only arm to
+   cross the <10% bar (0.038/0.061) and triggers rule 4, but what that
+   number can and cannot settle — readout vs alignment, encoder-side cost,
+   English-only evidence, and its effect on the ladder's x-axis — is on the
+   board (2026-09-18) and in `05-language-ladder.md` §4.1.
 2. Week 2 gate: the interface recipe.
 3. Week 5 gate: backbone and regime.
 4. 2026-10-25: Fondue freeze.
