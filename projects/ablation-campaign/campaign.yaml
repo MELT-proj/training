@@ -252,6 +252,13 @@ arms:
     encoder: openai/whisper-large-v3   # supervised-ASR encoder control, stack 1 (default)
     seed: 50
     time: "06:00:00"       # Whisper pads every cut to its fixed 30 s window, slower per step
+    # Job 45985946 (2026-09-18) failed at startup: Whisper-large-v3 only
+    # accepts exactly 3000 frames (its fixed 30 s window), not the
+    # w2v-BERT-tuned model.encoder.max_audio_seq_len default of 1500 --
+    # there is no campaign axis for this yet, so every submission of this
+    # arm (and any future Whisper arm in 03-audio-stack.md's crossing)
+    # needs `-- --model.encoder.max_audio_seq_len 3000` passed explicitly.
+    # Resubmitted as job 46050285 with it.
 
   # Decoder-size control, gated on PR #132 (merged 2026-09-17: Qwen chat-
   # formatted decoders never stopped generation) plus Qwen/Qwen3.5-4B staged

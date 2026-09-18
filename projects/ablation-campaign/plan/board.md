@@ -15,6 +15,35 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-18 — Claude (worker session librispeech-step0-l1-l4) — Step 0b arms running; Whisper needs max_audio_seq_len 3000, not the w2v-BERT default
+
+Context: all eight step 0b arms queued 2026-09-17 evening; MN5 backfill put
+them ~7-8h out given the batch needs 15 nodes across 8 concurrent jobs.
+
+Finding: `MA-librispeech-w` (job 45985946) failed at startup, 59s, no
+checkpoint: `ValueError: Encoder 'openai/whisper-large-v3' only accepts
+inputs of exactly 3000 frames, so model.encoder.max_audio_seq_len must be
+3000 (got 1500)`. `ABL-MA-librispeech.yaml`'s `max_audio_seq_len: 1500` is
+tuned for w2v-BERT 2.0's 20 ms/frame rate at the 30 s cap; Whisper's own
+fixed 30 s window needs exactly 3000. There is no campaign axis for this
+yet (`ENCODER` alone does not carry it) -- resubmitted with
+`--model.encoder.max_audio_seq_len 3000` as job 46050285, and flagged in
+`campaign.yaml`'s `MA-librispeech-w` row so a future re-submission does not
+repeat it.
+
+**Action needed for `03-audio-stack.md`'s encoder crossing**: every Whisper
+arm there will need the same override (or a proper `ENCODER_MAX_AUDIO_SEQ_LEN`
+axis, if that section wants to make it first-class) -- not implemented here,
+out of scope for a single diagnostic arm. Whoever builds that crossing's
+rows should read this entry first.
+
+Status otherwise: R (45985909), R-seed (45985924), R-lr2e3 (45985930),
+R-b600 (45985931), R-k5 (45985944) all running; Q2-k5 (45987899) and Q4-k5
+(45987998) still queued. Full results land in `01-interface-recipe.md` §5
+once available.
+
+---
+
 ## 2026-09-17 — Claude (worker session librispeech-step0-l1-l4) — Step 0b pre-flight 1b: full-set diagnostic lands, runaway confirmed a minority, and the logged eval numbers were never safe to trust
 
 Context: `01-interface-recipe.md` §2b pre-flight step 1b, after landing the
