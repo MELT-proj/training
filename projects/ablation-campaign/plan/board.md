@@ -15,6 +15,84 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-18 — Claude (session) — Whisper crossing step; Qwen ledger backfill; EuroLLM decoder profile
+
+Context: three Track B items from `timeline.md` week 1, no GPU. Did not touch
+step 0b's design, decision rules or Arms table — the two Qwen size arms are
+still outstanding and no rule fires until all eight are in.
+
+Finding / proposal:
+
+1. **`wsd-50hz-whisper`'s crossing step**, read from
+   `checkpoint-8652/trainer_state.json` on MN5
+   (`MA-librispeech-whisperlargeF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr1e3-s50-8g`,
+   effective batch 1200 s = 150 batch_duration × 1 grad_accum × 8 ranks,
+   `eval_steps` 262). **Both dev-clean and dev-other are already under WER
+   0.10 at the very first in-training eval**, `global_step` 262, 87.3 audio
+   hours (262 × 1200 s ÷ 3600) — dev-clean 0.0567, dev-other 0.0828, against
+   a step-0 (untrained) floor of 2.89/2.72. Both stay under 0.10 at every
+   later eval through the final checkpoint (dev-clean 0.0368, dev-other
+   0.0628 at step 8652), so the "two consecutive evals" clause in the
+   primary metric is trivially satisfied starting at the first eval. One
+   epoch on this recipe is ~2,884 steps, so the crossing lands at about 9%
+   of epoch 1 — this is the only hours-to-threshold number step 0b will
+   produce (nothing else crossed), per `01-interface-recipe.md` §2b's
+   Consequence paragraph, which someone should re-derive the week-2 budget
+   from once all eight arms are in. Not written into `01` myself, since
+   step 0b's decision rules are on hold.
+
+2. **`arms.tsv` backfill for the off-ledger Qwen pair.** The IFT arm,
+   `IFT-700-w2vbF-qwen35_2bInsT-mlpF-bd30-ga20-elr6e6-dlr2e5-lr2e4-s1337-8g`
+   (job 45685241, submitted 2026-09-10T14:24:53Z, finished 2026-09-12), was
+   genuinely missing and is now appended — command confirmed byte-for-byte
+   against `training/logs/melt-train-container.45685241.out` line 14 on
+   MN5, `sacct` gives `Timelimit 1-22:00:00` (46:00:00) and 2 nodes,
+   matching `campaign.yaml`'s `IFT-700-qwen35-2b-ins` row.
+   **The MA arm turned out not to be missing**: its job is **45412264**,
+   already in `arms.tsv` (row timestamped 2026-09-04T12:09:36Z) — but under
+   the *submitted* exp_name
+   (`MA-700asr-w2vbF-qwen35_2bInsF-mlpT-elr6e6-dlr2e5-lr2e5-s42-8g`,
+   `fsdp2_qwen35.yaml`, no `bd30-ga20`), not the canonical one. Its actual
+   output landed in
+   `MA-700asr-w2vbF-qwen35_2bInsF-mlpT-bd30-ga20-elr6e6-dlr2e5-lr2e5-s42-8g`
+   instead: confirmed by matching `save_steps`/`eval_steps` 239 and
+   `global_step`/`max_steps` 2625 between the job's own log and that
+   directory's `checkpoint-2625/trainer_state.json` — an exact match that
+   rules out coincidence. So something downstream of the CLI (not
+   `campaign.py`, which wasn't used for this submission) renamed the run to
+   the canonical `-bdN-gaN` form regardless of the literal
+   `--run.exp_name`/`--trainer.output_dir` passed. **Practical effect:**
+   grepping `arms.tsv` for the canonical bd30-ga20 name — the one every
+   later IFT command's `--model.ckpt` points at — finds nothing, which is
+   why this looked off-ledger. I did not add a duplicate row for 45412264
+   under the canonical name, since the command actually submitted (and
+   already recorded) doesn't match that name; a future join against
+   `arms.tsv` needs to know both names refer to the same job.
+
+3. **EuroLLM added to `DECODER_PROFILES`** (`plan_arm.py`), unblocking the
+   text-prior tool's sixth backbone and week 3's EuroLLM MA arms. Verified
+   directly on MN5, not assumed from the Llama pattern: Instruct's own
+   `generation_config.json` gives `eos_token_id: 4`, which
+   `tokenizer.json`'s `added_tokens` resolves to `<|im_end|>` — its ChatML
+   turn marker doubles as the real stop token here, unlike Qwen — and
+   `pad_token` is `</s>` (id 2), already distinct, so no fresh
+   `add_special_tokens` collision risk. The Base checkpoint's tokenizer is
+   **not** shared with Instruct (only 3 added tokens: `<unk>`, `<s>`,
+   `</s>` — no `<|im_start|>`/`<|im_end|>` at all, unlike the Llama
+   Base/Instruct pair), so borrowing Instruct's `eos_token` for Base grows
+   its embedding table by one row the same way Qwen's fresh pad token
+   already does. `chat_template_config: chatml`, `chat_template_from:
+   utter-project/EuroLLM-1.7B-Instruct` for Base, matching
+   `02-backbones.md` §3.1.
+
+Action needed: someone folds finding 1 into `01-interface-recipe.md` §2b
+once all eight step-0b arms are in and the schedule/stacking/encoder/size
+rules are actually applied. Finding 2's numbers are ready to fold into
+`02-backbones.md` §5 once week 3 settles what "the new baseline" compares
+against, per the existing `timeline.md` item.
+
+---
+
 ## 2026-09-18 — Claude (orchestrator) — Step 0b's scope narrowed; `03` runs before `02`; the plan folder is now three files
 
 Context: the PI read the Whisper result and made two calls — one on where

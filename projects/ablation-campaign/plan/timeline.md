@@ -133,7 +133,7 @@ frame rate) or a multilingual-data problem? Decided by LibriSpeech step 0.
       dev) and [melt-eval#13](https://github.com/MELT-proj/eval/pull/13) (ST
       X→en test + dev), both open against `main`. Verified by re-freezing:
       zero dropped cuts for either locale on any of the four sets.
-- [ ] **Add EuroLLM to `DECODER_PROFILES`** (`plan_arm.py`): `chatml`,
+- [x] **Add EuroLLM to `DECODER_PROFILES`** (`plan_arm.py`): `chatml`,
       `chat_template_from: utter-project/EuroLLM-1.7B-Instruct` for the base
       checkpoint -- verified directly against both checkpoints'
       `tokenizer_config.json` while drafting the text-prior tool spec
@@ -141,7 +141,7 @@ frame rate) or a multilingual-data problem? Decided by LibriSpeech step 0.
       Needed for the text-prior tool and for week 3's EuroLLM MA arms.
 - [ ] **Eyeball 20 Qwen hypotheses** from the running IFT arm's eval tables
       for a leaked think block.
-- [ ] **`wsd-50hz-whisper`'s threshold-crossing step**, from its existing
+- [x] **`wsd-50hz-whisper`'s threshold-crossing step**, from its existing
       in-training eval history: the first `global_step` and audio-hour count
       at which each dev set went below WER 0.10. No GPU. It is the only
       hours-to-threshold number step 0b will produce, and the week-2 screen
@@ -152,7 +152,7 @@ frame rate) or a multilingual-data problem? Decided by LibriSpeech step 0.
       *Outcome:* `wsd-50hz-whisper`'s 0.038/0.061 restated as the fraction
       of the encoder's own ability the projector recovers, which is the
       form `03-audio-stack.md` §0 needs.
-- [ ] **Backfill `arms.tsv`** with the completed-but-unrecorded Qwen pair
+- [x] **Backfill `arms.tsv`** with the completed-but-unrecorded Qwen pair
       (`MA-700-qwen35-2b-ins`, done 2026-09-05, and `IFT-700-qwen35-2b-ins`,
       done 2026-09-12, whose full eval scores sit in its `trainer_state.json`).
       Fold its numbers into `02-backbones.md` §5 once week 3's
