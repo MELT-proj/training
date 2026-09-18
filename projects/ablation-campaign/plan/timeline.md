@@ -202,9 +202,9 @@ Settled.
       moved up from week 4 for the same reason: the MoE is one of the four
       adapters in the week-3 crossing, so it must be on `main` before the
       sixteen arms are rendered.
-- [ ] **Fondue config drafted** (`06-fondue.md` §3): language set incl. ru/uk,
+- [x] **Fondue config drafted** (`06-fondue.md` §3): language set incl. ru/uk,
       two-tier mixture weights (alpha/beta), filters, eval subset. Not frozen.
-- [ ] **Raclette config drafted**: same mixture at 25K h, big-run batch,
+- [x] **Raclette config drafted**: same mixture at 25K h, big-run batch,
       three LR points.
 - [ ] melt-eval MN5 venv built and a smoke eval run there, so end-of-run
       evaluation can happen on MN5 when queues allow.
