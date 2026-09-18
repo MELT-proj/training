@@ -15,6 +15,43 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-18 — Claude (worker session librispeech-step0-l1-l4) — W crosses the <10% threshold decisively; decision rule 4 (encoder) triggers
+
+Context: R-b600 (45985931) and W (46050285, the Whisper-fix resubmission)
+completed. Q2-k5 (45987899) and Q4-k5 (45987998) both hit their wall-clock
+budget mid-run (41% and 45% through 8652 steps) and were resumed as jobs
+46077302 (`--time 06:00:00`) and 46077303 (`--time 07:00:00`); at ~3.2-4.2
+s/step those margins should clear the remaining ~4.7h/5.6h with headroom.
+6 of 8 step-0b arms are now in.
+
+Finding: **W (Whisper-large-v3 encoder, otherwise identical to R: same
+steps, schedule, `stack_factor 1`) reaches dev-clean WER 0.038 and
+dev-other WER 0.061** -- both under the 10% threshold that nothing else in
+this campaign (L1-L5, A0, R, R-seed, R-lr2e3, R-b600, R-k5) has come
+anywhere close to. Loss is 0.137/0.191 vs R's 0.775/1.022, and runaway
+fraction is 0.0%/0.0%. R-b600 (600 s effective batch, ~2x R's step count)
+lands at 0.401/0.543 -- beats R but loses to R-k5, so more steps on
+w2v-BERT alone doesn't close the gap Whisper closes.
+
+Decision rule 4 ("if W reaches the threshold much earlier than R, the
+encoder question moves ahead of the backbone grid") triggers unambiguously
+-- W is the *only* arm to cross the threshold at all, at the same step
+count where the best w2v-BERT arm (R-k5, stack 5) is still at 0.314/0.490.
+This also reframes rule 5 ("nothing reaches 10% in three epochs, take the
+best arm to six epochs before the screen"): something did reach it, on
+Whisper, not on the w2v-BERT path the other four rules were tuned against.
+Rule 1's 600 s batch clause does not trigger (R-b600 never reaches <10%).
+Full table and rule-by-rule writeup in `01-interface-recipe.md` §5.
+
+Action needed: none from me right now -- flagging for the Orchestrator's
+call, since rule 4 as written reprioritizes the whole step-0b agenda (encoder
+ahead of backbone/size) and that's a scope decision, not a numbers one.
+Still waiting on Q2-k5/Q4-k5 (decoder size, rule 3) before the full table is
+complete, but rule 4 firing this hard on 2/8 arms already seems like the
+headline result regardless of what size decoder ends up doing.
+
+---
+
 ## 2026-09-18 — Claude (worker session librispeech-step0-l1-l4) — R and R-lr2e3 land: both decision rules 1 and 2 trigger on the raw numbers
 
 Context: R (46059069) and R-lr2e3 (46059833) completed, joining R-k5 and

@@ -454,7 +454,9 @@ Two findings, both load-bearing:
 Launched 2026-09-17/18: R, R-seed, R-lr2e3, R-b600, R-k5, W, Q2-k5, Q4-k5
 (§2b). Fill in as each lands. In-training eval, `max_samples 500`/set, the
 metrics from `melt/training/metrics.py`'s update (full-set S/D/I/length
-ratio/runaway fraction, not the old 200-sample log).
+ratio/runaway fraction, not the old 200-sample log). Six of eight landed;
+Q2-k5 and Q4-k5 both TIMEOUT at 41%/45% and are resumed (jobs 46077302,
+46077303, 6h/7h budgets).
 
 **Resume note.** Several arms hit their original 3h wall-clock budget at
 ~87% (the 500-sample eval costs more per round than A0/l4-ep3's 200) and
@@ -473,6 +475,8 @@ on a resumed arm.
 | R-seed | `MA-librispeech-w2vbF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr1e3-s46-8g` | 0.441 | 0.666 | 0.750 | 1.012 | 1.4% / 1.4% | job 46059832 (resumed from 45985924), seed 46. Worse than R-k5 as expected (`stack_factor 1`, same as A0/L4). |
 | R | `MA-librispeech-w2vbF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr1e3-s45-8g` | 0.549 | 0.664 | 0.775 | 1.022 | 2.0% / 1.4% | job 46059069 (resumed from 45985909), seed 45, `stack_factor 1`, warmup-stable-decay. Beats A0 (cosine, same steps): 0.549 vs 0.689 clean, 0.664 vs 0.914 other. R/R-seed spread is large on dev-clean (0.549 vs 0.441, 0.11 absolute) and tiny on dev-other (0.664 vs 0.666) -- noisier than the ~0.02 spread measured on the one-epoch L4/L5 pair. |
 | R-lr2e3 | `MA-librispeech-w2vbF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr2e3-s47-8g` | 0.437 | 0.599 | 0.665 | 0.927 | 1.0% / 1.2% | job 46059833 (resumed from 45985930), peak LR 2e-3. Better than R (LR 1e-3) on both sets. |
+| R-b600 | `MA-librispeech-w2vbF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr1e3-s48-4g` | 0.401 | 0.543 | 0.683 | 0.932 | 0.6% / 0.8% | job 45985931, `nodes:1 gpus_per_node:4` (600 s effective batch, ~2x R's steps at 17301 vs 8652). Beats R (0.549/0.664) but loses to R-k5 (0.314/0.490) -- more steps alone doesn't match what `stack_factor 5` buys. |
+| **W** | `MA-librispeech-whisperlargeF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr1e3-s50-8g` | **0.038** | **0.061** | 0.137 | 0.191 | 0.0% / 0.0% | job 46050285 (resubmitted with the `max_audio_seq_len 3000` fix). Whisper-large-v3 encoder, `stack_factor 1`, same steps/schedule as R. Crosses the <10% threshold decisively on both sets -- the only step-0b arm to do so, by a wide margin over every w2v-BERT arm including R-k5. |
 
 **Decision rules applied to the numbers above** (not adjudicated here, per
 the Orchestrator's instruction -- flagging what the raw numbers say against
@@ -492,3 +496,18 @@ each rule as written):
   noise of R or better." R-k5 (0.314/0.490) clearly beats R (0.549/0.664)
   by more than the measured R/R-seed spread on both sets -- the rule
   triggers unambiguously.
+- **Rule 1, 600 s batch clause.** "The 600 s batch is adopted if it reaches
+  the threshold in fewer audio hours." R-b600 does not reach <10% at all
+  (0.401/0.543 after 3 epochs' worth of steps, ~2x R's step count) -- it
+  beats R but loses to R-k5, so the rule does not trigger; the 600 s batch
+  is not adopted over `stack_factor 5`.
+- **Rule 4 (encoder).** "If W reaches the threshold much earlier than R, the
+  encoder question moves ahead of the backbone grid." W reaches 0.038/0.061
+  at the same step count where R is still at 0.549/0.664 and R-k5 (the best
+  w2v-BERT arm) is at 0.314/0.490 -- W is the only arm to cross <10% at all,
+  by roughly an order of magnitude over the next-best w2v-BERT arm at equal
+  steps. The rule triggers unambiguously and by a wide margin: the encoder
+  question (Whisper vs. w2v-BERT) should move ahead of the backbone grid.
+  This also reframes Rule 5 ("nothing reaches 10% in three epochs") --
+  something did reach it, just not on the w2v-BERT encoder path the other
+  rules were tuned against.
