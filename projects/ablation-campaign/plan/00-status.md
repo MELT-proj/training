@@ -162,7 +162,12 @@ measured at 2, 8 and 16 nodes -- scaling is flat).
 
 1. Week 1 gate, revised 2026-09-17: step 0 was inconclusive, so step 0b
    (`01-interface-recipe.md` §2b) decides schedule, stacking, encoder and
-   decoder size before the week-2 screen launches.
+   decoder size before the week-2 screen launches. **Held 2026-09-18 on the
+   PI's instruction: no decision rule is applied until all eight arms
+   finish**, because each arm drew its own seed, so a contrast read early
+   can be a seed draw. Arms are now named descriptively (`wsd-10hz`,
+   `wsd-50hz-whisper` and so on); the mapping from the old letters is in
+   §2b.
 2. Week 2 gate: the interface recipe.
 3. Week 5 gate: backbone and regime.
 4. 2026-10-25: Fondue freeze.

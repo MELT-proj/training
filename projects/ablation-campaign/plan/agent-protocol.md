@@ -45,6 +45,16 @@ any machine. It applies to every week, not just the first.
 - `EXP_NAME` is composed by the tooling, never typed by hand. Every
   submission goes through `campaign.py run` so it lands in `arms.tsv`;
   a run submitted any other way is off the ledger and does not count.
+- **Name arms descriptively, never by letter or number** (PI, 2026-09-18).
+  `wsd-10hz-qwen4b` is readable a week later; `R-k5`, `A0` and `L4` are
+  not. The name carries the setting that differs from the reference arm.
+  This applies to campaign row ids and to every table in `plan/`. A row id
+  is only the grid key, so renaming one is safe; `exp_name` is not, because
+  output directories, `arms.tsv` and W&B all key on it.
+- **Hold the seed fixed across arms unless the seed is the variable.** One
+  seed per arm makes every contrast a factor change plus a seed draw, which
+  is how a 0.11 WER difference in step 0b turned out to be within the seed
+  spread (`01-interface-recipe.md` §2b).
 - Turn on `run.memory_preallocation` whenever what is trainable changes.
 - Read steady-state throughput from the second-to-last tqdm line, never
   from `train_runtime` or the closing average.

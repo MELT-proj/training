@@ -177,19 +177,39 @@ In-training eval on dev-clean and dev-other at **500 utterances per set**
 
 ### Arms
 
-| arm | differs from R in | question | GPU-h, extrapolated |
-|---|---|---|---|
-| A0 | cosine decay to zero, seed 44: the existing `MA-librispeech-l4-ep3` | schedule reference | done |
-| R | warmup-stable-decay: warmup 3%, constant, cosine decay over the last 20% to 0.1× peak | schedule shape, against A0 | ~20 |
-| R-seed | seed 43 | noise on hours-to-threshold | ~20 |
-| R-lr2e3 | peak LR 2e-3 | learning rate | ~20 |
-| R-b600 | effective batch 600 s: one node × 4 GPUs, `batch_duration 150`, `grad_accum 1` | twice the optimizer steps at the same GPU-h, twice the wall clock | ~20 |
-| R-k5 | `stack_factor 5`, 50 Hz to 10 Hz | stacking | ~12 |
-| W | Whisper-large-v3 encoder, stack 1 | supervised-ASR encoder against self-supervised w2v-BERT | ~35 |
-| Q2-k5 | Qwen3.5-2B (instruct) decoder, stack 5 | size control, same family | ~40 |
-| Q4-k5 | Qwen3.5-4B (instruct) decoder, stack 5 | decoder size | ~80 |
+**Names (PI's instruction, 2026-09-18): letters do not survive a week away,
+so every arm carries a descriptive name.** The name says schedule, frame
+rate and the one thing that differs. Everything unnamed is the common
+setting above: Llama-3.2-1B-Instruct decoder, w2v-BERT 2.0 encoder, adapter
+LR 1e-3, 1200 s effective batch, three epochs. `wsd` is
+warmup-stable-decay; 50 Hz is `stack_factor 1` and 10 Hz is
+`stack_factor 5`. The letters in the middle column are the labels the first
+step-0b reports used; they are kept only so older entries can be read.
 
-About 250 GPU-h in total.
+| name | was | campaign row | seed | differs from `wsd-50hz` in | question | GPU-h |
+|---|---|---|---|---|---|---|
+| `cosine-50hz` | A0 | `MA-librispeech-l4-ep3` | 44 | cosine decay to zero, the old schedule | schedule reference | done |
+| `wsd-50hz` | R | `MA-librispeech-r` | 45 | the reference: warmup 3%, constant, cosine decay over the last 20% to 0.1× peak | schedule shape, against `cosine-50hz` | ~20 |
+| `wsd-50hz-seed2` | R-seed | `MA-librispeech-r-seed` | 46 | seed only | the noise floor | ~20 |
+| `wsd-50hz-lr2e3` | R-lr2e3 | `MA-librispeech-r-lr2e3` | 47 | peak LR 2e-3 | learning rate | ~20 |
+| `wsd-50hz-batch600` | R-b600 | `MA-librispeech-r-b600` | 48 | 600 s effective batch, one node × 4 GPUs | twice the optimizer steps at the same GPU-h | ~20 |
+| `wsd-10hz` | R-k5 | `MA-librispeech-r-k5` | 49 | `stack_factor 5` | stacking | ~12 |
+| `wsd-50hz-whisper` | W | `MA-librispeech-w` | 50 | Whisper-large-v3 encoder | supervised-ASR encoder against self-supervised w2v-BERT | ~35 |
+| `wsd-10hz-qwen2b` | Q2-k5 | `MA-librispeech-q2-k5` | 51 | Qwen3.5-2B decoder, stack 5 | size control, same family | ~40 |
+| `wsd-10hz-qwen4b` | Q4-k5 | `MA-librispeech-q4-k5` | 52 | Qwen3.5-4B decoder, stack 5 | decoder size | ~80 |
+
+About 250 GPU-h in total. Campaign row ids may be renamed to match the
+names above; the row id is only the grid key, so nothing in `arms.tsv`,
+W&B or an output directory depends on it. `exp_name` is composed from the
+axes and must not be touched for a run that already exists.
+
+**Every arm drew a different seed, so each contrast carries one seed draw**
+(45 through 52; only `wsd-50hz` against `wsd-50hz-seed2` isolates the
+seed). That was not the intent and it matters, because the measured
+dev-clean spread between those two is 0.11, not the 0.02 seen on the
+one-epoch pair. Contrasts larger than the spread survive it; contrasts of
+the same size as the spread do not, and need a replicate before they are
+quoted. Future arms hold the seed fixed unless the seed is the variable.
 
 **Why warmup-stable-decay and not a pure constant schedule.** Its stable
 phase *is* a constant-LR run, so the evals up to the start of decay give the
@@ -283,6 +303,13 @@ which MELT does not load), vocabulary shared with the 2B, ungated.
   1b is repeated on each arm's final checkpoint instead.
 
 ### Decision rules, fixed before the runs
+
+**Hold, PI's instruction 2026-09-18: no rule is applied until all eight arms
+have finished.** Partial results are recorded in §5 as they land, and a rule
+may be reported as "would trigger", but the schedule, stacking, learning
+rate, encoder and size questions are settled together, once, on the full
+set of arms. The reason is in the table above: with one seed per arm, a
+contrast read early against a single reference arm can be a seed draw.
 
 1. **Schedule.** Warmup-stable-decay becomes the MA default if R beats A0 at
    equal steps by more than the R/R-seed spread. LR 2e-3 is adopted if it

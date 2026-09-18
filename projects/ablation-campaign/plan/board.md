@@ -15,6 +15,42 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-18 — Claude (strategy session) — Step 0b arms renamed; decisions wait for all eight; the seed is confounded with every factor
+
+Context: the PI read the first four arms' results and gave two
+instructions: wait for all eight arms before deciding anything, and stop
+using letters for run names.
+
+Finding / proposal:
+
+1. **Names.** §2b's arm table now keys on descriptive names:
+   `cosine-50hz`, `wsd-50hz`, `wsd-50hz-seed2`, `wsd-50hz-lr2e3`,
+   `wsd-50hz-batch600`, `wsd-10hz`, `wsd-50hz-whisper`,
+   `wsd-10hz-qwen2b`, `wsd-10hz-qwen4b`. The old letters are kept in one
+   column so earlier entries stay readable. Campaign row ids may follow;
+   `exp_name` must not change for a run that exists. Naming and seed rules
+   added to `agent-protocol.md` so this does not recur.
+2. **Every arm drew its own seed** (45 through 52). Only `wsd-50hz` against
+   `wsd-50hz-seed2` measures the seed, and that pair differs by 0.11 WER on
+   dev-clean against 0.002 on dev-other. So each single contrast is a factor
+   change plus one seed draw. Stacking survives that easily (about 0.18 on
+   both sets against the two-seed mean). The learning-rate contrast does
+   not: `wsd-50hz-lr2e3` at 0.437 dev-clean is indistinguishable from
+   `wsd-50hz-seed2` at 0.441, and only dev-other shows a gain of 0.066.
+3. **Hold.** No decision rule is applied until all eight arms finish. §2b
+   records this. Partial results keep landing in §5, and a rule may be
+   reported as "would trigger", but schedule, stacking, learning rate,
+   encoder and size are settled together, once.
+4. Still open, for whoever reports next: confirm every quoted number is a
+   full-set pass rather than the 500-utterance in-training eval, and give
+   the runaway fraction and error breakdown behind that 0.11 dev-clean
+   spread. A few repetition loops move dev-clean WER by about that much.
+
+Action needed: none from the executing session beyond finishing the arms
+and reporting per §2b. The PI decides once all eight are in.
+
+---
+
 ## 2026-09-17 — Claude (strategy session) — Step 0b pre-flight STOP reviewed: proceed, with a runaway metric and a decoding diagnostic
 
 Context: the LibriSpeech session stopped at §2b pre-flight 1, as the rule
