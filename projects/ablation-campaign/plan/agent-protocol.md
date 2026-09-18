@@ -40,6 +40,17 @@ box you finished is always yours to do.
   `infrastructure.md`. Do not re-derive any of it; if it is stale, fix the
   file and say so on the board.
 - Data: `data/hours_by_language.csv` and `data/README.md`.
+- **Never scan the filesystem to find something** (PI, 2026-09-18). No
+  `find /`, no `grep` from `/` or `$HOME`, no walking the tree hoping a name
+  turns up. It is slow, it fills your context with noise, and on a shared
+  machine it reads other people's data. Look in this repo, in
+  `infrastructure.md` §2, and in the sibling repos that section lists — that
+  is the whole search space.
+- **If it is still not there, ask the PI.** Do not hunt, do not guess a
+  path, and do not substitute a file you are not certain is the right one.
+  A one-line question costs less than a filesystem walk, and the answer is
+  then written into `infrastructure.md` so the next session never has to
+  ask it again.
 
 ## 2. Rules on machines
 
