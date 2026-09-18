@@ -72,32 +72,21 @@ arm's own final (step 2600) `eval_<lang>_loss`:
 | it | 4.154 | 2.674 | +1.480 |
 | overall (token-weighted) | 4.133 | — | — |
 
-**This contradicts the line above it and the framing in `00-status.md`**
-("eval loss 2.6–3.1 ... roughly what a 1B text LM scores ... with no
-audio"): the floor is *not* close to the observed loss, it is 1.1–1.5
-nats/token *above* it, consistently across all five languages. Audio was
-not ignored — conditioning on it lowers the loss by a factor of
-e^1.1..1.5 ≈ 3–4.4x in per-token perplexity versus no audio at all. That
-signal just is not the right signal for correct tokens: WER stayed at
-1.10–1.16 and hypotheses were fluent but unrelated to the audio. Read as:
-the adapter learned something coarse (e.g. "audio present -> respond in
-this register/language") that measurably helps next-token prediction
-without helping transcription. This does not by itself say the recipe is
-fine -- WER is still catastrophic and the suspects table above still holds
-end to end -- but "the adapter did nothing" is no longer the failure mode to
-assume; whatever it did learn should factor into interpreting the
-LibriSpeech screen below (e.g. a run that drops the loss further without
-moving WER would be repeating this same coarse-signal pattern, not
-progress).
+The floor is not close to the observed loss: it is 1.1–1.5 nats/token
+*above* it, consistently across all five languages. Audio was not ignored —
+conditioning on it lowers per-token perplexity by a factor of
+e^1.1..1.5 ≈ 3–4.4× against no audio at all. That signal is simply not the
+right signal for correct tokens: WER stayed at 1.10–1.16 and hypotheses were
+fluent but unrelated to the audio. The adapter learned something coarse
+("audio present → answer in this register and language") that helps
+next-token prediction without helping transcription.
 
-**Action needed (flagged, not resolved here):** PI review -- this changes
-the interpretation the week-2 gate reads section 1 through. Board entry
-with the full numbers is at the top of `board.md`.
-
-*Strategy session, 2026-09-15:* §1's diagnosis, the Settled block and the
-step-0 interpretation rules were updated to this reading (a coarse-feature
-plateau; loss is read together with WER). Confirmed by the PI on
-2026-09-15.
+**How this is read downstream:** "the adapter did nothing" is not the
+failure mode to assume, and a run that lowers loss without moving WER is
+repeating the coarse-signal plateau rather than making progress. The
+suspects table in §1 still holds end to end. Confirmed by the PI
+2026-09-15; the Settled block and the step-0 interpretation rules were
+written to this reading.
 
 ## 2. Step 0 — LibriSpeech
 
@@ -145,7 +134,7 @@ hypothesis/reference length ratio (so "does not stop" is distinguishable from
   plausibly 0.2–0.5. A run whose loss drops while WER stays above 0.5 is
   repeating the August coarse-signal plateau (§1a), not fixing the recipe.
 
-## 2b. Step 0b — schedule, stacking, encoder and decoder size (added 2026-09-17)
+## 2b. Step 0b — the optimisation recipe (added 2026-09-17, scope narrowed 2026-09-18)
 
 Step 0 was inconclusive (results in §5). All five one-epoch runs stayed above
 WER 1.0. A post-hoc three-epoch rerun of L4 broke the plateau, reaching
@@ -157,13 +146,26 @@ aggressive schedule, stacking to 10 Hz as SLAM-ASR does, and a larger
 decoder. Step 0b runs them together, plus a seed replicate and an encoder
 control, because each question can mask the others.
 
-**A dead config key found while designing this.** `optimization.min_lr_scale:
-0.1` appears in every campaign and SFT config, but no code reads it
-(`git grep` on main, 2026-09-17). Every cosine run so far decayed to zero,
-not to 10% of the peak. It does not invalidate comparisons between arms,
-which all shared it, but the configs misstate what ran. Step 0b sets its
-floor through `lr_scheduler_kwargs` instead. Wiring or deleting the key is a
-PI decision.
+### What step 0b settles, and what it does not (PI, 2026-09-18)
+
+Step 0b produces **a working recipe, not the best configuration**. It settles
+only what this file owns: schedule, learning rate, effective batch and frame
+rate. Its two remaining arms ask questions that belong to other sections,
+and they are **diagnostic controls** whose results are handed on as stated
+priors, never as decisions:
+
+| arm | reads as | belongs to |
+|---|---|---|
+| `wsd-50hz-whisper` | can the pipeline transcribe at all with an easy encoder? Answered: yes, so a null result elsewhere is the encoder, not the recipe | `03-audio-stack.md` decides the encoder |
+| `wsd-10hz-qwen2b`, `wsd-10hz-qwen4b` | does decoder size move the interface? | `02-backbones.md` decides the decoder |
+
+The reason for the line is selection bias, not tidiness. If the encoder is
+picked here — English, one dataset, one seed per arm — and the crossing in
+`03` then runs with a recipe tuned around that winner, `03`'s central
+comparison is biased toward it. Either `03` repeats the work properly, in
+which case picking early bought nothing, or it does not, and the paper's
+audio-stack section rests on one English run. The same argument applies to
+decoder size and `02`.
 
 ### Common settings
 
@@ -194,9 +196,9 @@ step-0b reports used; they are kept only so older entries can be read.
 | `wsd-50hz-lr2e3` | R-lr2e3 | `MA-librispeech-r-lr2e3` | 47 | peak LR 2e-3 | learning rate | ~20 |
 | `wsd-50hz-batch600` | R-b600 | `MA-librispeech-r-b600` | 48 | 600 s effective batch, one node × 4 GPUs | twice the optimizer steps at the same GPU-h | ~20 |
 | `wsd-10hz` | R-k5 | `MA-librispeech-r-k5` | 49 | `stack_factor 5` | stacking | ~12 |
-| `wsd-50hz-whisper` | W | `MA-librispeech-w` | 50 | Whisper-large-v3 encoder | supervised-ASR encoder against self-supervised w2v-BERT | ~35 |
-| `wsd-10hz-qwen2b` | Q2-k5 | `MA-librispeech-q2-k5` | 51 | Qwen3.5-2B decoder, stack 5 | size control, same family | ~40 |
-| `wsd-10hz-qwen4b` | Q4-k5 | `MA-librispeech-q4-k5` | 52 | Qwen3.5-4B decoder, stack 5 | decoder size | ~80 |
+| `wsd-50hz-whisper` | W | `MA-librispeech-w` | 50 | Whisper-large-v3 encoder | **control only:** can the pipeline transcribe at all? The encoder is decided in `03` | ~35 |
+| `wsd-10hz-qwen2b` | Q2-k5 | `MA-librispeech-q2-k5` | 51 | Qwen3.5-2B decoder, stack 5 | **control only:** size, same family; the decoder is decided in `02` | ~40 |
+| `wsd-10hz-qwen4b` | Q4-k5 | `MA-librispeech-q4-k5` | 52 | Qwen3.5-4B decoder, stack 5 | **control only:** size; the decoder is decided in `02` | ~80 |
 
 About 250 GPU-h in total. Campaign row ids may be renamed to match the
 names above; the row id is only the grid key, so nothing in `arms.tsv`,
@@ -318,12 +320,19 @@ contrast read early against a single reference arm can be a seed draw.
 2. **Stacking.** Stack 5 becomes the default if R-k5 is within noise of R or
    better, since it cuts decoder positions five-fold. If clearly worse, the
    screen tests stack 2 and 4.
-3. **Size.** If Q4-k5 reaches the threshold and Q2-k5 does not, or does so in
-   markedly fewer hours, the paper's "2–3B is enough" framing must be tested
-   and a ~4B point joins the backbone grid. It does not change the screen's
-   backbone by itself.
-4. **Encoder.** If W reaches the threshold much earlier than R, the encoder
-   question moves ahead of the backbone grid.
+3. **Size — reported, not decided here.** If `wsd-10hz-qwen4b` reaches the
+   threshold and `wsd-10hz-qwen2b` does not, or does so in markedly fewer
+   hours, that is written into `02-backbones.md` as a prior and a ~4B point
+   is added to its grid. It does not change this screen's backbone, and it
+   does not settle the "2–3B is enough" framing, which `02` owns.
+4. **Encoder — reported, not decided here.** `wsd-50hz-whisper` reaching the
+   threshold where the w2v-BERT arms do not says the representation is a
+   first-order factor, which the campaign had assumed it was not. What
+   triggers is a **calendar reorder, not an adoption**: `03-audio-stack.md`
+   runs before `02-backbones.md`, so the backbone grid is compared on a
+   stack that has been chosen rather than assumed. The encoder itself is
+   decided by `03`'s crossing, at equal budget, over five languages, on the
+   eval that matters. Recorded 2026-09-18.
 5. **Nothing reaches 10% in three epochs.** Take the best arm to six epochs
    before starting the screen. The screen does not start on a recipe that
    has never transcribed LibriSpeech.

@@ -20,6 +20,39 @@ Cost anchors used below (measured unless marked): MA arm at 700 h/lang
 ≈ 30 GPU-h; IFT arm at 700 h/lang, Llama-1B ≈ 80–100 GPU-h; Qwen-2B IFT
 unmeasured at the real topology, expected several times more.
 
+**This list is owned by the orchestrator.** Sessions tick the boxes they
+complete and nothing else: no adding, deleting, rewording or moving items
+between weeks. If work needs to change, post it on `board.md` and it is
+folded in from there. A box you could not finish stays unticked, with a
+board entry saying why.
+
+---
+
+## Blocked / waiting
+
+Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
+`board.md`; this list is only what is holding something up.
+
+- **Q-Former adapter is not instantiable.** PI fix, week 2 Track B. It gates
+  the four Q-Former arms of the week-3 audio-stack crossing; the other
+  twelve arms do not wait for it.
+- **melt-eval PRs awaiting review/merge:** #14 (the `text-prior` command),
+  #12 and #13 (ru/uk added to the FLEURS ASR and ST configs). The ru/uk
+  frozen sets are also not yet redeployed to the production copies on
+  artemis scratch — whoever next consumes the 26-language set re-runs
+  `melteval freeze` and copies over.
+- **The shared artemis melt-eval venv cannot run generation.** Its sibling
+  `training` checkout is pinned before the transformers 5 migration, so
+  `inspect eval` will not import there until it is synced to `main`.
+- **Two pre-existing test failures on `main`** (sdpa propagation into
+  `Wav2Vec2BertConfig`; all of `test_processing_melt.py`), likely
+  transformers version skew. Not blocking any week.
+- **`optimization.min_lr_scale` is a dead config key** — set in every
+  campaign and SFT config, read by no code, so every cosine run decayed to
+  zero rather than to 10% of peak. Comparisons between arms are unaffected;
+  the configs misstate what ran. **PI decides** whether to wire it or delete
+  it.
+
 ---
 
 ## Week 1 — Mon 2026-09-14 to Sun 2026-09-20
@@ -33,34 +66,34 @@ frame rate) or a multilingual-data problem? Decided by LibriSpeech step 0.
       validation transcripts with the MA chat prompt and no audio.
       *Outcome:* floor is 4.0–4.3 nats/token per language, **1.1–1.5 above**
       the August MA eval loss (2.6–3.1), not matching it — audio was not
-      ignored. See `01-interface-recipe.md` §1a and the board entry; flagged
-      for PI review, does not block LibriSpeech step 0 below.
-- [ ] **LibriSpeech step 0**, five MA runs (`01-interface-recipe.md` §2):
+      ignored. `01-interface-recipe.md` §1a.
+- [x] **LibriSpeech step 0**, five MA runs (`01-interface-recipe.md` §2):
       L1 current recipe (adapter LR 2e-5, batch 4800 s), L2 LR 2e-4 / 4800 s,
       L3 LR 2e-4 / 1200 s, L4 LR 1e-3 / 1200 s, plus a second seed of the
-      best. ~7 GPU-h each.
-      *Outcome:* dev-clean/dev-other generative WER per run, step at which the
-      loss leaves the plateau, gap to the floor. Success bar: under 10% WER on
-      test-clean and a transition inside the epoch.
+      best. ~7 GPU-h each. Done 2026-09-16.
+      *Outcome:* inconclusive — all five stayed above WER 1.0 and none showed
+      a transition inside the epoch, so step 0b was added below. Results in
+      `01-interface-recipe.md` §5.
 - [x] **Qwen3.5-2B IFT throughput** at 2 nodes × 4 GPUs, 20–50 steps,
       gradient checkpointing on, eval and saves off (`acc_debug`). Done
-      2026-09-15, MN5 job 45894977: steady state ~31 s/step (DDP,
-      batch_duration 30, grad_accum 20, effective batch 4800 audio-s/step).
-      Cross-checked against the full production IFT-700-qwen35-2b-ins arm
-      (job 45685241), which turned out to have already completed on
-      2026-09-12 unrecorded: 5048 steps, 27.3 s/step whole-epoch average
-      (includes eval/checkpoint overhead), ~306 GPU-h for the 6,729.85 h
-      mix. See `06-fondue.md` §2 and the board entry.
+      2026-09-15, MN5 job 45894977.
+      *Outcome:* ~31 s/step steady state, cross-checked against a completed
+      production arm at 27.3 s/step and ~306 GPU-h. Scaling is flat from 2 to
+      16 nodes. `06-fondue.md` §2.
 - [ ] **Step 0b** (`01-interface-recipe.md` §2b), added 2026-09-17 because
       step 0 was inconclusive. Pre-flight first, no GPU: substitution,
       deletion and insertion rates on the three-epoch L4 run's hypotheses,
       and a dry run of the warmup-stable-decay scheduler. Then eight
       LibriSpeech MA arms at three epochs: warmup-stable-decay, its seed
       replicate, LR 2e-3, 600 s batch, stack 5, Whisper encoder, and
-      Qwen3.5-2B against Qwen3.5-4B at stack 5. ~250 GPU-h. The two Qwen
-      arms wait for PR #132 and for Qwen3.5-4B staged on MN5.
+      Qwen3.5-2B against Qwen3.5-4B at stack 5. ~250 GPU-h.
       *Outcome:* audio hours to 10% dev-clean WER per arm, which sets the
       week-2 screen's budget and removes settled factors from its grid.
+      *State 2026-09-18:* six of eight landed, results in
+      `01-interface-recipe.md` §5; the two Qwen arms are queued. No decision
+      rule is applied until all eight are in. Scope narrowed the same day:
+      step 0b settles the recipe only, and its encoder and size arms are
+      controls handed to `03` and `02` (§2b).
 
 ### Track B — preparation
 - [x] **`stack_factor` for the MLP adapter** (done 2026-09-15, [PR #126](https://github.com/MELT-proj/training/pull/126)) (concatenate k consecutive
@@ -93,7 +126,7 @@ frame rate) or a multilingual-data problem? Decided by LibriSpeech step 0.
       cascade oracle), chat-template-per-backbone verified directly. Surfaced
       two prerequisites for week 2's build; the ru/uk one is closed below,
       the `DECODER_PROFILES` one is its own item below -- see the board
-      entry and `00-status.md` Blocked/waiting.
+      entry and Blocked / waiting above.
 - [x] **ru/uk added to the FLEURS melt-eval configs** (done 2026-09-16,
       closing the gap the text-prior tool spec surfaced above):
       [melt-eval#12](https://github.com/MELT-proj/eval/pull/12) (ASR test +
@@ -108,6 +141,11 @@ frame rate) or a multilingual-data problem? Decided by LibriSpeech step 0.
       Needed for the text-prior tool and for week 3's EuroLLM MA arms.
 - [ ] **Eyeball 20 Qwen hypotheses** from the running IFT arm's eval tables
       for a leaked think block.
+- [ ] **Backfill `arms.tsv`** with the completed-but-unrecorded Qwen pair
+      (`MA-700-qwen35-2b-ins`, done 2026-09-05, and `IFT-700-qwen35-2b-ins`,
+      done 2026-09-12, whose full eval scores sit in its `trainer_state.json`).
+      Fold its numbers into `02-backbones.md` §5 once week 3's
+      recipe-confirmation methodology is settled.
 
 ---
 
@@ -140,22 +178,15 @@ Settled.
       without the IFT instruction, for ASR transcripts and English ST
       references. Run on all six backbones on an internal GPU.
       *Outcome:* the 6 × 24 prior table, a first ranking of backbones by
-      language coverage before any training.
-      *Done 2026-09-16, pulled ahead of schedule on the PI's direct
-      request:* built and PR'd ([melt-eval #14](https://github.com/MELT-proj/eval/pull/14)),
-      run on all six backbones against both dev sets (12 runs total).
-      Qwen3.5 leads overall, EuroLLM wins specifically on Maltese, and
-      instruct beats base in every family on both tasks with no exception
-      (a direct measurement of the "template-naive base" confound above).
-      Two infra snags along the way, not tool bugs: a missing
-      `LANGUAGE_ISO_TO_NAME` entry for Irish (fixed) and a shared HF
-      cache with partial (tokenizer/config-only) entries for three
-      checkpoints (retried against complete ones). See `02-backbones.md`
-      §3.7 and the board entry for the full table.
-      *Left beyond this checkbox's original scope:* ru/uk (frozen sets not
-      yet redeployed to production, §3.5), the cascade oracle (a separate
-      mechanism, §3.2, not part of this item's own description), and the
-      `-test` splits (this ran on `-dev`).
+      language coverage before any training. Table in `02-backbones.md`
+      §3.7, reading on the board.
+      *Done 2026-09-16,* [melt-eval #14](https://github.com/MELT-proj/eval/pull/14),
+      twelve runs. Still open on this item: ru/uk, the cascade oracle
+      (§3.2) and the `-test` splits.
+- [ ] **Q-Former fix** (PI), moved up from week 4: the audio-stack crossing
+      now runs in week 3, so its four Q-Former arms need the adapter
+      instantiable by then. If it slips, the crossing launches without them
+      and they join as a late addition at the same recipe.
 - [ ] **Fondue config drafted** (`06-fondue.md` §3): language set incl. ru/uk,
       two-tier mixture weights (alpha/beta), filters, eval subset. Not frozen.
 - [ ] **Raclette config drafted**: same mixture at 25K h, big-run batch,
@@ -167,18 +198,24 @@ Settled.
 
 ## Week 3 — Mon 2026-09-28 to Sun 2026-10-04
 
-**Gate:** does the recipe carry to 700 h per language and through IFT? One
-confirmation pair answers it. MA-stage WER for all six backbones is the first
-backbone signal.
+**Gate:** does the recipe carry to 700 h per language and through IFT, and
+which audio stack does the campaign build on? *Revised 2026-09-18: the
+audio-stack crossing moves here from week 4, and the backbone MA arms move
+to week 4, so the six decoders are compared on a chosen stack rather than an
+assumed one (`03-audio-stack.md` §0).*
 
 ### Track A — GPU
 - [ ] **Recipe confirmation at 700 h/lang**: MA then IFT on
       Llama-3.2-1B-Instruct with the chosen recipe, current regime (adapter
       frozen at IFT). Evaluate in-domain and FLEURS-24, run the cascade oracle.
       *Outcome:* the new baseline numbers, replacing the August ones.
-- [ ] **MA arms for all six backbones** with the recipe (`02-backbones.md`).
-      ~30 GPU-h each, all six in the queue at once.
-      *Outcome:* MA-stage WER per backbone, in-domain and FLEURS-24.
+- [ ] **Audio-stack MA crossing** (`03-audio-stack.md` §2), moved from week 4:
+      4 encoders × 4 adapters at MA-stage cost on Llama-3.2-1B-Instruct, one
+      recipe for all sixteen, all at the same frame rate. ~16 × 30 GPU-h,
+      all in the queue at once. Q-Former arms wait for its fix.
+      *Outcome:* the audio stack — encoder, adapter, frame rate — read on
+      FLEURS-24 split into high- and low-resource halves, not on the
+      in-domain five alone.
 
 ### Track B — preparation
 - [ ] **Fondue dry run at full scale on MN5**: config resolves, dataloader
@@ -196,20 +233,23 @@ backbone signal.
 ## Week 4 — Mon 2026-10-05 to Sun 2026-10-11
 
 **Gate:** none; this is the heavy submission week. Queue everything, in
-parallel, in this order of priority: backbone IFTs, audio-stack MA crossing,
-regime fraction.
+parallel, in this order of priority: backbone MA arms, IFT for the leading
+audio stacks, regime fraction.
 
 ### Track A — GPU
-- [ ] **IFT for the six backbones** (`02-backbones.md`). Llama ~100 GPU-h
-      each, Qwen and EuroLLM per their measured rates. 20–46 h wall each.
-- [ ] **Audio-stack MA crossing** (`03-audio-stack.md`): 4 encoders ×
-      4 adapters at MA-stage cost on Llama-3.2-1B-Instruct with the recipe,
-      all at the same frame rate. ~16 × 30 GPU-h. Q-Former arms wait for its fix.
+- [ ] **MA arms for all six backbones** (`02-backbones.md`), moved from
+      week 3, now on the stack chosen at the week-3 gate. ~30 GPU-h each,
+      all six in the queue at once.
+      *Outcome:* MA-stage WER per backbone, in-domain and FLEURS-24.
+- [ ] **IFT for the top three or four audio stacks** from the week-3
+      crossing (`03-audio-stack.md` §2), moved from week 5.
 - [ ] **Regime half fraction** (`04-regime.md`): 8 IFT runs on
-      Llama-3.2-1B-Instruct from the confirmed MA checkpoint.
+      Llama-3.2-1B-Instruct from the confirmed MA checkpoint. Runs on the
+      week-3 confirmation checkpoint, so on the provisional stack if the
+      crossing moved it; regime factors are assumed independent of the
+      encoder, and that assumption is stated in `04-regime.md`.
 
 ### Track B — preparation
-- [ ] **Q-Former fix** (PI) so its four arms can join the crossing in week 5.
 - [ ] MoE adapter branch merged to `main` with its aux-loss logging.
 - [ ] Ladder eval pipeline: melt-eval configs for FLEURS-24 ASR, FLEURS X→en,
       CV22 test, CoVoST2 X→en where it exists; COMET rescoring environment on
@@ -223,15 +263,20 @@ regime fraction.
 `02-backbones.md` §4 and `04-regime.md` §4.
 
 ### Track A — GPU
-- [ ] Evaluate the six backbone IFTs: in-domain, FLEURS-24, cascade oracle,
+- [ ] **IFT for the six backbones** (`02-backbones.md`), moved from week 4.
+      Llama ~100 GPU-h each, Qwen and EuroLLM per their measured rates,
+      20–46 h wall each. *This week is tight:* if the queue will not turn
+      six IFTs around before Sunday, IFT only the three leading backbones on
+      the MA-stage signal and carry the rest into week 6, rather than
+      shortening the runs.
+- [ ] Evaluate the backbone IFTs: in-domain, FLEURS-24, cascade oracle,
       text-ability retention. Second seed on the two leading backbones.
-- [ ] **IFT for the top three or four audio stacks** from the MA crossing.
 - [ ] **MA runs at 100 and 300 h/lang** for the ratio study (`04-regime.md`
       §6), full schedules each, not checkpoints of the 700 h run. ~20 GPU-h,
       and independent of the regime decision so they can go early.
 - [ ] **R9 and R10**, the decoder-frozen regime runs (`04-regime.md` §3),
       if not already queued in week 4.
-- [ ] Q-Former arms of the crossing, if fixed.
+- [ ] Q-Former arms of the week-3 crossing, if the fix landed late.
 
 ### Track B — preparation
 - [ ] **Per-task budgets in `build_campaign_config.py`** and the ratio IFT
@@ -322,7 +367,7 @@ go into the paper as ablations, not into Fondue.
 - [ ] Nothing new submitted after Wednesday 11-25.
 - [ ] Fondue final checkpoint consolidated and copied off MN5; copy verified
       by checksum.
-- [ ] Last W&B sync; `arms.tsv` and `00-status.md` closed out.
+- [ ] Last W&B sync; `arms.tsv` closed out and the board's final entry written.
 - **2026-11-30:** allocation ends.
 
 ---

@@ -8,6 +8,38 @@ the efficiency figure is CER against decoder positions per audio second.
 default; the screen in `01-interface-recipe.md` may move it); whether Whisper
 runs as encoder-only or with its own conv frontend.
 **Owner:** PI.
+**Order (2026-09-18):** this section now runs **before** `02-backbones.md`.
+The reason is in §0.
+
+## 0. What step 0b handed over, as a prior
+
+Step 0b ran a Whisper arm as a diagnostic control, not as an encoder
+decision (`01-interface-recipe.md` §2b). On LibriSpeech, MA stage, frozen
+Llama-3.2-1B-Instruct, identical recipe and step count:
+
+| encoder | dev-clean WER | dev-other WER |
+|---|---|---|
+| Whisper-large-v3, 50 Hz | 0.038 | 0.061 |
+| w2v-BERT 2.0, 10 Hz (best self-supervised arm) | 0.314 | 0.490 |
+| w2v-BERT 2.0, 50 Hz | 0.549 | 0.664 |
+
+**This is a hypothesis for the crossing to test, not a result it may
+assume.** One dataset, English only, one seed per arm, and Whisper is
+supervised on exactly this kind of read speech. What it does establish is
+that the pipeline transcribes when the representation is easy, so a null
+result here is about encoders and not about the recipe.
+
+Two consequences for how the crossing is run:
+
+- **The recipe is fixed by `01` and identical across all sixteen arms.** It
+  is not re-tuned per encoder. Tuning around a provisional winner and then
+  comparing against it is how a crossing produces the answer it started with.
+- **The order changed.** The backbone grid compares six decoders on one
+  audio stack; if the encoder is worth an order of magnitude and the stack
+  is the wrong one, every backbone sits against the same encoder-imposed
+  floor and their differences compress into noise. So the stack is chosen
+  first, then `02` runs on it. The encoder × backbone interaction is still
+  assumed small, and that assumption is now doing less work than before.
 
 ## 1. What is wired
 
@@ -30,10 +62,18 @@ runs as encoder-only or with its own conv frontend.
 Four encoders × four adapters = 16 MA arms on the provisional backbone
 (Llama-3.2-1B-Instruct) with the recipe from `01-interface-recipe.md`, five
 languages at 700 h, ASR-only, one epoch. ≈ 30 GPU-h each, all in the queue
-at once in week 4. Scored on MA-stage generative WER/CER in-domain and
+at once in **week 3**. Scored on MA-stage generative WER/CER in-domain and
 FLEURS-24 zero-shot CER from melt-eval.
 
-Then IFT for the top three or four stacks (week 5), and one confirmation of
+**The encoder is read on FLEURS-24, not on the in-domain five.** The five
+training languages are all high-resource, which is where a supervised
+encoder's coverage is best; the question the campaign actually needs
+answered is what happens on the low-resource end of the EU-24. Report the
+FLEURS-24 CER split into a high-resource and a low-resource half, and treat
+a stack that wins in-domain while losing the low-resource half as unproven,
+not as the winner.
+
+Then IFT for the top three or four stacks (week 4), and one confirmation of
 the winning stack on the winning backbone (week 6). The encoder × backbone
 interaction is assumed small and is stated as an assumption.
 

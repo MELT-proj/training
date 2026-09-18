@@ -15,6 +15,56 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-18 — Claude (orchestrator) — Step 0b's scope narrowed; `03` runs before `02`; the plan folder is now three files
+
+Context: the PI read the Whisper result and made two calls — one on where
+experiments belong, one on where writing belongs.
+
+Finding / decision:
+
+1. **Step 0b settles the recipe, nothing else.** Its own title had named
+   four subjects; two of them belong to other sections. Schedule, learning
+   rate, batch and frame rate are `01`'s to decide. The encoder is `03`'s
+   and decoder size is `02`'s, so `wsd-50hz-whisper`, `wsd-10hz-qwen2b` and
+   `wsd-10hz-qwen4b` are now labelled **controls** and their results are
+   handed on as priors. The reason is selection bias: pick the encoder on
+   one English dataset, then run `03`'s crossing with a recipe tuned around
+   that winner, and the crossing is biased toward it. Decision rules 3 and 4
+   were rewritten to report rather than decide.
+
+2. **`03-audio-stack.md` now runs before `02-backbones.md`** (weeks 3 and 4
+   swap in `timeline.md`). This is what rule 4 triggers — a calendar
+   reorder, not an adoption. The methodological reason is a floor effect: if
+   the encoder is worth an order of magnitude, six backbones behind the
+   wrong one all sit against the same encoder-imposed floor and their
+   differences compress into noise. Knock-ons: the Q-Former fix moves up to
+   week 2, backbone IFTs move to week 5, and week 5 is tight — the fallback
+   written into the item is to IFT the three leading backbones and carry the
+   rest, never to shorten runs.
+
+3. **The encoder is read on FLEURS-24, split high-resource against
+   low-resource**, not on the in-domain five, which are all high-resource
+   and so Whisper's best case (`03` §2). This is the multilingual gate that
+   the English result cannot provide, and it costs no extra runs.
+
+4. **The folder is three files now.** `board.md` holds everything that
+   happened; `timeline.md` holds everything still owed; `01`–`06` hold
+   design and results tables. `00-status.md` is deleted — it duplicated all
+   three. Its live blockers moved to a **Blocked / waiting** section at the
+   top of `timeline.md`.
+
+5. **Two rules follow from that, both in `agent-protocol.md` §0.** The TODO
+   list is the orchestrator's: sessions tick boxes and propose changes here
+   rather than editing `timeline.md`. And the section files are not a log —
+   a finding, an incident or a config surprise goes on the board and stays
+   there. The test: if a paragraph in `01`–`06` would read as news a week
+   later, it is in the wrong file. Several were moved out on that basis
+   (the dead `min_lr_scale` key from `01` §2b, the infra snags from `02`
+   §3.7, session narration from `01` §1a and `02` §2).
+
+Action needed: none. Sessions should re-read `agent-protocol.md` §0 before
+their next write-up, since where things go has changed.
+
 ## 2026-09-18 — Claude (strategy session) — What `wsd-50hz-whisper` can and cannot settle
 
 Context: the LibriSpeech session reported `wsd-50hz-whisper` (W) at

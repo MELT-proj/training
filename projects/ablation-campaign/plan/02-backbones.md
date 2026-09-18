@@ -4,8 +4,15 @@
 each base and instruct; backbones are judged on the five in-domain languages
 *and* FLEURS-24 zero-shot; a text-only prior is measured for every backbone
 and language before training and reported against post-training adaptability.
-**Open:** the decision rule's weighting between in-domain and zero-shot.
+**Open:** the decision rule's weighting between in-domain and zero-shot;
+whether a ~4B point joins the grid (decided by step 0b's two size controls,
+`01-interface-recipe.md` §2b rule 3).
 **Owner:** PI decides the backbone at the week-5 gate.
+**Order (2026-09-18):** this section now runs **after** `03-audio-stack.md`,
+so the six decoders are compared on a chosen audio stack rather than an
+assumed one. If the encoder is worth an order of magnitude, six backbones
+behind the wrong one all sit against the same floor and their differences
+compress into noise. Rationale in `03-audio-stack.md` §0.
 
 ## 1. The grid
 
@@ -101,18 +108,15 @@ so guessing it from one family would mislead on the others:
 | EuroLLM-1.7B(-Instruct) | `chatml` | none — checked this session (`tokenizer_config.json` on nyx has no `chat_template` key); Instruct's is plain ChatML (`<\|im_start\|>{role}\n...<\|im_end\|>\n`, confirmed directly, not assumed) |
 
 Llama and Qwen come straight from `DECODER_PROFILES`
-(`projects/ablation-campaign/plan_arm.py`). EuroLLM has no entry there yet —
-no MA/IFT arm has used it — so this session verified both checkpoints'
-`tokenizer_config.json` directly instead of extrapolating from the Llama
-pattern; good thing it did, since Qwen3.5-2B-Base disproves the "base never
-ships a template" assumption a reader might otherwise bring from the Llama
-row alone. **Whoever builds this should add the EuroLLM entry to
-`DECODER_PROFILES` while at it** (`chatml`, `chat_template_from:
-utter-project/EuroLLM-1.7B-Instruct`): MA/IFT need it in week 3 regardless,
-and an unverified guess here would silently corrupt every EuroLLM row of the
-prior table, the same way a wrong `chat_template_config` silently corrupted
-training before eval caught it (`melteval/prompt.py`'s framing,
-MELT-proj/training#58).
+(`projects/ablation-campaign/plan_arm.py`); EuroLLM has no entry there yet
+and needs one (`chatml`, `chat_template_from:
+utter-project/EuroLLM-1.7B-Instruct`) — a `timeline.md` item.
+
+**Every row above is read from the checkpoint, never inferred from a
+sibling.** Qwen3.5-2B-Base ships its own template, which disproves the "a
+base checkpoint never ships one" pattern the Llama row would suggest, and a
+wrong template corrupts a whole backbone's rows silently (MELT-proj/training
+#58).
 
 ### 3.2 Two mechanisms
 
@@ -305,11 +309,7 @@ Built 2026-09-16 as `melteval text-prior`
 Ran on artemis (`dionysus`, h100/gpu-h100) against all six backbones (§1)
 on the production `fleurs24-asr-dev` (24 languages, 2,400 samples — ru/uk
 not deployed to this copy yet, §3.5) and `fleurs24-st-xen-dev` (23
-locales, 2,300 samples). Two infra snags, neither a tool bug: `ga` was
-missing from `LANGUAGE_ISO_TO_NAME` (first run, fixed on `main`), and a
-shared HF cache turned out to hold tokenizer-only or config-only entries
-for three checkpoints rather than full weights (retried against a
-complete cache). Every job completed cleanly once those were sorted out.
+locales, 2,300 samples). All twelve jobs completed cleanly.
 
 **Overall** (all languages pooled; lower bits/char = the backbone already
 knows more of the language):
