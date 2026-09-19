@@ -239,7 +239,7 @@ assumed one (`03-audio-stack.md` §0).*
 - [ ] **Ladder tier configs** (`05-language-ladder.md` §2): the config builder
       needs a "min(tier, available)" per-language budget; implement and render
       tiers 10/30/100/300/700.
-- [ ] Efficiency instrumentation: log decoder positions per audio second and
+- [x] Efficiency instrumentation: log decoder positions per audio second and
       GPU-h per 1,000 audio hours for every arm (from `resolved_config.json`
       and SLURM accounting).
 

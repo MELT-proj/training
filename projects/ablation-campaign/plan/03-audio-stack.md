@@ -45,17 +45,23 @@ Two consequences for how the crossing is run:
 
 | encoder | params | input | native rate | notes |
 |---|---|---|---|---|
-| `facebook/w2v-bert-2.0` | 580M | precomputed features | 50 Hz | the baseline; no flash attention (relative-position bias) |
-| `facebook/mms-1b` | 962M | raw waveform | 50 Hz | flash-eligible; matches w2v-BERT step time with flash, 1.54× slower with sdpa; ships `apply_spec_augment: true`, which must be set to match the others |
-| Whisper-large-v3 encoder | ~635M | log-Mel | 50 Hz after conv | supervised ASR pretraining, the odd one out |
-| mHuBERT-147 | 95M | raw waveform | 50 Hz | the small one; 147 languages |
+| `facebook/w2v-bert-2.0` | 580.5M | precomputed features | 50 Hz | the baseline; no flash attention (relative-position bias) |
+| `facebook/mms-1b` | 962.5M | raw waveform | 50 Hz | flash-eligible; matches w2v-BERT step time with flash, 1.54× slower with sdpa; ships `apply_spec_augment: true`, which must be set to match the others |
+| Whisper-large-v3 encoder | 637.0M | log-Mel | 50 Hz after conv | supervised ASR pretraining, the odd one out |
+| mHuBERT-147 | 94.4M | raw waveform | 50 Hz | the small one; 147 languages |
 
 | adapter | params (w2v-BERT → 2048-wide decoder) | output rate | state |
 |---|---|---|---|
-| MLP (2-layer, GELU, LayerNorm × gain) | 6.30M | 50 Hz, or 50/k with `stack_factor` k | baseline |
+| MLP (2-layer, GELU, LayerNorm × gain) | 6.30M (Whisper: 6.82M, its width is 1280) | 50 Hz, or 50/k with `stack_factor` k | baseline |
 | Conformer, 1 layer | 27.28M | 25 Hz (stride 2) | ready |
-| MoE, 8 SwiGLU experts, top-2, load-balancing aux loss | 33.57M total, 8.39M active | 50 Hz | on a branch; used by the running 10-epoch verbatim arm |
+| MoE, 8 SwiGLU experts, top-2, load-balancing aux loss | 33.57M total, 8.40M active | 50 Hz | on a branch; used by the running 10-epoch verbatim arm |
 | Q-Former, window 15, 3 queries | not instantiable today | 10 Hz by design | broken; PI fixes in week 4 |
+
+Parameter counts are measured, from the audio stack built on the meta device by
+`efficiency.py static`. The MoE's active count is the top-2 experts plus the router
+and the output norm, which are always on; the two experts alone are 8.39M. The
+waveform encoders (MMS, mHuBERT) emit 49.98 positions per second, not 50: the conv
+frontend loses a frame at the edge of a clip.
 
 ## 2. The crossing
 
@@ -103,6 +109,16 @@ Per stack, from `resolved_config.json` and SLURM accounting:
   since that cost is corpus-dependent and does not appear in the parameter
   count (see §3);
 - eval throughput in utterances per second at batch 16 sorted by duration.
+
+**How each is measured** (`projects/ablation-campaign/efficiency.py`, one row per
+arm, joinable on `exp_name`; `eval_throughput.py` + `.sbatch` for the last):
+
+| number | definition |
+|---|---|
+| parameters | encoder and adapter counted separately from the instantiated stack; MoE active = top-k experts + router + norm |
+| decoder positions per audio second | valid output positions from `MELTAudioStack._get_output_features_shape` for a real-audio mask, over the audio seconds. Padding never enters: a Whisper clip padded to its window still yields 50 |
+| GPU-h per 1,000 audio hours | GPU-h summed over **every** SLURM job of the `exp_name` (`ElapsedRaw × GPUs / 3600`, cross-checked against `CPUTimeRAW / 3600 / 40`); audio hours are the trainer's own `train_hours/total`, not steps × batch. A second column strips job startup and steps redone after a timeout |
+| eval throughput | one GPU, batch 16, duration-sorted, decoder `flash_attention_2`, bf16, greedy, 256 new tokens, batches collated before the clock starts; the audio-stack share of generate time is recorded alongside |
 
 The figure that sells the pipeline: CER (in-domain mean, and FLEURS-24 mean
 as a second panel) against decoder positions per audio second, one point per
