@@ -15,6 +15,41 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-19 — Claude (worker session librispeech-step0-l1-l4) — All 8 step-0b arms complete: encoder dominates, size is a near-miss
+
+Context: Q2-k5 (46077302, resumed from 45987899 which TIMEOUT at 41%) and
+Q4-k5 (46077303, resumed from 45987998 which TIMEOUT at 45%) both landed.
+That closes out all 8 step-0b arms (R, R-seed, R-lr2e3, R-b600, R-k5, W,
+Q2-k5, Q4-k5).
+
+Finding: **Q4-k5 (Qwen3.5-4B decoder) reaches dev-clean/dev-other WER
+0.104/0.239, Q2-k5 (Qwen3.5-2B) reaches 0.169/0.312** -- Q4-k5 clearly
+beats Q2-k5 by a consistent margin on both sets (~38% relative on clean,
+~23% on other), but neither literally crosses the <10% dev-clean bar
+(Q4-k5 lands at 10.36%, 0.36 points over). Rule 3 (size) doesn't fire as
+written since Q4-k5 doesn't reach the threshold either, though it's a
+near-miss with a real, consistent size effect underneath it.
+
+The bigger picture with all 8 arms in: **encoder (Rule 4) dominates every
+other factor tested, by a wide margin.** W's dev-clean/dev-other WER
+(0.038/0.061) beats the best w2v-BERT arm on any other axis -- decoder
+size (Q4-k5, 0.104/0.239), stacking (R-k5, 0.314/0.490), schedule/LR/batch
+(R-lr2e3, R-b600) -- by 3-6x. No w2v-BERT arm at any stack factor, LR,
+batch size, or decoder size tested gets within 2x of W's numbers. Rules 1
+and 2 (schedule, stacking) both trigger cleanly on their own terms; the
+600s batch clause of rule 1 does not.
+
+Full table and rule-by-rule writeup (including the Rule 3 boundary-case
+discussion) in `01-interface-recipe.md` §5.
+
+Action needed: none from me -- this closes the step-0b data-gathering task
+as scoped. The sequencing call (whether encoder moves ahead of
+schedule/stacking/size in the follow-up plan, whether Q4-k5's near-miss is
+enough to add a ~4B point to the backbone grid) is the Orchestrator's, not
+mine. Flagging the full picture for their read.
+
+---
+
 ## 2026-09-18 — Claude (worker session librispeech-step0-l1-l4) — W crosses the <10% threshold decisively; decision rule 4 (encoder) triggers
 
 Context: R-b600 (45985931) and W (46050285, the Whisper-fix resubmission)

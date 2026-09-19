@@ -477,7 +477,10 @@ on a resumed arm.
 | R-lr2e3 | `MA-librispeech-w2vbF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr2e3-s47-8g` | 0.437 | 0.599 | 0.665 | 0.927 | 1.0% / 1.2% | job 46059833 (resumed from 45985930), peak LR 2e-3. Better than R (LR 1e-3) on both sets. |
 | R-b600 | `MA-librispeech-w2vbF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr1e3-s48-4g` | 0.401 | 0.543 | 0.683 | 0.932 | 0.6% / 0.8% | job 45985931, `nodes:1 gpus_per_node:4` (600 s effective batch, ~2x R's steps at 17301 vs 8652). Beats R (0.549/0.664) but loses to R-k5 (0.314/0.490) -- more steps alone doesn't match what `stack_factor 5` buys. |
 | **W** | `MA-librispeech-whisperlargeF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr1e3-s50-8g` | **0.038** | **0.061** | 0.137 | 0.191 | 0.0% / 0.0% | job 46050285 (resubmitted with the `max_audio_seq_len 3000` fix). Whisper-large-v3 encoder, `stack_factor 1`, same steps/schedule as R. Crosses the <10% threshold decisively on both sets -- the only step-0b arm to do so, by a wide margin over every w2v-BERT arm including R-k5. |
-| Q2-k5 | `MA-librispeech-w2vbF-qwen35_2bInsF-mlpT-sk5-bd30-ga5-elr6e6-dlr2e5-lr1e3-s51-8g` | 0.169 | 0.312 | 0.369 | 0.545 | 0.0% / 0.0% | job 46077302 (resumed from 45987899, TIMEOUT at 41%). Qwen3.5-2B decoder, `stack_factor 5`, same w2v-BERT encoder as R-k5. Beats R-k5 (0.314/0.490) by a wide margin but does not cross <10%. Q4-k5 still running. |
+| Q2-k5 | `MA-librispeech-w2vbF-qwen35_2bInsF-mlpT-sk5-bd30-ga5-elr6e6-dlr2e5-lr1e3-s51-8g` | 0.169 | 0.312 | 0.369 | 0.545 | 0.0% / 0.0% | job 46077302 (resumed from 45987899, TIMEOUT at 41%). Qwen3.5-2B decoder, `stack_factor 5`, same w2v-BERT encoder as R-k5. Beats R-k5 (0.314/0.490) by a wide margin but does not cross <10%. |
+| Q4-k5 | `MA-librispeech-w2vbF-qwen35_4bInsF-mlpT-sk5-bd30-ga5-elr6e6-dlr2e5-lr1e3-s52-8g` | 0.104 | 0.239 | 0.253 | 0.403 | 0.0% / 0.0% | job 46077303 (resumed from 45987998, TIMEOUT at 45%). Qwen3.5-4B decoder, otherwise identical to Q2-k5. Beats Q2-k5 on both sets (0.104 vs 0.169 clean, 0.239 vs 0.312 other) but lands just above the <10% bar on dev-clean (10.36%) and well above it on dev-other. Last of the 8 step-0b arms to land. |
+
+All 8 step-0b arms are now complete.
 
 **Decision rules applied to the numbers above** (not adjudicated here, per
 the Orchestrator's instruction -- flagging what the raw numbers say against
@@ -512,3 +515,32 @@ each rule as written):
   This also reframes Rule 5 ("nothing reaches 10% in three epochs") --
   something did reach it, just not on the w2v-BERT encoder path the other
   rules were tuned against.
+- **Rule 3 (size).** "If Q4-k5 reaches the threshold and Q2-k5 does not, or
+  does so in markedly fewer hours, the paper's '2-3B is enough' framing must
+  be tested and a ~4B point joins the backbone grid." Literally, neither
+  arm reaches the <10% dev-clean bar: Q4-k5 lands at 0.1036, just 0.36
+  points over; Q2-k5 at 0.1686, well over. The rule's stated trigger
+  condition does not fire. That said, size clearly still matters on this
+  encoder: Q4-k5 beats Q2-k5 by the same direction and a similar relative
+  margin on both sets (0.104 vs 0.169 clean, ~38% relative; 0.239 vs 0.312
+  other, ~23% relative), and Q4-k5's dev-clean number is close enough to
+  the bar that a slightly longer schedule (the six-epoch fallback of Rule
+  5, or `stack_factor`/LR combined with the encoder finding below) would
+  plausibly cross it. Whether "close but not literally triggering" is
+  enough to add a ~4B point to the backbone grid is the Orchestrator's
+  call, not mine -- flagging the boundary case rather than rounding it
+  either way.
+
+**All 8 step-0b arms are in.** Summary across rules: schedule (Rule 1) and
+stacking (Rule 2) both trigger clearly; the 600 s batch clause does not;
+size (Rule 3) is a near-miss that doesn't literally trigger but shows a
+consistent, real effect; encoder (Rule 4) triggers decisively and by far
+the largest margin of any factor tested -- W's dev-clean/dev-other WER
+(0.038/0.061) is roughly 3-6x better than the best w2v-BERT arm on either
+decoder-size or stacking axis (Q4-k5 at 0.104/0.239, R-k5 at 0.314/0.490).
+No w2v-BERT arm, at any stack factor, LR, batch size, or decoder size
+tested, gets within 2x of W's numbers. On the numbers alone, encoder choice
+dominates every other step-0b factor tested; sequencing the remaining
+questions (schedule/stacking defaults, whether to add a 4B point) behind an
+encoder decision seems like the natural reading of Rule 4 firing this hard,
+but that sequencing call belongs to the Orchestrator.

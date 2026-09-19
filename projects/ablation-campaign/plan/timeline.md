@@ -56,27 +56,34 @@ frame rate) or a multilingual-data problem? Decided by LibriSpeech step 0.
       2026-09-12 unrecorded: 5048 steps, 27.3 s/step whole-epoch average
       (includes eval/checkpoint overhead), ~306 GPU-h for the 6,729.85 h
       mix. See `06-fondue.md` §2 and the board entry.
-- [ ] **Step 0b** (`01-interface-recipe.md` §2b), added 2026-09-17 because
+- [x] **Step 0b** (`01-interface-recipe.md` §2b), added 2026-09-17 because
       step 0 was inconclusive. Pre-flight first, no GPU: substitution,
       deletion and insertion rates on the three-epoch L4 run's hypotheses,
       and a dry run of the warmup-stable-decay scheduler. Then eight
       LibriSpeech MA arms at three epochs: warmup-stable-decay, its seed
       replicate, LR 2e-3, 600 s batch, stack 5, Whisper encoder, and
-      Qwen3.5-2B against Qwen3.5-4B at stack 5. ~250 GPU-h. The two Qwen
-      arms wait for PR #132 and for Qwen3.5-4B staged on MN5.
+      Qwen3.5-2B against Qwen3.5-4B at stack 5.
       Pre-flight step 1's initial "insertions dominate" (50.4%, n=20) read
       was reviewed and reversed 2026-09-17 (board entries, main commit
       `ad07b3f`): a full-set diagnostic (job 45985475) found runaway is
       real but only 2.4-3.3% of hypotheses (revised stop condition does not
       fire), and that none of the 20-sample/200-sample/full-set eval
       numbers were safe stand-ins for each other. Both pre-flight items
-      closed (metrics change landed, scheduler dry run confirmed). Six
-      Llama/Whisper arms launched: R (45985909), R-seed (45985924),
-      R-lr2e3 (45985930), R-b600 (45985931), R-k5 (45985944), W (45985946).
-      Q2-k5/Q4-k5 staged (PR #132 merged, Qwen3.5-4B rsync to MN5 in
-      progress) and queued to submit once the transfer lands.
-      *Outcome:* audio hours to 10% dev-clean WER per arm, which sets the
-      week-2 screen's budget and removes settled factors from its grid.
+      closed (metrics change landed, scheduler dry run confirmed).
+      All 8 arms complete (done 2026-09-19): R (45985909), R-seed
+      (45985924), R-lr2e3 (45985930), R-b600 (45985931), R-k5 (45985944),
+      W (45985946, resubmitted 46050285 with a `max_audio_seq_len` fix),
+      Q2-k5 (45987899 → resumed 46077302), Q4-k5 (45987998 → resumed
+      46077303).
+      *Outcome:* encoder choice (W, Whisper-large-v3) dominates every other
+      factor tested -- dev-clean/dev-other WER 0.038/0.061, the only arm to
+      cross the <10% bar, 3-6x better than the best w2v-BERT arm on any
+      other axis. Schedule and stacking rules both trigger; decoder size is
+      a near-miss (Q4-k5 at 10.36% dev-clean). Full writeup in
+      `01-interface-recipe.md` §5, board entries 2026-09-18/19. Sets the
+      week-2 screen's budget and removes settled factors from its grid --
+      sequencing (encoder ahead of the backbone grid?) is the Orchestrator's
+      call.
 
 ### Track B — preparation
 - [x] **`stack_factor` for the MLP adapter** (done 2026-09-15, [PR #126](https://github.com/MELT-proj/training/pull/126)) (concatenate k consecutive
