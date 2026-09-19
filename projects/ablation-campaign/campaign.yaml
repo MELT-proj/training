@@ -250,6 +250,26 @@ arms:
     seed: 49
     time: "04:00:00"
 
+  # Q-Former smoke test (2026-09-19), not a campaign arm. Does the fixed
+  # Q-Former (window 15, 3 queries = 10 Hz) train and generate at all? Same
+  # recipe as R-k5 (the other 10 Hz arm): adapter LR 1e-3, 1200 s effective
+  # batch (bd 150 x ga 4 x 2 ranks), warmup 260 steps then constant, so its
+  # loss at steps 262 and 524 reads directly against R-k5's. Stopped at 524
+  # steps (max_steps pinned on purpose, this is a smoke test) by a `--`
+  # passthrough; see the board entry for the command.
+  - id: MA-librispeech-qformer-smoke
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter: qformer
+    adapter_lr: 1e-3
+    grad_accum_steps: 4
+    nodes: 1
+    gpus_per_node: 2
+    site: artemis
+    qos: gpu-h100
+    seed: 49              # R-k5's seed, so only the adapter differs
+    time: "04:00:00"
+
   - id: MA-librispeech-w
     stage: MA
     config: ABL-MA-librispeech.yaml
