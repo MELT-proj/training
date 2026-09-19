@@ -249,18 +249,87 @@ class TestAdapterOutputFeaturesShape:
         assert output_shape == (2, 12, 1024)
         assert output_mask is None
 
-    def test_qformer_adapter_downsampling(self, qformer_config):
-        """Q-Former adapter should downsample sequence by downsample_rate."""
-        pytest.importorskip("transformers")
+    @staticmethod
+    def _real_qformer_adapter(window_size=15, downsample_rate=5, encoder_width=64):
+        """A Q-Former adapter built from real configs, no hub access."""
+        from transformers import GPT2Config, Wav2Vec2Config
 
-        seq_len = 45
-        window_size = 15
-        num_queries = window_size // 5
+        from melt.modeling import MELTAdapterConfig, MELTQFormerAdapter
 
-        nblocks = math.ceil(seq_len / window_size)
-        expected_output_len = nblocks * num_queries
+        config = SimpleNamespace(
+            adapter_config=MELTAdapterConfig(
+                _type="qformer",
+                hidden_size=32,
+                num_hidden_layers=2,
+                intermediate_size=64,
+                window_size=window_size,
+                downsample_rate=downsample_rate,
+            ),
+            audio_encoder_config=Wav2Vec2Config(hidden_size=encoder_width),
+            text_decoder_config=GPT2Config(n_embd=48),
+        )
+        return MELTQFormerAdapter(config).eval()
 
-        assert expected_output_len == 9
+    def test_qformer_adapter_instantiates_and_downsamples(self):
+        """Regression: the adapter used to fail at construction (no AutoModel maps
+        MELTAdapterConfig), and its forward broadcast one query over B*nblocks."""
+        adapter = self._real_qformer_adapter()
+        features = torch.randn(2, 45, 64)
+
+        out = adapter(features)
+        shape, mask = adapter._get_output_features_shape(features.shape)
+
+        # 45 frames / window 15 = 3 windows x 3 queries
+        assert out.shape == (2, 9, 48) == shape
+        assert mask.shape == (2, 9) and bool(mask.all())
+
+    def test_qformer_adapter_pads_a_partial_window(self):
+        adapter = self._real_qformer_adapter()
+        out = adapter(torch.randn(2, 40, 64))
+        assert out.shape == (2, 9, 48)
+
+    def test_qformer_output_mask_follows_valid_windows(self):
+        adapter = self._real_qformer_adapter()
+        input_mask = torch.zeros(2, 45, dtype=torch.long)
+        input_mask[0, :45] = 1
+        input_mask[1, :16] = 1  # 16 frames touch two windows
+
+        _, mask = adapter._get_output_features_shape((2, 45, 64), input_mask)
+
+        assert mask.sum(dim=-1).tolist() == [9, 6]
+        assert mask[1].tolist() == [1, 1, 1, 1, 1, 1, 0, 0, 0]
+
+    def test_qformer_forward_is_finite_with_a_fully_padded_window(self):
+        adapter = self._real_qformer_adapter().train()
+        features = torch.randn(2, 45, 64, requires_grad=True)
+        input_mask = torch.ones(2, 45, dtype=torch.long)
+        input_mask[1, 10:] = 0  # windows 1 and 2 hold no real frame
+
+        out = adapter(features, attention_mask=input_mask)
+        out.sum().backward()
+
+        assert torch.isfinite(out).all()
+        assert torch.isfinite(features.grad).all()
+
+    def test_qformer_padding_does_not_change_live_outputs(self):
+        adapter = self._real_qformer_adapter()
+        torch.manual_seed(0)
+        short = torch.randn(1, 10, 64)
+        padded = torch.cat([short, torch.randn(1, 20, 64)], dim=1)
+        mask = torch.zeros(1, 30, dtype=torch.long)
+        mask[0, :10] = 1
+
+        alone = adapter(short)
+        batched = adapter(padded, attention_mask=mask)
+
+        # Window 0 holds frames 0-14: 10 real, 5 padding. Masked padding must not
+        # leak into the first window's outputs.
+        alone_masked = adapter(
+            torch.nn.functional.pad(short, (0, 0, 0, 5)),
+            attention_mask=torch.tensor([[1] * 10 + [0] * 5]),
+        )
+        assert torch.allclose(batched[:, :3], alone_masked, atol=1e-5)
+        assert alone.shape == (1, 3, 48)
 
     def test_conformer_adapter_downsampling_single_layer(self):
         """Test Conformer adapter downsampling with a single layer."""
