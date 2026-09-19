@@ -452,11 +452,13 @@ Two findings, both load-bearing:
 ### Step 0b arms
 
 Launched 2026-09-17/18: R, R-seed, R-lr2e3, R-b600, R-k5, W, Q2-k5, Q4-k5
-(§2b). Fill in as each lands. In-training eval, `max_samples 500`/set, the
-metrics from `melt/training/metrics.py`'s update (full-set S/D/I/length
-ratio/runaway fraction, not the old 200-sample log). Six of eight landed;
-Q2-k5 and Q4-k5 both TIMEOUT at 41%/45% and are resumed (jobs 46077302,
-46077303, 6h/7h budgets).
+(§2b). All 8 landed 2026-09-19 (Q2-k5 and Q4-k5 both TIMEOUT at 41%/45%
+and were resumed as jobs 46077302/46077303). In-training eval,
+`max_samples 500`/set, the metrics from `melt/training/metrics.py`'s
+update (full-set S/D/I/length ratio/runaway fraction, not the old
+200-sample log). A ninth arm, `Q4-k5-seed2` (seed 53, job 46143618), is
+running to check the 2B->4B size gap against seed noise before it is
+quotable -- see the decision-rules discussion below.
 
 **Resume note.** Several arms hit their original 3h wall-clock budget at
 ~87% (the 500-sample eval costs more per round than A0/l4-ep3's 200) and
@@ -480,7 +482,7 @@ on a resumed arm.
 | Q2-k5 | `MA-librispeech-w2vbF-qwen35_2bInsF-mlpT-sk5-bd30-ga5-elr6e6-dlr2e5-lr1e3-s51-8g` | 0.169 | 0.312 | 0.369 | 0.545 | 0.0% / 0.0% | job 46077302 (resumed from 45987899, TIMEOUT at 41%). Qwen3.5-2B decoder, `stack_factor 5`, same w2v-BERT encoder as R-k5. Beats R-k5 (0.314/0.490) by a wide margin but does not cross <10%. |
 | Q4-k5 | `MA-librispeech-w2vbF-qwen35_4bInsF-mlpT-sk5-bd30-ga5-elr6e6-dlr2e5-lr1e3-s52-8g` | 0.104 | 0.239 | 0.253 | 0.403 | 0.0% / 0.0% | job 46077303 (resumed from 45987998, TIMEOUT at 45%). Qwen3.5-4B decoder, otherwise identical to Q2-k5. Beats Q2-k5 on both sets (0.104 vs 0.169 clean, 0.239 vs 0.312 other) but lands just above the <10% bar on dev-clean (10.36%) and well above it on dev-other. Last of the 8 step-0b arms to land. |
 
-All 8 step-0b arms are now complete.
+All 8 original step-0b arms are complete; `Q4-k5-seed2` is running (see below).
 
 **Decision rules applied to the numbers above** (not adjudicated here, per
 the Orchestrator's instruction -- flagging what the raw numbers say against
@@ -508,39 +510,41 @@ each rule as written):
 - **Rule 4 (encoder).** "If W reaches the threshold much earlier than R, the
   encoder question moves ahead of the backbone grid." W reaches 0.038/0.061
   at the same step count where R is still at 0.549/0.664 and R-k5 (the best
-  w2v-BERT arm) is at 0.314/0.490 -- W is the only arm to cross <10% at all,
-  by roughly an order of magnitude over the next-best w2v-BERT arm at equal
-  steps. The rule triggers unambiguously and by a wide margin: the encoder
-  question (Whisper vs. w2v-BERT) should move ahead of the backbone grid.
-  This also reframes Rule 5 ("nothing reaches 10% in three epochs") --
-  something did reach it, just not on the w2v-BERT encoder path the other
-  rules were tuned against.
+  w2v-BERT arm) is at 0.314/0.490 -- W is the only arm to cross <10% at all.
+  The rule triggers unambiguously. This also reframes Rule 5 ("nothing
+  reaches 10% in three epochs, take the best arm to six epochs before the
+  screen") -- it does not fire, since Whisper crossed; the week-2 screen is
+  unblocked on the budget side without a six-epoch extension.
+  Encoder choice (`03-audio-stack.md`'s question) is reported here as a
+  prior for that section, not decided in this file: Whisper won with the
+  **smallest** decoder tested and **no** stacking, against w2v-BERT arms
+  running up to 4x the decoder and a 5x shorter sequence (`stack_factor 5`)
+  -- so at a fixed decoder budget, the encoder bought more than
+  quadrupling the decoder did. That reads as supporting the paper's 2-3B
+  framing rather than straining it, not as a reason to move size ahead of
+  or behind encoder work.
 - **Rule 3 (size).** "If Q4-k5 reaches the threshold and Q2-k5 does not, or
   does so in markedly fewer hours, the paper's '2-3B is enough' framing must
   be tested and a ~4B point joins the backbone grid." Literally, neither
   arm reaches the <10% dev-clean bar: Q4-k5 lands at 0.1036, just 0.36
   points over; Q2-k5 at 0.1686, well over. The rule's stated trigger
-  condition does not fire. That said, size clearly still matters on this
-  encoder: Q4-k5 beats Q2-k5 by the same direction and a similar relative
-  margin on both sets (0.104 vs 0.169 clean, ~38% relative; 0.239 vs 0.312
-  other, ~23% relative), and Q4-k5's dev-clean number is close enough to
-  the bar that a slightly longer schedule (the six-epoch fallback of Rule
-  5, or `stack_factor`/LR combined with the encoder finding below) would
-  plausibly cross it. Whether "close but not literally triggering" is
-  enough to add a ~4B point to the backbone grid is the Orchestrator's
-  call, not mine -- flagging the boundary case rather than rounding it
-  either way.
+  condition does not fire. Q4-k5 beats Q2-k5 by a consistent margin on both
+  sets (0.104 vs 0.169 clean, ~38% relative; 0.239 vs 0.312 other, ~23%
+  relative) -- but this is one seed per arm, the same trap the LR 2e-3
+  contrast fell into, and the gap (0.065 dev-clean) is not yet safe to
+  quote against the measured seed-only spread (0.11, from `R`/`R-seed`,
+  though at a much higher error rate so probably pessimistic here).
+  `MA-librispeech-q4-k5-seed2` (seed 53, job 46143618, launched
+  2026-09-19) is running to settle both the spread and whether 0.104
+  sitting just over the bar is itself a seed draw. This is
+  `02-backbones.md`'s question; reported here as a prior, not decided.
 
-**All 8 step-0b arms are in.** Summary across rules: schedule (Rule 1) and
-stacking (Rule 2) both trigger clearly; the 600 s batch clause does not;
-size (Rule 3) is a near-miss that doesn't literally trigger but shows a
-consistent, real effect; encoder (Rule 4) triggers decisively and by far
-the largest margin of any factor tested -- W's dev-clean/dev-other WER
-(0.038/0.061) is roughly 3-6x better than the best w2v-BERT arm on either
-decoder-size or stacking axis (Q4-k5 at 0.104/0.239, R-k5 at 0.314/0.490).
-No w2v-BERT arm, at any stack factor, LR, batch size, or decoder size
-tested, gets within 2x of W's numbers. On the numbers alone, encoder choice
-dominates every other step-0b factor tested; sequencing the remaining
-questions (schedule/stacking defaults, whether to add a 4B point) behind an
-encoder decision seems like the natural reading of Rule 4 firing this hard,
-but that sequencing call belongs to the Orchestrator.
+**All 8 original step-0b arms are in; a ninth (Q4-k5's seed replicate) is
+running.** Schedule (Rule 1) and stacking (Rule 2) both trigger clearly;
+the 600 s batch clause does not. Size (Rule 3) is a near-miss that doesn't
+literally trigger, and the gap behind it is not yet quotable (single seed).
+Encoder (Rule 4) triggers decisively and unblocks the week-2 screen's
+budget (Rule 5 does not fire). Size and encoder are `02-backbones.md`'s
+and `03-audio-stack.md`'s questions respectively -- the numbers above are
+reported as priors for those sections, not as a backbone or encoder
+recommendation from this file.

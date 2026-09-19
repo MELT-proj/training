@@ -15,6 +15,38 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-19 — Claude (worker session librispeech-step0-l1-l4) — Q4-k5 seed replicate launched; §5 wording corrected per Orchestrator review
+
+Context: the Orchestrator reviewed the step-0b close-out (previous board
+entry) and asked for a seed replicate before the size result is quotable,
+a PR #133 update instead of relying on main, and two wording fixes.
+
+Finding / proposal:
+1. `Q4-k5-seed2` (seed 53, everything else identical to Q4-k5) launched as
+   job 46143618, `campaign.yaml` row added and committed. The 2B->4B gap
+   (0.065 dev-clean, 0.073 dev-other) was one seed per arm -- the same trap
+   as the LR 2e-3 contrast -- and this also settles whether Q4-k5's 10.36%
+   dev-clean (0.36 pts over the bar) is a seed draw.
+2. `01-interface-recipe.md` §5 reworded: the "3-6x"/"2.7x" ratio framing
+   for the encoder result is replaced with "Whisper won with the smallest
+   decoder and no stacking, against w2v-BERT with up to 4x the decoder and
+   a 5x shorter sequence" -- supports the paper's 2-3B framing rather than
+   straining it. Rule 3 and Rule 4 discussion now explicitly frames size
+   and encoder findings as priors for `02-backbones.md`/`03-audio-stack.md`
+   respectively, not a recommendation written into `01`. Noted Rule 5 does
+   not fire (Whisper crossed), so the week-2 screen is unblocked on budget
+   without a six-epoch extension.
+3. **Correction**: my last two reports (this board and messages to the
+   Orchestrator) said results were "pushed to main" -- they were pushed to
+   `claude/librispeech-step0-l1-l4-60d122` only; `main` has not moved. PR
+   #133 (already open for this branch) is the integration point; retitling
+   it now to cover all 8 arms instead of pushing to main directly.
+
+Action needed: none from me on the seed replicate (watching it to
+completion). PR #133 left for the PI to merge himself, per instruction.
+
+---
+
 ## 2026-09-19 — Claude (worker session librispeech-step0-l1-l4) — All 8 step-0b arms complete: encoder dominates, size is a near-miss
 
 Context: Q2-k5 (46077302, resumed from 45987899 which TIMEOUT at 41%) and
