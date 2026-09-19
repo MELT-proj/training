@@ -15,6 +15,87 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-19 — Claude (session) — Efficiency tool built; the Whisper "1.8x cheaper" is mostly contention, not the encoder
+
+Context: timeline week 3 Track B "Efficiency instrumentation". Built
+`projects/ablation-campaign/efficiency.py` (one TSV/JSON row per arm, joinable on
+`exp_name`), `eval_throughput.py` + `.sbatch` (GPU harness, **not run**), and
+`tests/test_efficiency.py`. Did not touch `01` or step 0b's design.
+
+Finding / proposal:
+
+1. **Validation against known answers: all pass, two definitional gaps.**
+   wsd-50hz / wsd-10hz / wsd-50hz-whisper give 50 / 10 / 50 positions per audio
+   second; Conformer 25. Params: w2v-BERT 580.5M, MMS 962.5M, MLP 6.30M,
+   Conformer 27.28M, MoE 33.57M total (MoE code taken from the
+   `claude/moe-adapter-verbatim-test` branch, nothing merged). Gaps, not adjusted:
+   Whisper encoder measures 637.0M (plan ~635M), mHuBERT-147 94.4M (plan 95M), MoE
+   active 8.40M (plan 8.39M is the two experts alone; router and norm add 0.012M).
+   Waveform encoders give 49.98/s, not 50. GPU-h: job 45969297 = 19.16, job
+   46050285 = 15.49; `ElapsedRaw x gres/gpu / 3600` and `CPUTimeRAW/3600/40` agree.
+   The Q-Former cannot be built (AutoModel rejects its config), so its rate is
+   unvalidated.
+2. **GPU-h per 1,000 audio hours, LibriSpeech step-0b arms** (all jobs summed;
+   "clean" strips startup and steps redone after a timeout; audio hours are the
+   trainer's `train_hours/total`, 2676.5 h for every 8-GPU arm):
+
+   | arm | jobs | GPU-h | per 1K h | clean per 1K h | loop s/step |
+   |---|---|---|---|---|---|
+   | cosine-50hz | 1 | 19.16 | 7.16 | 7.08 | 0.99 |
+   | wsd-50hz | 2 | 27.86 | 10.41 | 9.99 | 1.42 then 1.23 |
+   | wsd-50hz-seed2 | 2 | 27.27 | 10.19 | 9.95 | 1.40 then 1.27 |
+   | wsd-50hz-lr2e3 | 2 | 27.87 | 10.41 | 10.03 | 1.43 then 1.22 |
+   | wsd-50hz-batch600 (4 GPU) | 1 | 21.30 | 7.96 | 7.92 | 1.10 |
+   | wsd-10hz | 2 | 25.26 | 9.44 | 8.99 | 1.24 |
+   | wsd-50hz-whisper | 2 (1 failed at 59 s) | 15.62 | 5.84 | 5.71 | 0.79 |
+   | wsd-10hz-qwen2b | 2 | 75.42 | 35.05 | 34.17 | 4.0 then 3.7 |
+   | wsd-10hz-qwen4b | 2 | 89.13 | 41.42 | 40.10 | 4.6 then 4.4 |
+
+   The Qwen arms consumed 2151.6 audio hours, not 2676.5, at the same step count:
+   batch_duration 30 fills less than 150. Qwen4b took 89 GPU-h against ~80 planned.
+3. **Whisper cost question: the 1.8x is real in the accounting and mostly not the
+   encoder.** (a) Restart overhead is not doing the work: startup plus redone steps
+   are 1.1 of wsd-50hz's 27.9 GPU-h (4%). (b) The reference was the wrong one.
+   cosine-50hz (same data, same steps, same recipe bar the schedule) ran alone on
+   the project and cost 19.16; wsd-50hz's first job ran beside five others at
+   1.4-1.6 s/step against 0.92-0.98 alone. Whisper stays at 0.75-0.77 s/step
+   throughout. Against the uncontended reference Whisper is **1.24x cheaper**
+   (15.28 vs 18.94 clean), not 1.8x. Whisper itself ran under load too (the four
+   resumes, a 1-node arm and both Qwen arms overlapped it), so 1.24x is if anything
+   conservative. (c) Why w2v-BERT arms slow down under concurrency and Whisper does
+   not is **unexplained**; I have no data on I/O versus CPU versus fabric.
+4. **The flash-attention mechanism, as stated, is not what happened.** `resolved_config`
+   shows both encoders ran `attn_implementation: sdpa`; Whisper did not use
+   flash_attention_2. Reading transformers 5.16.1 in the tf5 image: w2v-BERT
+   (`position_embeddings_type: relative_key`) passes an explicit `position_bias`
+   tensor into the sdpa call, Whisper passes neither bias nor mask. So a narrower
+   version, PyTorch picking its flash kernel for Whisper's unbiased call but not for
+   w2v-BERT's, is plausible from the source but **unmeasured**. Against it: Whisper
+   encodes a full 30 s window for every utterance. `eval_throughput.py` records
+   audio-stack time separately from generate time to test this on a GPU during the
+   crossing.
+5. **03 §4 is underspecified.** (a) The crossing queues sixteen arms at once, and
+   wall-clock GPU-h moved 1.5x with concurrency on an identical recipe, so the cost
+   column will not be comparable across arms as specified. Proposal: cost from a
+   controlled short fixed-step run alone on one node, or report concurrency beside
+   GPU-h. (b) The denominator needs a definition; measured audio hours differ from
+   steps x batch by 7% at batch_duration 150 and 25% at 30. (c) Eval throughput
+   depends on output length, so a runaway arm looks slow; `mean_new_tokens` is
+   recorded. (d) `arms.tsv` holds none of the step-0b jobs (11 rows, all older), so
+   under protocol section 3 they are off the ledger; the tool finds jobs by scanning
+   the SLURM logs for the `exp_name` instead. (e) The brief cited a Whisper
+   window-padding item in `timeline.md`; there is none on this branch, so the tool
+   leaves `window_padding_ratio` blank with no item to point to.
+
+Left unmeasured: eval throughput (needs a GPU; harness imports verified, never run
+on hardware), padding ratio (out of scope), MoE/Conformer/Q-Former GPU-h (no runs).
+
+Action needed: PI reviews the PR. Orchestrator: decide item 5a, and add the
+padding item if it is wanted. To fill the eval-throughput column, submit
+`eval_throughput.sbatch <exp_name>` once per arm on one GPU type.
+
+---
+
 ## 2026-09-18 — Claude (session) — Whisper crossing step; Qwen ledger backfill; EuroLLM decoder profile
 
 Context: three Track B items from `timeline.md` week 1, no GPU. Did not touch
