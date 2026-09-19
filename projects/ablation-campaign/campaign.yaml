@@ -301,6 +301,25 @@ arms:
     seed: 52
     time: "05:00:00"       # ~2x the 2B's decoder; wider margin until measured
 
+  # Seed replicate of Q4-k5, requested by the Orchestrator 2026-09-19: the
+  # 2B->4B gap (0.065 dev-clean, 0.073 dev-other) is not yet quotable
+  # against a single seed per arm -- same trap as the LR 2e-3 contrast.
+  # This also settles whether Q4-k5's 10.36% dev-clean (0.36 pts over the
+  # <10% bar) is itself a seed draw. Identical to Q4-k5 in every other
+  # axis; total elapsed compute across Q4-k5's two submissions was
+  # ~11h -- budgeted higher here to avoid a second TIMEOUT/resume cycle.
+  - id: MA-librispeech-q4-k5-seed2
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    decoder: Qwen/Qwen3.5-4B
+    adapter_lr: 1e-3
+    batch_duration: 30
+    grad_accum_steps: 5
+    gradient_checkpointing: false
+    stack_factor: 5
+    seed: 53
+    time: "12:00:00"
+
   # --------------------------------------------------------------- IFT (stage 2)
   - id: IFT-700-llama1b-ins
     stage: IFT
