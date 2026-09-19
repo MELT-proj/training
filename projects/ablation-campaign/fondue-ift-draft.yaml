@@ -1,0 +1,224 @@
+# Fondue -- stage 2 (instruction fine-tuning), DRAFT config -- week 2,
+# 2026-09-18. Sibling of fondue-ma-draft.yaml; read that file's header first,
+# the same NOT RUNNABLE / NOT FROZEN / "# OPEN" convention applies here.
+#
+# Pool: ASR (all 26 languages, same as stage 1) + ST X->en (~82,000 h) +
+# ST en->X (5 x ~430 h, CoVoST2) -- "IFT over ~330K h" in 06-fondue.md §2.
+# Every translation DIRECTION is its own language entry for the two-tier
+# policy (docs/mixture_weights.md): ASR "de" and ST "de-en" are balanced as
+# separate entries under beta, which is why some very small ST directions
+# (lv-en at 0.6 h) get a real repetition-boost warning below.
+#
+# The real render, at the week-3 dry run:
+#
+#   python3 infra/compute_mix_weights.py \
+#       --config       projects/ablation-campaign/plan/fondue-ift-draft.yaml \
+#       --datasets-root <shar root> \
+#       --alpha 0.2 --beta 0.5 \
+#       --cache        infra/.mix_weights_hours.json \
+#       --emit-config  projects/ablation-campaign/Fondue-IFT.yaml \
+#       --exp-name     Fondue-IFT
+#
+# ALPHA=0.2 (not 0.5, unlike stage 1) -- reasoning:
+#   - The paper this policy comes from (arXiv:2509.14128 3.3.1) explicitly
+#     names alpha=0.2 as its own choice for a fine-tuning stage, separate
+#     from the alpha=beta=0.5 pretraining default used in fondue-ma-draft.yaml.
+#     IFT is the fine-tuning-shaped stage of this campaign (full decoder
+#     trained, task-conditioned), so this is the literature's own answer to
+#     "what changes between the two stages", not a new invention.
+#   - It also directly answers a concrete risk this pool has and stage 1's
+#     ASR-only pool does not: ST X->en exists at 0.6 h for lv, and is
+#     entirely absent (0 h) for sl, ga and mt (data/hours_by_language.csv --
+#     those three simply have no ST source, so they are not in the ST mix
+#     at all, not a repetition risk). lv-en's 0.6 h is a real, present, tiny
+#     source; at alpha=0.5 corpus-within-language balancing does not touch
+#     this (lv-en's group holds only one corpus), but beta's language-level
+#     step over ~45 language/direction entries (26 ASR + ~14 ST X->en + 5
+#     ST en->X) will still give lv-en a language SHARE many times its
+#     natural 0.6/82,000 sliver -- the same arithmetic as mt's ASR case in
+#     stage 1, just on a source two orders of magnitude smaller. A lower
+#     alpha does not fix a single-corpus group (there is nothing to flatten
+#     within it), but the paper's own alpha=0.2 stage is where this policy
+#     is documented to have been tuned for exactly this fine-tuning
+#     regime, so it is the more defensible of the two "settings that exist"
+#     rather than reusing stage 1's number by default.
+#   - beta is held at 0.5, same as stage 1, for lack of a specific
+#     literature value for the language-level exponent at fine-tuning time;
+#     this is the part of the choice with the least support and is worth
+#     revisiting once check_training_config.py's boost report is run for
+#     real at the week-3 dry run (docs/mixture_weights.md: "very high
+#     boosts on tiny sources... decide whether you want it in the mix at
+#     all" -- lv-en, and possibly the smallest en->X CoVoST2 directions, are
+#     exactly the candidates that report will flag).
+#
+# See raclette-draft.yaml: it draws from THIS mixture (same alpha/beta,
+# same input_cfg), just capped to ~25K h, to pilot the LR this pool needs at
+# Fondue's actual batch.
+
+# =============================================================================
+# Run Configuration
+# =============================================================================
+run:
+  exp_name: Fondue-IFT           # placeholder; see fondue-ma-draft.yaml.
+  dry_run: false
+  memory_preallocation: true
+
+# =============================================================================
+# Model Configuration -- OPEN (same rows as fondue-ma-draft.yaml)
+# =============================================================================
+model:
+  encoder: { name: null, freeze: true }        # OPEN -- 03-audio-stack.md, wk3
+  decoder:
+    name: null                                  # OPEN -- 02-backbones.md, wk5
+    attn_implementation: flash_attention_2
+    freeze: false                               # IFT convention: decoder trains.
+  adapter:
+    freeze: null            # OPEN -- 04-regime.md (adapter trainable at IFT
+                             # or not is a regime factor, week-5 gate); the
+                             # current campaign default is frozen (mlpF), but
+                             # that is exactly what 04-regime.md is testing.
+    _type: null              # OPEN -- 03-audio-stack.md, week-3 gate.
+  ckpt: null                 # OPEN -- the stage-1 (MA) Fondue run directory,
+                             # once it exists.
+
+# =============================================================================
+# Data Configuration
+# =============================================================================
+data:
+  sample_rate: 16000
+  apply_chat_template: true         # IFT convention, decidable regardless
+                                     # of which backbone/stack wins.
+  chat_template_config: null        # OPEN -- decoder-dependent (llama3 /
+                                     # chatml / EuroLLM's own), set once
+                                     # model.decoder.name is chosen.
+  strict_text_field: true           # settled campaign-wide; matters more
+                                     # here than at MA because ST sources
+                                     # are in this mix (silent-text-field
+                                     # fallback trap, infrastructure.md §5).
+
+  train_ds:
+    total_hours: 330000.0            # PROVISIONAL -- 06-fondue.md §2's own
+                                      # "~330,000" figure (ASR + ST X->en +
+                                      # ST en->X over the 26-language set);
+                                      # re-measured for real at the week-3
+                                      # dry run, same as stage 1.
+    force_estimate: false
+
+    # LANGUAGE SET: same 26 as stage 1 (EU-24 + ru + uk), ca open, same
+    # caveat about not hand-inventing the 19 not shown below. ASR groups
+    # are identical to fondue-ma-draft.yaml's train_ds -- not repeated here
+    # in full; only the ST groups, which are new to this stage, are shown.
+    input_cfg:
+      # ---- ASR groups: copy fondue-ma-draft.yaml's train_ds.input_cfg
+      # verbatim (en/de/fr/es/it/ru/uk fully specified there, 19 more as a
+      # comment table). Kept as one block in that file rather than
+      # duplicated here so the two drafts cannot drift out of sync by hand.
+
+      # ---- ST X->en: real, verified paths for de/fr/es/it->en, copied from
+      # ABL-IFT-700.yaml's own "both" render (weight omitted, per
+      # docs/mixture_weights.md).
+      - type: group
+        tags: { task: st, src_lang: de, tgt_lang: en }
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/German/ast
+            tags: { task: st, src_lang: de, tgt_lang: en, text_field: custom.translation_en }
+            # PATH ASSUMED by the same convention confirmed for
+            # French/Spanish/Italian/Polish/English below; not directly
+            # observed in the files this draft read. Verify at week 3.
+      - type: group
+        tags: { task: st, src_lang: fr, tgt_lang: en }
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/French/ast
+            tags: { task: st, src_lang: fr, tgt_lang: en, text_field: custom.translation_en }
+      - type: group
+        tags: { task: st, src_lang: es, tgt_lang: en }
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Spanish/ast
+            tags: { task: st, src_lang: es, tgt_lang: en, text_field: custom.translation_en }
+      - type: group
+        tags: { task: st, src_lang: it, tgt_lang: en }
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Italian/ast
+            tags: { task: st, src_lang: it, tgt_lang: en, text_field: custom.translation_en }
+
+      # ---- ST en->X: real, verified path pattern (CoVoST2), en->de shown
+      # in ABL-IFT-700.yaml directly; the other four follow the identical
+      # `covost2/en_<x>/train` shape (data/hours_by_language.csv:
+      # covost_en_to_x = ~430 h for de, et, lv, sl, sv, all English audio).
+      - type: group
+        tags: { task: st, src_lang: en, tgt_lang: de }
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_de/train
+            tags: { task: st, src_lang: en, tgt_lang: de }
+      - type: group
+        tags: { task: st, src_lang: en, tgt_lang: sv }
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_sv/train
+            tags: { task: st, src_lang: en, tgt_lang: sv }
+      - type: group
+        tags: { task: st, src_lang: en, tgt_lang: lv }
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_lv/train
+            tags: { task: st, src_lang: en, tgt_lang: lv }
+      - type: group
+        tags: { task: st, src_lang: en, tgt_lang: et }
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_et/train
+            tags: { task: st, src_lang: en, tgt_lang: et }
+      - type: group
+        tags: { task: st, src_lang: en, tgt_lang: sl }
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_sl/train
+            tags: { task: st, src_lang: en, tgt_lang: sl }
+
+      # ---- ST X->en, remaining directions -- hours only, not expanded:
+      # ru-en 18,412.4 h, uk-en 596.1 h, pl-en 663.6 h, nl-en 1,328.1 h,
+      # pt-en 1,641.2 h, hu-en 145.3 h, fi-en 155.9 h, sv-en 90.9 h,
+      # cs-en 65.6 h, el-en 13.8 h, ro-en 32.5 h, da-en 16.7 h, bg-en 16.7 h,
+      # hr-en 9.2 h, sk-en 8.9 h, lt-en 4.9 h, et-en 7.9 h, lv-en 0.6 h
+      # (the tiny-source flag above). sl-en, ga-en, mt-en: 0 h, no ST source
+      # exists for these three at all.
+
+  max_duration: 60
+  max_tokens: 400
+
+  validation_ds:
+    max_samples: 200
+    input_cfg:
+      # Same in-domain dev/validation pattern as fondue-ma-draft.yaml, plus
+      # one ST validation entry per direction that has ASR+ST fully working
+      # (mirrors ABL-IFT-700.yaml's asr_en/asr_de/.../st_en_de names).
+      # FLEURS held out of this trainer-internal loop for the same reason
+      # and the same open caveat as stage 1 -- see that file.
+
+# =============================================================================
+# Optimization -- decoder_lr is the row Raclette exists to pin down
+# =============================================================================
+optimization:
+  # encoder_lr: not used while the encoder is frozen.
+  # adapter_lr: OPEN if 04-regime.md decides the adapter trains at IFT too.
+  decoder_lr: null              # OPEN -- set from raclette-draft.yaml's
+                                 # result (week 6). Every completed IFT arm
+                                 # in this campaign so far (both backbones)
+                                 # has used 2e-5 at 4,800 audio-s/step; that
+                                 # number is Raclette's own starting anchor,
+                                 # not Fondue's answer -- see that file.
+
+# =============================================================================
+# Trainer -- OPEN (batch, topology; see 06-fondue.md §3 and §2's measured
+# candidates)
+# =============================================================================
+trainer:
+  num_train_epochs: 1
+  max_steps: -1
+  batch_duration: null
+  gradient_accumulation_steps: null

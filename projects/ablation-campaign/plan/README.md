@@ -31,6 +31,11 @@ belongs on the board, not in a section file.
 | `board.md` | everything that happened: findings, numbers, incidents, doubts and proposals, newest first. Any session appends; nothing is ever edited away |
 | `data/` | per-language hours (`hours_by_language.csv`), eval-set inventory, tier table |
 
+This folder holds documents and `data/` only. Configs — including drafts —
+live one level up in `projects/ablation-campaign/` beside the other
+`ABL-*.yaml` and `*-draft.yaml` files, so there is one place to look for
+something runnable.
+
 Each numbered file opens with a **Settled / Open / Owner** block. Settled items
 are decisions already made with the PI; do not re-litigate them in a new
 session, post to `board.md` instead if you think one is wrong.
