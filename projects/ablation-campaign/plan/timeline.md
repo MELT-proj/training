@@ -221,6 +221,21 @@ Settled.
       three LR points.
 - [ ] melt-eval MN5 venv built and a smoke eval run there, so end-of-run
       evaluation can happen on MN5 when queues allow.
+- [ ] **Re-derive the screen's budget and render its configs**, now that
+      step 0b has produced an hours-to-threshold number: `wsd-50hz-whisper`
+      crossed at `global_step` 262, ~87.3 audio-h. `01-interface-recipe.md`
+      §2b's Consequence sets the per-arm budget at ≥1.5× that and never
+      under one epoch of 700 h/lang. Settled factors (schedule, stacking)
+      leave the grid. Nothing to launch — this produces the rendered configs
+      and the arm list the screen starts from.
+      *Blocks the whole of week 2 Track A.*
+- [ ] **Quantify FLEURS in or out of the Fondue pool** (`06-fondue.md` §3,
+      new row 2026-09-18): per language, how many ASR hours excluding
+      `asr_fleurs` would remove, from `data/hours_by_language.csv`, with the
+      tail languages called out separately. The campaign excludes FLEURS
+      (`--exclude-corpus fleurs`) and FLEURS-24 is both the zero-shot
+      benchmark and Fondue's drafted in-training eval set, so this decides
+      whether Fondue can keep that benchmark clean. Data only, no GPU.
 
 ---
 
@@ -252,6 +267,14 @@ assumed one (`03-audio-stack.md` §0).*
 - [ ] **Ladder tier configs** (`05-language-ladder.md` §2): the config builder
       needs a "min(tier, available)" per-language budget; implement and render
       tiers 10/30/100/300/700.
+- [ ] **Whisper's window-padding ratio per corpus** (`03-audio-stack.md` §3,
+      §4): a fixed-window encoder spends a full 30 s of encoder compute on
+      every utterance however short, so its cost per audio hour is
+      `30 s / mean utterance duration` and varies by corpus. Measure the mean
+      duration per corpus from the shar manifests and report the ratio
+      alongside GPU-h per 1,000 audio hours. Needed before the crossing's
+      cost axis means anything, since Whisper is one of its four encoders.
+      Data only, no GPU.
 - [ ] Efficiency instrumentation: log decoder positions per audio second and
       GPU-h per 1,000 audio hours for every arm (from `resolved_config.json`
       and SLURM accounting).
