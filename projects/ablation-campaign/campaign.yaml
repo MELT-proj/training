@@ -270,6 +270,30 @@ arms:
     seed: 49              # R-k5's seed, so only the adapter differs
     time: "04:00:00"
 
+  # Q-Former, one full epoch (2026-09-19). The 524-step smoke run above matched
+  # R-k5's loss on the plateau; R-k5 left it between steps 1048 and 1572 and
+  # was at dev-clean WER 0.60 / loss 1.01 by step 2620. Same recipe again for
+  # a full epoch (2884 steps at 1200 s), no warmup because R-k5 had none
+  # (`warmup_ratio` is dropped by transformers 5), warmup-stable-decay with
+  # the last 20% decaying. Eval/save every 524 steps. Submit as:
+  #   campaign.py run MA-librispeech-qformer-1ep -- --trainer.warmup_steps 0 \
+  #     --trainer.eval_steps 524 --trainer.save_steps 524 \
+  #     --data.validation_ds.max_samples 500 \
+  #     --trainer.lr_scheduler_type warmup_stable_decay \
+  #     --trainer.lr_scheduler_kwargs '{"num_decay_steps": 577, "min_lr_ratio": 0.1, "decay_type": "cosine"}'
+  - id: MA-librispeech-qformer-1ep
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter: qformer
+    adapter_lr: 1e-3
+    grad_accum_steps: 4
+    nodes: 1
+    gpus_per_node: 2
+    site: artemis
+    qos: gpu-h100
+    seed: 49
+    time: "12:00:00"
+
   - id: MA-librispeech-w
     stage: MA
     config: ABL-MA-librispeech.yaml
