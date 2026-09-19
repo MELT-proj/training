@@ -477,6 +477,7 @@ on a resumed arm.
 | R-lr2e3 | `MA-librispeech-w2vbF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr2e3-s47-8g` | 0.437 | 0.599 | 0.665 | 0.927 | 1.0% / 1.2% | job 46059833 (resumed from 45985930), peak LR 2e-3. Better than R (LR 1e-3) on both sets. |
 | R-b600 | `MA-librispeech-w2vbF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr1e3-s48-4g` | 0.401 | 0.543 | 0.683 | 0.932 | 0.6% / 0.8% | job 45985931, `nodes:1 gpus_per_node:4` (600 s effective batch, ~2x R's steps at 17301 vs 8652). Beats R (0.549/0.664) but loses to R-k5 (0.314/0.490) -- more steps alone doesn't match what `stack_factor 5` buys. |
 | **W** | `MA-librispeech-whisperlargeF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr1e3-s50-8g` | **0.038** | **0.061** | 0.137 | 0.191 | 0.0% / 0.0% | job 46050285 (resubmitted with the `max_audio_seq_len 3000` fix). Whisper-large-v3 encoder, `stack_factor 1`, same steps/schedule as R. Crosses the <10% threshold decisively on both sets -- the only step-0b arm to do so, by a wide margin over every w2v-BERT arm including R-k5. |
+| Q2-k5 | `MA-librispeech-w2vbF-qwen35_2bInsF-mlpT-sk5-bd30-ga5-elr6e6-dlr2e5-lr1e3-s51-8g` | 0.169 | 0.312 | 0.369 | 0.545 | 0.0% / 0.0% | job 46077302 (resumed from 45987899, TIMEOUT at 41%). Qwen3.5-2B decoder, `stack_factor 5`, same w2v-BERT encoder as R-k5. Beats R-k5 (0.314/0.490) by a wide margin but does not cross <10%. Q4-k5 still running. |
 
 **Decision rules applied to the numbers above** (not adjudicated here, per
 the Orchestrator's instruction -- flagging what the raw numbers say against
