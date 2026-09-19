@@ -1267,7 +1267,7 @@ from the eval metrics in §B4.
 | symptom | cause |
 |---|---|
 | `trainer.per_device_eval_batch_size is -1, but evaluation is enabled` | exactly what it says — pass `--trainer.per_device_eval_batch_size 4` or fix the config. Before 0.5.2 the same config instead crashed at the first eval with `Trying to create tensor with negative dimension -1` (or `batch_size should be a positive integer, but got -1`) |
-| `False is not a valid SaveStrategy` (or `…EvalStrategy`) | you passed `--trainer.save_strategy no`. Overrides are parsed as YAML, so `no`/`off` become `false` and `yes`/`on` become `true`. Quote it: `--trainer.save_strategy "'no'"` |
+| `False is not a valid SaveStrategy` (or `…EvalStrategy`) | fixed (#77): overrides are parsed as YAML, so bare `no`/`off`/`yes`/`on` used to reach `--trainer.save_strategy no` as a bool and crash. It's now auto-corrected back to the string with a warning; quoting (`--trainer.save_strategy "'no'"`) is only needed if you hit this on an older checkout |
 | Job exits instantly, no log | `logs/` didn't exist, or a bad `--output` path — see §B4 |
 | `` `use_bucketing` is retired `` | config predates `lhotse_sampler_type`; swap it as the message says |
 | `PermissionError: … '/workspace/outputs/<EXP>'` | shared `OUTPUT_DIR` owned by someone else — set your own (§B3) |
