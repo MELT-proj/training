@@ -12,9 +12,22 @@ Two tracks run in parallel every week:
 - **Track B — preparation.** Code, configs, data, evaluation sets, text-only
   measurements. CPU work on nyx, GPU work on artemis via `sbatch`.
 
-Budget frame: ~49,700 GPU-h remained on 2026-09-15. Everything below except
-Fondue is ~8K GPU-h; Fondue is 10–30K depending on the backbone. Spend the
-rest on seed replicates and ladder points; unspent hours vanish on 11-30.
+Budget frame, measured 2026-09-19 (`bsc_acct` for the official position,
+`sacct` for the live one; 1 GPU-h = 20 physical core-hours on ACC):
+
+| | GPU-h |
+|---|---|
+| `epor48` grant (1,752 khours ACC) | 87,600 |
+| consumed, whole project, all users | ~38,500 (44%) |
+| **remaining** | **~49,100** |
+| of the consumed total: before 2026-08-01, i.e. pre-campaign | ~35,000 (92%) |
+| of the consumed total: this ablation campaign (Aug + Sep) | ~2,900 |
+
+`bsc_acct` lags about a day, so the remaining figure is a slight
+overstatement. Everything in this timeline except Fondue is ~8K GPU-h;
+Fondue is 10–30K depending on the backbone, and Raclette is ~1.4K
+(Llama-class) to ~4K (Qwen-class). Spend the rest on seed replicates and
+ladder points; unspent hours vanish on 11-30.
 
 Cost anchors used below (measured unless marked): MA arm at 700 h/lang
 ≈ 30 GPU-h; IFT arm at 700 h/lang, Llama-1B ≈ 80–100 GPU-h; Qwen-2B IFT

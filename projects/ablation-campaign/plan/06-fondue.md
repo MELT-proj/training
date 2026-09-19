@@ -123,7 +123,15 @@ steps over Fondue's pool, so Fondue needs a batch on the order of one audio
 hour per step, and the learning rate at that batch is an extrapolation.
 Raclette sets it: the Fondue mixture at ~25K h (5–10% of the pool), the
 Fondue batch and topology, three LR points, chosen on loss at matched steps
-and FLEURS-24 dev CER. About a tenth of Fondue's cost; runs in week 6.
+and FLEURS-24 dev CER. Runs in week 6.
+
+**Cost, corrected 2026-09-19.** "About a tenth of Fondue's cost" is the cost
+of *one* Raclette arm: 25K h against the ~330K h IFT pool is 7.6%. Raclette
+is three LR points, so it is three times that — **about 23% of Fondue's IFT
+cost**, which is ~1,400 GPU-h at the Llama rate (18.2 GPU-h per 1K h) and
+~4,000 at the measured Qwen rate (53.9 GPU-h per 1K h). Budget it as a
+four-figure line item, not a rounding error, and note it scales with the
+backbone decision.
 
 **Drafted 2026-09-18** (`raclette-draft.yaml`): the mixture is
 `fondue-ift-draft.yaml`'s own weighted pool (alpha=0.2/beta=0.5) with
