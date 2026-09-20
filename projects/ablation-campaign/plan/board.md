@@ -15,6 +15,101 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-20 — Claude (worker session librispeech-step0-l1-l4) — Q4-k5-seed2 lands: size gap is real and reproducible, both seeds miss the bar
+
+Context: `Q4-k5-seed2` (seed 53, job 46143618) completed after a long
+queue wait (submitted 2026-09-19, ran 2026-09-20, ~10h21m compute).
+
+Finding: dev-clean/dev-other WER 0.1053/0.2367, against Q4-k5's (seed 52)
+0.1036/0.2390 -- a spread of 0.0017/0.0023. That settles both questions
+the replicate was launched to answer:
+1. The seed-only spread at this error regime (~10-24% WER) is tight --
+   nothing like the 0.11 dev-clean spread measured on `R`/`R-seed` at a
+   much higher error rate (~55-77%). The 2B->4B gap (Q4-k5 vs Q2-k5:
+   0.104 vs 0.169 clean, 0.239 vs 0.312 other) is ~30-40x that spread and
+   is now safely quotable as a real, consistent size effect.
+2. Q4-k5's dev-clean landing just over the <10% bar (10.36%/10.53% across
+   both seeds) is not a seed draw -- the 4B decoder reproducibly falls
+   short of the threshold on this encoder, at three epochs. Rule 3 stays a
+   near-miss, now on firmer footing rather than a single noisy data point.
+
+All 9 step-0b arms (8 original + the seed replicate) are now complete.
+Full table and rule-by-rule writeup updated in `01-interface-recipe.md`
+§5; PR #133 will get a final update to reflect this.
+
+Action needed: none -- this closes out the Orchestrator's seed-replicate
+request. Reporting the result, not deciding what it means for
+`02-backbones.md`'s 4B backbone-grid question.
+
+---
+
+## 2026-09-19 — Claude (worker session librispeech-step0-l1-l4) — Q4-k5 seed replicate launched; §5 wording corrected per Orchestrator review
+
+Context: the Orchestrator reviewed the step-0b close-out (previous board
+entry) and asked for a seed replicate before the size result is quotable,
+a PR #133 update instead of relying on main, and two wording fixes.
+
+Finding / proposal:
+1. `Q4-k5-seed2` (seed 53, everything else identical to Q4-k5) launched as
+   job 46143618, `campaign.yaml` row added and committed. The 2B->4B gap
+   (0.065 dev-clean, 0.073 dev-other) was one seed per arm -- the same trap
+   as the LR 2e-3 contrast -- and this also settles whether Q4-k5's 10.36%
+   dev-clean (0.36 pts over the bar) is a seed draw.
+2. `01-interface-recipe.md` §5 reworded: the "3-6x"/"2.7x" ratio framing
+   for the encoder result is replaced with "Whisper won with the smallest
+   decoder and no stacking, against w2v-BERT with up to 4x the decoder and
+   a 5x shorter sequence" -- supports the paper's 2-3B framing rather than
+   straining it. Rule 3 and Rule 4 discussion now explicitly frames size
+   and encoder findings as priors for `02-backbones.md`/`03-audio-stack.md`
+   respectively, not a recommendation written into `01`. Noted Rule 5 does
+   not fire (Whisper crossed), so the week-2 screen is unblocked on budget
+   without a six-epoch extension.
+3. **Correction**: my last two reports (this board and messages to the
+   Orchestrator) said results were "pushed to main" -- they were pushed to
+   `claude/librispeech-step0-l1-l4-60d122` only; `main` has not moved. PR
+   #133 (already open for this branch) is the integration point; retitling
+   it now to cover all 8 arms instead of pushing to main directly.
+
+Action needed: none from me on the seed replicate (watching it to
+completion). PR #133 left for the PI to merge himself, per instruction.
+
+---
+
+## 2026-09-19 — Claude (worker session librispeech-step0-l1-l4) — All 8 step-0b arms complete: encoder dominates, size is a near-miss
+
+Context: Q2-k5 (46077302, resumed from 45987899 which TIMEOUT at 41%) and
+Q4-k5 (46077303, resumed from 45987998 which TIMEOUT at 45%) both landed.
+That closes out all 8 step-0b arms (R, R-seed, R-lr2e3, R-b600, R-k5, W,
+Q2-k5, Q4-k5).
+
+Finding: **Q4-k5 (Qwen3.5-4B decoder) reaches dev-clean/dev-other WER
+0.104/0.239, Q2-k5 (Qwen3.5-2B) reaches 0.169/0.312** -- Q4-k5 clearly
+beats Q2-k5 by a consistent margin on both sets (~38% relative on clean,
+~23% on other), but neither literally crosses the <10% dev-clean bar
+(Q4-k5 lands at 10.36%, 0.36 points over). Rule 3 (size) doesn't fire as
+written since Q4-k5 doesn't reach the threshold either, though it's a
+near-miss with a real, consistent size effect underneath it.
+
+The bigger picture with all 8 arms in: **encoder (Rule 4) dominates every
+other factor tested, by a wide margin.** W's dev-clean/dev-other WER
+(0.038/0.061) beats the best w2v-BERT arm on any other axis -- decoder
+size (Q4-k5, 0.104/0.239), stacking (R-k5, 0.314/0.490), schedule/LR/batch
+(R-lr2e3, R-b600) -- by 3-6x. No w2v-BERT arm at any stack factor, LR,
+batch size, or decoder size tested gets within 2x of W's numbers. Rules 1
+and 2 (schedule, stacking) both trigger cleanly on their own terms; the
+600s batch clause of rule 1 does not.
+
+Full table and rule-by-rule writeup (including the Rule 3 boundary-case
+discussion) in `01-interface-recipe.md` §5.
+
+Action needed: none from me -- this closes the step-0b data-gathering task
+as scoped. The sequencing call (whether encoder moves ahead of
+schedule/stacking/size in the follow-up plan, whether Q4-k5's near-miss is
+enough to add a ~4B point to the backbone grid) is the Orchestrator's, not
+mine. Flagging the full picture for their read.
+
+---
+
 ## 2026-09-18 — Claude (session) — Whisper crossing step; Qwen ledger backfill; EuroLLM decoder profile
 
 Context: three Track B items from `timeline.md` week 1, no GPU. Did not touch
@@ -143,6 +238,8 @@ Finding / decision:
 Action needed: none. Sessions should re-read `agent-protocol.md` §0 before
 their next write-up, since where things go has changed.
 
+---
+
 ## 2026-09-18 — Claude (strategy session) — What `wsd-50hz-whisper` can and cannot settle
 
 Context: the LibriSpeech session reported `wsd-50hz-whisper` (W) at
@@ -235,6 +332,45 @@ Action needed: none that changes the agenda. Two measurements can run in
 parallel without pre-empting any decision: Whisper's own WER on the two
 dev sets, and W's threshold-crossing step from its eval history.
 
+---
+
+## 2026-09-18 — Claude (worker session librispeech-step0-l1-l4) — W crosses the <10% threshold decisively; decision rule 4 (encoder) triggers
+
+Context: R-b600 (45985931) and W (46050285, the Whisper-fix resubmission)
+completed. Q2-k5 (45987899) and Q4-k5 (45987998) both hit their wall-clock
+budget mid-run (41% and 45% through 8652 steps) and were resumed as jobs
+46077302 (`--time 06:00:00`) and 46077303 (`--time 07:00:00`); at ~3.2-4.2
+s/step those margins should clear the remaining ~4.7h/5.6h with headroom.
+6 of 8 step-0b arms are now in.
+
+Finding: **W (Whisper-large-v3 encoder, otherwise identical to R: same
+steps, schedule, `stack_factor 1`) reaches dev-clean WER 0.038 and
+dev-other WER 0.061** -- both under the 10% threshold that nothing else in
+this campaign (L1-L5, A0, R, R-seed, R-lr2e3, R-b600, R-k5) has come
+anywhere close to. Loss is 0.137/0.191 vs R's 0.775/1.022, and runaway
+fraction is 0.0%/0.0%. R-b600 (600 s effective batch, ~2x R's step count)
+lands at 0.401/0.543 -- beats R but loses to R-k5, so more steps on
+w2v-BERT alone doesn't close the gap Whisper closes.
+
+Decision rule 4 ("if W reaches the threshold much earlier than R, the
+encoder question moves ahead of the backbone grid") triggers unambiguously
+-- W is the *only* arm to cross the threshold at all, at the same step
+count where the best w2v-BERT arm (R-k5, stack 5) is still at 0.314/0.490.
+This also reframes rule 5 ("nothing reaches 10% in three epochs, take the
+best arm to six epochs before the screen"): something did reach it, on
+Whisper, not on the w2v-BERT path the other four rules were tuned against.
+Rule 1's 600 s batch clause does not trigger (R-b600 never reaches <10%).
+Full table and rule-by-rule writeup in `01-interface-recipe.md` §5.
+
+Action needed: none from me right now -- flagging for the Orchestrator's
+call, since rule 4 as written reprioritizes the whole step-0b agenda (encoder
+ahead of backbone/size) and that's a scope decision, not a numbers one.
+Still waiting on Q2-k5/Q4-k5 (decoder size, rule 3) before the full table is
+complete, but rule 4 firing this hard on 2/8 arms already seems like the
+headline result regardless of what size decoder ends up doing.
+
+---
+
 ## 2026-09-18 — Claude (strategy session) — Step 0b arms renamed; decisions wait for all eight; the seed is confounded with every factor
 
 Context: the PI read the first four arms' results and gave two
@@ -271,6 +407,186 @@ and reporting per §2b. The PI decides once all eight are in.
 
 ---
 
+## 2026-09-18 — Claude (worker session librispeech-step0-l1-l4) — R and R-lr2e3 land: both decision rules 1 and 2 trigger on the raw numbers
+
+Context: R (46059069) and R-lr2e3 (46059833) completed, joining R-k5 and
+R-seed. Four of eight step 0b arms done.
+
+| | dev-clean WER | dev-other WER | notes |
+|---|---|---|---|
+| A0 (full-set greedy) | 0.689 | 0.914 | cosine, stack 1 |
+| R | 0.549 | 0.664 | warmup-stable-decay, stack 1, LR 1e-3 |
+| R-seed | 0.441 | 0.666 | same as R, seed 46 |
+| R-lr2e3 | 0.437 | 0.599 | same as R, LR 2e-3 |
+| R-k5 | 0.314 | 0.490 | same as R, `stack_factor 5` |
+
+Applying §2b's decision rules as written, not reinterpreting:
+
+- **Rule 1 (schedule):** triggers. R beats A0 by 0.14/0.25 (clean/other);
+  the R/R-seed spread is 0.11/0.002. R's margin exceeds the spread on
+  both sets, so warmup-stable-decay becomes the default per the rule.
+  Flagging, not deciding: the spread itself is large on dev-clean (0.11
+  absolute, vs ~0.02 measured on the one-epoch L4/L5 pair) -- a single
+  seed pair is a thin basis for "the spread" here, and R-seed's dev-clean
+  (0.441) is closer to R-lr2e3's (0.437) than to R's own (0.549). Worth
+  a second seed pair before treating this as settled if it matters later.
+- **Rule 2 (stacking):** triggers unambiguously. R-k5 beats R by
+  0.235/0.174, well past the R/R-seed spread on either set.
+- **LR 2e-3 half of rule 1:** R-lr2e3 beats R on both sets at equal
+  steps, but nothing has crossed the <10% threshold yet, so "reaches
+  it in fewer hours" has nothing to measure against. Directionally
+  favors 2e-3 over 1e-3, not adjudicated further here.
+
+None of the four are near the <10% success bar (best so far: R-k5 at
+0.314/0.490). Remaining: R-b600, W, Q2-k5, Q4-k5.
+
+Action needed: PI / Fondue Orchestrator apply the decision rules; flagged
+the dev-clean seed-spread concern above rather than resolving it myself.
+Full table and rule text in `01-interface-recipe.md` §5.
+
+---
+
+## 2026-09-18 — Claude (worker session librispeech-step0-l1-l4) — First step 0b result: R-k5 (stack_factor 5) roughly halves A0's WER
+
+Context: step 0b arms launched 2026-09-17 evening; MN5 backfill put them
+~7-8h out (15 nodes across 8 concurrent jobs). Four of eight (R, R-seed,
+R-lr2e3, R-k5) hit their original 3h wall-clock budget at ~87% -- the
+500-sample eval costs more per round than A0's 200 -- and needed
+`--resume`; `campaign.yaml`'s `time:` bumped 3h->4h for next time. W
+also failed once at startup (see the entry below) and was resubmitted.
+
+Finding: R-k5 (job 46059845, resumed from 45985944) is the first step 0b
+arm to complete. `stack_factor 5` (50 Hz -> 10 Hz) against A0's `stack_factor
+1`, everything else matched (LR 1e-3, 1200 s batch, 3 epochs,
+warmup-stable-decay once R's own numbers land for the schedule
+comparison):
+
+| | dev-clean WER | dev-other WER | dev-clean loss | dev-other loss | runaway |
+|---|---|---|---|---|---|
+| A0 (full-set greedy) | 0.689 | 0.914 | -- | -- | 2.37% / 3.28% |
+| R-k5 | **0.314** | **0.490** | 0.621 | 0.885 | 1.0% / 0.6% |
+
+Roughly half A0's WER, and runaway drops 2-5x too -- consistent with the
+"losing its place in long 50 Hz audio" hypothesis §2b's decision rule 2
+names: stacking cuts decoder positions five-fold and both accuracy and
+the runaway problem improve together, not just one. This is a comparison
+against A0 (cosine schedule), not yet against R (the same warmup-stable-decay
+schedule at stack_factor 1) -- R's own run is still in progress, so
+decision rule 2 ("stack 5 becomes the default if R-k5 is within noise of
+R or better") cannot be applied yet; A0 only shows stacking helps
+*something* about this recipe, not how much of the gain is the schedule
+vs. the stacking specifically.
+
+**Resume artifact, worth knowing:** the resumed run's final logged
+`epoch` reads `2.093`, not `3.0`, even though `global_step` correctly
+reaches 8652 (the true 3-epoch target) and the checkpoint's final weights
+are written. Cosmetic only -- the LR schedule and training length are
+step-driven (`lr_scheduler_kwargs.num_decay_steps`/`num_training_steps`),
+not epoch-driven -- but don't read a resumed arm's `epoch` field as "how
+much training happened."
+
+Action needed: none blocking. Full table fills in as R/R-seed/R-lr2e3/
+R-b600/W/Q2-k5/Q4-k5 land; see `01-interface-recipe.md` §5.
+
+---
+
+## 2026-09-18 — Claude (worker session librispeech-step0-l1-l4) — Step 0b arms running; Whisper needs max_audio_seq_len 3000, not the w2v-BERT default
+
+Context: all eight step 0b arms queued 2026-09-17 evening; MN5 backfill put
+them ~7-8h out given the batch needs 15 nodes across 8 concurrent jobs.
+
+Finding: `MA-librispeech-w` (job 45985946) failed at startup, 59s, no
+checkpoint: `ValueError: Encoder 'openai/whisper-large-v3' only accepts
+inputs of exactly 3000 frames, so model.encoder.max_audio_seq_len must be
+3000 (got 1500)`. `ABL-MA-librispeech.yaml`'s `max_audio_seq_len: 1500` is
+tuned for w2v-BERT 2.0's 20 ms/frame rate at the 30 s cap; Whisper's own
+fixed 30 s window needs exactly 3000. There is no campaign axis for this
+yet (`ENCODER` alone does not carry it) -- resubmitted with
+`--model.encoder.max_audio_seq_len 3000` as job 46050285, and flagged in
+`campaign.yaml`'s `MA-librispeech-w` row so a future re-submission does not
+repeat it.
+
+**Action needed for `03-audio-stack.md`'s encoder crossing**: every Whisper
+arm there will need the same override (or a proper `ENCODER_MAX_AUDIO_SEQ_LEN`
+axis, if that section wants to make it first-class) -- not implemented here,
+out of scope for a single diagnostic arm. Whoever builds that crossing's
+rows should read this entry first.
+
+Status otherwise: R (45985909), R-seed (45985924), R-lr2e3 (45985930),
+R-b600 (45985931), R-k5 (45985944) all running; Q2-k5 (45987899) and Q4-k5
+(45987998) still queued. Full results land in `01-interface-recipe.md` §5
+once available.
+
+---
+
+## 2026-09-17 — Claude (worker session librispeech-step0-l1-l4) — Step 0b pre-flight 1b: full-set diagnostic lands, runaway confirmed a minority, and the logged eval numbers were never safe to trust
+
+Context: `01-interface-recipe.md` §2b pre-flight step 1b, after landing the
+S/D/I/runaway-fraction metrics change and the WSD scheduler dry run (both
+reported below). `step0b_diagnostic_full_eval.py`, MN5 job 45985475
+(off `arms.tsv` by design, same as `no_audio_floor.py`), decoded
+`MA-librispeech-l4-ep3`'s final checkpoint over the FULL dev-clean
+(2,703 cuts) and dev-other (2,864 cuts) sets, greedy then with
+`no_repeat_ngram_size: 4`. 22m28s on one GPU, exit 0:0.
+
+Finding:
+
+| pass | set | n | WER | S | D | I | length ratio | runaway fraction |
+|---|---|---|---|---|---|---|---|---|
+| greedy | dev-clean | 2703 | 0.689 | 31.8% | 10.3% | 26.7% | 1.150 | 2.37% (64) |
+| greedy | dev-other | 2864 | 0.914 | 44.0% | 11.5% | 36.0% | 1.177 | 3.28% (94) |
+| ngram4 | dev-clean | 2703 | 0.487 | 30.6% | 10.8% | 7.3% | 0.969 | 0.00% (0) |
+| ngram4 | dev-other | 2864 | 0.643 | 42.9% | 12.0% | 9.4% | 0.976 | 0.03% (1) |
+
+Two things worth flagging beyond what's in §5 already:
+
+1. The 200-sample number the trainer itself reported at the end of
+   training (0.622/0.776) was *not* conservative -- the true full-set
+   greedy WER is worse (0.689/0.914), not better. So far every eval
+   number quoted for this run (20-sample 1.19, 200-sample 0.62/0.78,
+   full-set 0.69/0.91) has moved in a different direction than its sample
+   size alone would suggest; none of the three was a safe stand-in for
+   either of the others. This is why the runaway fraction and full-set
+   S/D/I now ship with every in-training eval, not just a final report.
+2. Runaway is real (mean duration 11.8s/10.8s vs 7.1s/6.3s for
+   non-runaway -- supports "losing its place in long audio" over
+   "undertrained EOS", which `R-k5` tests directly) but only 2.4-3.3% of
+   hypotheses -- the revised stop condition ("runaway on most
+   hypotheses") does not fire, confirming step 0b's arms (already
+   launched, see below) were right to proceed. `no_repeat_ngram_size 4`
+   removes runaway almost entirely and drops WER by 0.20-0.27 absolute,
+   nearly all from insertions collapsing while substitution/deletion barely
+   move -- so the loops are a large, real, cleanly separable error source,
+   but even fully suppressed the recipe stays at 0.49-0.64 WER, nowhere
+   near the <10% bar. Confirms keeping anti-repetition decoding out of the
+   campaign metric was the right call: fixing it doesn't get this recipe
+   to threshold either.
+
+Also done, both pre-flight items now closed:
+- Landed `substitution_rate`/`deletion_rate`/`insertion_rate`/
+  `length_ratio`/`runaway_fraction` in `TrainingEvaluator`
+  (`melt/training/metrics.py`), computed over the whole eval set. Small
+  change, landed directly (458 passed in the nyx container, only the two
+  pre-existing unrelated failures).
+- Dry-ran `warmup_stable_decay` against the real transformers 5.16.1
+  image: full peak LR through the entire stable phase, cosine decay to
+  the 0.1x floor exactly at `num_decay_steps`.
+- Launched all six Llama/Whisper step-0b arms: R (45985909), R-seed
+  (45985924), R-lr2e3 (45985930), R-b600 (45985931), R-k5 (45985944), W
+  (45985946), all queued `acc_ehpc`.
+- PR #132 merged (Qwen eos_token_id fix); staged `Qwen/Qwen3.5-4B` to MN5
+  (rsync via `mn5transfer`) and added its `plan_arm.py` `DECODER_PROFILES`
+  entry, verified directly against the real tokenizer (identical vocab
+  size and special-token ids to the 2B, `<|text_pad|>` equally absent, not
+  assumed). Q2-k5/Q4-k5 rows added to `campaign.yaml`; submitting once the
+  transfer completes.
+
+Action needed: none blocking. FYI to Fondue Orchestrator re: finding 1 --
+worth knowing before reading any arm's in-training eval numbers at face
+value.
+
+---
+
 ## 2026-09-17 — Claude (strategy session) — Step 0b pre-flight STOP reviewed: proceed, with a runaway metric and a decoding diagnostic
 
 Context: the LibriSpeech session stopped at §2b pre-flight 1, as the rule
@@ -297,6 +613,67 @@ the full set.
 Action needed: the LibriSpeech session lands the evaluator metrics, runs the
 diagnostic pass, and launches the Llama and Whisper arms; Qwen arms remain
 gated on PR #132.
+
+---
+
+## 2026-09-17 — Claude (worker session librispeech-step0-l1-l4) — Step 0b pre-flight STOP: insertions dominate on MA-librispeech-l4-ep3's hypotheses
+
+Context: §2b's pre-flight step 1, before spending any of the ~250 GPU-h for
+the R/R-seed/R-lr2e3/R-b600/R-k5/W/Q2-k5/Q4-k5 arms. Merged `main` (picked
+up §2b, commit `d060e6a`) into `claude/librispeech-step0-l1-l4-60d122`.
+Computed substitution/deletion/insertion rates and the hypothesis/reference
+length ratio on the 20 sample pairs logged at `MA-librispeech-l4-ep3`'s
+final eval (step 8652, epoch 3.0: 10 `dev_clean` + 10 `dev_other`, from
+`logs/melt-train-container.45969297.out`), normalized exactly as
+`melt/training/metrics.py`'s `TrainingEvaluator` does (`BasicTextNormalizer`,
+then `jiwer`), and read all 20 by eye.
+
+Finding: **insertions dominate** (S 39.5% / D 10.2% / **I 50.4%** of all
+edits, n=20, aggregate WER 1.19 on this subsample) -- the pre-flight's
+literal stop condition. Reading the hypotheses shows why: 4 of 20 (20%,
+`dev_clean[0]`, `dev_clean[6]`, `dev_clean[9]`, `dev_other[1]`) are not
+transcription errors but **decoding runaway** -- the model gets stuck
+repeating a short phrase or n-gram until the generation budget
+(`generation_max_length: 256`) cuts it off, e.g. `dev_clean[9]`: ref 47
+words, hyp 344 words, 297 of the 302 edits are insertions, almost entirely
+"on the left hand, on the right hand," repeated ~24 times; `dev_other[1]`:
+"which is a constant and always so as not considering the idea of god,"
+repeated ~13 times. These 4 examples alone are ~60% of all insertions
+counted. **The other 16 (80%) do not show this pattern**: length ratio near
+1.0, errors are the ordinary substitution/deletion mix of an imperfect but
+genuinely-attempting ASR system (e.g. `dev_clean[7]`: WER 0.33, S13/D3/I3;
+`dev_other[8]`: WER 0.30, S11/D1/I1). Excluding just the 2 most extreme
+runaway examples (`dev_clean[9]`, `dev_other[1]`) flips the composition to
+S 58.0% / D 17.0% / I 25.1%, n=18, WER 0.786, length ratio 1.064 -- the
+normal pattern the 2b design assumed.
+
+Per §2b's rule as written ("if insertions dominate ... STOP and report; no
+schedule change fixes a decoding problem"), this is a literal trigger. But
+flagging the nuance rather than reinterpreting: this does not look like
+uniform decoding collapse (in which case no arm below would be worth
+running) -- it looks like a repetition-loop failure mode concentrated on a
+minority of utterances, plausibly longer/harder ones, on top of a majority
+that are already producing real, substitution-dominated transcription
+attempts. That is also consistent with the loss/WER story so far (0.90
+loss, 62% WER at the full 200-set): a large fraction of the loss
+improvement is real per-token calibration, and a subset of catastrophic
+sequences drag the corpus WER down.
+
+Two candidate explanations, not adjudicated here: (a) a training-side
+problem (undertrained EOS probability at this schedule/step count -- more
+schedule/steps might reduce it, testable by R/R-lr2e3/etc. as planned), or
+(b) a pure decoding-side problem (greedy generation with no repetition
+penalty or `no_repeat_ngram_size` -- fixable with a generation-config
+change alone, no retraining, and orthogonal to everything §2b's arms vary).
+(b) is not excluded by anything measured here and would be far cheaper to
+test than any of the 8 arms.
+
+Action needed: PI / Fondue Orchestrator decide before I launch step 0b's
+GPU arms. Not submitted: no `campaign.yaml` rows added, no jobs on
+`arms.tsv` for R/R-seed/R-lr2e3/R-b600/R-k5/W/Q2-k5/Q4-k5. Messaged Fondue
+Orchestrator directly per §2b's instructions. Full 20-pair breakdown and
+the analysis script are with this session; ask if the raw numbers are
+needed beyond what's here.
 
 ---
 
@@ -338,6 +715,61 @@ directly). The PI merges PR #132 to unblock the Qwen arms and decides on
 `min_lr_scale`.
 
 ---
+
+## 2026-09-17 — Claude (worker session librispeech-step0-l1-l4) — LibriSpeech step 0: recipe fails at 1 epoch, but the plateau breaks with more gradient updates
+
+Context: week 1 Track A, `01-interface-recipe.md` §2 ("is the failed
+alignment a recipe problem or a multilingual-data problem?"). Branch
+`claude/librispeech-step0-l1-l4-60d122`. New base config
+`ABL-MA-librispeech.yaml` (hand-written, not `build_campaign_config.py`
+-- LibriSpeech is one corpus/language, not the campaign's N-language
+reference-matched mixture; its three train splits are weighted by their
+own measured hours, not the alpha/beta corpus-balancing policy --
+documented in the config so nobody re-emits it). `campaign.yaml` gained
+`MA-librispeech-l1`..`l5` plus a post-hoc diagnostic arm,
+`MA-librispeech-l4-ep3`.
+
+Finding: L1-L4 (adapter LR 2e-5/2e-4/2e-4/1e-3, effective batch
+4800/4800/1200/1200 s, one epoch of LibriSpeech's ~961 h) all reproduce
+the August plateau -- none crossed WER 1.0, loss declined smoothly with
+no plateau-then-drop transition. This rules out multilingual data as the
+sole cause (LibriSpeech alone fails the same way) and confirms LR+steps
+help monotonically: L4 (loss 2.625/2.587 clean/other, WER 1.040/1.056)
+is clearly best. L5 (second seed of L4) replicated within ~0.02
+nats/WER, so this is a real recipe effect, not seed noise.
+
+But L4's loss delta was still accelerating at epoch end (-0.03/step
+early -> -0.108 near epoch 0.8), so I ran a diagnostic outside the
+designed grid: `MA-librispeech-l4-ep3`, L4's exact LR/batch (1e-3,
+1200 s) fresh for 3 epochs (a fresh run, not a resume, so the cosine
+schedule re-derives over the full 3-epoch horizon and decays much more
+slowly through what was epoch 1). **The plateau breaks**: dev-clean/
+dev-other WER goes 1.155/1.312 (epoch 1) -> 0.895/0.745 (epoch 2) ->
+0.622/0.776 (epoch 3, final). Loss falls 3.11->1.51 within epoch 1 alone
+(a schedule effect: this run's LR has decayed far less by that step
+count than L4's own 1-epoch-tuned schedule had), then keeps falling
+1.51->0.90 over epochs 2-3. Not monotonic in the last ~10% of training
+(best single point was epoch 2.726's dev-clean WER 0.588; dev-other got
+slightly worse from epoch 2 to 3) and still short of the <10%
+success-bar, but this is a real, large transition, not noise.
+
+Reframing: the August recipe's failure at 1 epoch is real and
+reproduces on English-only data, but the bottleneck looks like schedule
+length (LR decaying before the transition completes at a 1B decoder),
+not a hard adapter/decoder/encoder capacity ceiling. `03-audio-stack.md`
+and `02-backbones.md` still have open questions this doesn't touch
+(w2v-BERT vs Whisper; SLAM-ASR's 7B decoder vs our 1-3B target class),
+but they're no longer the only explanation on the table for "why didn't
+it transcribe."
+
+Action needed: PI decision for the week-2 gate (`01-interface-recipe.md`
+§3, five-language screen) -- does the screen's step/LR budget need to
+grow to let this transition complete at 125 h/language, or is more
+wall-clock at that budget enough? Full trajectories and job ids in
+`01-interface-recipe.md` §5 and `arms.tsv`.
+
+---
+
 
 ## 2026-09-16 — Claude (worker session text-prior-tool-spec) — Full text-prior numbers: all 6 backbones × 24 languages, reference table
 
@@ -1097,127 +1529,3 @@ catastrophic) but it does overturn "audio was ignored" as the explanation,
 which changes what a passing LibriSpeech screen run should look like (a run
 that only drops eval loss without moving WER may be repeating this same
 coarse-signal pattern rather than fixing the recipe).
-
----
-
-## 2026-09-15 — Claude (worker session fleurs-24-asr-frozen-sets) — FLEURS-24 ASR frozen sets built
-
-Context: week 1 Track B, `05-language-ladder.md` §3 / `timeline.md` week 1
-("FLEURS-24 ASR frozen sets in melt-eval"). Branch
-`claude/fleurs24-asr-frozen-sets` in `melt-eval`,
-[PR #10](https://github.com/MELT-proj/eval/pull/10).
-
-Finding / proposal: added `configs/fleurs24-asr-test.yaml` (full FLEURS
-`test`, all 24 EU languages) and `configs/fleurs24-asr-dev.yaml` (~100
-utterances/language from FLEURS `validation`, for the in-training generative
-round). Froze both against the real shar tree: `fleurs24-asr-test` is 19,463
-samples / 63.41 h with zero dropped-no-reference cuts; `fleurs24-asr-dev` is
-2,400 samples / 7.41 h. Copied to
-`/mnt/scratch-artemis/giuseppe/melt-data/eval-sets/{fleurs24-asr-test,fleurs24-asr-dev}/`.
-
-Checked `custom.pnc_text` coverage directly against the shar tree for all 24
-languages, both `test` and `validation` (not previously measured at this
-granularity): **23/24 are 100% covered; ga (Irish) has 0% on both splits**
-and silently falls back to plain, unpunctuated supervision text
-(`get_text_from_cut`, `strict=False`, the training repo's own default). Every
-other language's FLEURS reference is cased and punctuated; Irish's is not.
-Documented in both spec headers rather than worked around -- fixing it is the
-training repo's PNC-backfill/`strict_text_field` decision
-([[num-tokens-and-pnc-text-semantics]], [[silent-text-field-fallback]]), out
-of scope here. Worth remembering when Irish's ladder numbers look
-disproportionately bad or good: part of that could be transcript formatting,
-not the model.
-
-Also found: the shared artemis dev venv
-(`/mnt/scratch-artemis/giuseppe/venvs/melteval`) editable-installs
-`melt-proj` from `melt-eval`'s sibling checkout at
-`/mnt/home/giuseppe/melt-proj/training`, which is pinned at `74c7892`
-(2026-08-19) -- **before** the transformers 5 migration (`a519e4fe`,
-2026-09-01, PR #109). Importing `melt.training` there crashes
-(`ValueError: mutable default <class 'dict'> for field sub_configs`) against
-the venv's transformers 5.16.1. I froze the sets from nyx instead (training
-repo's own `.venv`, current `main`, melt-eval on `PYTHONPATH`) rather than
-touching that checkout, since it has unrelated uncommitted local changes
-(`.github/workflows/ci.yml`, `.gitignore`, `AGENTS.md`, `README.md`) and its
-scratch-side sibling (`/mnt/scratch-artemis/giuseppe/melt-proj-src/melt-eval`,
-on `claude/air-bench-support`) has unrelated in-progress work from another
-session. Did not touch either.
-
-Action needed: PI review/merge PR #10. Before anyone runs `inspect eval`
-(the generation step) against these frozen sets on artemis, sync
-`/mnt/home/giuseppe/melt-proj/training` to `main` (or otherwise past
-`a519e4fe`) -- generation will crash on import otherwise. FLEURS X→en ST set
-construction (the other week-1 Track B eval item) is still open.
-
----
-
-## 2026-09-15 — Claude (worker session mlp-adapter-stack-factor-13e900) — stack_factor PR opened
-
-Context: follow-up to the entry directly below, after the PI merged the
-plan folder into `main`.
-
-Finding / proposal: rebased the branch onto the updated `main`, re-ran the
-full suite in the nyx container (unchanged: only the two pre-existing
-failures noted below), and opened
-[PR #126](https://github.com/MELT-proj/training/pull/126) against `main`.
-
-Action needed: PI review/merge.
-
----
-
-## 2026-09-15 — Claude (worker session mlp-adapter-stack-factor-13e900) — stack_factor implemented for the MLP adapter
-
-Context: week 1 Track B, `01-interface-recipe.md` §4. Branch
-`claude/mlp-adapter-stack-factor-13e900`, commit `5822129`, 12 files, local
-only until the PI decides on a PR.
-
-Finding: `MELTMLPAdapter` concatenates k consecutive encoder frames along the
-feature axis before `fc1` (input width k × encoder hidden size), pads the
-frame count to a multiple of k, and subsamples the attention mask by k in
-`_get_output_features_shape` with the same prefix-mask assumption the
-Conformer adapter uses. New `model.adapter.stack_factor` field, default 1,
-byte-identical to the previous adapter. Conformer and Q-Former ignore it.
-Wired as a `STACK_FACTOR` campaign axis (env var, `ArmAxes.stack_factor`,
-`--model.adapter.stack_factor`), tagged into `EXP_NAME` as `-skN` only when
-it differs from the base config, so no existing arm is renamed. Tests added
-for fc1 width, exact and non-multiple downsampling, mask subsampling, the
-no-mask case, composition with an encoder's own downsampling, config parsing,
-and `plan_arm.py` tag composition (its first tests). Full suite in the nyx
-container: 452 passed.
-
-Two pre-existing failures found, unrelated to this change and reproduced on
-a clean checkout: `TestAttnImplementationPropagation::test_sdpa_reaches_an_encoder_that_has_no_flash_kernel`
-(sdpa not propagated into `Wav2Vec2BertConfig`, likely transformers version
-skew) and every test in `test_processing_melt.py` (tokenizer fixture's
-`add_special_tokens` against Qwen2.5-1.5B). Background tasks queued for both.
-
-Action needed: PI decides push/PR for the branch (12 files, so a PR against
-`main` per the protocol). Reviewed at plan level by the strategy session:
-padding, reshape and ceil(valid/k) prefix mask look right; end-to-end
-validation comes from the LibriSpeech screen's stack=4 runs.
-
-## 2026-09-15 — Claude (Fable 5.1, research-buddy session) — Plan folder created; the August baseline is a failed alignment
-
-Context: three-turn strategy session with the PI on how to organise the
-campaign, then two added commitments (24 EU languages, the Fondue run).
-
-Findings:
-- MA eval loss 2.6–3.1 and WER > 1.0 after one epoch means the adapter never
-  conditioned the decoder on audio. Adapter LR 2e-5 (10× below the repo's
-  own IFT default), ~2,600 optimizer steps per epoch at a 4,800 s batch, and
-  a 50 Hz frame rate with no stacking are the suspects, in that order. The
-  10-epoch MoE/verbatim run's late loss drop is the alignment transition
-  arriving late, not MoE evidence.
-- MA-stage generative WER is a valid selection metric for anything on the
-  audio side (SLAM-ASR shows a frozen LLM with a good projector transcribes),
-  so encoders, adapters and frame rate are screened at ~30 GPU-h per arm.
-- Qwen3.5-2B is dense with hybrid linear attention, not an MoE. Llama vs
-  Qwen is also full vs hybrid attention.
-- The spreadsheet's ST column mixes X→en and en→X; real X→en exists for 13
-  EU languages, none for sl/lv/mt/ga. Tiers 10/30/100/300/700 h are reached
-  in full by 24/17/13/8/8 languages.
-- Budget: ~49,700 GPU-h remain until 2026-11-30, no renewal. Compute is not
-  the constraint; queue wait, wall clock and serial dependencies are.
-
-Action needed: PI reviews `timeline.md` week 1; an implementation session
-lands `stack_factor` and the LibriSpeech step-0 configs.

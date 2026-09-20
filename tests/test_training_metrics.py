@@ -21,7 +21,12 @@ import pytest
 import torch
 from transformers import EvalPrediction
 
-from melt.training.metrics import TrainingEvaluator
+from melt.training.metrics import (
+    RUNAWAY_LENGTH_RATIO,
+    TrainingEvaluator,
+    _mean_length_ratio,
+    _runaway_fraction,
+)
 
 PAD_TOKEN_ID = 0
 #: Added to every token of a wrong prediction, so no word of it survives.
@@ -174,6 +179,115 @@ def test_numpy_predictions_are_accepted(evaluator):
 
 
 # ---------------------------------------------------------------------------
+# S/D/I rates and runaway detection (plan/01-interface-recipe.md §2b)
+# ---------------------------------------------------------------------------
+
+
+def test_substitution_deletion_insertion_rates_sum_to_wer(evaluator):
+    """The three rates are a decomposition of wer, not independent numbers.
+
+    Three samples, one error type each: sample 1 is an exact match (0
+    errors); sample 2 is entirely wrong same-length words (2 substitutions);
+    sample 3's hypothesis has one word deleted and the labels padded to
+    match (1 deletion) -- built directly rather than via `_batch`/`_feed`,
+    the same way `test_a_one_position_shift_is_not_free` builds its custom
+    tensor, since `_batch` only ever produces same-length correct/wrong
+    pairs.
+    """
+    labels = torch.tensor(
+        [
+            [11, 12, 0],  # ref: w11 w12
+            [21, 22, 0],  # ref: w21 w22
+            [31, 32, 33],  # ref: w31 w32 w33
+        ]
+    )
+    predictions = torch.tensor(
+        [
+            [11, 12, 0],  # exact match: 0 errors
+            [521, 522, 0],  # both words wrong: 2 substitutions
+            [31, 32, 0],  # w33 missing: 1 deletion
+        ]
+    )
+
+    result = evaluator(
+        EvalPrediction(predictions=predictions, label_ids=labels),
+        compute_result=True,
+    )
+
+    assert result["substitution_rate"] == pytest.approx(2 / 7)
+    assert result["deletion_rate"] == pytest.approx(1 / 7)
+    assert result["insertion_rate"] == pytest.approx(0.0)
+    total = (
+        result["substitution_rate"]
+        + result["deletion_rate"]
+        + result["insertion_rate"]
+    )
+    assert total == pytest.approx(result["wer"])
+
+
+def test_insertions_are_read_from_a_longer_hypothesis(evaluator):
+    """A hypothesis padded with extra, unmatched words costs insertions."""
+    labels = torch.tensor([[11, 12, 0, 0, 0]])
+    predictions = torch.tensor([[11, 12, 91, 92, 93]])
+
+    result = evaluator(
+        EvalPrediction(predictions=predictions, label_ids=labels),
+        compute_result=True,
+    )
+
+    assert result["insertion_rate"] == pytest.approx(3 / 2)
+    assert result["substitution_rate"] == pytest.approx(0.0)
+    assert result["deletion_rate"] == pytest.approx(0.0)
+
+
+def test_length_ratio_and_runaway_fraction_via_the_evaluator(evaluator):
+    """End to end: a runaway sample alongside a normal one."""
+    # Sample 1: reference 2 words, hypothesis 2 words -> ratio 1.0, not runaway.
+    # Sample 2: reference 2 words, hypothesis 5 distinct words -> ratio 2.5,
+    # over RUNAWAY_LENGTH_RATIO (2.0) -> runaway.
+    labels = torch.tensor(
+        [
+            [11, 12, 0, 0, 0],
+            [21, 22, 0, 0, 0],
+        ]
+    )
+    predictions = torch.tensor(
+        [
+            [11, 12, 0, 0, 0],
+            [921, 922, 923, 924, 925],
+        ]
+    )
+
+    result = evaluator(
+        EvalPrediction(predictions=predictions, label_ids=labels),
+        compute_result=True,
+    )
+
+    assert result["length_ratio"] == pytest.approx((1.0 + 2.5) / 2)
+    assert result["runaway_fraction"] == pytest.approx(0.5)
+
+
+def test_mean_length_ratio_ignores_empty_references():
+    """An empty reference has no ratio; it must not pull the mean to 0 or inf."""
+    assert _mean_length_ratio(["one two", ""], ["one two", "spurious"]) == pytest.approx(1.0)
+    assert _mean_length_ratio([""], ["anything"]) == 0.0
+
+
+def test_runaway_fraction_thresholds_at_the_configured_ratio():
+    ref = "one two three four five"  # 5 words
+    just_under = " ".join(f"w{i}" for i in range(10))  # 10 words, exactly 2x
+    over = " ".join(f"w{i}" for i in range(11))  # 11 words, over 2x
+
+    assert RUNAWAY_LENGTH_RATIO == 2.0
+    assert _runaway_fraction([ref], [just_under]) == 0.0
+    assert _runaway_fraction([ref], [over]) == 1.0
+
+
+def test_runaway_fraction_ignores_empty_references():
+    assert _runaway_fraction([""], ["anything at all here"]) == 0.0
+
+
+# ---------------------------------------------------------------------------
 # Sample logging
 # ---------------------------------------------------------------------------
 
@@ -299,7 +413,15 @@ def test_breakdown_is_skipped_when_no_codes_are_available(evaluator):
         compute_result=True,
     )
 
-    assert result == {"wer": 0.5, "cer": pytest.approx(result["cer"])}
+    assert result == {
+        "wer": 0.5,
+        "cer": pytest.approx(result["cer"]),
+        "substitution_rate": 0.5,
+        "deletion_rate": 0.0,
+        "insertion_rate": 0.0,
+        "length_ratio": 1.0,
+        "runaway_fraction": 0.0,
+    }
     assert not [k for k in result if "unknown" in k]
 
 
@@ -391,7 +513,15 @@ def test_single_language_breakdown_is_skipped_as_redundant(evaluator):
 
     result = _feed(evaluator, batches, langs_per_batch, tasks_per_batch)
 
-    assert set(result) == {"wer", "cer"}
+    assert set(result) == {
+        "wer",
+        "cer",
+        "substitution_rate",
+        "deletion_rate",
+        "insertion_rate",
+        "length_ratio",
+        "runaway_fraction",
+    }
 
 
 def test_two_languages_one_task_gets_language_split_not_task_split(evaluator):

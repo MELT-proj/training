@@ -80,7 +80,7 @@ frame rate) or a multilingual-data problem? Decided by LibriSpeech step 0.
       *Outcome:* ~31 s/step steady state, cross-checked against a completed
       production arm at 27.3 s/step and ~306 GPU-h. Scaling is flat from 2 to
       16 nodes. `06-fondue.md` §2.
-- [ ] **Step 0b** (`01-interface-recipe.md` §2b), added 2026-09-17 because
+- [x] **Step 0b** (`01-interface-recipe.md` §2b), added 2026-09-17 because
       step 0 was inconclusive. Pre-flight first, no GPU: substitution,
       deletion and insertion rates on the three-epoch L4 run's hypotheses,
       and a dry run of the warmup-stable-decay scheduler. Then eight
