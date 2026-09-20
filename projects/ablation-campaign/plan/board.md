@@ -110,6 +110,230 @@ mine. Flagging the full picture for their read.
 
 ---
 
+## 2026-09-18 — Claude (session) — Whisper crossing step; Qwen ledger backfill; EuroLLM decoder profile
+
+Context: three Track B items from `timeline.md` week 1, no GPU. Did not touch
+step 0b's design, decision rules or Arms table — the two Qwen size arms are
+still outstanding and no rule fires until all eight are in.
+
+Finding / proposal:
+
+1. **`wsd-50hz-whisper`'s crossing step**, read from
+   `checkpoint-8652/trainer_state.json` on MN5
+   (`MA-librispeech-whisperlargeF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr1e3-s50-8g`,
+   effective batch 1200 s = 150 batch_duration × 1 grad_accum × 8 ranks,
+   `eval_steps` 262). **Both dev-clean and dev-other are already under WER
+   0.10 at the very first in-training eval**, `global_step` 262, 87.3 audio
+   hours (262 × 1200 s ÷ 3600) — dev-clean 0.0567, dev-other 0.0828, against
+   a step-0 (untrained) floor of 2.89/2.72. Both stay under 0.10 at every
+   later eval through the final checkpoint (dev-clean 0.0368, dev-other
+   0.0628 at step 8652), so the "two consecutive evals" clause in the
+   primary metric is trivially satisfied starting at the first eval. One
+   epoch on this recipe is ~2,884 steps, so the crossing lands at about 9%
+   of epoch 1 — this is the only hours-to-threshold number step 0b will
+   produce (nothing else crossed), per `01-interface-recipe.md` §2b's
+   Consequence paragraph, which someone should re-derive the week-2 budget
+   from once all eight arms are in. Not written into `01` myself, since
+   step 0b's decision rules are on hold.
+
+2. **`arms.tsv` backfill for the off-ledger Qwen pair.** The IFT arm,
+   `IFT-700-w2vbF-qwen35_2bInsT-mlpF-bd30-ga20-elr6e6-dlr2e5-lr2e4-s1337-8g`
+   (job 45685241, submitted 2026-09-10T14:24:53Z, finished 2026-09-12), was
+   genuinely missing and is now appended — command confirmed byte-for-byte
+   against `training/logs/melt-train-container.45685241.out` line 14 on
+   MN5, `sacct` gives `Timelimit 1-22:00:00` (46:00:00) and 2 nodes,
+   matching `campaign.yaml`'s `IFT-700-qwen35-2b-ins` row.
+   **The MA arm turned out not to be missing**: its job is **45412264**,
+   already in `arms.tsv` (row timestamped 2026-09-04T12:09:36Z) — but under
+   the *submitted* exp_name
+   (`MA-700asr-w2vbF-qwen35_2bInsF-mlpT-elr6e6-dlr2e5-lr2e5-s42-8g`,
+   `fsdp2_qwen35.yaml`, no `bd30-ga20`), not the canonical one. Its actual
+   output landed in
+   `MA-700asr-w2vbF-qwen35_2bInsF-mlpT-bd30-ga20-elr6e6-dlr2e5-lr2e5-s42-8g`
+   instead: confirmed by matching `save_steps`/`eval_steps` 239 and
+   `global_step`/`max_steps` 2625 between the job's own log and that
+   directory's `checkpoint-2625/trainer_state.json` — an exact match that
+   rules out coincidence. So something downstream of the CLI (not
+   `campaign.py`, which wasn't used for this submission) renamed the run to
+   the canonical `-bdN-gaN` form regardless of the literal
+   `--run.exp_name`/`--trainer.output_dir` passed. **Practical effect:**
+   grepping `arms.tsv` for the canonical bd30-ga20 name — the one every
+   later IFT command's `--model.ckpt` points at — finds nothing, which is
+   why this looked off-ledger. I did not add a duplicate row for 45412264
+   under the canonical name, since the command actually submitted (and
+   already recorded) doesn't match that name; a future join against
+   `arms.tsv` needs to know both names refer to the same job.
+
+3. **EuroLLM added to `DECODER_PROFILES`** (`plan_arm.py`), unblocking the
+   text-prior tool's sixth backbone and week 3's EuroLLM MA arms. Verified
+   directly on MN5, not assumed from the Llama pattern: Instruct's own
+   `generation_config.json` gives `eos_token_id: 4`, which
+   `tokenizer.json`'s `added_tokens` resolves to `<|im_end|>` — its ChatML
+   turn marker doubles as the real stop token here, unlike Qwen — and
+   `pad_token` is `</s>` (id 2), already distinct, so no fresh
+   `add_special_tokens` collision risk. The Base checkpoint's tokenizer is
+   **not** shared with Instruct (only 3 added tokens: `<unk>`, `<s>`,
+   `</s>` — no `<|im_start|>`/`<|im_end|>` at all, unlike the Llama
+   Base/Instruct pair), so borrowing Instruct's `eos_token` for Base grows
+   its embedding table by one row the same way Qwen's fresh pad token
+   already does. `chat_template_config: chatml`, `chat_template_from:
+   utter-project/EuroLLM-1.7B-Instruct` for Base, matching
+   `02-backbones.md` §3.1.
+
+Action needed: someone folds finding 1 into `01-interface-recipe.md` §2b
+once all eight step-0b arms are in and the schedule/stacking/encoder/size
+rules are actually applied. Finding 2's numbers are ready to fold into
+`02-backbones.md` §5 once week 3 settles what "the new baseline" compares
+against, per the existing `timeline.md` item.
+
+---
+
+## 2026-09-18 — Claude (orchestrator) — Step 0b's scope narrowed; `03` runs before `02`; the plan folder is now three files
+
+Context: the PI read the Whisper result and made two calls — one on where
+experiments belong, one on where writing belongs.
+
+Finding / decision:
+
+1. **Step 0b settles the recipe, nothing else.** Its own title had named
+   four subjects; two of them belong to other sections. Schedule, learning
+   rate, batch and frame rate are `01`'s to decide. The encoder is `03`'s
+   and decoder size is `02`'s, so `wsd-50hz-whisper`, `wsd-10hz-qwen2b` and
+   `wsd-10hz-qwen4b` are now labelled **controls** and their results are
+   handed on as priors. The reason is selection bias: pick the encoder on
+   one English dataset, then run `03`'s crossing with a recipe tuned around
+   that winner, and the crossing is biased toward it. Decision rules 3 and 4
+   were rewritten to report rather than decide.
+
+2. **`03-audio-stack.md` now runs before `02-backbones.md`** (weeks 3 and 4
+   swap in `timeline.md`). This is what rule 4 triggers — a calendar
+   reorder, not an adoption. The methodological reason is a floor effect: if
+   the encoder is worth an order of magnitude, six backbones behind the
+   wrong one all sit against the same encoder-imposed floor and their
+   differences compress into noise. Knock-ons: the Q-Former fix moves up to
+   week 2, backbone IFTs move to week 5, and week 5 is tight — the fallback
+   written into the item is to IFT the three leading backbones and carry the
+   rest, never to shorten runs.
+
+3. **The encoder is read on FLEURS-24, split high-resource against
+   low-resource**, not on the in-domain five, which are all high-resource
+   and so Whisper's best case (`03` §2). This is the multilingual gate that
+   the English result cannot provide, and it costs no extra runs.
+
+4. **The folder is three files now.** `board.md` holds everything that
+   happened; `timeline.md` holds everything still owed; `01`–`06` hold
+   design and results tables. `00-status.md` is deleted — it duplicated all
+   three. Its live blockers moved to a **Blocked / waiting** section at the
+   top of `timeline.md`.
+
+5. **Two rules follow from that, both in `agent-protocol.md` §0.** The TODO
+   list is the orchestrator's: sessions tick boxes and propose changes here
+   rather than editing `timeline.md`. And the section files are not a log —
+   a finding, an incident or a config surprise goes on the board and stays
+   there. The test: if a paragraph in `01`–`06` would read as news a week
+   later, it is in the wrong file. Several were moved out on that basis
+   (the dead `min_lr_scale` key from `01` §2b, the infra snags from `02`
+   §3.7, session narration from `01` §1a and `02` §2).
+
+Action needed: none. Sessions should re-read `agent-protocol.md` §0 before
+their next write-up, since where things go has changed.
+
+---
+
+## 2026-09-18 — Claude (strategy session) — What `wsd-50hz-whisper` can and cannot settle
+
+Context: the LibriSpeech session reported `wsd-50hz-whisper` (W) at
+dev-clean 0.038 / dev-other 0.061, against `wsd-50hz` at 0.549/0.664 and
+`wsd-10hz` at 0.314/0.490, and flagged decision rule 4. No decision is
+taken here: the PI holds all of them until `wsd-10hz-qwen2b` and
+`wsd-10hz-qwen4b` land. This entry records what the number means so the
+reading is not re-derived later.
+
+Finding / proposal:
+
+1. **The arm measures readout, not alignment.** Whisper-large-v3 is
+   supervised on ASR and read audiobooks are its best-covered domain; its
+   own reported zero-shot LibriSpeech dev-clean WER is around 2%. So
+   0.038 is near the encoder's standalone ability, and the arm answers
+   "how much of an already ASR-solved representation can a frozen 1B
+   decoder read through a 2-layer MLP" — a real and useful quantity, but
+   not evidence that the alignment recipe now works. Everything tuned in
+   step 0b (schedule, stacking, LR, batch) was tuned on w2v-BERT, a much
+   harder problem; none of it transfers to the Whisper path by default,
+   and the LR optimum in particular should be expected to differ when the
+   features are already close to linearly separable.
+   *Cheap measurement, no training:* decode Whisper-large-v3's own output
+   on the same normalised dev-clean/dev-other. That turns W's number into
+   "fraction of the encoder's own ability recovered by the projector",
+   which is the quantity the paper wants. On the figures above the
+   projector costs roughly 1.8 WER points; worth having exactly.
+
+2. **The week-2 budget needs W's crossing step, not its endpoint.**
+   Decision rule 5 derives the screen budget from hours-to-threshold. W's
+   in-training eval history holds the first `global_step` at which each
+   set went below 0.10. If it crossed inside epoch 1, the screen budget
+   can shrink substantially. Nothing else in step 0b can supply this
+   number, because nothing else crossed.
+
+3. **Decoder cost is equal; encoder cost is not.** Checked in the code:
+   `encoder_specs.py` gives Whisper `window_frames: 3000`, and
+   `processing_melt.py::_extract_windowed` cuts audio into whole 30 s
+   windows and zero-pads the *waveform* of the tail, while the mask keeps
+   only real frames — so the LLM receives the same number of audio
+   positions per audio second as w2v-BERT (both 50 Hz), and the interface
+   comparison is fair. The encoder is not: every utterance costs a full
+   30 s window however short it is, so encoder compute is inflated by
+   roughly `30 s / mean utterance duration`. That is the ~35 vs ~20 GPU-h
+   already in §2b, and it gets *worse* on the campaign's short-utterance
+   corpora (Common Voice, FLEURS) than on LibriSpeech. The cost axis in
+   `03-audio-stack.md` §4 needs this as a measured padding ratio per
+   corpus, not an estimate. Note it is a per-utterance window, so
+   duration-sorted batching does not recover it.
+
+4. **The encoder question must not be settled on English.** Rule 4's
+   "move the encoder question ahead of the backbone grid" is right;
+   "adopt Whisper now" would not be. LibriSpeech is Whisper's best case,
+   and its supervision is very unevenly spread across the 24 EU
+   languages, while w2v-BERT 2.0 and MMS carry broader and more uniform
+   unsupervised coverage. The encoder pair should be run on the
+   five-language screen with at least one low-resource language in it
+   before anything is adopted.
+
+5. **What a supervised encoder does to the ladder (`05`), which is the
+   expensive consequence.** The ladder claims "N hours of language X
+   gives P". With Whisper the x-axis stops being the model's exposure to
+   X: the encoder arrives carrying its own per-language supervised hours,
+   which vary by orders of magnitude across the EU-24. The 10 h and 30 h
+   tiers would then largely measure Whisper's prior, and a low tier could
+   look strong for reasons unrelated to our data. Three ways out, PI's
+   call: (a) run the ladder on the SSL encoder and keep Whisper for the
+   performance sections; (b) keep Whisper and reframe the axis as
+   "fine-tuning hours on top of a supervised encoder", reporting its
+   per-language prior as a covariate; (c) run both encoders at two tiers
+   (10 h and 100 h) for a handful of languages and report the gap as its
+   own result. (c) is the smallest experiment that converts the confound
+   into a contribution — "does supervised pretraining substitute for
+   in-domain hours, and how many hours is it worth?" — and is the
+   recommendation.
+
+6. **The shipping configuration is still untested.** W ran at 50 Hz;
+   `wsd-10hz` showed stacking is the largest w2v-BERT lever and it cuts
+   decoder positions 5×, which is the paper's efficiency axis. Whisper +
+   stack 5 is the combination that would actually ship and nobody has run
+   it. Same for the best w2v-BERT combination (WSD + stack 5 + LR 2e-3).
+
+7. **Read the two Qwen arms accordingly.** Both run w2v-BERT, so they now
+   answer "does a larger decoder rescue a weak encoder", not "how large
+   should the decoder be". That is still worth knowing, and it is close
+   to a direct test of whether the encoder was the binding constraint all
+   along — but it is not the backbone-grid question.
+
+Action needed: none that changes the agenda. Two measurements can run in
+parallel without pre-empting any decision: Whisper's own WER on the two
+dev sets, and W's threshold-crossing step from its eval history.
+
+---
+
 ## 2026-09-18 — Claude (worker session librispeech-step0-l1-l4) — W crosses the <10% threshold decisively; decision rule 4 (encoder) triggers
 
 Context: R-b600 (45985931) and W (46050285, the Whisper-fix resubmission)
@@ -144,6 +368,42 @@ ahead of backbone/size) and that's a scope decision, not a numbers one.
 Still waiting on Q2-k5/Q4-k5 (decoder size, rule 3) before the full table is
 complete, but rule 4 firing this hard on 2/8 arms already seems like the
 headline result regardless of what size decoder ends up doing.
+
+---
+
+## 2026-09-18 — Claude (strategy session) — Step 0b arms renamed; decisions wait for all eight; the seed is confounded with every factor
+
+Context: the PI read the first four arms' results and gave two
+instructions: wait for all eight arms before deciding anything, and stop
+using letters for run names.
+
+Finding / proposal:
+
+1. **Names.** §2b's arm table now keys on descriptive names:
+   `cosine-50hz`, `wsd-50hz`, `wsd-50hz-seed2`, `wsd-50hz-lr2e3`,
+   `wsd-50hz-batch600`, `wsd-10hz`, `wsd-50hz-whisper`,
+   `wsd-10hz-qwen2b`, `wsd-10hz-qwen4b`. The old letters are kept in one
+   column so earlier entries stay readable. Campaign row ids may follow;
+   `exp_name` must not change for a run that exists. Naming and seed rules
+   added to `agent-protocol.md` so this does not recur.
+2. **Every arm drew its own seed** (45 through 52). Only `wsd-50hz` against
+   `wsd-50hz-seed2` measures the seed, and that pair differs by 0.11 WER on
+   dev-clean against 0.002 on dev-other. So each single contrast is a factor
+   change plus one seed draw. Stacking survives that easily (about 0.18 on
+   both sets against the two-seed mean). The learning-rate contrast does
+   not: `wsd-50hz-lr2e3` at 0.437 dev-clean is indistinguishable from
+   `wsd-50hz-seed2` at 0.441, and only dev-other shows a gain of 0.066.
+3. **Hold.** No decision rule is applied until all eight arms finish. §2b
+   records this. Partial results keep landing in §5, and a rule may be
+   reported as "would trigger", but schedule, stacking, learning rate,
+   encoder and size are settled together, once.
+4. Still open, for whoever reports next: confirm every quoted number is a
+   full-set pass rather than the 500-utterance in-training eval, and give
+   the runaway fraction and error breakdown behind that 0.11 dev-clean
+   spread. A few repetition loops move dev-clean WER by about that much.
+
+Action needed: none from the executing session beyond finishing the arms
+and reporting per §2b. The PI decides once all eight are in.
 
 ---
 

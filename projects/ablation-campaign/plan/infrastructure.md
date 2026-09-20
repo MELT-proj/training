@@ -82,6 +82,13 @@ anything time-sensitive.
 
 ## 2. Repositories
 
+**They are siblings under `/home/giuseppe/melt-proj/`** — `training` (this
+one), `preprocessing`, `melt-eval` and `handoff-extras` sit next to each
+other in that directory. That is the entire search space: this repo, those
+siblings, and the checkouts named below. **Never `find /` or grep from `/`
+or `$HOME` looking for a file** (`agent-protocol.md` §1); if something is
+not where this section says, ask the PI and the answer gets added here.
+
 | repo | role |
 |---|---|
 | `MELT-proj/training` (this) | model, trainer, lhotse data pipeline, launchers, the campaign under `projects/ablation-campaign/` |
@@ -104,6 +111,14 @@ anything time-sensitive.
 - `build_campaign_config.py` renders the data axis (budget × task) from the
   Italian-anchored corpus template; run it where the data is, keep the
   `--cache` file, never train on a `--sample-shards` render.
+- `infra/compute_mix_weights.py` (**in this repo**, documented at
+  `docs/mixture_weights.md`) computes the per-source mux sampling weights:
+  two-tier balancing, corpora within a language by `alpha` first, then
+  languages against each other by `beta`, `n(.)` measured in **hours of
+  audio** and not utterance counts. Its output is a training config whose
+  `train_ds.input_cfg` carries the weights. Read the doc before changing a
+  mixture. This is the tooling `06-fondue.md` §3 means by "the config
+  builder already implements it"; it is not in `preprocessing`.
 - Effective batch = `batch_duration × gradient_accumulation_steps ×
   world_size` in audio seconds (with `quadratic_duration` unset). One epoch
   is derived from it; never pin `max_steps` per arm.

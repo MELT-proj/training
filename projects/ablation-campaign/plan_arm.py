@@ -132,6 +132,32 @@ DECODER_PROFILES = {
         "pad_token": "<|text_pad|>",
         "chat_template_config": "chatml",
     },
+    # eos_token/pad_token verified directly against tokenizer.json,
+    # special_tokens_map.json and generation_config.json on MN5 (2026-09-18):
+    # EuroLLM-1.7B-Instruct's own eos_token_id (4) is "<|im_end|>" -- its
+    # chatml turn marker doubles as the real generation-stop token here,
+    # unlike Qwen -- and pad_token "</s>" (id 2) is already a separate token,
+    # so nothing needs a fresh add_special_tokens entry. Chat template is
+    # plain ChatML, confirmed directly (`02-backbones.md` §3.1).
+    "utter-project/EuroLLM-1.7B-Instruct": {
+        "eos_token": "<|im_end|>",
+        "pad_token": "</s>",
+        "chat_template_config": "chatml",
+    },
+    # The Base half of the pair does NOT share Instruct's vocabulary --
+    # verified (2026-09-18): base's tokenizer.json has only 3 added tokens
+    # (<unk>, <s>, </s>), no "<|im_start|>"/"<|im_end|>" at all, unlike the
+    # Llama Base/Instruct pair above. Borrowing Instruct's eos_token here
+    # means add_special_tokens grows base's embedding table by one row, the
+    # same mechanism MELT already uses for Qwen's pad_token. Base ships no
+    # chat template of its own, so chat_template_from is required the same
+    # way meta-llama/Llama-3.2-1B needs it.
+    "utter-project/EuroLLM-1.7B": {
+        "eos_token": "<|im_end|>",
+        "pad_token": "</s>",
+        "chat_template_config": "chatml",
+        "chat_template_from": "utter-project/EuroLLM-1.7B-Instruct",
+    },
 }
 
 # Short tags for EXP_NAME. Unknown names fall back to a sanitised slug (see

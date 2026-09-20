@@ -57,8 +57,8 @@ sized to cover a whole one-shot run, not an observed rate.
   happens to draw, not a real effect). Wall 38h19m at world_size 8 -> **~306
   GPU-h for the 6,729.85 h arm**. This run and its MA-stage parent
   (`MA-700asr-w2vbF-qwen35_2bInsF-mlpT-bd30-ga20-elr6e6-dlr2e5-lr2e5-s42-8g`,
-  done 2026-09-05) were not recorded in `arms.tsv` or `00-status.md` -- see
-  the board entry.
+  done 2026-09-05) were not recorded in `arms.tsv`; the backfill is a week-1
+  item in `timeline.md`.
 - **8 nodes x 4 GPUs, measured 2026-09-15/16** (job 45902184, `acc_debug`,
   same recipe with `grad_accum 20` held fixed so effective batch scales
   with world_size to 19,200 audio-s/step): steady state ~32.3 s/step,

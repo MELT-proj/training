@@ -8,15 +8,19 @@ large final training run (**Fondue**, `06-fondue.md`).
 
 It is written for two audiences: the people running the campaign, and any
 agent picking it up cold. Read it top to bottom once, then keep
-`timeline.md` and `00-status.md` open.
+`timeline.md` open.
 
 ## How to read this folder
+
+Three files carry the campaign's state, and nothing else does: **`board.md`**
+is everything that happened, **`timeline.md`** is everything still owed, and
+the numbered sections hold each experiment's design and results. A finding
+belongs on the board, not in a section file.
 
 | file | what it holds |
 |---|---|
 | `agent-protocol.md` | the rules every session follows: machines, experiments, code, and how to record work; read before touching anything |
-| `timeline.md` | week-by-week plan with dates, per-track TODO lists, expected outcomes, gates |
-| `00-status.md` | living snapshot: what is running, what is blocked, the next decision |
+| `timeline.md` | week-by-week TODO list with dates, gates and blockers. Added to and pruned **only by the orchestrator**; sessions tick boxes |
 | `01-interface-recipe.md` | step 0 (LibriSpeech) and the five-language interface screen: LR, batch, frame stacking, prompt |
 | `02-backbones.md` | the 2×3 backbone grid (Llama 3.2 1B, Qwen3.5 2B, EuroLLM 1.7B; base and instruct) and the text-prior study |
 | `03-audio-stack.md` | encoders × adapters, the cost axis, the efficiency figure |
@@ -24,7 +28,7 @@ agent picking it up cold. Read it top to bottom once, then keep
 | `05-language-ladder.md` | the "N hours gives P" study over 24 EU languages, transfer and repetition probes |
 | `06-fondue.md` | the big run: data, decisions, freeze date, the Raclette pilot, operations, off-boarding |
 | `infrastructure.md` | clusters, repos, data, tooling, and every trap an agent needs to know |
-| `board.md` | message board: dated entries from people and agents, newest first |
+| `board.md` | everything that happened: findings, numbers, incidents, doubts and proposals, newest first. Any session appends; nothing is ever edited away |
 | `data/` | per-language hours (`hours_by_language.csv`), eval-set inventory, tier table |
 
 Each numbered file opens with a **Settled / Open / Owner** block. Settled items
@@ -97,14 +101,19 @@ session, post to `board.md` instead if you think one is wrong.
 | 2026-09-15 | the August MA failure is a coarse-feature plateau, not ignored audio (no-audio floor measured); step 0 reads loss together with WER | `01-interface-recipe.md` §1a |
 | 2026-09-16 | the MA:IFT hours ratio is a named study, run after the regime decision, splitting ASR hours only while ST hours stay fixed; the decoder-frozen IFT regime joins the regime comparison as R9/R10 | `04-regime.md` §3, §6 |
 | 2026-09-17 | step 0 was inconclusive; step 0b (schedule, stacking to 10 Hz, decoder size, plus a seed replicate and an encoder control) runs before the week-2 screen, whose budget is then re-set from step 0b's hours-to-threshold | `01-interface-recipe.md` §2b |
+| 2026-09-18 | step 0b settles the optimisation recipe only; its Whisper and Qwen arms are diagnostic controls handed to `03` and `02` as priors, never decisions. The audio-stack section runs **before** the backbone grid, so backbones are compared on a chosen stack; the encoder itself is decided by `03`'s crossing, read on FLEURS-24 split high- against low-resource | `01-interface-recipe.md` §2b, `03-audio-stack.md` §0, `02-backbones.md` |
 
 ## Conventions for editing this folder
 
 - Dates are absolute (`2026-10-25`), never "next week".
-- Add findings to `board.md` first, then fold the settled part into the
-  relevant numbered file. The board is append-only and newest-first.
-- Tick TODO boxes in `timeline.md` as work lands; move slipped items forward
-  explicitly rather than leaving them unticked in a past week.
+- Findings go to `board.md` and stay there. Only the *settled* part — a
+  design decision or a measured number in a results table — is folded into
+  a numbered file. If a paragraph in `01`–`06` would read as news a week
+  later, it belongs on the board instead. The board is append-only and
+  newest-first.
+- Tick TODO boxes in `timeline.md` as work lands. Adding, removing, rewording
+  or moving an item is the orchestrator's job; everyone else proposes it on
+  the board.
 - Numbers that came from a measurement say so and name the arm; numbers
   that are extrapolations say "extrapolated".
 - Experiment names follow the campaign `EXP_NAME` grammar

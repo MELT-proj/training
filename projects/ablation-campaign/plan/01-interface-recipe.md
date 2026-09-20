@@ -72,32 +72,21 @@ arm's own final (step 2600) `eval_<lang>_loss`:
 | it | 4.154 | 2.674 | +1.480 |
 | overall (token-weighted) | 4.133 | — | — |
 
-**This contradicts the line above it and the framing in `00-status.md`**
-("eval loss 2.6–3.1 ... roughly what a 1B text LM scores ... with no
-audio"): the floor is *not* close to the observed loss, it is 1.1–1.5
-nats/token *above* it, consistently across all five languages. Audio was
-not ignored — conditioning on it lowers the loss by a factor of
-e^1.1..1.5 ≈ 3–4.4x in per-token perplexity versus no audio at all. That
-signal just is not the right signal for correct tokens: WER stayed at
-1.10–1.16 and hypotheses were fluent but unrelated to the audio. Read as:
-the adapter learned something coarse (e.g. "audio present -> respond in
-this register/language") that measurably helps next-token prediction
-without helping transcription. This does not by itself say the recipe is
-fine -- WER is still catastrophic and the suspects table above still holds
-end to end -- but "the adapter did nothing" is no longer the failure mode to
-assume; whatever it did learn should factor into interpreting the
-LibriSpeech screen below (e.g. a run that drops the loss further without
-moving WER would be repeating this same coarse-signal pattern, not
-progress).
+The floor is not close to the observed loss: it is 1.1–1.5 nats/token
+*above* it, consistently across all five languages. Audio was not ignored —
+conditioning on it lowers per-token perplexity by a factor of
+e^1.1..1.5 ≈ 3–4.4× against no audio at all. That signal is simply not the
+right signal for correct tokens: WER stayed at 1.10–1.16 and hypotheses were
+fluent but unrelated to the audio. The adapter learned something coarse
+("audio present → answer in this register and language") that helps
+next-token prediction without helping transcription.
 
-**Action needed (flagged, not resolved here):** PI review -- this changes
-the interpretation the week-2 gate reads section 1 through. Board entry
-with the full numbers is at the top of `board.md`.
-
-*Strategy session, 2026-09-15:* §1's diagnosis, the Settled block and the
-step-0 interpretation rules were updated to this reading (a coarse-feature
-plateau; loss is read together with WER). Confirmed by the PI on
-2026-09-15.
+**How this is read downstream:** "the adapter did nothing" is not the
+failure mode to assume, and a run that lowers loss without moving WER is
+repeating the coarse-signal plateau rather than making progress. The
+suspects table in §1 still holds end to end. Confirmed by the PI
+2026-09-15; the Settled block and the step-0 interpretation rules were
+written to this reading.
 
 ## 2. Step 0 — LibriSpeech
 
@@ -145,7 +134,7 @@ hypothesis/reference length ratio (so "does not stop" is distinguishable from
   plausibly 0.2–0.5. A run whose loss drops while WER stays above 0.5 is
   repeating the August coarse-signal plateau (§1a), not fixing the recipe.
 
-## 2b. Step 0b — schedule, stacking, encoder and decoder size (added 2026-09-17)
+## 2b. Step 0b — the optimisation recipe (added 2026-09-17, scope narrowed 2026-09-18)
 
 Step 0 was inconclusive (results in §5). All five one-epoch runs stayed above
 WER 1.0. A post-hoc three-epoch rerun of L4 broke the plateau, reaching
@@ -157,13 +146,26 @@ aggressive schedule, stacking to 10 Hz as SLAM-ASR does, and a larger
 decoder. Step 0b runs them together, plus a seed replicate and an encoder
 control, because each question can mask the others.
 
-**A dead config key found while designing this.** `optimization.min_lr_scale:
-0.1` appears in every campaign and SFT config, but no code reads it
-(`git grep` on main, 2026-09-17). Every cosine run so far decayed to zero,
-not to 10% of the peak. It does not invalidate comparisons between arms,
-which all shared it, but the configs misstate what ran. Step 0b sets its
-floor through `lr_scheduler_kwargs` instead. Wiring or deleting the key is a
-PI decision.
+### What step 0b settles, and what it does not (PI, 2026-09-18)
+
+Step 0b produces **a working recipe, not the best configuration**. It settles
+only what this file owns: schedule, learning rate, effective batch and frame
+rate. Its two remaining arms ask questions that belong to other sections,
+and they are **diagnostic controls** whose results are handed on as stated
+priors, never as decisions:
+
+| arm | reads as | belongs to |
+|---|---|---|
+| `wsd-50hz-whisper` | can the pipeline transcribe at all with an easy encoder? Answered: yes, so a null result elsewhere is the encoder, not the recipe | `03-audio-stack.md` decides the encoder |
+| `wsd-10hz-qwen2b`, `wsd-10hz-qwen4b` | does decoder size move the interface? | `02-backbones.md` decides the decoder |
+
+The reason for the line is selection bias, not tidiness. If the encoder is
+picked here — English, one dataset, one seed per arm — and the crossing in
+`03` then runs with a recipe tuned around that winner, `03`'s central
+comparison is biased toward it. Either `03` repeats the work properly, in
+which case picking early bought nothing, or it does not, and the paper's
+audio-stack section rests on one English run. The same argument applies to
+decoder size and `02`.
 
 ### Common settings
 
@@ -177,19 +179,39 @@ In-training eval on dev-clean and dev-other at **500 utterances per set**
 
 ### Arms
 
-| arm | differs from R in | question | GPU-h, extrapolated |
-|---|---|---|---|
-| A0 | cosine decay to zero, seed 44: the existing `MA-librispeech-l4-ep3` | schedule reference | done |
-| R | warmup-stable-decay: warmup 3%, constant, cosine decay over the last 20% to 0.1× peak | schedule shape, against A0 | ~20 |
-| R-seed | seed 43 | noise on hours-to-threshold | ~20 |
-| R-lr2e3 | peak LR 2e-3 | learning rate | ~20 |
-| R-b600 | effective batch 600 s: one node × 4 GPUs, `batch_duration 150`, `grad_accum 1` | twice the optimizer steps at the same GPU-h, twice the wall clock | ~20 |
-| R-k5 | `stack_factor 5`, 50 Hz to 10 Hz | stacking | ~12 |
-| W | Whisper-large-v3 encoder, stack 1 | supervised-ASR encoder against self-supervised w2v-BERT | ~35 |
-| Q2-k5 | Qwen3.5-2B (instruct) decoder, stack 5 | size control, same family | ~40 |
-| Q4-k5 | Qwen3.5-4B (instruct) decoder, stack 5 | decoder size | ~80 |
+**Names (PI's instruction, 2026-09-18): letters do not survive a week away,
+so every arm carries a descriptive name.** The name says schedule, frame
+rate and the one thing that differs. Everything unnamed is the common
+setting above: Llama-3.2-1B-Instruct decoder, w2v-BERT 2.0 encoder, adapter
+LR 1e-3, 1200 s effective batch, three epochs. `wsd` is
+warmup-stable-decay; 50 Hz is `stack_factor 1` and 10 Hz is
+`stack_factor 5`. The letters in the middle column are the labels the first
+step-0b reports used; they are kept only so older entries can be read.
 
-About 250 GPU-h in total.
+| name | was | campaign row | seed | differs from `wsd-50hz` in | question | GPU-h |
+|---|---|---|---|---|---|---|
+| `cosine-50hz` | A0 | `MA-librispeech-l4-ep3` | 44 | cosine decay to zero, the old schedule | schedule reference | done |
+| `wsd-50hz` | R | `MA-librispeech-r` | 45 | the reference: warmup 3%, constant, cosine decay over the last 20% to 0.1× peak | schedule shape, against `cosine-50hz` | ~20 |
+| `wsd-50hz-seed2` | R-seed | `MA-librispeech-r-seed` | 46 | seed only | the noise floor | ~20 |
+| `wsd-50hz-lr2e3` | R-lr2e3 | `MA-librispeech-r-lr2e3` | 47 | peak LR 2e-3 | learning rate | ~20 |
+| `wsd-50hz-batch600` | R-b600 | `MA-librispeech-r-b600` | 48 | 600 s effective batch, one node × 4 GPUs | twice the optimizer steps at the same GPU-h | ~20 |
+| `wsd-10hz` | R-k5 | `MA-librispeech-r-k5` | 49 | `stack_factor 5` | stacking | ~12 |
+| `wsd-50hz-whisper` | W | `MA-librispeech-w` | 50 | Whisper-large-v3 encoder | **control only:** can the pipeline transcribe at all? The encoder is decided in `03` | ~35 |
+| `wsd-10hz-qwen2b` | Q2-k5 | `MA-librispeech-q2-k5` | 51 | Qwen3.5-2B decoder, stack 5 | **control only:** size, same family; the decoder is decided in `02` | ~40 |
+| `wsd-10hz-qwen4b` | Q4-k5 | `MA-librispeech-q4-k5` | 52 | Qwen3.5-4B decoder, stack 5 | **control only:** size; the decoder is decided in `02` | ~80 |
+
+About 250 GPU-h in total. Campaign row ids may be renamed to match the
+names above; the row id is only the grid key, so nothing in `arms.tsv`,
+W&B or an output directory depends on it. `exp_name` is composed from the
+axes and must not be touched for a run that already exists.
+
+**Every arm drew a different seed, so each contrast carries one seed draw**
+(45 through 52; only `wsd-50hz` against `wsd-50hz-seed2` isolates the
+seed). That was not the intent and it matters, because the measured
+dev-clean spread between those two is 0.11, not the 0.02 seen on the
+one-epoch pair. Contrasts larger than the spread survive it; contrasts of
+the same size as the spread do not, and need a replicate before they are
+quoted. Future arms hold the seed fixed unless the seed is the variable.
 
 **Why warmup-stable-decay and not a pure constant schedule.** Its stable
 phase *is* a constant-LR run, so the evals up to the start of decay give the
@@ -284,6 +306,13 @@ which MELT does not load), vocabulary shared with the 2B, ungated.
 
 ### Decision rules, fixed before the runs
 
+**Hold, PI's instruction 2026-09-18: no rule is applied until all eight arms
+have finished.** Partial results are recorded in §5 as they land, and a rule
+may be reported as "would trigger", but the schedule, stacking, learning
+rate, encoder and size questions are settled together, once, on the full
+set of arms. The reason is in the table above: with one seed per arm, a
+contrast read early against a single reference arm can be a seed draw.
+
 1. **Schedule.** Warmup-stable-decay becomes the MA default if R beats A0 at
    equal steps by more than the R/R-seed spread. LR 2e-3 is adopted if it
    reaches the threshold in fewer audio hours without loss spikes. The 600 s
@@ -291,12 +320,19 @@ which MELT does not load), vocabulary shared with the 2B, ungated.
 2. **Stacking.** Stack 5 becomes the default if R-k5 is within noise of R or
    better, since it cuts decoder positions five-fold. If clearly worse, the
    screen tests stack 2 and 4.
-3. **Size.** If Q4-k5 reaches the threshold and Q2-k5 does not, or does so in
-   markedly fewer hours, the paper's "2–3B is enough" framing must be tested
-   and a ~4B point joins the backbone grid. It does not change the screen's
-   backbone by itself.
-4. **Encoder.** If W reaches the threshold much earlier than R, the encoder
-   question moves ahead of the backbone grid.
+3. **Size — reported, not decided here.** If `wsd-10hz-qwen4b` reaches the
+   threshold and `wsd-10hz-qwen2b` does not, or does so in markedly fewer
+   hours, that is written into `02-backbones.md` as a prior and a ~4B point
+   is added to its grid. It does not change this screen's backbone, and it
+   does not settle the "2–3B is enough" framing, which `02` owns.
+4. **Encoder — reported, not decided here.** `wsd-50hz-whisper` reaching the
+   threshold where the w2v-BERT arms do not says the representation is a
+   first-order factor, which the campaign had assumed it was not. What
+   triggers is a **calendar reorder, not an adoption**: `03-audio-stack.md`
+   runs before `02-backbones.md`, so the backbone grid is compared on a
+   stack that has been chosen rather than assumed. The encoder itself is
+   decided by `03`'s crossing, at equal budget, over five languages, on the
+   eval that matters. Recorded 2026-09-18.
 5. **Nothing reaches 10% in three epochs.** Take the best arm to six epochs
    before starting the screen. The screen does not start on a recipe that
    has never transcribed LibriSpeech.
@@ -492,13 +528,16 @@ each rule as written):
 - **Rule 1 (schedule).** "Warmup-stable-decay becomes the MA default if R
   beats A0 at equal steps by more than the R/R-seed spread." R beats A0 by
   0.14 (clean) / 0.25 (other); the R/R-seed spread is 0.11 (clean) / 0.002
-  (other). R's margin over A0 exceeds the spread on both sets -- the rule
-  as written triggers, though the spread itself (0.11 on dev-clean) is
-  large enough that a single extra seed pair is a thin basis for "the
-  spread." "LR 2e-3 is adopted if it reaches the threshold in fewer audio
-  hours without loss spikes" -- R-lr2e3 beats R on both sets at the same
-  step count, but nothing has reached the <10% threshold yet, so this half
-  of the rule has no threshold-crossing to measure against.
+  (other), measured at WER 0.44-0.55 dev-clean -- the same regime as R and
+  A0 themselves, so it is the right spread for this contrast. R's margin
+  over A0 exceeds it on both sets -- the rule as written triggers, though a
+  single extra seed pair is a thin basis for "the spread," and (per the
+  regime note below) this 0.11 figure should not be exported to contrasts
+  at a different error rate. "LR 2e-3 is adopted if it reaches the
+  threshold in fewer audio hours without loss spikes" -- R-lr2e3 beats R
+  on both sets at the same step count, but nothing has reached the <10%
+  threshold yet, so this half of the rule has no threshold-crossing to
+  measure against.
 - **Rule 2 (stacking).** "Stack 5 becomes the default if R-k5 is within
   noise of R or better." R-k5 (0.314/0.490) clearly beats R (0.549/0.664)
   by more than the measured R/R-seed spread on both sets -- the rule
@@ -531,15 +570,25 @@ each rule as written):
   points over; Q2-k5 at 0.1686, well over. The rule's stated trigger
   condition does not fire. The seed replicate (`Q4-k5-seed2`, seed 53, job
   46143618) now settles both open questions it was launched to answer:
-  the seed-only spread at this error regime is 0.0017 (clean) / 0.0023
-  (other) -- tight, nothing like the 0.11 spread measured on `R`/`R-seed`
-  at a much higher error rate -- so the 2B->4B gap (0.104 vs 0.169 clean,
-  ~38% relative; 0.239 vs 0.312 other, ~23% relative) is now safely
+  the seed-only spread at WER 0.10-0.24 (Q4-k5's own regime) is 0.0017
+  (clean) / 0.0023 (other) -- tight, nothing like the 0.11 spread measured
+  on `R`/`R-seed` at WER 0.44-0.55. So the 2B->4B gap (0.104 vs 0.169
+  clean, ~38% relative; 0.239 vs 0.312 other, ~23% relative) is now safely
   quotable as a real, consistent effect. It also settles that Q4-k5's
   10.36%/10.53% landing just over the bar on both seeds is not a seed
   draw: the 4B decoder genuinely falls short of <10% dev-clean on this
   encoder, reproducibly. This is `02-backbones.md`'s question; reported
   here as a prior, not decided.
+
+**Regime note, added 2026-09-20 (Orchestrator).** Seed noise scales with
+the error rate, not a campaign-wide constant: 0.11 dev-clean at WER
+0.44-0.55 (`R`/`R-seed`), 0.0017 dev-clean at WER 0.10-0.24
+(`Q4-k5`/`Q4-k5-seed2`) -- roughly two orders of magnitude apart. A spread
+measured at one WER level is not a safe stand-in for a contrast at
+another; every spread quoted above is now labelled with the WER range it
+came from rather than reported as one number. This is now `agent-protocol.md`
+§3's standing rule, since the campaign's later, lower-error arms would
+otherwise inherit the 0.11 figure by default.
 
 **All 9 step-0b arms are in** (8 original plus the seed replicate).
 Schedule (Rule 1) and stacking (Rule 2) both trigger clearly; the 600 s

@@ -1,21 +1,56 @@
 # Agent protocol — how any session works on this campaign
 
-Read this once at the start of every session, after `README.md`,
-`00-status.md` and the current week of `timeline.md`, and before touching
-any machine. It applies to every week, not just the first.
+Read this once at the start of every session, after `README.md` and the
+current week of `timeline.md`, and before touching any machine. It applies
+to every week, not just the first.
+
+## 0. Three places, and only three
+
+Everything this campaign records goes to exactly one of these. If you are
+unsure where something belongs, it belongs on the board.
+
+| | holds | who writes it |
+|---|---|---|
+| `board.md` | everything that happened: findings, numbers, surprises, incidents, dead ends, doubts, proposals | any session, append-only, newest first |
+| `timeline.md` | the TODO list, week by week, with tick boxes | **only the orchestrator adds or removes items**; sessions tick the boxes they complete |
+| `01`–`06` | the *design* of each experiment, its Settled decisions, and its results tables | any session, but only for design changes and measured results |
+
+**The section files are not a log.** A finding, an incident, a config
+surprise or a "found this while doing that" note goes on the board and
+stays there. What may enter `01`–`06` is a design decision, a Settled item,
+or a number in a results table. If a paragraph in a section file would read
+as news in a week's time, it is board material and it is in the wrong file.
+
+**You do not edit the TODO list.** If work needs adding, dropping or
+moving between weeks, post it on the board and the orchestrator folds it
+into `timeline.md`. This keeps one person's view of what the campaign owes
+itself, and keeps two sessions from inventing overlapping work. Ticking a
+box you finished is always yours to do.
 
 ## 1. Where things are
 
 - Branch: `claude/speech-llm-ablation-research-46d735` until it is merged;
   check `git log -1` on `main` first, the plan may have moved there.
 - The plan: `projects/ablation-campaign/plan/`. Section files `01`–`06`
-  hold each experiment's design. Their **Settled** blocks are decisions
-  already made with the PI: do not reopen them in a session. If you think
-  one is wrong, post to `board.md` and carry on with the task as specified.
+  hold each experiment's design and its results tables. Their **Settled**
+  blocks are decisions already made with the PI: do not reopen them in a
+  session. If you think one is wrong, post to `board.md` and carry on with
+  the task as specified.
 - Machines, repos, tooling, measured costs and known traps:
   `infrastructure.md`. Do not re-derive any of it; if it is stale, fix the
   file and say so on the board.
 - Data: `data/hours_by_language.csv` and `data/README.md`.
+- **Never scan the filesystem to find something** (PI, 2026-09-18). No
+  `find /`, no `grep` from `/` or `$HOME`, no walking the tree hoping a name
+  turns up. It is slow, it fills your context with noise, and on a shared
+  machine it reads other people's data. Look in this repo, in
+  `infrastructure.md` §2, and in the sibling repos that section lists — that
+  is the whole search space.
+- **If it is still not there, ask the PI.** Do not hunt, do not guess a
+  path, and do not substitute a file you are not certain is the right one.
+  A one-line question costs less than a filesystem walk, and the answer is
+  then written into `infrastructure.md` so the next session never has to
+  ask it again.
 
 ## 2. Rules on machines
 
@@ -45,6 +80,16 @@ any machine. It applies to every week, not just the first.
 - `EXP_NAME` is composed by the tooling, never typed by hand. Every
   submission goes through `campaign.py run` so it lands in `arms.tsv`;
   a run submitted any other way is off the ledger and does not count.
+- **Name arms descriptively, never by letter or number** (PI, 2026-09-18).
+  `wsd-10hz-qwen4b` is readable a week later; `R-k5`, `A0` and `L4` are
+  not. The name carries the setting that differs from the reference arm.
+  This applies to campaign row ids and to every table in `plan/`. A row id
+  is only the grid key, so renaming one is safe; `exp_name` is not, because
+  output directories, `arms.tsv` and W&B all key on it.
+- **Hold the seed fixed across arms unless the seed is the variable.** One
+  seed per arm makes every contrast a factor change plus a seed draw, which
+  is how a 0.11 WER difference in step 0b turned out to be within the seed
+  spread (`01-interface-recipe.md` §2b).
 - Turn on `run.memory_preallocation` whenever what is trainable changes.
 - Read steady-state throughput from the second-to-last tqdm line, never
   from `train_runtime` or the closing average.
@@ -67,21 +112,21 @@ any machine. It applies to every week, not just the first.
 
 ## 5. Recording what you did
 
-Every session ends with all three of these, in this order:
+Every session ends with both of these, in this order:
 
 1. **`board.md`**: one entry at the top, using the template in the file.
    Findings with numbers and experiment names; doubts; what surprised you;
-   what the next person should do. Job ids belong in `arms.tsv`, not here.
-2. **`00-status.md`**: update Running / Done / Blocked and the next
-   decisions. Keep it a snapshot, not a log.
-3. **`timeline.md`**: tick the boxes you completed in the current week.
-   If something slipped, move it forward into the next week explicitly;
-   never leave a silent unticked box in a past week.
+   anything blocked and what it blocks; what the next person should do.
+   Job ids belong in `arms.tsv`, not here.
+2. **`timeline.md`**: tick the boxes you completed in the current week.
+   Do not add, delete or reword an item, and do not move one between weeks
+   — say so on the board and the orchestrator does it. A box you could not
+   finish stays unticked with a board entry explaining why.
 
-Measured numbers go in the results table of the relevant section file and
-say "measured" with the experiment name; extrapolations say
-"extrapolated". Numbers in prose are kept out of the plan files; use the
-tables.
+Then, only if you produced a measured result or changed a design: update
+the relevant section file's results table or design text. Measured numbers
+say "measured" and name the experiment; extrapolations say "extrapolated".
+Numbers in prose are kept out of the section files; use the tables.
 
 ## 6. When to stop and ask
 
