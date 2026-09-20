@@ -13,7 +13,7 @@ directly from GitHub.
 
 ## [Unreleased]
 
-Targeting v0.8.0, pending merge of both:
+## [0.8.0] - 2026-09-12
 
 - [#107](https://github.com/MELT-proj/training/pull/107) — a per-encoder spec
   table (`melt/modeling/encoder_specs.py`) describing each supported speech
@@ -27,6 +27,11 @@ Targeting v0.8.0, pending merge of both:
   decoder already had. Measured on MN5: `flash_attention_2` is 1.6x faster
   than `sdpa` on MMS, and matches w2v-BERT-2.0's step time despite MMS being
   1.7x larger.
+- Fixed `utils/sync_wandb.sh` silently dropping the eval hypotheses
+  `wandb.Table` on sync (#115): wandb bakes the container-internal staging
+  path into the offline run log, which never resolves once the run is
+  rsynced off MN5. A new `--staging-path` mirrors that directory too and runs
+  `wandb sync` inside the run's own Singularity image so the path resolves.
 
 ## [0.6.2] - 2026-09-08
 

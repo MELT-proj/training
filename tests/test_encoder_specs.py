@@ -126,6 +126,7 @@ class TestEncoderHiddenSize:
         config.adapter_config = MagicMock()
         config.adapter_config._type = "mlp"
         config.adapter_config.mlp_hidden_size = None
+        config.adapter_config.stack_factor = 1
         config.audio_encoder_config = types.SimpleNamespace(d_model=1280, model_type="whisper")
         config.text_decoder_config = MagicMock()
         config.text_decoder_config.hidden_size = 2048
@@ -159,11 +160,12 @@ def _stack_with(spec, adapter, max_seq_len=None):
     return stack
 
 
-def _mlp_adapter(hidden_size=1280, out=2048):
+def _mlp_adapter(hidden_size=1280, out=2048, stack_factor=1):
     config = MagicMock(spec=MELTConfig)
     config.adapter_config = MagicMock()
     config.adapter_config._type = "mlp"
     config.adapter_config.mlp_hidden_size = None
+    config.adapter_config.stack_factor = stack_factor
     config.audio_encoder_config = types.SimpleNamespace(hidden_size=hidden_size)
     config.text_decoder_config = MagicMock()
     config.text_decoder_config.hidden_size = out
@@ -221,6 +223,27 @@ class TestStackOutputFeaturesShape:
 
         assert shape == (2, 1500, 2048)
         assert out_mask is None
+
+    def test_mlp_stack_factor_composes_with_encoder_downsampling(self):
+        """Encoder halves first (whisper's own stride), then the adapter's own
+        stack_factor divides again -- the two frame-rate changes compose in order."""
+        spec = get_encoder_spec("whisper")
+        stack = _stack_with(spec, _mlp_adapter(hidden_size=128, stack_factor=4))
+        # One 30 s window of mel frames: 12 s and 3 s of real audio.
+        features = torch.randn(2, 3000, 128)
+        mask = torch.zeros(2, 3000, dtype=torch.long)
+        mask[0, :1200] = 1
+        mask[1, :300] = 1
+
+        shape, out_mask = MELTAudioStack._get_output_features_shape(stack, features, mask)
+
+        # Encoder: 3000 -> 1500 mel/2. Adapter: ceil(1500 / 4) = 375.
+        assert shape == (2, 375, 2048)
+        assert out_mask.shape == (2, 375)
+        # Encoder gives 600/150 valid frames; the adapter's stack_factor=4
+        # subsamples those to ceil(600/4)=150 and ceil(150/4)=38.
+        assert out_mask.sum(-1).tolist() == [150, 38]
+        assert out_mask[0, :150].all() and not out_mask[0, 150:].any()
 
 
 # ============================================================================

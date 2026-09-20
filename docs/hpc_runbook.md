@@ -109,28 +109,31 @@ read it.
 ### Which container image
 
 **The default is correct — you do not need to set `SINGULARITY_IMG`.** As of
-2026-08-10, `melt_cuda126.sif` is a symlink to the lhotse 2 image:
+2026-09-01, `melt_cuda126.sif` is a symlink to the transformers-5 image:
 
 ```
-melt_cuda126.sif -> melt_cuda126_lhotse2_td.sif
+melt_cuda126.sif -> melt_cuda126_tf5.sif
 ```
 
 so the site-file default resolves to a stack matching `main`:
 
-| image | lhotse | torchdata | works with `main` (≥0.5.0)? |
-|---|---|---|---|
-| `melt_cuda126.sif` → `…_lhotse2_td.sif` | 2.0.0a3 | 0.11.0 | **yes — the default** |
-| `melt_cuda126_lhotse2_td.sif` | 2.0.0a3 | 0.11.0 | yes (same file) |
-| `melt_cuda126_pre-lhotse2-20260804.sif` | 1.32.2 | absent | no — kept for reference only |
-| `melt_cuda126_pre-devel-20260411.sif` | — | — | no — kept for reference only |
+| image | lhotse | torchdata | transformers | works with `main` (≥0.6.2)? |
+|---|---|---|---|---|
+| `melt_cuda126.sif` → `…_tf5.sif` | 2.0.0a3 | 0.11.0 | 5.16.1 | **yes — the default** |
+| `melt_cuda126_tf5.sif` | 2.0.0a3 | 0.11.0 | 5.16.1 | yes (same file) |
+| `melt_cuda126_lhotse2_td.sif` | 2.0.0a3 | 0.11.0 | 4.57.1 | **no — pre-transformers5, superseded 2026-09-01** |
+| `melt_cuda126_pre-transformers5-20260901.sif` | 2.0.0a3 | 0.11.0 | 4.57.1 | no — the image retired by the 2026-09-01 promotion, kept for reference only |
+| `melt_cuda126_pre-lhotse2-20260804.sif` | 1.32.2 | absent | — | no — kept for reference only |
+| `melt_cuda126_pre-devel-20260411.sif` | — | — | — | no — kept for reference only |
 
-`pyproject.toml` pins `lhotse==2.0.0a3` and `torchdata>=0.11`, which only the
-promoted image satisfies. The pre-lhotse2 images are retained deliberately, but
-nothing on `main` runs on them.
-
-The `_lhotse2_td.sif` name still resolves — the campaign scripts under
-`tests/integration/lhotse2_campaign/` reference it directly — so both names
-work and neither costs extra disk.
+`pyproject.toml` pins `transformers>=5.16,<6` (bumped from 4.57.1 in commit
+`47ae271`), which only the promoted image satisfies. Any script or doc that
+still hardcodes `melt_cuda126_lhotse2_td.sif` by name is pinned to the
+pre-transformers5 snapshot and will hit `add_special_tokens` validation
+errors in `melt.training.setup.prepare_processor` (and in
+`tests/test_processing_melt.py`) — use the `melt_cuda126.sif` symlink instead
+so it keeps tracking whatever is currently promoted. The pre-lhotse2 images
+are retained deliberately, but nothing on `main` runs on them.
 
 To pin a specific image (a trial build, or reproducing an old run) override it
 as usual, and verify what you pinned before spending an allocation on it:
@@ -811,6 +814,7 @@ wins):
 | `-e, --entity` | `WANDB_ENTITY` | none — **warns**, see below |
 | `-p, --project` | `WANDB_PROJECT` | whatever the run recorded (`melt`) |
 | `-v, --venv` | `VENV_PATH` | none — uses the current environment |
+| `-S, --staging-path` | `WANDB_STAGING_PATH` | none — see "Artifact/table uploads" below |
 | `-t, --threshold` | `ACTIVE_THRESHOLD_MINUTES` | `10` |
 | `-n, --dry-run` | — | off |
 
@@ -918,10 +922,39 @@ rsync -ravh --append-verify --exclude='.synced' \
 wandb sync ".../wandb/$RUN" --entity <the-shared-team> --include-offline --append
 ```
 
-Two harmless artefacts you will see: a `FileNotFoundError` uploading a stale
-artifact staging file, and W&B reporting a run as `finished` while it is
-plainly still training. Neither affects the metrics; a later manual sync marks
-the run caught-up.
+One harmless artefact you may still see: W&B reporting a run as `finished`
+while it is plainly still training. That does not affect the metrics; a later
+manual sync marks the run caught-up.
+
+#### Artifact/table uploads (eval hypotheses, `wandb.Table`)
+
+A run that logs a `wandb.Table` (e.g. the eval hypotheses table in
+`melt/training/trainer.py`) stages its media files *outside* the run
+directory, and wandb bakes the container-internal absolute path
+(`/workspace/tmp/.local/share/artifacts/staging/...`) into the offline run's
+binary log at record time. Plain `wandb sync` of the rsynced run directory
+cannot find that path on artemis — it never existed outside the MN5
+container — and drops the table with `FileNotFoundError ... Artifact won't be
+committed`, silently, without failing the run's sync.
+
+Fix it by also passing `--staging-path` (the remote `$TMPDIR_HOST/.local/share/artifacts/staging`,
+e.g. `/gpfs/projects/epor48/melt-data/tmp/.local/share/artifacts/staging` on
+MN5 — see `infra/runners/sites/mn5.sh`):
+
+```bash
+# [artemis] SINGULARITY_IMG must be the image the run itself used
+# (already exported if you sourced infra/runners/sites/artemis.sh)
+utils/sync_wandb.sh \
+  --remote-path /gpfs/scratch/epor48/<your-mn5-user>/outputs/wandb/wandb \
+  --staging-path /gpfs/projects/epor48/melt-data/tmp/.local/share/artifacts/staging \
+  --entity <the-shared-team>
+```
+
+This mirrors that directory locally too, and runs `wandb sync` inside
+`$SINGULARITY_IMG` with the mirror bound back onto the exact container path
+wandb recorded, so the lookup resolves. Without `--staging-path`, everything
+else still syncs fine (scalars, config, summary) — only artifact/table uploads
+are affected.
 
 **Checkpoints** — pull via the transfer node:
 
@@ -1234,13 +1267,14 @@ from the eval metrics in §B4.
 | symptom | cause |
 |---|---|
 | `trainer.per_device_eval_batch_size is -1, but evaluation is enabled` | exactly what it says — pass `--trainer.per_device_eval_batch_size 4` or fix the config. Before 0.5.2 the same config instead crashed at the first eval with `Trying to create tensor with negative dimension -1` (or `batch_size should be a positive integer, but got -1`) |
-| `False is not a valid SaveStrategy` (or `…EvalStrategy`) | you passed `--trainer.save_strategy no`. Overrides are parsed as YAML, so `no`/`off` become `false` and `yes`/`on` become `true`. Quote it: `--trainer.save_strategy "'no'"` |
+| `False is not a valid SaveStrategy` (or `…EvalStrategy`) | fixed (#77): overrides are parsed as YAML, so bare `no`/`off`/`yes`/`on` used to reach `--trainer.save_strategy no` as a bool and crash. It's now auto-corrected back to the string with a warning; quoting (`--trainer.save_strategy "'no'"`) is only needed if you hit this on an older checkout |
 | Job exits instantly, no log | `logs/` didn't exist, or a bad `--output` path — see §B4 |
 | `` `use_bucketing` is retired `` | config predates `lhotse_sampler_type`; swap it as the message says |
 | `PermissionError: … '/workspace/outputs/<EXP>'` | shared `OUTPUT_DIR` owned by someone else — set your own (§B3) |
 | Permission denied under `/workspace/tmp` | same cause, `TMPDIR_HOST` — set your own (§B3) |
 | `SINGULARITY_IMG not found` | image not shipped, or site-file path is stale |
-| `ModuleNotFoundError: torchdata`, or a lhotse API error | running `main` against a pre-lhotse2 image — unset `SINGULARITY_IMG` to get the default, or point it at `melt_cuda126_lhotse2_td.sif` |
+| `ModuleNotFoundError: torchdata`, or a lhotse API error | running `main` against a pre-lhotse2 image — unset `SINGULARITY_IMG` to get the default, or point it at `melt_cuda126.sif` |
+| `ValueError`/`AssertionError` out of `tokenizer.add_special_tokens` (e.g. `Key extra_special_tokens is not a special token`) | running `main` against a pre-transformers5 image (`melt_cuda126_lhotse2_td.sif` or its `_pre-transformers5-*` alias, transformers 4.57.1) — unset `SINGULARITY_IMG` or point it at `melt_cuda126.sif` (transformers 5.16.1) |
 | Model load fails / tries to reach the Hub | weights not in `$HF_HOME` (§A3) |
 | `CUDA out of memory` during eval | eval batch too large — first batches are worst-case |
 | Output dir "not empty" | add `--trainer.overwrite_output_dir true`, or pick a new `EXP` |

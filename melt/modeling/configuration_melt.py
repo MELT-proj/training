@@ -41,6 +41,10 @@ class MELTAdapterConfig(PretrainedConfig):
             Kernel size for conformer convolutions (used by Conformer adapter).
         adapter_stride (`int`, *optional*, defaults to 2):
             Stride for conformer convolutions (used by Conformer adapter).
+        stack_factor (`int`, *optional*, defaults to 1):
+            Number of consecutive encoder frames the MLP adapter concatenates along
+            the feature axis before its first projection (used by MLP adapter). 1
+            leaves the frame rate unchanged; k lowers it by k.
     """
 
     model_type = "melt_adapter"
@@ -67,6 +71,7 @@ class MELTAdapterConfig(PretrainedConfig):
         layerdrop=0.0,
         adapter_kernel_size=3,
         adapter_stride=2,
+        stack_factor=1,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -79,6 +84,7 @@ class MELTAdapterConfig(PretrainedConfig):
         self.intermediate_size = intermediate_size
         self.hidden_act = hidden_act
         self.dropout = dropout
+        self.stack_factor = stack_factor
 
         # Q-Former specific
         self.downsample_rate = downsample_rate

@@ -72,13 +72,38 @@ class MELTMLPAdapter(nn.Module):
         if mid is None:
             mid = out
 
-        self.fc1 = nn.Linear(audio_hidden_size, mid, bias=True)
+        stack_factor = (
+            getattr(adapter_cfg, "stack_factor", None) if adapter_cfg is not None else None
+        )
+        # 1 = no stacking, the pre-stack_factor behavior. Guards a None from a
+        # config that sets the key to `null` the same way `mid`/`mlp_hidden_size`
+        # does above.
+        self.stack_factor = stack_factor if stack_factor else 1
+
+        self.fc1 = nn.Linear(audio_hidden_size * self.stack_factor, mid, bias=True)
         self.act = nn.GELU()
         self.fc2 = nn.Linear(mid, out, bias=True)
 
         self.post_norm = nn.LayerNorm(out)
         self.gain = nn.Parameter(torch.tensor([0.1]))
         self.output_hidden_size = out
+
+    def _stack_frames(self, audio_features: torch.Tensor) -> torch.Tensor:
+        """Concatenate ``stack_factor`` consecutive frames along the feature axis.
+
+        Pads the frame count up to a multiple of ``stack_factor`` with zeros at the
+        end before reshaping -- the same frame count ``_get_output_features_shape``
+        predicts, since both derive the padded length from ``seq_len`` alone rather
+        than from where real audio ends within the batch.
+        """
+        if self.stack_factor <= 1:
+            return audio_features
+        batch_size, seq_len, hidden_size = audio_features.shape
+        pad = (-seq_len) % self.stack_factor
+        if pad:
+            audio_features = F.pad(audio_features, (0, 0, 0, pad))
+        stacked_len = (seq_len + pad) // self.stack_factor
+        return audio_features.reshape(batch_size, stacked_len, hidden_size * self.stack_factor)
 
     def _get_output_features_shape(
         self,
@@ -97,14 +122,37 @@ class MELTMLPAdapter(nn.Module):
 
         Returns:
             Tuple of (output_shape, output_attention_mask):
-                - output_shape: (batch_size, output_seq_len, output_hidden_size)
-                - output_attention_mask: Same as input (MLP preserves sequence length)
+                - output_shape: (batch_size, output_seq_len, output_hidden_size), with
+                  output_seq_len == seq_len when stack_factor is 1 and
+                  ceil(seq_len / stack_factor) otherwise
+                - output_attention_mask: Same as input when stack_factor is 1;
+                  otherwise a prefix mask subsampled by stack_factor (real audio
+                  occupies a prefix of the frames, so ceil(valid_len / stack_factor)
+                  is exact)
         """
         batch_size, seq_len, _ = input_shape
-        output_shape = (batch_size, seq_len, self.output_hidden_size)
-        return output_shape, features_attention_mask
+        k = self.stack_factor
+        output_seq_len = math.ceil(seq_len / k) if k > 1 else seq_len
+        output_shape = (batch_size, output_seq_len, self.output_hidden_size)
+
+        if k <= 1:
+            return output_shape, features_attention_mask
+
+        output_attention_mask = None
+        if features_attention_mask is not None:
+            mask_device = device if device is not None else features_attention_mask.device
+            non_padded_lengths = features_attention_mask.to(torch.long).sum(dim=-1)
+            out_lengths = torch.div(non_padded_lengths + k - 1, k, rounding_mode="floor")
+            out_lengths = out_lengths.clamp(min=0, max=output_seq_len).to(mask_device)
+            positions = torch.arange(output_seq_len, device=mask_device)
+            output_attention_mask = (positions.unsqueeze(0) < out_lengths.unsqueeze(-1)).to(
+                features_attention_mask.dtype
+            )
+
+        return output_shape, output_attention_mask
 
     def forward(self, audio_features: torch.Tensor) -> torch.Tensor:
+        audio_features = self._stack_frames(audio_features)
         hidden_states = self.fc1(audio_features)
         hidden_states = self.act(hidden_states)
         hidden_states = self.fc2(hidden_states)
@@ -1680,6 +1728,15 @@ class MELTForSequenceClassification(MELTPreTrainedModel):
         if ndim == 3:
             hidden_size = target_tensor.shape[-1]
             eos_token_id = self.text_decoder.config.eos_token_id
+            # Some decoders (chat-formatted ones in particular, see MELTForCausalLM
+            # __init__) carry a *list* of valid stop tokens rather than a single id.
+            # Only one embedding row is needed as a placeholder here, so take the
+            # first -- matching MELTForCausalLM's own eos_id[0] fallback -- instead
+            # of feeding the whole list to torch.tensor([eos_token_id]) and getting
+            # an extra (num_eos, hidden_size) axis back where a single (D,) row is
+            # expected.
+            if isinstance(eos_token_id, list):
+                eos_token_id = eos_token_id[0]
             pad_item = self.text_decoder.get_input_embeddings()(
                 torch.tensor(
                     [eos_token_id], device=target_tensor.device, dtype=torch.long

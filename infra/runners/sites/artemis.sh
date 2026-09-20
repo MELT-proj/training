@@ -8,7 +8,7 @@ export LOCAL_DATASETS_DIR="${LOCAL_DATASETS_DIR:-/mnt/scratch-nyx/giuseppe/melt/
 export TMPDIR_HOST="${TMPDIR_HOST:-/tmp}"
 
 # --- container mode -------------------------------------------------------
-export SINGULARITY_IMG=${SINGULARITY_IMG:-/mnt/scratch-artemis/giuseppe/melt-data/melt_cuda126_lhotse2_td.sif}
+export SINGULARITY_IMG=${SINGULARITY_IMG:-/mnt/scratch-artemis/giuseppe/melt-data/melt_cuda126.sif}
 export SINGULARITY_BIN=${SINGULARITY_BIN:-singularity}
 
 # --- repo sync (infra/sync_repo.sh) ---------------------------------------

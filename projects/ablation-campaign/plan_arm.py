@@ -120,6 +120,44 @@ DECODER_PROFILES = {
         "pad_token": "<|text_pad|>",
         "chat_template_config": "chatml",
     },
+    # Step 0b's decoder-size control (plan/01-interface-recipe.md §2b, Q4-k5
+    # against Q2-k5). Verified directly against the real downloaded
+    # tokenizer_config.json (2026-09-17), not assumed from "shares the 2B's
+    # vocabulary": identical vocab size (248,077), identical token ids for
+    # <|endoftext|> (248044) and <|im_end|> (248046), <|text_pad|> equally
+    # absent. Same MELT-convention override as Qwen/Qwen3.5-2B above, for the
+    # same reason -- the whole Qwen3.x/3.5 line shares it.
+    "Qwen/Qwen3.5-4B": {
+        "eos_token": "<|endoftext|>",
+        "pad_token": "<|text_pad|>",
+        "chat_template_config": "chatml",
+    },
+    # eos_token/pad_token verified directly against tokenizer.json,
+    # special_tokens_map.json and generation_config.json on MN5 (2026-09-18):
+    # EuroLLM-1.7B-Instruct's own eos_token_id (4) is "<|im_end|>" -- its
+    # chatml turn marker doubles as the real generation-stop token here,
+    # unlike Qwen -- and pad_token "</s>" (id 2) is already a separate token,
+    # so nothing needs a fresh add_special_tokens entry. Chat template is
+    # plain ChatML, confirmed directly (`02-backbones.md` §3.1).
+    "utter-project/EuroLLM-1.7B-Instruct": {
+        "eos_token": "<|im_end|>",
+        "pad_token": "</s>",
+        "chat_template_config": "chatml",
+    },
+    # The Base half of the pair does NOT share Instruct's vocabulary --
+    # verified (2026-09-18): base's tokenizer.json has only 3 added tokens
+    # (<unk>, <s>, </s>), no "<|im_start|>"/"<|im_end|>" at all, unlike the
+    # Llama Base/Instruct pair above. Borrowing Instruct's eos_token here
+    # means add_special_tokens grows base's embedding table by one row, the
+    # same mechanism MELT already uses for Qwen's pad_token. Base ships no
+    # chat template of its own, so chat_template_from is required the same
+    # way meta-llama/Llama-3.2-1B needs it.
+    "utter-project/EuroLLM-1.7B": {
+        "eos_token": "<|im_end|>",
+        "pad_token": "</s>",
+        "chat_template_config": "chatml",
+        "chat_template_from": "utter-project/EuroLLM-1.7B-Instruct",
+    },
 }
 
 # Short tags for EXP_NAME. Unknown names fall back to a sanitised slug (see
@@ -132,6 +170,7 @@ DECODER_TAGS = {
     "Qwen/Qwen3-1.7B": "qwen1_7b",
     "Qwen/Qwen3.5-2B": "qwen35_2bIns",
     "Qwen/Qwen3.5-2B-Base": "qwen35_2bBase",
+    "Qwen/Qwen3.5-4B": "qwen35_4bIns",
 }
 
 # Wall-clock defaults. 06:00:00 for the 700 h arm: measured
@@ -161,6 +200,11 @@ DEFAULT_TIME_FALLBACK = "08:00:00"
 DEFAULT_ENCODER_LR = "6e-6"
 DEFAULT_DECODER_LR = "2e-5"
 DEFAULT_ADAPTER_LR = "2e-4"
+
+# Same fallback reasoning as the LR constants above: no ABL-*.yaml declares
+# model.adapter.stack_factor (the key is new), so every existing config omits
+# it and this is the value melt/training/config.py's DEFAULT_CONFIG fills in.
+DEFAULT_STACK_FACTOR = 1
 
 
 def die(msg: str) -> None:
@@ -307,6 +351,16 @@ class ArmAxes:
     world_size: int
     adapter: str = ""
     adapter_freeze: str = ""
+    # stack_factor: how many consecutive encoder frames the MLP adapter
+    # concatenates before fc1 (`melt/modeling/modeling_melt.py`'s
+    # MELTMLPAdapter); a no-op for the other adapter types, which downsample
+    # through their own knobs instead. Same inherit-or-override rule as every
+    # other axis, but tagged into EXP_NAME only when overridden -- like
+    # batch_duration/grad_accum_steps below, not like the always-present LR
+    # tags -- since every arm composed before this axis existed has no value
+    # for it to differ from, and tagging it unconditionally would rename (and
+    # orphan the output directory of) all of them.
+    stack_factor: str = ""
     encoder: str = ""
     encoder_freeze: str = ""
     decoder: str = ""
@@ -465,6 +519,7 @@ def plan(args: ArmAxes) -> ArmPlan:
     # what it already declares unless a human says so.
     cfg_adapter_type = get(cfg, "model.adapter._type")
     cfg_adapter_freeze = bool(get(cfg, "model.adapter.freeze"))
+    cfg_stack_factor = get(cfg, "model.adapter.stack_factor", DEFAULT_STACK_FACTOR)
     cfg_encoder_name = get(cfg, "model.encoder.name")
     cfg_encoder_freeze = bool(get(cfg, "model.encoder.freeze"))
     cfg_decoder_name = get(cfg, "model.decoder.name")
@@ -492,6 +547,7 @@ def plan(args: ArmAxes) -> ArmPlan:
     encoder_freeze = as_bool(args.encoder_freeze) if args.encoder_freeze else cfg_encoder_freeze
     decoder_freeze = as_bool(args.decoder_freeze) if args.decoder_freeze else cfg_decoder_freeze
     decoder_lora = as_bool(args.decoder_lora) if args.decoder_lora else cfg_decoder_lora
+    stack_factor_effective = int(args.stack_factor) if args.stack_factor else int(cfg_stack_factor)
 
     overrides: list[str] = []
 
@@ -583,6 +639,15 @@ def plan(args: ArmAxes) -> ArmPlan:
         overrides += ["--model.adapter._type", adapter_effective]
     if args.adapter_freeze and adapter_freeze != cfg_adapter_freeze:
         overrides += ["--model.adapter.freeze", str(adapter_freeze).lower()]
+
+    # See ArmAxes's comment on stack_factor for why this is only emitted (and
+    # only tagged into EXP_NAME below) when it actually differs from the
+    # config -- same rule as batch_duration/grad_accum_steps just below.
+    stack_factor_overridden = bool(args.stack_factor) and (
+        stack_factor_effective != int(cfg_stack_factor)
+    )
+    if stack_factor_overridden:
+        overrides += ["--model.adapter.stack_factor", str(stack_factor_effective)]
 
     # batch_duration/grad_accum_steps overrides -- see ArmAxes's comment on
     # why these two are coupled. Only emitted (and only tagged into EXP_NAME
@@ -685,12 +750,16 @@ def plan(args: ArmAxes) -> ArmPlan:
     if args.template_task_override:
         extra_tags.append(f"tt{_slug(args.template_task_override, 12)}")
 
+    # Same "only when overridden" rule, for the same reason (see ArmAxes).
+    stack_factor_tags = [f"sk{stack_factor_effective}"] if stack_factor_overridden else []
+
     composed_name = "-".join([
         args.stage,
         data_tag(args.config, args.stage),
         f"{encoder_tag(encoder_effective)}{'F' if encoder_freeze else 'T'}",
         f"{decoder_tag(decoder_effective)}{'F' if decoder_freeze else 'T'}" + ("-lora" if decoder_lora else ""),
         f"{adapter_effective}{'F' if adapter_freeze else 'T'}",
+        *stack_factor_tags,
         *extra_tags,
         lr_tag(encoder_lr_effective, "elr"),
         lr_tag(decoder_lr_effective, "dlr"),
@@ -729,6 +798,7 @@ def main() -> None:
     p.add_argument("--world-size", required=True, type=int)
     p.add_argument("--adapter", required=True)
     p.add_argument("--adapter-freeze", required=True)
+    p.add_argument("--stack-factor", required=True, help="empty string means: use the config's own value, no override")
     p.add_argument("--encoder", required=True)
     p.add_argument("--encoder-freeze", required=True)
     p.add_argument("--decoder", required=True)
@@ -751,6 +821,7 @@ def main() -> None:
         world_size=args.world_size,
         adapter=args.adapter,
         adapter_freeze=args.adapter_freeze,
+        stack_factor=args.stack_factor,
         encoder=args.encoder,
         encoder_freeze=args.encoder_freeze,
         decoder=args.decoder,
