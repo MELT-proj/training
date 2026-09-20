@@ -229,7 +229,7 @@ Settled.
       leave the grid. Nothing to launch — this produces the rendered configs
       and the arm list the screen starts from.
       *Blocks the whole of week 2 Track A.*
-- [ ] **LID prompt templates and a `without_language` selection mode**
+- [x] **LID prompt templates and a `without_language` selection mode**
       (`01-interface-recipe.md` §3): `{lang}` variants of the six `verbatim`
       templates, plus the selection mode that makes LID a controllable
       factor instead of a per-sample coin flip. Prerequisite for the

@@ -15,6 +15,60 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-20 — Claude (worker session, LID templates) — templates and `without_language` are in PR #136; nothing downstream can select them yet
+
+Context: week-2 item "LID prompt templates and a `without_language`
+selection mode". Code and tests only, no GPU. PR #136 against main.
+
+Finding / proposal:
+1. **Done (PR #136).** Six `{lang}` variants appended to
+   `TASK_TEMPLATES["verbatim"]` (indices 6-11, each the original plus one
+   sentence in its own register, so `without_language` recovers the six
+   originals as an exact control; template 1 drops the original's stray
+   trailing space, per the PI's wording). `"without_language"` added;
+   the selection branch duplicated in the two helpers is now
+   `select_prompt_template()`. `random` is unchanged (one `random.choice`
+   on the global RNG, pinned by a test). Suite green in the nyx container.
+2. **`random` on `verbatim` changed anyway.** Appending to the list makes
+   `random` draw 12 templates, half with LID. The recorded arm
+   `MA-700asr-w2vbF-llama1bInsF-mlpT-ep3-ttverbatim-...` trained on the six
+   originals, so re-running that name would no longer be the same
+   experiment. Unavoidable given "with_language on verbatim returns the new
+   variants"; any new verbatim arm must pin `without_language` or
+   `with_language` rather than lean on `random`.
+3. **Not reachable from the campaign.** `plan_arm.py` forces
+   `data.prompt_template_selection` to `random` whenever
+   `template_task_override` is set, and pins `custom` otherwise; the mode is
+   not an `ArmAxes` field, not in `campaign.py` `AXIS_FIELDS`, not in the
+   EXP_NAME tags (only `tt<value>`). Needed: a new axis (e.g.
+   `template_selection`) in `ArmAxes`, `AXIS_FIELDS`, the `TEMPLATE_TASK_OVERRIDE`
+   launcher plumbing and README, a tag so LID and no-LID arms get different
+   names (today they would both be `...-ttverbatim-...`), and a decision
+   on the "forces random" rule. Not wired: it changes EXP_NAME grammar.
+4. **Eval parity is broken on three counts** (`melt-eval/melteval/prompt.py`):
+   (a) `select_template` is a third copy of the selection logic and raises on
+   `without_language`; (b) `FormatSpec`/`FORMAT_KEYS` do not carry
+   `template_task_override`, and `select_template` looks up
+   `TASK_TEMPLATES[task]` from the sample's task, so a `-ttverbatim` arm is
+   scored with `asr` prompts today, already, independent of this change;
+   (c) `solver.speech_prompt` can override the selection mode, so "score
+   with the language named" is expressible via `with_language`, but "score
+   with it withheld" is not until (a) is fixed. Fix (a) by calling
+   `select_prompt_template` (it takes an `rng`, so eval's
+   `random.Random(sample_key)` drops in); fix (b) by reading
+   `data.template_task_override` into the spec.
+5. **Existing template design, not changed (byte parity):** every verbatim
+   template names `<|audio__bos|>` (double underscore) while the real special
+   token is `<|audio_bos|>`; the marker the prompt describes is not in the
+   sequence. The examples are English whatever `{lang}` is. Both weaken a
+   LID contrast (the model is told "German" and shown English examples).
+
+Action needed: PI reviews #136. Orchestrator decides whether to open items
+for the campaign axis (3) and the melt-eval fixes (4a, 4b) before any LID
+arm is scheduled; I have not started either.
+
+---
+
 ## 2026-09-20 — Claude (worker session librispeech-step0-l1-l4) — Q4-k5-seed2 lands: size gap is real and reproducible, both seeds miss the bar
 
 Context: `Q4-k5-seed2` (seed 53, job 46143618) completed after a long
