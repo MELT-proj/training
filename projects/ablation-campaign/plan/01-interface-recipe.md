@@ -354,15 +354,22 @@ Same five languages and corpus mix as the campaign, ASR-only MA, rendered at
 not a fraction, because MA-stage runs are cheap and the grant is not the
 constraint:
 
-| factor | levels |
-|---|---|
-| adapter LR | 2e-4, 1e-3 (2e-5 as a single control run, not a grid level) |
-| effective batch | 1200 s, 4800 s |
-| `stack_factor` | 1 (50 Hz), 4 (12.5 Hz) |
+**Levels re-set from step 0b, 2026-09-20 (PI).** The table below previously
+carried levels chosen before step 0b ran, and three of them were settings
+step 0b had already ruled out. A screen must not re-test a factor the
+screen before it settled:
+
+| factor | levels | why these |
+|---|---|---|
+| adapter LR | 1e-3, 2e-3 | step 0 put 2e-5 at WER 1.12 and 2e-4 at 1.08; `wsd-50hz-lr2e3` beat `wsd-50hz` 0.599 vs 0.664 on dev-other. 2e-5 stays as **one control run**, not a grid level — it is the only thing tying this screen to the August failure and to LibriSpeech, and it costs ~5 GPU-h |
+| effective batch | 1200 s, 600 s, 300 s | **4800 s is dropped.** It is the August recipe: ~2,600 optimizer steps, the diagnosed cause of the failure in §1. `wsd-50hz-batch600` beat `wsd-50hz` 0.543 vs 0.664 on dev-other (a 0.002 seed regime), so smaller is still winning and 300 s tests whether that has bottomed out |
+| `stack_factor` | fixed at **5** (10 Hz) | continuity with `wsd-10hz`, the best w2v-BERT arm of step 0b, and with SLAM-ASR. Not a grid factor here; see the sweep below |
 | MA prompt | audio only; plus one verbatim run at the best corner; **proposed third level (PI, 2026-09-20): verbatim with a language ID in the prompt** — see below |
 
-Eight grid runs, one verbatim run, one 2e-5 control, two extra seeds at the
-best corner: twelve runs, ≈ 60 GPU-h. Metrics: MA-stage generative WER and
+Six grid runs (2 LR × 3 batch at k=5), two stacking-sweep runs (k=2 and
+k=10 at the best corner), one 2e-5 control, two prompt runs at the best
+corner (verbatim, and verbatim+LID if adopted), two extra seeds at the best
+corner: thirteen runs, ≈ 65 GPU-h. Metrics: MA-stage generative WER and
 CER per language from the in-training eval (200 utterances per set), the loss
 transition step, and FLEURS-24 zero-shot CER from melt-eval on the final
 checkpoint, which gives a first 24-language signal for free.
@@ -372,23 +379,55 @@ batch, stack factor, prompt. IFT keeps its own effective batch (3840 s at
 2 nodes / grad_accum 4, measured to hide the all-reduce) and decoder LR 2e-5
 until `04-regime.md` says otherwise.
 
-Why a 4× stack and not 5: 4 keeps the 60 s cut at 750 positions and divides
-the w2v-BERT frame count evenly; 5 would match SLAM-ASR. Either is fine; 4 is
-the default so that 2 and 8 are one halving away if the crossing needs them.
+**Stacking is a sweep, not a grid factor (revised 2026-09-20).** The earlier
+note here preferred k=4 because it "divides the w2v-BERT frame count
+evenly"; that is not a reason, since a 60 s cut at 50 Hz is 3,000 frames and
+5 divides it exactly as evenly as 4. The real argument for 12.5 Hz was to
+pick one rate every adapter in `03-audio-stack.md` can hit — but the
+Q-Former is natively 10 Hz, so 10 Hz is at least as natural a common rate,
+and it is the rate SLAM-ASR uses and the one `wsd-10hz` was measured at.
 
-**Proposed prompt level: verbatim with a language ID (PI, 2026-09-20).**
-Part of the configuration the PI expects to win (`03-audio-stack.md` §0.1).
-The argument for it is that MA is where the model learns what the audio *is*,
-and a frozen decoder cannot infer the target language from 10–50 Hz features
-as reliably as it can be told; the August failure mode included hypotheses
-"sometimes in the wrong language" (§1), which is exactly what an LID tag
-would suppress. The argument against is that it hands the model at training
-time something no realistic deployment knows, so a model trained with it
-either needs the tag at inference or has to be shown to survive without it.
-**Not adopted yet — the PI decides.** If it goes in, it is a third prompt
-level here and every arm that uses it must be scored twice, once with the
-tag and once with it withheld, or the comparison against the audio-only and
-verbatim arms measures a different task rather than a different prompt.
+So k=5 is the default, and stacking gets a **one-dimensional sweep at the
+best LR/batch corner: k ∈ {2, 5, 10}** (25, 10 and 5 Hz). Three adjacent
+values such as {4, 5, 6} span 12.5 to 8.3 Hz — under 30% apart, likely
+inside noise, and they would not draw a curve. The efficiency figure in
+`03-audio-stack.md` §4 plots CER against decoder positions per audio second,
+so what it needs from this screen is *spread* on that axis and the point
+where accuracy starts to pay for it.
+
+**Prompt level: verbatim with a language ID (PI, 2026-09-20).** MA is where
+the model learns what the audio *is*, and a frozen decoder cannot infer the
+target language from 10–50 Hz features as reliably as it can be told; the
+August failure included hypotheses "sometimes in the wrong language" (§1),
+which is exactly what naming the language would suppress.
+
+**What it means concretely** (`melt/training/data/audio/lhotse/helpers.py`):
+add `{lang}` variants of the six `verbatim` templates, each saying that what
+sits between the audio tags will be in that language — the PI's wording is
+"Everything between those tags will be in {lang}." `{lang}` already resolves
+through `LANGUAGE_ISO_TO_NAME` to a language *name*, not an ISO code, so
+this needs no new machinery.
+
+**Two things to get right, both of which the existing `asr` family gets
+wrong today:**
+
+1. **LID must be selectable, not sampled.** The `asr` family already holds
+   six `{lang}` templates and six explicitly-no-LID copies *in one list*, and
+   `prompt_template_selection: "random"` draws from the whole list. Any run
+   using it therefore trains on a random mixture of LID and no-LID prompts,
+   which makes LID a per-sample coin flip rather than a factor — no existing
+   run can say anything about it. `"with_language"` filters to the `{lang}`
+   templates, but there is **no `"without_language"`**, so the no-LID control
+   cannot currently be selected cleanly either. Adding that selection mode is
+   the prerequisite for testing this at all.
+2. **Score with and without the tag.** A model trained with the language
+   named either needs it at inference or must be shown to survive without it.
+   Our eval sets are per-language so supplying it is easy, which is exactly
+   why the withheld-tag score is the one that matters.
+
+Also stale in that file: the comment above the templates claims every
+template must contain `{audio_token}` and `{lang}`, which is already untrue
+of half the `asr` list and all of `verbatim`.
 
 ## 4. What `stack_factor` has to do
 
