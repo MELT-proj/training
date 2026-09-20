@@ -180,19 +180,24 @@ MA prompt) is chosen by Sunday and written into `01-interface-recipe.md` as
 Settled.
 
 ### Track A — GPU
-- [ ] **Five-language interface screen**, MA only, ASR-only mixture rendered
-      at `--budget-hours 125` (625 h total, ≈35 min per run on 8 GPUs):
-      full grid adapter LR {2e-4, 1e-3} × effective batch {1200, 4800} s ×
-      stack {1, 4} = 8 runs; one verbatim-prompt run at the best corner; two
-      extra seeds at the best corner; one 2e-5 control. Twelve runs, ~60 GPU-h.
-      *Outcome:* MA-stage generative WER per language, loss transition step,
-      per-run FLEURS-24 zero-shot CER from melt-eval on the final checkpoint.
-      *Revised 2026-09-17:* waits for step 0b. Budget becomes at least 1.5×
-      the best LibriSpeech arm's hours-to-threshold and never under one
-      epoch of 700 h per language; 125 h per language is ~1,900 steps, below
-      where the transition appeared. Settled factors leave the grid. Launch
-      moves to about Tue 2026-09-22; the gate stays Sun 2026-09-27 if the
-      queue allows.
+- [ ] **Five-language interface screen — the LR × batch grid** (twelve arms,
+      `01-interface-recipe.md` §3, rows `MA-700-screen-*` in `campaign.yaml`,
+      added 2026-09-20). Adapter LR {1e-3, 2e-3} × effective batch {1200,
+      600, 300} s × encoder {w2v-BERT 2.0, Whisper-large-v3}, all at k=5, on
+      `ABL-MA-700-asr.yaml` (one epoch of 700 h/lang), seed 42 throughout.
+      ≈ 240 GPU-h. All twelve can go into the queue at once — nothing in the
+      grid depends on another arm's result.
+      *Outcome:* MA-stage generative WER and CER per language, the loss
+      transition step, FLEURS-24 zero-shot CER on the final checkpoint, and
+      the best LR/batch corner per encoder — which also answers whether the
+      recipe optimum is encoder-invariant, the assumption `03`'s crossing
+      rests on.
+- [ ] **Screen follow-ups at the best corner** (seven arms, ≈ 140 GPU-h).
+      Blocked on the grid above, because every one of them is defined
+      relative to a corner the grid has to find: stacking sweep k=2 and
+      k=10; the 2e-5 control; two prompt runs (verbatim, and verbatim+LID);
+      two extra seeds. Rows are not in `campaign.yaml` yet — they are added
+      once the corner is known.
 - [ ] If step 0 was ambiguous, re-run the deciding LibriSpeech pair with the
       second seed before the screen. *Superseded by step 0b (week 1).*
 
@@ -221,20 +226,34 @@ Settled.
       three LR points.
 - [ ] melt-eval MN5 venv built and a smoke eval run there, so end-of-run
       evaluation can happen on MN5 when queues allow.
-- [ ] **Re-derive the screen's budget and render its configs**, now that
-      step 0b has produced an hours-to-threshold number: `wsd-50hz-whisper`
-      crossed at `global_step` 262, ~87.3 audio-h. `01-interface-recipe.md`
-      §2b's Consequence sets the per-arm budget at ≥1.5× that and never
-      under one epoch of 700 h/lang. Settled factors (schedule, stacking)
-      leave the grid. Nothing to launch — this produces the rendered configs
-      and the arm list the screen starts from.
-      *Blocks the whole of week 2 Track A.*
+- [x] **Re-derive the screen's budget and render its configs** (done
+      2026-09-20). `wsd-50hz-whisper` crossed at `global_step` 262, ~87.3
+      audio-h; 1.5× that is 131 h, so §2b's other floor — one epoch of 700 h
+      per language — binds, and that is exactly `ABL-MA-700-asr.yaml`
+      (`total_hours: 3500.00`). **No new config was needed**; the screen is
+      twelve `MA-700-screen-*` rows against the config the campaign already
+      trains on, with `grad_accum_steps` set explicitly on every one because
+      that config's own 150 × 4 × 8 is the 4800 s August recipe. Cost
+      re-derived from ≈65 to ≈380 GPU-h over nineteen runs. See
+      `01-interface-recipe.md` §3 and the board entry.
 - [x] **LID prompt templates and a `without_language` selection mode**
       (`01-interface-recipe.md` §3): `{lang}` variants of the six `verbatim`
       templates, plus the selection mode that makes LID a controllable
       factor instead of a per-sample coin flip. Prerequisite for the
       screen's prompt runs; additive only, no change to `random`'s current
       behaviour. No GPU.
+- [ ] **Whisper's window-padding ratio per corpus** (`03-audio-stack.md` §3,
+      §4), **moved up from week 3 on 2026-09-20**: a fixed-window encoder
+      spends a full 30 s of encoder compute on every utterance however short,
+      so its cost per audio hour is `30 s / mean utterance duration` and
+      varies by corpus. Measure the mean duration per corpus from the shar
+      manifests and report the ratio alongside GPU-h per 1,000 audio hours.
+      Still needed before the week-3 crossing's cost axis means anything, but
+      now also for this week: six Whisper arms joined the screen's grid, and
+      their `batch_duration` was set to 75 on an *estimated* ~6x inflation
+      (~5 s mean utterance) against the ~2.5x `MA-librispeech-w` saw on
+      LibriSpeech. If the real ratio is materially higher, the 1200 s Whisper
+      arms are the ones that will OOM. Data only, no GPU.
 - [ ] **Quantify FLEURS in or out of the Fondue pool** (`06-fondue.md` §3,
       new row 2026-09-18): per language, how many ASR hours excluding
       `asr_fleurs` would remove, from `data/hours_by_language.csv`, with the
@@ -273,14 +292,6 @@ assumed one (`03-audio-stack.md` §0).*
 - [ ] **Ladder tier configs** (`05-language-ladder.md` §2): the config builder
       needs a "min(tier, available)" per-language budget; implement and render
       tiers 10/30/100/300/700.
-- [ ] **Whisper's window-padding ratio per corpus** (`03-audio-stack.md` §3,
-      §4): a fixed-window encoder spends a full 30 s of encoder compute on
-      every utterance however short, so its cost per audio hour is
-      `30 s / mean utterance duration` and varies by corpus. Measure the mean
-      duration per corpus from the shar manifests and report the ratio
-      alongside GPU-h per 1,000 audio hours. Needed before the crossing's
-      cost axis means anything, since Whisper is one of its four encoders.
-      Data only, no GPU.
 - [ ] Efficiency instrumentation: log decoder positions per audio second and
       GPU-h per 1,000 audio hours for every arm (from `resolved_config.json`
       and SLURM accounting).

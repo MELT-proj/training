@@ -20,6 +20,7 @@
 #                                        rendered by build_campaign_config.py --
 #                                        never write a new one per arm)
 #   Architecture   ADAPTER, ADAPTER_FREEZE, STACK_FACTOR, ENCODER, ENCODER_FREEZE,
+#                  MAX_AUDIO_SEQ_LEN,
 #                  DECODER, DECODER_FREEZE, DECODER_LORA     (2-8 CLI overrides;
 #                  STACK_FACTOR only affects the MLP adapter -- see
 #                  plan_arm.py's ArmAxes and melt/modeling/modeling_melt.py's
@@ -92,6 +93,9 @@ ADAPTER_FREEZE="${ADAPTER_FREEZE:-}"
 STACK_FACTOR="${STACK_FACTOR:-}"
 ENCODER="${ENCODER:-}"
 ENCODER_FREEZE="${ENCODER_FREEZE:-}"
+# Empty = derive from ENCODER (a fixed-window encoder gets the window it
+# demands) and otherwise inherit from CONFIG. See plan_arm.py.
+MAX_AUDIO_SEQ_LEN="${MAX_AUDIO_SEQ_LEN:-}"
 DECODER="${DECODER:-}"
 DECODER_FREEZE="${DECODER_FREEZE:-}"
 DECODER_LORA="${DECODER_LORA:-}"
@@ -140,6 +144,7 @@ PLAN="$(python3 "${SCRIPT_DIR}/plan_arm.py" \
     --adapter "$ADAPTER" --adapter-freeze "$ADAPTER_FREEZE" \
     --stack-factor "$STACK_FACTOR" \
     --encoder "$ENCODER" --encoder-freeze "$ENCODER_FREEZE" \
+    --max-audio-seq-len "$MAX_AUDIO_SEQ_LEN" \
     --decoder "$DECODER" --decoder-freeze "$DECODER_FREEZE" \
     --decoder-lora "$DECODER_LORA" \
     --encoder-lr "$ENCODER_LR" --decoder-lr "$DECODER_LR" --adapter-lr "$ADAPTER_LR" \

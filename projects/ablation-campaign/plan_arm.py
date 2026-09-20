@@ -235,6 +235,26 @@ def as_bool(s: str) -> bool:
 TEMPLATE_SELECTIONS = ("random", "with_language", "without_language")
 TEMPLATE_SELECTION_TAGS = {"with_language": "lid", "without_language": "nolid"}
 
+# Encoders that demand an exact input length, and the frame count they demand.
+# Mirrors ENCODER_SPECS[...].window_frames in melt/modeling/encoder_specs.py,
+# which is the source of truth -- this script never imports melt (see the LR
+# constants above), so the value is restated here, keyed on hub name rather
+# than on `config.model_type` because that is all an arm row gives us.
+#
+# Why this table exists at all: WhisperEncoder.forward raises on anything that
+# is not exactly `max_source_positions * 2` mel frames, so a Whisper arm run
+# against a config written for w2v-BERT (max_audio_seq_len 1500) dies at
+# startup -- which is what happened to job 45985946 on 2026-09-18, and was
+# then worked around by hand-passing the override on every submission. An arm
+# that only runs when the operator remembers an undocumented extra argument is
+# off the ledger the moment they forget, so it is derived here instead.
+ENCODER_WINDOW_FRAMES: dict[str, int] = {
+    "openai/whisper-large-v3": 3000,
+    "openai/whisper-large-v3-turbo": 3000,
+    "openai/whisper-medium": 3000,
+    "openai/whisper-small": 3000,
+}
+
 
 def _slug(name: str, maxlen: int) -> str:
     base = name.split("/")[-1]
@@ -369,6 +389,21 @@ class ArmAxes:
     stack_factor: str = ""
     encoder: str = ""
     encoder_freeze: str = ""
+    # max_audio_seq_len: input frames the encoder is fed per forward window.
+    # "" means "derive it", NOT "inherit blindly": when the arm overrides the
+    # encoder to one in ENCODER_WINDOW_FRAMES, the required window is emitted
+    # automatically, because the alternative is an arm that only runs when the
+    # operator remembers an extra CLI argument (see that table's comment).
+    # An explicit value overrides both, and is the only way to set it for an
+    # encoder the table does not know.
+    #
+    # Deliberately NOT tagged into EXP_NAME. It is a property of the encoder,
+    # which the name already carries in its own tag, so tagging it would
+    # rename every Whisper arm -- including MA-librispeech-w, which has run --
+    # and orphan its output directory for no gain. plan() rejects an explicit
+    # value that contradicts a known fixed-window encoder instead, so the
+    # untagged case cannot silently mean two different things.
+    max_audio_seq_len: str = ""
     decoder: str = ""
     decoder_freeze: str = ""
     decoder_lora: str = ""
@@ -571,6 +606,34 @@ def plan(args: ArmAxes) -> ArmPlan:
         overrides += ["--model.encoder.name", encoder_effective]
     if args.encoder_freeze and encoder_freeze != cfg_encoder_freeze:
         overrides += ["--model.encoder.freeze", str(encoder_freeze).lower()]
+
+    # max_audio_seq_len: explicit value wins; otherwise derive the window a
+    # fixed-window encoder demands. Only emitted when it differs from what the
+    # config already declares, so arms that do not move the encoder produce a
+    # byte-identical command to the one they produced before this axis existed.
+    cfg_max_audio_seq_len = get(cfg, "model.encoder.max_audio_seq_len")
+    required_window = ENCODER_WINDOW_FRAMES.get(encoder_effective)
+    if args.max_audio_seq_len:
+        try:
+            max_audio_seq_len_effective = int(args.max_audio_seq_len)
+        except ValueError:
+            die(f"MAX_AUDIO_SEQ_LEN={args.max_audio_seq_len!r} is not an integer.")
+        if required_window is not None and max_audio_seq_len_effective != required_window:
+            die(
+                f"MAX_AUDIO_SEQ_LEN={max_audio_seq_len_effective} contradicts "
+                f"{encoder_effective}, which accepts exactly {required_window} frames "
+                "and raises on anything else (melt/modeling/encoder_specs.py). Drop "
+                "the override and it is derived, or fix the value."
+            )
+    elif required_window is not None:
+        max_audio_seq_len_effective = required_window
+    else:
+        max_audio_seq_len_effective = cfg_max_audio_seq_len
+    if (
+        max_audio_seq_len_effective is not None
+        and max_audio_seq_len_effective != cfg_max_audio_seq_len
+    ):
+        overrides += ["--model.encoder.max_audio_seq_len", str(max_audio_seq_len_effective)]
 
     if args.decoder and decoder_effective != cfg_decoder_name:
         profile = DECODER_PROFILES.get(decoder_effective)
@@ -831,6 +894,7 @@ def main() -> None:
     p.add_argument("--stack-factor", required=True, help="empty string means: use the config's own value, no override")
     p.add_argument("--encoder", required=True)
     p.add_argument("--encoder-freeze", required=True)
+    p.add_argument("--max-audio-seq-len", required=True, help="empty string means: derive it from the encoder, else use the config's own value")
     p.add_argument("--decoder", required=True)
     p.add_argument("--decoder-freeze", required=True)
     p.add_argument("--decoder-lora", required=True, help="empty string means: use the config's own value, no override")
@@ -855,6 +919,7 @@ def main() -> None:
         stack_factor=args.stack_factor,
         encoder=args.encoder,
         encoder_freeze=args.encoder_freeze,
+        max_audio_seq_len=args.max_audio_seq_len,
         decoder=args.decoder,
         decoder_freeze=args.decoder_freeze,
         decoder_lora=args.decoder_lora,

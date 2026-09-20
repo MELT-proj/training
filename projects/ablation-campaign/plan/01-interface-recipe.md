@@ -347,12 +347,41 @@ settles leave the screen's grid.
 ## 3. The five-language interface screen (week 2)
 
 *Revised 2026-09-17: the budget and factor levels below are re-set from step
-0b (§2b) before launch.*
+0b (§2b) before launch. Budget re-derived and the grid rendered 2026-09-20.*
 
-Same five languages and corpus mix as the campaign, ASR-only MA, rendered at
-`--budget-hours 125` (625 h total, ≈ 35 min per run on 8 GPUs). Full grid,
+Same five languages and corpus mix as the campaign, ASR-only MA. Full grid,
 not a fraction, because MA-stage runs are cheap and the grant is not the
 constraint:
+
+**Budget, derived 2026-09-20.** §2b's Consequence sets the per-arm budget at
+≥ 1.5× the best arm's hours-to-threshold (1.5 × 87.3 = 131 h) **and never
+under one epoch of 700 h per language**. The floor binds, and 700 h × 5 is
+exactly `ABL-MA-700-asr.yaml` (`total_hours: 3500.00`), so the screen needs
+no new config: it is campaign.yaml rows against the config the campaign
+already trains on. The `--budget-hours 125` figure written here before is
+withdrawn — at ~1,900 steps it was below where the transition appeared.
+
+One override is not optional. `ABL-MA-700-asr.yaml`'s own `batch_duration
+150 × grad_accum 4 × 8 ranks` is **4800 s**, the August recipe this screen
+exists to replace, so every arm sets `grad_accum_steps` explicitly. The
+three batch levels are reached as:
+
+| effective batch | `batch_duration` × `grad_accum` × world | steps/epoch |
+|---|---|---|
+| 1200 s | 150 × 1 × 8 (Whisper: 75 × 2 × 8) | 10,500 |
+| 600 s | 75 × 1 × 8 | 21,000 |
+| 300 s | 75 × 1 × 4 | 42,000 |
+
+Whisper halves `batch_duration` and doubles `grad_accum` at the 1200 s level:
+it pads every cut to a whole 30 s window, so at this mixture's ~5 s mean
+utterance its encoder input inflates ~6× against ~2.5× on LibriSpeech, where
+`MA-librispeech-w` ran at 150. The product, and therefore steps per epoch, is
+unchanged. `max_audio_seq_len` is derived from the encoder name rather than
+passed by hand (`plan_arm.py`'s `ENCODER_WINDOW_FRAMES`).
+
+**Cost.** ≈ 20 GPU-h per arm at k=5, extrapolated from the measured 30 GPU-h
+of a 700 h/lang 50 Hz MA arm. The "≈ 65 GPU-h" written here before was
+computed at 125 h/lang and is superseded.
 
 **Levels re-set from step 0b, 2026-09-20 (PI).** The table below previously
 carried levels chosen before step 0b ran, and three of them were settings
@@ -366,10 +395,35 @@ screen before it settled:
 | `stack_factor` | fixed at **5** (10 Hz) | continuity with `wsd-10hz`, the best w2v-BERT arm of step 0b, and with SLAM-ASR. Not a grid factor here; see the sweep below |
 | MA prompt | audio only; plus one verbatim run at the best corner; **proposed third level (PI, 2026-09-20): verbatim with a language ID in the prompt** — see below |
 
-Six grid runs (2 LR × 3 batch at k=5), two stacking-sweep runs (k=2 and
-k=10 at the best corner), one 2e-5 control, two prompt runs at the best
-corner (verbatim, and verbatim+LID if adopted), two extra seeds at the best
-corner: thirteen runs, ≈ 65 GPU-h. Metrics: MA-stage generative WER and
+**The grid runs on both encoders (PI, 2026-09-20).** The screen has to
+resolve LR and batch contrasts, and step 0b measured exactly those against
+the seed-only spread at the same error regime:
+
+| contrast | dev-clean Δ | dev-other Δ |
+|---|---|---|
+| seed only (`wsd-50hz` vs `wsd-50hz-seed2`) | 0.108 | 0.002 |
+| adapter LR 1e-3 → 2e-3 | 0.112 | 0.065 |
+| effective batch 1200 → 600 s | 0.148 | 0.121 |
+
+On dev-clean the LR contrast is the size of the noise. w2v-BERT's best
+step-0b arm sat at WER 0.314 on data easier than this mixture, so the spread
+here is likelier to widen than narrow; Whisper sat at 0.038, where the
+measured spread is 0.002. Running the grid on w2v-BERT alone risks a screen
+that cannot answer its own question; running it on Whisper alone is the
+selection bias §2b warns about. Running both costs ~120 GPU-h more and tests
+whether the recipe optimum is encoder-invariant — which `03-audio-stack.md`
+§2 already *assumes* when it fixes one recipe across all sixteen crossing
+arms. If the optimum differs by encoder, that assumption is wrong, and this
+screen is where it is cheapest to find out.
+
+Twelve grid runs (2 LR × 3 batch × 2 encoders, all at k=5), then at the best
+corner: two stacking-sweep runs (k=2 and k=10), one 2e-5 control, two prompt
+runs (verbatim, and verbatim+LID if adopted), two extra seeds. **Nineteen
+runs, ≈ 380 GPU-h.** Only the twelve grid runs can be submitted up front; the
+other seven are defined relative to a corner the grid has to find first.
+Seed fixed at 42 across all twelve, per `agent-protocol.md` §3 — step 0b drew
+a different seed per arm, which is how a 0.11 contrast turned out to be a
+seed draw. Metrics: MA-stage generative WER and
 CER per language from the in-training eval (200 utterances per set), the loss
 transition step, and FLEURS-24 zero-shot CER from melt-eval on the final
 checkpoint, which gives a first 24-language signal for free.

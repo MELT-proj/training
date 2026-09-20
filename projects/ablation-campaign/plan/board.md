@@ -15,6 +15,60 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-20 — Fondue Orchestrator — the week-2 screen needs no new config; grid rendered on both encoders; `max_audio_seq_len` is now derived
+
+Context: MN5 queue empty on a Sunday, PI wanted something launchable. The
+blocking item was "re-derive the screen's budget and render its configs".
+
+Finding / proposal:
+1. **The budget floor resolves to a config we already have.** §2b's
+   Consequence sets the per-arm budget at ≥1.5x the best hours-to-threshold
+   (1.5 x 87.3 = 131 h) *and* never under one epoch of 700 h/lang. The floor
+   binds, and 700 h x 5 is exactly `ABL-MA-700-asr.yaml`
+   (`total_hours: 3500.00`). Nothing needed rendering; the screen is
+   campaign.yaml rows. The `--budget-hours 125` figure is withdrawn.
+2. **`ABL-MA-700-asr.yaml`'s own effective batch is 4800 s**, not 1200:
+   `batch_duration 150 x grad_accum 4 x 8 ranks`. That is the August recipe
+   §1 diagnosed as the cause of the failed alignment. Every screen row sets
+   `grad_accum_steps` explicitly; inheriting it would have silently re-run
+   the thing the screen exists to replace. Steps/epoch come out at
+   10,500 / 21,000 / 42,000 for 1200 / 600 / 300 s, matching §2b's own
+   "about 10,500 steps at 1200 s".
+3. **Cost re-derived: ~65 -> ~380 GPU-h** over nineteen runs (~20 GPU-h per
+   k=5 arm, extrapolated from the measured 30 GPU-h of a 700 h/lang 50 Hz
+   arm). Against ~49,100 remaining this is 0.8%.
+4. **The grid runs on both encoders** (PI, 2026-09-20). Step 0b measured the
+   screen's own contrasts against the seed-only spread at the same error
+   regime: seed 0.108/0.002, LR 1e-3->2e-3 0.112/0.065, batch 1200->600
+   0.148/0.121 (dev-clean/dev-other). On dev-clean the LR contrast is the
+   size of the noise, and w2v-BERT's best step-0b arm sat at 0.314 on data
+   easier than this mixture. Whisper sat at 0.038, where the measured spread
+   is 0.002. Twelve grid arms instead of six, +~120 GPU-h, and it tests
+   whether the recipe optimum is encoder-invariant — which `03` §2 already
+   assumes when it fixes one recipe across all sixteen crossing arms.
+5. **`max_audio_seq_len` is now a derived axis** (`plan_arm.py`
+   `ENCODER_WINDOW_FRAMES`, mirroring `encoder_specs.py`). Job 45985946 died
+   at startup because Whisper takes exactly 3000 frames and the config said
+   1500; the fix was an extra argument hand-passed on every submission,
+   which keeps the real command out of `arms.tsv` and only works while the
+   operator remembers. A Whisper arm now derives 3000 with no row entry, an
+   explicit value that contradicts a known fixed-window encoder is refused,
+   and no arm is renamed (the window is a property of the encoder, already
+   in its tag — tagging it would orphan `MA-librispeech-w`'s output dir).
+   Eight tests; existing arms verified byte-identical.
+6. **Unverified, and it is the likeliest way the grid fails.** The six
+   Whisper arms are sized at `batch_duration 75` on an *estimated* ~6x
+   window-padding inflation for this mixture (~5 s mean utterance) against
+   the ~2.5x `MA-librispeech-w` saw on LibriSpeech. Nobody has measured the
+   real per-corpus ratio. The 1200 s Whisper arms are the ones that will OOM
+   if the estimate is low. The week-3 padding-ratio item is moved up to
+   week 2 for this reason.
+
+Action needed: PI launches the twelve `MA-700-screen-*` rows (grid only —
+the other seven are defined relative to a corner the grid has to find).
+Watch the first Whisper arm's memory-preallocation lines before the rest of
+them start.
+
 ## 2026-09-20 — Claude (worker session, LID templates) — templates, `without_language` and the campaign axis are in PR #136; melt-eval cannot score them yet (eval#17)
 
 Context: week-2 item "LID prompt templates and a `without_language`
