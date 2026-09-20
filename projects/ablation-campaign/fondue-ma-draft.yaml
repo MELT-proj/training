@@ -1,0 +1,337 @@
+# Fondue -- stage 1 (modality alignment), DRAFT config -- week 2, 2026-09-18.
+#
+# NOT RUNNABLE. NOT FROZEN. This is a template for the two-tier mixture and
+# the pieces that are decidable before 2026-10-25; every gated field is a
+# placeholder tagged "# OPEN" naming the section and week that resolves it,
+# per the rule in projects/ablation-campaign/plan/06-fondue.md §3: do not
+# invent a value for a row that is still open there.
+#
+# How this differs from every ABL-*.yaml in this folder: those are rendered
+# by build_campaign_config.py, which explicitly does NOT use the alpha/beta
+# policy -- it gives every ablation language an equal 1/N share so a
+# cross-language comparison measures language, not corpus (see that script's
+# own docstring). Fondue is the opposite case: the full, naturally-skewed
+# pool (English 62%, Maltese 0.005%), so it is built with the OTHER tool,
+# infra/compute_mix_weights.py, whose alpha/beta two-tier policy is exactly
+# for this (docs/mixture_weights.md).
+#
+# The real render, at the week-3 dry run, is:
+#
+#   python3 infra/compute_mix_weights.py \
+#       --config       projects/ablation-campaign/plan/fondue-ma-draft.yaml \
+#       --datasets-root <shar root> \
+#       --alpha 0.5 --beta 0.5 \
+#       --cache        infra/.mix_weights_hours.json \
+#       --emit-config  projects/ablation-campaign/Fondue-MA.yaml \
+#       --exp-name     Fondue-MA
+#
+# which fills in every `weight:` this file omits (per docs/mixture_weights.md
+# "Adding a dataset": do NOT hand-set weight, the script computes it) and
+# corrects train_ds.total_hours from what it actually measures on disk.
+#
+# ALPHA=0.5, BETA=0.5 -- chosen, not the tool's bare default coincidence:
+#   - This is the paper's own pretraining setting (arXiv:2509.14128 3.3.1),
+#     and MA is a representation-alignment stage, not a task fine-tune, so
+#     the pretraining regime is the more apt of the two the paper names.
+#   - docs/mixture_weights.md's own worked example already ran alpha=beta=0.5
+#     against a pool of 245,099.2 h / 71 language entries -- close enough to
+#     this pool (~240,355 h over the 26 languages below, from
+#     data/hours_by_language.csv) that its printed boosts are a direct
+#     preview: at beta=0.5 the natural en:mt hours ratio (151,848.7 : 12.3,
+#     ~12,345x) compresses to a language-share ratio of sqrt(12,345) =~ 111x
+#     -- still English-dominated, but not 12,345x dominated. The corollary:
+#     mt's realized exposure in one nominal epoch of ~240,355 h works out to
+#     roughly 0.27% of it (~655 h) against its actual 12.3 unique h, i.e. a
+#     ~53x repetition of the same handful of hours. That number is arithmetic
+#     from alpha/beta, not a promise about how many actual epochs the tail
+#     sees -- see the "epochs for the tail" row in 06-fondue.md §3, which is
+#     a SEPARATE, still-open decision (the repetition probe, weeks 5-6) about
+#     how much of this the campaign wants, independent of alpha/beta.
+#   - alpha=0.5 flattens corpus-within-language the same way; nothing here
+#     forces a small in-language corpus (e.g. FLEURS's ~9h per language) to
+#     be swamped by MLS or Common Voice before the language-level step runs.
+#
+# See fondue-ift-draft.yaml for why alpha=0.2 is proposed for the IFT stage
+# instead, and raclette-draft.yaml for the pilot that measures the LR this
+# batch actually needs.
+
+# =============================================================================
+# Run Configuration
+# =============================================================================
+run:
+  exp_name: Fondue-MA          # placeholder; the real EXP_NAME is composed by
+                                # plan_arm.py once this is an actual campaign
+                                # row (agent-protocol.md: never typed by hand).
+  dry_run: false
+  memory_preallocation: true   # decidable now: campaign convention, "turn on
+                                # whenever what is trainable changes"
+                                # (infrastructure.md §3).
+
+# =============================================================================
+# Model Configuration -- every field below is OPEN
+# =============================================================================
+model:
+  encoder:
+    name: null                 # OPEN -- 03-audio-stack.md §2 crossing,
+                                # week-3 gate (2026-10-04). Do not assume
+                                # w2v-BERT continues past the crossing.
+    freeze: true                # MA convention (encoder frozen at this stage)
+                                # is not itself gated; which encoder is.
+    max_audio_seq_len: null    # OPEN -- follows frame rate, same gate.
+
+  decoder:
+    name: null                 # OPEN -- 02-backbones.md §4, week-5 gate
+                                # (2026-10-18), informed by the Qwen
+                                # throughput numbers in 06-fondue.md §2.
+    attn_implementation: flash_attention_2   # decidable: campaign-wide
+                                # convention regardless of which decoder wins
+                                # (ckpt-path-drops-attn-implementation trap).
+    freeze: true                 # MA convention; decoder itself is open.
+    # eos_token / pad_token / audio_token(s): decoder-dependent, set once
+    # model.decoder.name is chosen (each backbone's block in 02-backbones.md
+    # already has the right tokens for all six candidates).
+
+  adapter:
+    freeze: false
+    _type: null                 # OPEN -- 03-audio-stack.md §2 crossing +
+                                # 04-regime.md; the audio-stack section picks
+                                # the adapter, week-3 gate.
+
+  ckpt: null
+
+# =============================================================================
+# Data Configuration -- the decidable part of this file
+# =============================================================================
+data:
+  sample_rate: 16000
+  apply_chat_template: false   # MA convention for every arm in this campaign
+                                # regardless of backbone (build_campaign_config.py
+                                # docstring); an instruct backbone's empty-prompt
+                                # variant is a command-line override, not a
+                                # config field, kept out on purpose.
+  strict_text_field: true      # settled campaign-wide (silent-text-field-fallback).
+
+  train_ds:
+    # total_hours is a placeholder pending the real measurement; the two-tier
+    # weights below are proportions and do not depend on this number, but the
+    # steps-per-epoch estimate does. ~240,355 h is the sum of asr_train_hours
+    # over the 26 languages below (data/hours_by_language.csv, 2026-09-15
+    # snapshot); 06-fondue.md §1 quotes ~247,000 for a slightly different
+    # language/date cut. Re-measured properly at the week-3 dry run.
+    total_hours: 240355.0        # PROVISIONAL -- from the CSV, not measured
+    force_estimate: false
+
+    # ---------------------------------------------------------------------
+    # LANGUAGE SET: EU-24 + ru + uk = 26 languages (settled, 06-fondue.md §3
+    # and the 2026-09-15 decision log). ca (Catalan) is explicitly OUT of
+    # this draft -- it is the one open cell of the "language set" row.
+    #   ca (Romance, non-EU-24): 1,747.3 h ASR, 135.8 h ST X->en (CoVoST2).
+    #   OPEN -- add as a 27th `type: group` here, same mechanism, if the PI
+    #   says yes before the freeze. Nothing else in this file changes if it
+    #   is added; it is just one more entry for compute_mix_weights.py to
+    #   weigh like any other.
+    # ---------------------------------------------------------------------
+    #
+    # Below: full, verified corpus entries for the five languages already
+    # confirmed in ABL-MA-700-asr.yaml / ABL-IFT-700.yaml and in
+    # docs/mixture_weights.md's own worked example (en, and by the same
+    # naming convention de/fr/es/it/pl/ru/uk for the Granary leaves) --
+    # `weight:` is deliberately omitted throughout, per docs/mixture_weights.md
+    # ("do NOT add a weight -- the script computes it"). The remaining 19
+    # languages are listed as a comment table only: fabricating their shar
+    # sub-paths here would look verified and would not be; enumerating them
+    # for real is exactly the week-3 dry-run task, which has filesystem
+    # access this draft does not use.
+    input_cfg:
+      # --- en: 151,848.7 h ASR (asr_train_hours) -------------------------
+      - type: group
+        tags: { task: asr, lang: en }
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/en/train
+            tags: { task: asr, lang: en, text_field: custom.metadata.sentence }
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/english/train
+            tags: { task: asr, lang: en, text_field: custom.pnc_text }
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/English/asr_only
+            tags: { task: asr, lang: en }
+          # + LibriSpeech, People's Speech (data/README.md's "asr_other",
+          # 7,847.5 h for en) -- shar paths not yet confirmed in any file
+          # this draft read; add at the week-3 dry run rather than guess.
+
+      # --- de: 11,128.2 h ASR, 7,429.1 h ST X->en -------------------------
+      - type: group
+        tags: { task: asr, lang: de }
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/de/train
+            tags: { task: asr, lang: de }
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/german/train
+            tags: { task: asr, lang: de, text_field: custom.pnc_text }
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/de/train
+            tags: { task: asr, lang: de }
+
+      # --- fr: 14,370.7 h ASR ---------------------------------------------
+      - type: group
+        tags: { task: asr, lang: fr }
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/fr/train
+            tags: { task: asr, lang: fr }
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/french/train
+            tags: { task: asr, lang: fr, text_field: custom.pnc_text }
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/fr/train
+            tags: { task: asr, lang: fr }
+
+      # --- es: 28,200.0 h ASR ---------------------------------------------
+      - type: group
+        tags: { task: asr, lang: es }
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/es/train
+            tags: { task: asr, lang: es }
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/spanish/train
+            tags: { task: asr, lang: es, text_field: custom.pnc_text }
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/es/train
+            tags: { task: asr, lang: es }
+
+      # --- it: 6,734.1 h ASR ----------------------------------------------
+      - type: group
+        tags: { task: asr, lang: it }
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/it/train
+            tags: { task: asr, lang: it, text_field: custom.metadata.sentence }
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/italian/train
+            tags: { task: asr, lang: it, text_field: custom.pnc_text }
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/it/train
+            tags: { task: asr, lang: it }
+
+      # --- ru: 20,172.9 h ASR (the named probe language, 06-fondue.md) ---
+      # Path BY NAMING-CONVENTION ANALOGY ONLY (confirmed pattern:
+      # yodas-granary/{English,French,Spanish,Italian,Polish}/asr_only from
+      # ABL-MA-700-asr.yaml and docs/mixture_weights.md's own example) --
+      # NOT verified against the real tree. Verify at the week-3 dry run.
+      - type: group
+        tags: { task: asr, lang: ru }
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Russian/asr_only
+            tags: { task: asr, lang: ru }
+            # UNVERIFIED PATH -- see comment above.
+          # + cv22 (38.1 h per the CSV's asr_cv22 column) -- path presumably
+          # cv22_sidon/ru/train by the established convention; not verified.
+
+      # --- uk: 647.0 h ASR (the other named-settled addition) -------------
+      # Same caveat as ru: path by analogy, not verified.
+      - type: group
+        tags: { task: asr, lang: uk }
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Ukrainian/asr_only
+            tags: { task: asr, lang: uk }
+            # UNVERIFIED PATH.
+          # + cv22 (31.7 h) -- same caveat.
+
+      # ---------------------------------------------------------------------
+      # Remaining 19 languages -- hours only (data/hours_by_language.csv),
+      # NOT expanded into groups here. Add each as a `- type: group` stanza
+      # matching the pattern above once its shar paths are confirmed
+      # (week-3 dry run); do not hand-invent a path for these.
+      #
+      #   nl  3,028.3 h  (cv22 54.1, mls 1554.2, voxpopuli 46.4, granary asr_only 37.8)
+      #   pt  2,100.9 h  (cv22 26.3, mls 161.0, granary asr_only 262.2)
+      #   pl    930.7 h  (cv22 35.5, mls 103.6, voxpopuli 97.7, granary asr_only 21.1)
+      #   hu    273.8 h  (cv22 56.6, voxpopuli 54.1, granary asr_only 8.5)
+      #   fi    193.7 h  (cv22 2.6, voxpopuli 22.6, granary asr_only 3.8)
+      #   cs    160.3 h  (cv22 28.8, voxpopuli 53.6, granary asr_only 3.8)
+      #   ro    130.6 h  (cv22 5.7, voxpopuli 76.4, granary asr_only 5.8)
+      #   sv    110.3 h  (cv22 9.1, granary asr_only 1.9)
+      #   hr     56.0 h  (voxpopuli 34.8, granary asr_only 0.2)
+      #   sk     54.2 h  (cv22 8.9, voxpopuli 30.1, granary asr_only 0.5)
+      #   bg     35.2 h  (cv22 7.2, granary asr_only 1.8)
+      #   lv     30.5 h  (cv22 23.3, granary asr_only 0.1)
+      #   da     29.0 h  (cv22 4.2, granary asr_only 0.6)
+      #   lt     28.4 h  (cv22 11.7, voxpopuli 1.3, granary asr_only 0.6)
+      #   el     27.0 h  (cv22 2.2, granary asr_only 1.0)
+      #   et     24.3 h  (cv22 6.4, voxpopuli 2.3, granary asr_only 0.5)
+      #   sl     15.3 h  (cv22 1.5, voxpopuli 6.1)
+      #   ga     12.7 h  (cv22 0.6)
+      #   mt     12.3 h  (cv22 2.4)
+      #
+      # Every one of these also has asr_fleurs (7-12 h each). See the OPEN
+      # note below on whether FLEURS train is even meant to be in this pool.
+
+    # -----------------------------------------------------------------------
+    # OPEN, not in 06-fondue.md's decision table as its own row, flagged
+    # here and on the board (2026-09-18 entry): 06-fondue.md §1's pool
+    # table sums asr_fleurs into the ~247,000 h ASR total, unlike every
+    # ABL-*.yaml in this campaign, which runs with `--exclude-corpus fleurs`
+    # specifically so FLEURS stays a clean, held-out zero-shot benchmark
+    # (build_campaign_config.py's own docstring). If Fondue trains on
+    # FLEURS train, then FLEURS test/dev (used everywhere else in this
+    # campaign, including the eval-subset row below) is no longer a clean
+    # zero-shot measurement for Fondue -- 05-language-ladder.md §1 already
+    # names this exact tension for the tail ("in-domain and FLEURS coincide
+    # for the tail"). This draft does NOT decide it either way; whichever
+    # way it goes, it is a one-line `--exclude-corpus fleurs` flag on the
+    # render command above, not a structural change to this file.
+    # -----------------------------------------------------------------------
+
+  # Duration filtering -- settled, matches every ABL-*.yaml in this campaign.
+  max_duration: 60
+  max_tokens: 400
+
+  validation_ds:
+    # In-domain held-out dev/validation splits, same mechanism the ablation
+    # arms use (flat `type: lhotse_shar`, one `name:` per set, no `type:
+    # group`/`weight:` -- materialize_cuts_for_eval does not support group).
+    # FLEURS test/dev is deliberately NOT here, for the same reason the
+    # ablation arms exclude it from validation_ds: it is meant to stay an
+    # external, held-out benchmark, scored separately via melt-eval on
+    # checkpoints (see the eval-subset note below) rather than folded into
+    # the trainer's own loss-tracking loop. That reasoning is undercut if
+    # FLEURS train ends up in train_ds -- see the OPEN note above.
+    max_samples: 200
+    input_cfg:
+      - { type: lhotse_shar, name: asr_en, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/en/validation", tags: { task: asr, lang: en, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_en, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/english/dev", tags: { task: asr, lang: en, text_field: custom.pnc_text } }
+      # ... one pair per language with a real dev/validation split (per
+      # data/README.md's eval-set inventory); the other 21 languages follow
+      # the same pattern once their train-side paths are confirmed.
+
+# =============================================================================
+# Optimization -- OPEN
+# =============================================================================
+optimization:
+  # encoder_lr: not used while the encoder is frozen at this stage.
+  # decoder_lr: not used while the decoder is frozen at this stage.
+  adapter_lr: null              # OPEN -- 01-interface-recipe.md, week-2 gate
+                                 # (2026-09-27). Do not assume a value; that
+                                 # file's Settled block is the only source.
+
+# =============================================================================
+# Trainer -- OPEN (effective batch, topology)
+# =============================================================================
+trainer:
+  num_train_epochs: 1            # decidable: campaign-wide convention.
+  max_steps: -1
+  batch_duration: null           # OPEN -- 06-fondue.md §3 "effective batch
+  gradient_accumulation_steps: null   # and LR" / "topology" rows, gated on
+                                       # the backbone (week 5) and on
+                                       # Raclette (week 6). See
+                                       # raclette-draft.yaml for the two
+                                       # measured candidate topologies this
+                                       # will resolve to.
+  # checkpoint cadence: OPEN -- 06-fondue.md §3 "checkpoint and eval cadence"
+  # row proposes "every ~6h of wall clock"; the actual eval_steps/save_steps
+  # numbers depend on the step count, which depends on the batch above.

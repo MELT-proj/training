@@ -109,6 +109,115 @@ enough to add a ~4B point to the backbone grid) is the Orchestrator's, not
 mine. Flagging the full picture for their read.
 
 ---
+## 2026-09-18 — Claude (session) — Fondue and Raclette configs drafted (week 2, Track B); one gap and one inconsistency found in `06-fondue.md`
+
+Context: the two week-2 Track B items — Fondue config drafted, Raclette
+config drafted (`06-fondue.md` §3/§4, `timeline.md` week 2). No GPU touched;
+nothing scanned on any cluster filesystem (per the new rule) — everything
+below comes from files already in this repo: `data/hours_by_language.csv`,
+`docs/mixture_weights.md`, the two ABL-*.yaml renders, `06-fondue.md` itself.
+
+Finding / proposal:
+
+1. **Drafted `plan/fondue-ma-draft.yaml`, `plan/fondue-ift-draft.yaml`,
+   `plan/raclette-draft.yaml`.** Language set (EU-24 + ru + uk, ca left
+   explicitly out as the one open cell), the two-tier mixture mechanism via
+   `infra/compute_mix_weights.py` (not `build_campaign_config.py`, which
+   deliberately does *not* use alpha/beta — that tool is for the
+   equal-per-language ablation arms; Fondue is the natural, skewed pool,
+   which is exactly what `compute_mix_weights.py` exists for), filters
+   (`max_duration 60`/`max_tokens 400`, already settled), and the eval
+   subset (the frozen `fleurs24-asr-dev` set) are filled in. Every gated
+   row — backbone, audio stack, regime, batch, topology, decoder_lr — is an
+   explicit `null` with a comment naming the section and week that resolves
+   it, per the task's instruction not to invent values for open decisions.
+
+2. **Mixture weights: alpha=0.5/beta=0.5 for MA, alpha=0.2/beta=0.5 for
+   IFT.** Both are the paper's own two named settings (arXiv:2509.14128
+   §3.3.1: 0.5/0.5 for pretraining, alpha=0.2 for one fine-tuning stage) —
+   matched to MA-as-alignment vs IFT-as-fine-tune rather than picked freely.
+   Concretely, beta=0.5 compresses the ASR pool's natural en:mt hours ratio
+   (151,848.7 : 12.3, ~12,345x) to a language-share ratio of sqrt(12,345) ≈
+   111x, which arithmetically means mt's realized exposure in one nominal
+   MA epoch is ~53x its own 12.3 unique hours. That repetition number is
+   not a decision by itself — "epochs for the tail" stays its own open row,
+   owned by the repetition probe — but it is worth the PI seeing the actual
+   multiple before the freeze, not just "alpha/beta chosen." For IFT, the
+   sharper concern is `lv-en` ST X→en at 0.6 h: a single-corpus group, so
+   alpha does nothing for it, and beta's language-level step (over ~45
+   ASR+ST-direction entries) will still give it a language share many times
+   that natural sliver. `sl-en`, `ga-en`, `mt-en` have **zero** ST hours
+   (not near-zero — genuinely absent, per the CSV), so they are not in the
+   ST mix at all and are not a repetition risk, just a coverage gap.
+   `infra/check_training_config.py`'s boost report (`docs/mixture_weights.md`)
+   is the right tool to re-check this once real hours are measured at the
+   week-3 dry run; recommend running it before the freeze.
+
+3. **Gap in `06-fondue.md` §1, not in the decision table at all:** the pool
+   table sums `asr_fleurs` into the ~247,000 h ASR total, meaning Fondue's
+   pool — unlike every ABL-*.yaml in this campaign, which runs with
+   `--exclude-corpus fleurs` specifically to keep FLEURS a clean zero-shot
+   benchmark — may include FLEURS train. If so, using FLEURS test/dev as
+   Fondue's in-training eval subset (as I drafted it, following the
+   campaign's existing eval-subset convention) is no longer a clean
+   zero-shot measurement, especially for the tail languages where
+   `05-language-ladder.md` §1 already flags "in-domain and FLEURS coincide."
+   Did not decide this either way — it's a one-line `--exclude-corpus
+   fleurs` flag on the render command, not a structural change — but it
+   belongs somewhere in §3 as its own row, or folded explicitly into
+   "filters," rather than left implicit in §1's totals.
+
+4. **Inconsistency in `06-fondue.md` §3's "topology" row:** it reads "8
+   nodes × 4 GPUs, `grad_accum 4`". Every measured number in §2 (jobs
+   45902184/45902185) and every real arm in `campaign.yaml` at this node
+   count uses `grad_accum 20`, not 4 — `grad_accum 4` matches
+   `infrastructure.md`'s older, pre-Qwen-measurement Llama figure (2 nodes,
+   effective 3,840 s/step) that looks like it was never reconciled with
+   §2's own later numbers. Did not correct it — "topology" is an open row —
+   but flagging since it's the kind of thing that gets copied into a real
+   config verbatim.
+
+5. **Ambiguity in §4:** "Raclette sets it [the learning rate]" doesn't say
+   whether that's the MA-stage `adapter_lr` (currently `01-interface-
+   recipe.md`/step 0b's open question, which I did not touch or assume) or
+   the IFT-stage `decoder_lr`. Drafted Raclette around `decoder_lr` only —
+   it's the larger, more expensive, more novel-at-scale stage, and piloting
+   `adapter_lr` too would duplicate 0b's in-flight work rather than sit
+   next to it. If the PI means both, Raclette needs a fourth axis, not
+   three points on one parameter.
+
+6. **Raclette's three `decoder_lr` points: 2e-5, 5e-5, 1.2e-4.** Anchored on
+   the one number every completed IFT arm in this campaign has actually
+   used, at both current backbone candidates, at 4,800 audio-s/step
+   (campaign.yaml's IFT-700-* rows; the completed `IFT-700-qwen35-2b-ins`
+   production run). Scaled to Fondue's two measured topology candidates
+   (19,200 / 38,400 audio-s/step, 4x/8x the anchor) via sqrt(batch-ratio),
+   the standard Adam-family heuristic, giving a central estimate of
+   4e-5–5.7e-5; the three points bracket the anchor and that estimate with
+   a consistent ~2.5x step each way. Full reasoning is in
+   `plan/raclette-draft.yaml`'s header, not repeated in `06-fondue.md`.
+
+7. **Also flagged, smaller:** `06-fondue.md` §3's "checkpoint and eval
+   cadence" row proposes "~50 utterances per language" for the FLEURS-24
+   dev subset; the set actually frozen (melt-eval PR #10, week 1) has 100
+   per language (2,400 samples / 24 languages). Not fixed in §3 since the
+   cadence number itself is still gated on batch/topology, but worth
+   reconciling with the real number when that row is filled in.
+
+8. **What I could not do from the repo alone:** enumerate real shar paths
+   for corpora beyond the five languages (en/de/fr/es/it) already confirmed
+   in the existing `ABL-*.yaml` files, plus the handful `docs/mixture_
+   weights.md`'s own worked example names directly (English/French/
+   Spanish/Italian/Polish granary leaves, `covost2/en_de`). The other ~40
+   corpus entries needed for a real render (21 more languages × several
+   corpora each, plus most ST directions) are listed as hours-only comment
+   tables in the drafts rather than invented paths — that enumeration
+   needs the real shar tree and is explicitly the week-3 dry-run's job, not
+   something to fake from a language code and a naming guess.
+
+Action needed: PI call on (3) FLEURS-in-training-pool, confirmation on (5)
+whether Raclette should also cover `adapter_lr`; everything else is a
+"worth knowing before the freeze" note, no action forced.
 
 ## 2026-09-18 — Claude (session) — Whisper crossing step; Qwen ledger backfill; EuroLLM decoder profile
 

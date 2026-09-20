@@ -106,13 +106,67 @@ Checkpoint cadence bounds a failure's cost; keep two checkpoints.
 | audio stack, frame rate | week-6 confirmation | `03-audio-stack.md` | open |
 | regime (adapter at IFT, full vs LoRA, MA data, MA length) | week-5 winner | `04-regime.md` | open |
 | language set | EU-24 + ru + uk (+ ca?) | Russian probe, `05-language-ladder.md` | ru, uk in (settled); ca open |
-| mixture weights | two-tier alpha/beta (the config builder already implements it); values to choose | ladder and repetition probe | open |
+| mixture weights | two-tier alpha/beta (the config builder already implements it); values to choose | ladder and repetition probe | **drafted 2026-09-18:** alpha=0.5/beta=0.5 for MA (the paper's own pretraining setting, arXiv:2509.14128 §3.3.1); alpha=0.2/beta=0.5 for IFT (the paper's named fine-tuning-stage alpha). Reasoning and the concrete boost/repetition numbers this implies (e.g. mt's ASR tail at ~53× its 12.3 unique h under MA's weights) are in `fondue-ma-draft.yaml` and `fondue-ift-draft.yaml`. Not frozen — the repetition probe and ladder may move it. |
 | epochs for the tail | 1–4× repetition of languages under 100 h | repetition probe | open |
 | MA data budget and stage split | full 247K h of ASR in MA, a subset, or — if the decoder-frozen regime wins and the no-MA point matches — a single stage with instructions from the start | the MA:IFT ratio sweep (`04-regime.md` §6, week 6), ladder MA-stage curves, step-0 transition; default if the sweep misses the freeze: full MA, as today | open |
 | effective batch and LR | batch ~ one audio hour per step; LR from Raclette | Raclette | open |
-| topology | 8 nodes × 4 GPUs, `grad_accum 4`; 16 nodes as contingency | scaling test | open |
-| checkpoint and eval cadence | checkpoints every ~6 h of wall clock; in-training generative eval on a FLEURS-24 dev subset of ~50 utterances per language | eval cost | open |
+| topology | 8 nodes × 4 GPUs; 16 nodes as contingency. **`grad_accum` follows the backbone, not the node count:** the Llama IFT arms run 4, every Qwen arm in `campaign.yaml` runs 20, and the two differ 5× in effective batch. §2's Llama row is a `grad_accum 4` extrapolation and its Qwen rows are `grad_accum 20` measurements; do not read one against the other | scaling test, and the backbone row above | open |
+| FLEURS in the training pool | FLEURS **train** in or out; FLEURS **test + validation** stay the benchmark either way | see §3.1 | **PI said out (2026-09-20); re-opened the same day on new evidence — needs one more call** |
+| checkpoint and eval cadence | checkpoints every ~6 h of wall clock; in-training generative eval on a FLEURS-24 dev subset of 100 utterances per language, matching the frozen set | eval cost | open — the **subset itself** is drafted: the frozen `fleurs24-asr-dev` set (melt-eval PR #10, 24 EU languages, 100/lang, plus ru/uk once PR #12/13 redeploy). The **cadence** (eval_steps/save_steps) stays open, gated on the batch/topology rows above. |
 | filters | `max_duration 60`, `max_tokens 400`, as the campaign | settled |
+
+### 3.1 FLEURS in the training pool — the numbers behind the row
+
+The PI's instruction on 2026-09-20 was to keep FLEURS out of training so it
+stays an eval set. Two facts found while implementing it argue the decision
+should be taken again, deliberately, rather than inherited:
+
+**The splits are disjoint.** `asr_fleurs` counts the FLEURS **train** split
+(`data/README.md`); every frozen benchmark is built from FLEURS **test** and
+**validation**. Training on train and evaluating on test is how FLEURS is
+meant to be used and does not contaminate anything by itself. Note also that
+the campaign's own `--exclude-corpus fleurs` was never a contamination
+decision: `build_campaign_config.py` excludes FLEURS because it cannot
+supply its ~1% share at 709 h per language in every language ("en and es
+fall 0.2–1.5 h short"), and says in terms that FLEURS "stays comparable if
+this decision is revisited."
+
+**Excluding it costs almost nothing globally and almost everything in the
+tail.** FLEURS is 239.3 h of the 242,102 h ASR pool — 0.10%. But per
+language:
+
+| language | FLEURS h | total ASR h | share | net of FLEURS |
+|---|---|---|---|---|
+| ga (Irish) | 12.1 | 12.7 | **95.3%** | **0.6** |
+| mt (Maltese) | 9.9 | 12.3 | **80.5%** | **2.4** |
+| sl (Slovenian) | 7.8 | 15.3 | 51.0% | 7.5 |
+| el | 10.0 | 27.0 | 37.0% | 17.0 |
+| lt | 9.8 | 28.4 | 34.5% | 18.6 |
+| et | 7.3 | 24.3 | 30.0% | 17.0 |
+| bg | 9.5 | 35.2 | 27.0% | 25.7 |
+| da | 7.5 | 29.0 | 25.9% | 21.5 |
+| lv | 6.5 | 30.5 | 21.3% | 24.0 |
+| hr | 11.8 | 56.0 | 21.1% | 44.2 |
+
+Excluding FLEURS leaves Irish with **36 minutes** of training audio and
+Maltese with 2.4 h, below the language ladder's lowest 10 h tier
+(`05-language-ladder.md` §1). Three of the 24 EU languages would become
+untrainable rather than low-resource, which collides with the coverage
+commitment the paper rests on.
+
+**The real risk is utterance overlap, not corpus identity**, and it is
+checkable: audit sentence-id overlap between the FLEURS train shards and the
+frozen test/validation sets. If it is zero, training on FLEURS train is
+sound and the tail keeps its data; if it is not, exclude and say so. That
+audit is cheap and turns a worry into a fact.
+
+**Options, PI's call:**
+
+| | consequence |
+|---|---|
+| exclude FLEURS train everywhere (as instructed) | benchmark unimpeachable; ga/mt/sl effectively have no training data and are reported as zero-shot languages — defensible, but it must be stated as a deliberate choice, not a data accident |
+| include FLEURS train, keep test+validation frozen, after a zero-overlap audit | standard practice; the tail keeps its only data; needs the audit and one sentence in the paper |
+| exclude only for the languages where it is a trivial share | incoherent — not recommended |
 
 ## 4. Raclette — the pilot
 
@@ -122,14 +176,77 @@ steps over Fondue's pool, so Fondue needs a batch on the order of one audio
 hour per step, and the learning rate at that batch is an extrapolation.
 Raclette sets it: the Fondue mixture at ~25K h (5–10% of the pool), the
 Fondue batch and topology, three LR points, chosen on loss at matched steps
-and FLEURS-24 dev CER. About a tenth of Fondue's cost; runs in week 6.
+and FLEURS-24 dev CER. Runs in week 6.
+
+**Cost, corrected 2026-09-19.** "About a tenth of Fondue's cost" is the cost
+of *one* Raclette arm: 25K h against the ~330K h IFT pool is 7.6%. Raclette
+is three LR points, so it is three times that — **about 23% of Fondue's IFT
+cost**, which is ~1,400 GPU-h at the Llama rate (18.2 GPU-h per 1K h) and
+~4,000 at the measured Qwen rate (53.9 GPU-h per 1K h). Budget it as a
+four-figure line item, not a rounding error, and note it scales with the
+backbone decision.
+
+**The LR points are not decidable yet (PI, 2026-09-20).** The week-2 draft
+proposed 2e-5 / 5e-5 / 1.2e-4 on `optimization.decoder_lr`, scaled from the
+campaign's own IFT arms. That is premature, and withdrawn, for three
+reasons the PI gave:
+
+1. **We may not be training the decoder at all.** If the decoder-frozen
+   regime wins (`04-regime.md` §3, R9/R10) there is no `decoder_lr` to
+   pilot and Raclette pilots the adapter LR instead — a different
+   parameter, a different scale, a different grid.
+2. **LoRA changes the answer.** A LoRA arm's effective LR is not comparable
+   to a full fine-tune's, so the grid cannot be chosen before
+   `04-regime.md`'s week-5 decision.
+3. **The ASR:ST mix has to come first.** Task over-fitting
+   ([arXiv:2310.13289](https://arxiv.org/abs/2310.13289), `04-regime.md`
+   §6) means an ASR-heavy mixture and a balanced one want different
+   learning rates, so allocating ASR against ST hours precedes piloting the
+   LR rather than following it.
+
+**Order, therefore:** regime decision (week 5) → ASR:ST allocation and the
+MA:IFT ratio sweep (week 6, `04-regime.md` §6) → *then* Raclette's grid,
+chosen against whatever parameter is actually trainable. The draft's
+arithmetic (anchor at the campaign's measured 2e-5, sqrt-scaled to Fondue's
+batch) is kept in `raclette-draft.yaml` as a method, not as values.
+
+**Drafted 2026-09-18** (`raclette-draft.yaml`): the mixture is
+`fondue-ift-draft.yaml`'s own weighted pool (alpha=0.2/beta=0.5) with
+`total_hours` lowered to ~25,000 (≈7.6% of the ~330K h IFT pool) — the
+sampling *proportions* don't change, only the epoch length. Batch and
+topology stay open, gated on the backbone (week 5); the draft names the two
+already-measured candidates it will slot into (8 nodes → 19,200 audio-s/step,
+16 nodes → 38,400, both `grad_accum 20`, both flat with 2 nodes per §2).
+
+Three LR points for `optimization.decoder_lr`, extrapolated from the one
+number every completed IFT arm in this campaign has actually used —
+**2e-5 at 4,800 audio-s/step**, common to both backbones — via the standard
+√(batch-ratio) rule for Adam-family optimizers:
+
+| LR | reasoning |
+|---|---|
+| 2e-5 | null hypothesis: the larger batch alone doesn't force a change from what's already run |
+| 5e-5 | central estimate: inside the √-scaled range for the 8-node (4e-5) to 16-node (5.7e-5) candidates |
+| 1.2e-4 | ~2.4× above the central estimate, in case a full-decoder fine-tune at this batch wants steeper-than-√ scaling |
+
+This assumes Raclette pilots the **IFT decoder LR**, not the MA adapter LR
+(a separate, already-running, PI-held question in `01-interface-recipe.md`
+that this draft does not touch or duplicate) — flagged on `board.md` as
+worth a PI confirmation, since if Raclette is meant to cover both, it needs
+a fourth axis rather than three points on one parameter.
 
 ## 5. Preparation checklist
 
-- [ ] Fondue config drafted (week 2) and dry-run at full scale on MN5 (week
-      3): dataloader build time, bucket bins on the full distribution,
-      exposure audit, host-RAM trace over the first hour.
-- [ ] Raclette config (week 2), final (week 5), run (week 6).
+- [x] Fondue config drafted (week 2, `fondue-ma-draft.yaml` +
+      `fondue-ift-draft.yaml`) — the decidable parts only (language
+      set, mixture mechanism and weights, filters, eval subset); every
+      gated field is an explicit placeholder. Dry-run at full scale on MN5
+      (week 3) still owed: dataloader build time, bucket bins on the full
+      distribution, exposure audit, host-RAM trace over the first hour, and
+      confirming the ~40 unverified corpus paths the draft flags.
+- [x] Raclette config drafted (week 2, `raclette-draft.yaml`: mixture,
+      three LR points and their reasoning). Final (week 5, once batch/
+      topology are set) and run (week 6) still owed.
 - [ ] Launch and resume chain tested on a short run (week 6).
 - [ ] FLEURS-24 dev subset frozen for in-training eval (week 1–2).
 - [ ] Off-boarding plan (§7) written by week 5.

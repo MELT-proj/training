@@ -115,6 +115,22 @@ shifts towards less MA.
   its own full schedule.
 - **One seed per point**, two at the campaign split (the week-3
   confirmation run and its replicate already provide them).
+- **Score ST at every point, not only ASR** (PI, 2026-09-20). Two-stage
+  training on ASR-heavy data is known to collapse onto ASR at the expense of
+  the other tasks — SALMONN ([arXiv:2310.13289](https://arxiv.org/abs/2310.13289))
+  names this task over-fitting and needs a third stage to undo it. Our MA
+  stage is ASR-only by construction, so this sweep is the place it would
+  show up: a split that minimises ASR WER may be the split that costs the
+  most chrF. Report ASR and ST side by side at every point and treat a
+  point that wins on ASR while losing on ST as a finding, not a winner.
+  The existing text-retention metric does not cover this: it asks whether
+  the decoder still writes text, not whether the model still translates.
+
+**Consequence for the ASR:ST allocation.** If task over-fitting is visible
+here, then the ASR:ST mix inside IFT becomes a decision in its own right
+rather than a property of the data pool, and it has to be settled before
+Raclette can pilot a learning rate (`06-fondue.md` §4) — the LR that suits
+an ASR-dominated mix is not the one that suits a balanced one.
 - **Metrics:** in-domain CER, FLEURS-24 CER, X→en chrF/COMET (with ST
   exposure fixed, an ST change reflects alignment quality rather than
   exposure), text retention, and GPU-h. Read the same table two ways: CER
