@@ -68,6 +68,13 @@ Finding:
    digit against 8 and 3 references, so Whisper writing "1990" for "nineteen
    ninety" is a few hundredths of a point of error the arm may or may not
    also pay. Casing and punctuation were washed out completely.
+   **Arms against the raw transcript: not measured (PI, 2026-09-20).**
+   Re-decoding the step-0b arms needs their checkpoints and MN5 time, so it
+   was skipped. Whisper alone scores 0.0263 / 0.0395 (WER, first 500) and
+   0.0111 / 0.0176 (CER) against the raw transcript. *Extrapolated:* the arms'
+   raw-transcript WER should sit about 0.002 below their `pnc_text` WER,
+   taking the gap measured on Whisper as a property of the reference; nobody
+   has checked that it transfers to a model that was trained on `pnc_text`.
 6. **Report item 2 - dropped cuts: none.** Per set, materialised = decoded =
    unfiltered count in the shar (2,703 and 2,864, total 5,567 as declared);
    no cut lacked a reference, none failed to load, none had an empty
