@@ -43,11 +43,17 @@ jobs:
 
     permissions:
       contents: read
-      issues: write  # react to the `/test` comment and post the result on the PR
+      # React to the `/test` comment and post the result on the PR. The comment
+      # is on a pull request, so the API asks for pull-requests: write as well;
+      # with issues: write alone both calls return 403.
+      issues: write
+      pull-requests: write
 
     steps:
     - name: Acknowledge the /test comment
       if: github.event_name == 'issue_comment'
+      # Cosmetic: a failed reaction must not fail the test run.
+      continue-on-error: true
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
