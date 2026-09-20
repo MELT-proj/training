@@ -628,6 +628,23 @@ on a resumed arm.
 
 All 9 step-0b arms (8 original plus the seed replicate) are complete.
 
+**Whisper-large-v3 decoding the same sets by itself** (measured 2026-09-20,
+`whisper_reference_decode.py`; no MELT model, no adapter, no LLM). Same cuts,
+`custom.pnc_text` reference, `BasicTextNormalizer`, greedy, duration-sorted
+batches of 16, `flash_attention_2`, language forced to English. "First 500"
+is the arm's own `max_samples: 500` subset (seeded shuffle, not shard order),
+so it is the like-for-like row; cuts over 30 s use Whisper long-form. The arm
+column is `wsd-50hz-whisper`'s in-training eval (`MA-librispeech-whisperlargeF-...-s50-8g`).
+
+| set | cuts | Whisper WER | Whisper CER | arm WER | arm WER / Whisper WER | Whisper WER / arm WER |
+|---|---|---|---|---|---|---|
+| dev-clean, first 500 (like-for-like) | 500 | 0.0272 | 0.0118 | 0.038 | 1.40 | 0.72 |
+| dev-other, first 500 (like-for-like) | 500 | 0.0410 | 0.0186 | 0.061 | 1.49 | 0.67 |
+| dev-clean, full set | 2,703 | 0.0249 | 0.0115 | -- | -- | -- |
+| dev-other, full set | 2,864 | 0.0416 | 0.0189 | -- | -- | -- |
+
+The arm has no full-set number, so the full-set rows carry no ratio.
+
 **Decision rules applied to the numbers above** (not adjudicated here, per
 the Orchestrator's instruction -- flagging what the raw numbers say against
 each rule as written):

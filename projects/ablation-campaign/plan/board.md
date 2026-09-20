@@ -15,6 +15,88 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-20 — Claude session (Whisper reference decode) — Whisper-large-v3 alone scores 0.027/0.041; `wsd-50hz-whisper` is at 1.40x/1.49x its error rate
+
+Context: week 1 Track B, "Whisper-large-v3's own WER". Decoded dev_clean and
+dev_other with `openai/whisper-large-v3` alone (`whisper_reference_decode.py`,
+PR against main), one A6000 on artemis, 29 min wall, ~0.5 GPU-h. Same cuts
+(via `materialize_cuts_for_eval`), `custom.pnc_text` reference, `BasicTextNormalizer`
++ `jiwer`, greedy, duration-sorted batches, `flash_attention_2`, English forced.
+
+Finding:
+1. **The numbers** (measured; results table in `01-interface-recipe.md` §5).
+   First 500 per set, which is the arm's own subset (`max_samples` is a
+   seeded shuffle, so it is not the first 500 in shard order; the script calls
+   the same function with the same seed): dev-clean WER 0.0272 / CER 0.0118,
+   dev-other WER 0.0410 / CER 0.0186. Full sets: dev-clean 0.0249 / 0.0115
+   (2,703 cuts), dev-other 0.0416 / 0.0189 (2,864 cuts).
+2. **Restated arm.** `wsd-50hz-whisper` (0.038 / 0.061) makes 1.40x / 1.49x
+   Whisper's own errors on the like-for-like 500. "The projector recovers X%
+   of the encoder's own ability" comes out as **72% (dev-clean) and 67%
+   (dev-other)** if X is Whisper WER / arm WER. That is the reading `03` §0
+   asked for: the projector recovers roughly two thirds to three quarters
+   of the encoder's own ability, not essentially all of it and not half. On accuracy (1 - WER) it would
+   read 99%, which says nothing; quote the error-rate ratio.
+3. **Precision.** 500 utterances is ~10k words, so Whisper's own WER carries
+   roughly ±0.0015 sampling error. The arm's 0.038 is a single seed and
+   rounded to 3 places; the only seed spread measured at this error regime is
+   0.002 (Q4-k5 pair). Together that puts the ratio in about 0.68-0.76 on
+   dev-clean; do not quote it to two figures.
+4. **Cuts over 30 s change the comparison and were not in the brief.** The
+   arm's processor (`processing_melt.py`) cuts audio into whole 30 s windows
+   and feeds all of them to the encoder, so the arm hears every cut in full.
+   Whisper's default short-form decode truncates at 30 s and deletes ~20% of
+   the words on such cuts (0.217 / 0.223 WER on them). There are 9 such cuts
+   in dev-clean (max 32.6 s) and 7 in dev-other (max 35.2 s), of which 2 and 1
+   fall in the 500 subset. The headline therefore uses Whisper's long-form
+   algorithm for them; truncating instead would add 0.0026 (clean) / 0.0020
+   (other) WER on the full sets. Whisper long-form is a different mechanism
+   from the arm's windowing, so this is a like-for-like *input*, not a
+   like-for-like *algorithm*. Whisper WER on the <=30 s cuts alone is 0.0248 /
+   0.0419, so it hardly moves the number either way.
+5. **Report item 1 - what the normaliser left behind.** Scoring the same
+   hypotheses against the untouched LibriSpeech transcript instead of
+   `pnc_text` gives dev-clean 0.0263 (vs 0.0272) and dev-other 0.0395 (vs
+   0.0410) on the 500 subset, so the PNC rewrite costs ~0.001-0.002 WER of
+   pure reference noise. After normalisation `pnc_text` still differs from
+   the raw transcript on 294 of 2,703 dev-clean cuts (10.9%) and 273 of
+   2,864 dev-other (9.5%), 0.84% / 0.77% WER between the two references; that
+   is the 10.7% gap already on record. It is small next to 0.027-0.041 but
+   not next to the gaps `03` will be reading between encoders, and both
+   sides pay it because both use `pnc_text`. What `BasicTextNormalizer`
+   does not do: numerals. 43 dev-clean and 24 dev-other hypotheses hold a
+   digit against 8 and 3 references, so Whisper writing "1990" for "nineteen
+   ninety" is a few hundredths of a point of error the arm may or may not
+   also pay. Casing and punctuation were washed out completely.
+6. **Report item 2 - dropped cuts: none.** Per set, materialised = decoded =
+   unfiltered count in the shar (2,703 and 2,864, total 5,567 as declared);
+   no cut lacked a reference, none failed to load, none had an empty
+   reference after normalisation. Nothing was filtered by duration.
+7. **Forced vs unforced.** Unforced LID gives dev-clean 0.0248 (unchanged)
+   and dev-other 0.0449 vs 0.0416 forced. LID picked a non-English language
+   on 2 of 2,703 and 10 of 2,864 cuts, so forcing English is worth ~0.003 on
+   dev-other and nothing on dev-clean.
+8. **Batching.** Scoring the 500 subset out of the full-set decode gives the
+   same 0.0272 / 0.0410 as its own decode, so batch composition is not moving
+   this number at the precision reported.
+
+What could make the comparison softer than it looks: the arm's eval also ran
+a Llama chat prompt and its own generation config, and I did not verify its
+500-cut list against a logged one, only that the seed path (`validation_ds.seed`
+42, not the arm seed) is the same in code; the arm has one seed at this error
+regime; and the arm's `max_samples: 200` in `ABL-MA-librispeech.yaml` is
+overridden to 500 on the command line, which I took from `campaign.yaml`, not
+from the arm's own log.
+
+Action needed: PI to review the PR. Orchestrator: `03-audio-stack.md` §0 can
+take the 72% / 67% (error-rate ratio) as its Whisper reference line. Proposal:
+if `03` will compare four encoders on WER, give each the same "encoder alone"
+line only where the encoder has a decoder; w2v-BERT, MMS and mHuBERT have no
+CTC head staged here, so the equivalent for them is not measurable from this
+setup.
+
+---
+
 ## 2026-09-20 — Fondue Orchestrator — the week-2 screen needs no new config; grid rendered on both encoders; `max_audio_seq_len` is now derived
 
 Context: MN5 queue empty on a Sunday, PI wanted something launchable. The
