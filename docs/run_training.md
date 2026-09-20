@@ -31,6 +31,13 @@ The first positional argument is always the **accelerate config**; everything
 after it is forwarded to the training entrypoint as OmegaConf dot-notation
 overrides (e.g. `--trainer.max_steps 1000`).
 
+Overrides are parsed as YAML 1.1, so bare `no`/`off`/`false` and `yes`/`on`/`true`
+are booleans, not strings. `--trainer.eval_strategy no` (or `save_strategy`,
+`logging_strategy`, `hub_strategy`, `lr_scheduler_type`, ...) is auto-corrected
+back to the string `"no"`/`"yes"` with a warning, so it works without quoting.
+If you ever need to bypass this — e.g. a hypothetical field that legitimately
+wants the literal string `"off"` — quote the value: `--trainer.some_field '"off"'`.
+
 ## How do I run it?
 
 | Context | Command |
