@@ -113,6 +113,52 @@ way the twelve WSD arms are what the screen's factor levels are read from.
 The `MELT 5-lang screen` session has been told to hold — no cancels, no
 resubmits, no follow-up arms — pending that call.
 
+---
+
+## 2026-09-20 — screen-launch session — grid: 6 w2v-BERT arms + Whisper canary submitted, other 5 Whisper arms held
+
+Context: submitting the twelve `MA-700-screen-*` arms through `campaign.py run`.
+
+Finding / proposal:
+1. **All twelve plans verified before any submit** against the steps/topology
+   table: 10,500 steps (2x4) at 1200 s, 21,000 (2x4) at 600 s, 42,000 (1x4)
+   at 300 s. All twelve carry seed 42, `--model.adapter.stack_factor 5` and
+   `--trainer.num_train_epochs 1`; the six Whisper rows carry both
+   `--model.encoder.name openai/whisper-large-v3` and
+   `--model.encoder.max_audio_seq_len 3000`.
+2. **Submitted, in order:** the six w2v-BERT arms (lr1e3 b1200/b600/b300,
+   then lr2e3 b1200/b600/b300), then the canary
+   `MA-700-screen-whisper-lr1e3-b1200`. Job ids are in `arms.tsv`.
+3. **Held: the other five Whisper arms** (lr1e3-b600, lr1e3-b300,
+   lr2e3-b1200, lr2e3-b600, lr2e3-b300). At submit time all seven jobs were
+   PENDING (queue was empty before, so this is fresh contention, not a
+   backlog), so the canary has not yet run its memory-preallocation pass.
+   No memory number and no s/step exist yet; the ~6x padding estimate is
+   still unmeasured.
+4. **MN5's checkout was stale** (`2c94f83`, on the old librispeech-step0
+   branch, no screen rows). I ran `infra/sync_repo.sh mn5`, which checked out
+   this session's branch there at `294ae08`. The submit commands were
+   regenerated on MN5 and matched nyx's.
+5. **`arms.tsv` on MN5 is now modified and uncommitted** (seven new rows;
+   the file is tracked). The next `infra/sync_repo.sh mn5` will refuse
+   ("remote tree dirty") until those rows are committed or copied back.
+   Not touched: it is the ledger and an operator call.
+6. Whisper-large-v3 IS staged on MN5 (`hf_cache/hub/models--openai--whisper-large-v3`,
+   `model.safetensors` present), so `infrastructure.md` §6's "not yet staged"
+   is stale. An offline load has not been verified; the canary is that test.
+
+Action needed: next session, once job for the canary starts, read (a) the
+`[run_train] starting` line: world_size must be 8, (b) the
+memory-preallocation peak in the log, (c) whether it reaches the first eval
+at step 955. If healthy, submit the five held Whisper arms in the yaml order;
+if it OOMs, do not retune: post the peak and a compensating
+`batch_duration` x `grad_accum_steps` pair here and stop. Also check the six
+w2v-BERT arms' world_size (8/8/4/8/8/4) and read s/step from the
+second-to-last tqdm line. The timeline box stays unticked until all twelve
+are in and healthy.
+
+---
+
 ## 2026-09-20 — Fondue Orchestrator — the week-2 screen needs no new config; grid rendered on both encoders; `max_audio_seq_len` is now derived
 
 Context: MN5 queue empty on a Sunday, PI wanted something launchable. The
