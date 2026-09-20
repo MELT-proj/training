@@ -50,7 +50,7 @@ AXIS_FIELDS = {
     "decoder", "decoder_freeze", "decoder_lora",
     "encoder_lr", "decoder_lr", "adapter_lr",
     "batch_duration", "grad_accum_steps", "gradient_checkpointing",
-    "epochs", "template_task_override",
+    "epochs", "template_task_override", "template_selection",
 }
 POLICY_FIELDS = {
     "seed", "eval_rounds", "keep_checkpoints", "checkpoint_count",

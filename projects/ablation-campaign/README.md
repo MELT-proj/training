@@ -19,6 +19,7 @@ The campaign varies three things. Each lives in exactly one place:
 | **Memory/perf** (also not a fourth axis): `trainer.gradient_checkpointing` | 0-1 CLI override, independent | `GRADIENT_CHECKPOINTING` env var -- trades recompute for activation memory without changing what a step trains on, so (unlike batch/accum) it needs no compensating override and is not tagged into `EXP_NAME` |
 | **Duration** (also not a fourth axis): `trainer.num_train_epochs` | 0-1 CLI override, independent | `EPOCHS` env var -- always emitted (default 1, the campaign convention), tagged into `EXP_NAME` (`ep<N>`) only when it overrides the config |
 | **Prompt style** (also not a fourth axis): which `TASK_TEMPLATES` bucket (`melt/training/data/audio/lhotse/helpers.py`) prompt selection draws from | 0-2 CLI overrides, always paired | `TEMPLATE_TASK_OVERRIDE` env var -- forces `data.prompt_template_selection` to `random` and `data.template_task_override` to the requested value, decoupled from each source's own `tags.task` (which keeps identifying the data mixture and the per-task WER/CER split). Tagged into `EXP_NAME` (`tt<value>`) when set. Lets an arm swap prompt framing (e.g. `verbatim`, see the "verbatim" campaign) onto an existing data mixture without a second near-duplicate `ABL-*.yaml` |
+| **Prompt language ID** (only with `TEMPLATE_TASK_OVERRIDE`) | 0-1 CLI override | `TEMPLATE_SELECTION` env var / `template_selection` grid field -- `with_language` or `without_language` replaces the forced `random`, so naming the language in the prompt is a factor instead of a per-sample coin flip on buckets that mix both. Tagged `-lid` / `-nolid`; `random` (or empty) is the old behaviour and adds no tag. Setting it without `TEMPLATE_TASK_OVERRIDE` is an error: selection is then pinned to `custom`, which never consults `TASK_TEMPLATES` |
 
 There is deliberately **no YAML per arm**. A data axis change (a new budget or
 task mix) is big enough, and shared enough across many arms, to earn its own
@@ -238,7 +239,7 @@ or with `STACK_FACTOR` overridden:
 or with `EPOCHS`/`TEMPLATE_TASK_OVERRIDE` overridden:
 `MA-700asr-w2vbF-llama1bInsF-mlpT-ep3-ttverbatim-elr6e6-dlr2e5-lr2e5-s42-8g`.
 Trailing `F`/`T` marks a module frozen/trainable; `-lora` only appears when
-`DECODER_LORA` resolves true, and `-skN`/`-bdN`/`-gaN`/`-epN`/`-tt<value>` only
+`DECODER_LORA` resolves true, and `-skN`/`-bdN`/`-gaN`/`-epN`/`-tt<value>`/`-lid`/`-nolid` only
 appear when `STACK_FACTOR`/`BATCH_DURATION`/`GRAD_ACCUM_STEPS`/`EPOCHS`/
 `TEMPLATE_TASK_OVERRIDE` actually override the config -- unlike the LR tags
 below, they are NOT always present, since making them so would have renamed

@@ -266,56 +266,45 @@ TASK_TEMPLATES: dict[str, list[str]] = {
         "Listen to this audio, assess the provided {lang} translation, and output only a float between 0 and 1: {audio_token}",
     ],
     "verbatim": [
-        "Your task is to repeat verbatim whatever I write in this chat surrounded by <|audio__bos|> and <|audio_eos|>. \n\n"
-        "## Example 1\nInput: <|audio__bos|>Today is really a great day!<|audio_eos|>\nOutput: Today is really a great day!\n\n"
-        "## Example 2\nInput: I would do <|audio__bos|>everything<|audio_eos|> to be a that concert tomorrow. \nOutput: everything\n\n"
+        "Your task is to repeat verbatim whatever I write in this chat surrounded by <|audio_bos|> and <|audio_eos|>. \n\n"
+        "## Example 1\nInput: <|audio_bos|>Today is really a great day!<|audio_eos|>\nOutput: Today is really a great day!\n\n"
+        "## Example 2\nInput: I would do <|audio_bos|>everything<|audio_eos|> to be a that concert tomorrow. \nOutput: everything\n\n"
         "Let's start right away. Below is my first input:\n{audio_token}",
-        "Repeat back, word for word, only the text found between <|audio__bos|> and <|audio_eos|>.\n\n"
-        "Example 1\nInput: <|audio__bos|>The train leaves at noon.<|audio_eos|>\nOutput: The train leaves at noon.\n\n"
-        "Example 2\nInput: She said <|audio__bos|>hello<|audio_eos|> before leaving the room.\nOutput: hello\n\n"
+        "Repeat back, word for word, only the text found between <|audio_bos|> and <|audio_eos|>.\n\n"
+        "Example 1\nInput: <|audio_bos|>The train leaves at noon.<|audio_eos|>\nOutput: The train leaves at noon.\n\n"
+        "Example 2\nInput: She said <|audio_bos|>hello<|audio_eos|> before leaving the room.\nOutput: hello\n\n"
         "Now it's your turn:\n{audio_token}",
-        "Whatever appears between the markers <|audio__bos|> and <|audio_eos|> must be echoed back exactly as written, and nothing else.\n\n"
-        "Example 1:\nInput: <|audio__bos|>Can you hear me now?<|audio_eos|>\nOutput: Can you hear me now?\n\n"
-        "Example 2:\nInput: We stopped at <|audio__bos|>the old bridge<|audio_eos|> for a photo.\nOutput: the old bridge\n\n"
+        "Whatever appears between the markers <|audio_bos|> and <|audio_eos|> must be echoed back exactly as written, and nothing else.\n\n"
+        "Example 1:\nInput: <|audio_bos|>Can you hear me now?<|audio_eos|>\nOutput: Can you hear me now?\n\n"
+        "Example 2:\nInput: We stopped at <|audio_bos|>the old bridge<|audio_eos|> for a photo.\nOutput: the old bridge\n\n"
         "Here is the real input:\n{audio_token}",
-        "I'm testing a simple copy task: reproduce exactly the text wrapped in <|audio__bos|> and <|audio_eos|>, ignoring everything outside it.\n\n"
-        "Example 1\nInput: <|audio__bos|>Rain is expected tomorrow.<|audio_eos|>\nOutput: Rain is expected tomorrow.\n\n"
-        "Example 2\nInput: He only wanted <|audio__bos|>a glass of water<|audio_eos|> and nothing more.\nOutput: a glass of water\n\n"
+        "I'm testing a simple copy task: reproduce exactly the text wrapped in <|audio_bos|> and <|audio_eos|>, ignoring everything outside it.\n\n"
+        "Example 1\nInput: <|audio_bos|>Rain is expected tomorrow.<|audio_eos|>\nOutput: Rain is expected tomorrow.\n\n"
+        "Example 2\nInput: He only wanted <|audio_bos|>a glass of water<|audio_eos|> and nothing more.\nOutput: a glass of water\n\n"
         "Ready? Here's the input:\n{audio_token}",
-        "Your job is verbatim repetition: copy exactly what sits between <|audio__bos|> and <|audio_eos|>, character for character.\n\n"
-        "Example 1\nInput: <|audio__bos|>Meet me at the station.<|audio_eos|>\nOutput: Meet me at the station.\n\n"
-        "Example 2\nInput: They found <|audio__bos|>a small key<|audio_eos|> under the mat.\nOutput: a small key\n\n"
+        "Your job is verbatim repetition: copy exactly what sits between <|audio_bos|> and <|audio_eos|>, character for character.\n\n"
+        "Example 1\nInput: <|audio_bos|>Meet me at the station.<|audio_eos|>\nOutput: Meet me at the station.\n\n"
+        "Example 2\nInput: They found <|audio_bos|>a small key<|audio_eos|> under the mat.\nOutput: a small key\n\n"
         "Let's begin with this input:\n{audio_token}",
-        "Below are a couple of examples showing how to repeat only the text between <|audio__bos|> and <|audio_eos|>. Study them, then do the same.\n\n"
-        "Example 1\nInput: <|audio__bos|>The concert starts at eight.<|audio_eos|>\nOutput: The concert starts at eight.\n\n"
-        "Example 2\nInput: I picked up <|audio__bos|>the wrong bag<|audio_eos|> at the airport.\nOutput: the wrong bag\n\n"
+        "Below are a couple of examples showing how to repeat only the text between <|audio_bos|> and <|audio_eos|>. Study them, then do the same.\n\n"
+        "Example 1\nInput: <|audio_bos|>The concert starts at eight.<|audio_eos|>\nOutput: The concert starts at eight.\n\n"
+        "Example 2\nInput: I picked up <|audio_bos|>the wrong bag<|audio_eos|> at the airport.\nOutput: the wrong bag\n\n"
         "Your turn:\n{audio_token}",
-        # Language-naming variants of the six above: same body, plus one
-        # sentence saying what language the marked span is in. Kept apart from
-        # the originals so "without_language" recovers them unchanged.
-        "Your task is to repeat verbatim whatever I write in this chat surrounded by <|audio__bos|> and <|audio_eos|>. Everything between those tags will be in {lang}.\n\n"
-        "## Example 1\nInput: <|audio__bos|>Today is really a great day!<|audio_eos|>\nOutput: Today is really a great day!\n\n"
-        "## Example 2\nInput: I would do <|audio__bos|>everything<|audio_eos|> to be a that concert tomorrow. \nOutput: everything\n\n"
+        # Language-naming variants of the six above. No in-context examples:
+        # they would be English whatever {lang} is, contradicting the sentence
+        # that names the language. The opening line matches the original's, plus
+        # one sentence naming the language.
+        "Your task is to repeat verbatim whatever I write in this chat surrounded by <|audio_bos|> and <|audio_eos|>. Everything between those tags will be in {lang}.\n\n"
         "Let's start right away. Below is my first input:\n{audio_token}",
-        "Repeat back, word for word, only the text found between <|audio__bos|> and <|audio_eos|>. That text is in {lang}.\n\n"
-        "Example 1\nInput: <|audio__bos|>The train leaves at noon.<|audio_eos|>\nOutput: The train leaves at noon.\n\n"
-        "Example 2\nInput: She said <|audio__bos|>hello<|audio_eos|> before leaving the room.\nOutput: hello\n\n"
+        "Repeat back, word for word, only the text found between <|audio_bos|> and <|audio_eos|>. That text is in {lang}.\n\n"
         "Now it's your turn:\n{audio_token}",
-        "Whatever appears between the markers <|audio__bos|> and <|audio_eos|> must be echoed back exactly as written, and nothing else. The marked text is written in {lang}.\n\n"
-        "Example 1:\nInput: <|audio__bos|>Can you hear me now?<|audio_eos|>\nOutput: Can you hear me now?\n\n"
-        "Example 2:\nInput: We stopped at <|audio__bos|>the old bridge<|audio_eos|> for a photo.\nOutput: the old bridge\n\n"
+        "Whatever appears between the markers <|audio_bos|> and <|audio_eos|> must be echoed back exactly as written, and nothing else. The marked text is written in {lang}.\n\n"
         "Here is the real input:\n{audio_token}",
-        "I'm testing a simple copy task: reproduce exactly the text wrapped in <|audio__bos|> and <|audio_eos|>, ignoring everything outside it. Just so you know, the wrapped text is in {lang}.\n\n"
-        "Example 1\nInput: <|audio__bos|>Rain is expected tomorrow.<|audio_eos|>\nOutput: Rain is expected tomorrow.\n\n"
-        "Example 2\nInput: He only wanted <|audio__bos|>a glass of water<|audio_eos|> and nothing more.\nOutput: a glass of water\n\n"
+        "I'm testing a simple copy task: reproduce exactly the text wrapped in <|audio_bos|> and <|audio_eos|>, ignoring everything outside it. Just so you know, the wrapped text is in {lang}.\n\n"
         "Ready? Here's the input:\n{audio_token}",
-        "Your job is verbatim repetition: copy exactly what sits between <|audio__bos|> and <|audio_eos|>, character for character. Language: {lang}.\n\n"
-        "Example 1\nInput: <|audio__bos|>Meet me at the station.<|audio_eos|>\nOutput: Meet me at the station.\n\n"
-        "Example 2\nInput: They found <|audio__bos|>a small key<|audio_eos|> under the mat.\nOutput: a small key\n\n"
+        "Your job is verbatim repetition: copy exactly what sits between <|audio_bos|> and <|audio_eos|>, character for character. Language: {lang}.\n\n"
         "Let's begin with this input:\n{audio_token}",
-        "Below are a couple of examples showing how to repeat only the text between <|audio__bos|> and <|audio_eos|>. Study them, then do the same; the text you will be repeating is in {lang}.\n\n"
-        "Example 1\nInput: <|audio__bos|>The concert starts at eight.<|audio_eos|>\nOutput: The concert starts at eight.\n\n"
-        "Example 2\nInput: I picked up <|audio__bos|>the wrong bag<|audio_eos|> at the airport.\nOutput: the wrong bag\n\n"
+        "Your job is to repeat only the text between <|audio_bos|> and <|audio_eos|>; the text you will be repeating is in {lang}.\n\n"
         "Your turn:\n{audio_token}",
     ],
 }

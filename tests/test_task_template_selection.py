@@ -56,14 +56,26 @@ class TestVerbatimVariants:
         for head, template in zip(_ORIGINAL_VERBATIM_HEADS, TASK_TEMPLATES["verbatim"][:6]):
             assert template.startswith(head)
 
-    def test_each_variant_pairs_with_its_original(self):
-        """Same opening words and the same audio slot, so the LID factor is the
-        only thing that differs between a variant and its no-LID original."""
-        verbatim = TASK_TEMPLATES["verbatim"]
-        for original, variant in zip(verbatim[:6], verbatim[6:]):
-            assert variant.split()[:4] == original.split()[:4]
+    def test_variants_carry_no_in_context_examples(self):
+        """Examples would be English whatever {lang} is."""
+        for variant in TASK_TEMPLATES["verbatim"][6:]:
+            assert "Example" not in variant
+            assert "Input:" not in variant and "Output:" not in variant
+
+    def test_originals_keep_their_examples(self):
+        for original in TASK_TEMPLATES["verbatim"][:6]:
+            assert "Input:" in original and "Output:" in original
+
+    def test_each_variant_has_one_lang_slot_and_ends_on_the_audio(self):
+        for variant in TASK_TEMPLATES["verbatim"][6:]:
             assert variant.count("{lang}") == 1
             assert variant.endswith("{audio_token}")
+
+    def test_verbatim_names_the_real_audio_boundary_tokens(self):
+        """The templates once said <|audio__bos|>, a token that does not exist."""
+        for template in TASK_TEMPLATES["verbatim"]:
+            assert "audio__bos" not in template
+            assert "<|audio_bos|>" in template and "<|audio_eos|>" in template
 
     def test_variants_are_not_copies_of_one_sentence(self):
         sentences = set()
@@ -75,7 +87,7 @@ class TestVerbatimVariants:
     def test_first_variant_uses_the_pi_wording(self):
         assert TASK_TEMPLATES["verbatim"][6].startswith(
             "Your task is to repeat verbatim whatever I write in this chat surrounded by "
-            "<|audio__bos|> and <|audio_eos|>. Everything between those tags will be in {lang}.\n\n"
+            "<|audio_bos|> and <|audio_eos|>. Everything between those tags will be in {lang}.\n\n"
         )
 
     @pytest.mark.parametrize("family", sorted(TASK_TEMPLATES))
