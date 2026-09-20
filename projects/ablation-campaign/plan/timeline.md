@@ -229,6 +229,12 @@ Settled.
       leave the grid. Nothing to launch — this produces the rendered configs
       and the arm list the screen starts from.
       *Blocks the whole of week 2 Track A.*
+- [ ] **LID prompt templates and a `without_language` selection mode**
+      (`01-interface-recipe.md` §3): `{lang}` variants of the six `verbatim`
+      templates, plus the selection mode that makes LID a controllable
+      factor instead of a per-sample coin flip. Prerequisite for the
+      screen's prompt runs; additive only, no change to `random`'s current
+      behaviour. No GPU.
 - [ ] **Quantify FLEURS in or out of the Fondue pool** (`06-fondue.md` §3,
       new row 2026-09-18): per language, how many ASR hours excluding
       `asr_fleurs` would remove, from `data/hours_by_language.csv`, with the
