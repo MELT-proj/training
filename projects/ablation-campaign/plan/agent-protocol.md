@@ -90,6 +90,15 @@ box you finished is always yours to do.
   seed per arm makes every contrast a factor change plus a seed draw, which
   is how a 0.11 WER difference in step 0b turned out to be within the seed
   spread (`01-interface-recipe.md` §2b).
+- **A noise floor is only valid at the error regime where it was measured**
+  (step 0b, 2026-09-19/20). The same screen measured seed-only spread
+  twice: **0.11** dev-clean WER between `wsd-50hz` and `wsd-50hz-seed2`, at
+  WER ≈ 0.5, and **0.002** between `wsd-10hz-qwen4b` and its seed-53
+  replicate, at WER ≈ 0.10. Noise scales with the error rate, so a spread
+  measured on bad arms must not be used to dismiss a contrast between good
+  ones, and a spread measured on good arms must not be used to bless one
+  between bad ones. Replicate at the regime you intend to quote, and say
+  which regime a quoted spread came from.
 - Turn on `run.memory_preallocation` whenever what is trainable changes.
 - Read steady-state throughput from the second-to-last tqdm line, never
   from `train_runtime` or the closing average.
