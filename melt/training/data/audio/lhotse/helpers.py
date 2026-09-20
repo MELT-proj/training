@@ -228,7 +228,13 @@ LANGUAGE_ISO_TO_NAME: dict[str, str] = {
 }
 
 # Task-specific prompt templates for chat-template mode.
-# Each template must contain {audio_token} and {lang} placeholders.
+# Every template must contain {audio_token}. {lang} (and {src_lang} /
+# {tgt_lang}) are optional: templates that name the language and templates that
+# deliberately do not can share one list, and select_prompt_template() picks
+# between them with "with_language" / "without_language". "random" draws from
+# the whole list, so appending to a family changes what "random" draws for it;
+# never remove or reorder an entry, since arms already trained on the current
+# contents.
 TASK_TEMPLATES: dict[str, list[str]] = {
     "asr": [
         "{audio_token} Transcribe this audio in {lang}.",
@@ -260,29 +266,45 @@ TASK_TEMPLATES: dict[str, list[str]] = {
         "Listen to this audio, assess the provided {lang} translation, and output only a float between 0 and 1: {audio_token}",
     ],
     "verbatim": [
-        "Your task is to repeat verbatim whatever I write in this chat surrounded by <|audio__bos|> and <|audio_eos|>. \n\n"
-        "## Example 1\nInput: <|audio__bos|>Today is really a great day!<|audio_eos|>\nOutput: Today is really a great day!\n\n"
-        "## Example 2\nInput: I would do <|audio__bos|>everything<|audio_eos|> to be a that concert tomorrow. \nOutput: everything\n\n"
+        "Your task is to repeat verbatim whatever I write in this chat surrounded by <|audio_bos|> and <|audio_eos|>. \n\n"
+        "## Example 1\nInput: <|audio_bos|>Today is really a great day!<|audio_eos|>\nOutput: Today is really a great day!\n\n"
+        "## Example 2\nInput: I would do <|audio_bos|>everything<|audio_eos|> to be a that concert tomorrow. \nOutput: everything\n\n"
         "Let's start right away. Below is my first input:\n{audio_token}",
-        "Repeat back, word for word, only the text found between <|audio__bos|> and <|audio_eos|>.\n\n"
-        "Example 1\nInput: <|audio__bos|>The train leaves at noon.<|audio_eos|>\nOutput: The train leaves at noon.\n\n"
-        "Example 2\nInput: She said <|audio__bos|>hello<|audio_eos|> before leaving the room.\nOutput: hello\n\n"
+        "Repeat back, word for word, only the text found between <|audio_bos|> and <|audio_eos|>.\n\n"
+        "Example 1\nInput: <|audio_bos|>The train leaves at noon.<|audio_eos|>\nOutput: The train leaves at noon.\n\n"
+        "Example 2\nInput: She said <|audio_bos|>hello<|audio_eos|> before leaving the room.\nOutput: hello\n\n"
         "Now it's your turn:\n{audio_token}",
-        "Whatever appears between the markers <|audio__bos|> and <|audio_eos|> must be echoed back exactly as written, and nothing else.\n\n"
-        "Example 1:\nInput: <|audio__bos|>Can you hear me now?<|audio_eos|>\nOutput: Can you hear me now?\n\n"
-        "Example 2:\nInput: We stopped at <|audio__bos|>the old bridge<|audio_eos|> for a photo.\nOutput: the old bridge\n\n"
+        "Whatever appears between the markers <|audio_bos|> and <|audio_eos|> must be echoed back exactly as written, and nothing else.\n\n"
+        "Example 1:\nInput: <|audio_bos|>Can you hear me now?<|audio_eos|>\nOutput: Can you hear me now?\n\n"
+        "Example 2:\nInput: We stopped at <|audio_bos|>the old bridge<|audio_eos|> for a photo.\nOutput: the old bridge\n\n"
         "Here is the real input:\n{audio_token}",
-        "I'm testing a simple copy task: reproduce exactly the text wrapped in <|audio__bos|> and <|audio_eos|>, ignoring everything outside it.\n\n"
-        "Example 1\nInput: <|audio__bos|>Rain is expected tomorrow.<|audio_eos|>\nOutput: Rain is expected tomorrow.\n\n"
-        "Example 2\nInput: He only wanted <|audio__bos|>a glass of water<|audio_eos|> and nothing more.\nOutput: a glass of water\n\n"
+        "I'm testing a simple copy task: reproduce exactly the text wrapped in <|audio_bos|> and <|audio_eos|>, ignoring everything outside it.\n\n"
+        "Example 1\nInput: <|audio_bos|>Rain is expected tomorrow.<|audio_eos|>\nOutput: Rain is expected tomorrow.\n\n"
+        "Example 2\nInput: He only wanted <|audio_bos|>a glass of water<|audio_eos|> and nothing more.\nOutput: a glass of water\n\n"
         "Ready? Here's the input:\n{audio_token}",
-        "Your job is verbatim repetition: copy exactly what sits between <|audio__bos|> and <|audio_eos|>, character for character.\n\n"
-        "Example 1\nInput: <|audio__bos|>Meet me at the station.<|audio_eos|>\nOutput: Meet me at the station.\n\n"
-        "Example 2\nInput: They found <|audio__bos|>a small key<|audio_eos|> under the mat.\nOutput: a small key\n\n"
+        "Your job is verbatim repetition: copy exactly what sits between <|audio_bos|> and <|audio_eos|>, character for character.\n\n"
+        "Example 1\nInput: <|audio_bos|>Meet me at the station.<|audio_eos|>\nOutput: Meet me at the station.\n\n"
+        "Example 2\nInput: They found <|audio_bos|>a small key<|audio_eos|> under the mat.\nOutput: a small key\n\n"
         "Let's begin with this input:\n{audio_token}",
-        "Below are a couple of examples showing how to repeat only the text between <|audio__bos|> and <|audio_eos|>. Study them, then do the same.\n\n"
-        "Example 1\nInput: <|audio__bos|>The concert starts at eight.<|audio_eos|>\nOutput: The concert starts at eight.\n\n"
-        "Example 2\nInput: I picked up <|audio__bos|>the wrong bag<|audio_eos|> at the airport.\nOutput: the wrong bag\n\n"
+        "Below are a couple of examples showing how to repeat only the text between <|audio_bos|> and <|audio_eos|>. Study them, then do the same.\n\n"
+        "Example 1\nInput: <|audio_bos|>The concert starts at eight.<|audio_eos|>\nOutput: The concert starts at eight.\n\n"
+        "Example 2\nInput: I picked up <|audio_bos|>the wrong bag<|audio_eos|> at the airport.\nOutput: the wrong bag\n\n"
+        "Your turn:\n{audio_token}",
+        # Language-naming variants of the six above. No in-context examples:
+        # they would be English whatever {lang} is, contradicting the sentence
+        # that names the language. The opening line matches the original's, plus
+        # one sentence naming the language.
+        "Your task is to repeat verbatim whatever I write in this chat surrounded by <|audio_bos|> and <|audio_eos|>. Everything between those tags will be in {lang}.\n\n"
+        "Let's start right away. Below is my first input:\n{audio_token}",
+        "Repeat back, word for word, only the text found between <|audio_bos|> and <|audio_eos|>. That text is in {lang}.\n\n"
+        "Now it's your turn:\n{audio_token}",
+        "Whatever appears between the markers <|audio_bos|> and <|audio_eos|> must be echoed back exactly as written, and nothing else. The marked text is written in {lang}.\n\n"
+        "Here is the real input:\n{audio_token}",
+        "I'm testing a simple copy task: reproduce exactly the text wrapped in <|audio_bos|> and <|audio_eos|>, ignoring everything outside it. Just so you know, the wrapped text is in {lang}.\n\n"
+        "Ready? Here's the input:\n{audio_token}",
+        "Your job is verbatim repetition: copy exactly what sits between <|audio_bos|> and <|audio_eos|>, character for character. Language: {lang}.\n\n"
+        "Let's begin with this input:\n{audio_token}",
+        "Your job is to repeat only the text between <|audio_bos|> and <|audio_eos|>; the text you will be repeating is in {lang}.\n\n"
         "Your turn:\n{audio_token}",
     ],
 }
@@ -493,6 +515,46 @@ def _resolve_language_name_safe(lang: str | None) -> str:
     return LANGUAGE_ISO_TO_NAME.get(lang_key, lang)
 
 
+def select_prompt_template(
+    templates: list[str],
+    selection: str,
+    rng: "random.Random | None" = None,
+) -> str:
+    """Pick one template from *templates* according to *selection*.
+
+    The single place selection modes are defined; both chat-template helpers
+    call it, so a new mode cannot be added to one and not the other.
+
+    Args:
+        templates: Candidate templates (a ``TASK_TEMPLATES`` bucket).
+        selection: ``"random"`` draws from every template, ``"with_language"``
+            only from those containing ``{lang}``, ``"without_language"`` only
+            from those that do not. (``"custom"`` is resolved by the caller.)
+        rng: Source of randomness; defaults to the global ``random`` module,
+            which is what training has always drawn from.
+
+    Raises:
+        ValueError: On an unknown mode, or when a language filter leaves
+            nothing to choose from.
+    """
+    rng = rng or random
+    if selection == "random":
+        return rng.choice(templates)
+    if selection == "with_language":
+        pool = [t for t in templates if "{lang}" in t]
+    elif selection == "without_language":
+        pool = [t for t in templates if "{lang}" not in t]
+    else:
+        raise ValueError(f"Unknown prompt_template_selection: {selection}")
+    if not pool:
+        needs = "with" if selection == "with_language" else "without"
+        raise ValueError(
+            f"prompt_template_selection='{selection}' but no templates "
+            f"{needs} {{lang}} placeholder found among: {templates}"
+        )
+    return rng.choice(pool)
+
+
 def apply_chat_template_to_texts(
     texts: list[str],
     tasks: list[str],
@@ -519,7 +581,7 @@ def apply_chat_template_to_texts(
             mapping task→template).  Only used when *prompt_template_selection*
             is ``"custom"``.
         prompt_template_selection: Template selection strategy:
-            ``"random"`` (default), ``"with_language"``, or ``"custom"``.
+            ``"random"`` (default), ``"with_language"``, ``"without_language"``, or ``"custom"``.
         template_task_override: When set, overrides which ``TASK_TEMPLATES``
             bucket ``"random"``/``"with_language"`` draw from, decoupled from
             each sample's own *task* (which keeps labelling the data mixture
@@ -541,8 +603,6 @@ def apply_chat_template_to_texts(
         List of fully formatted chat strings ready for the processor, or —
         when *return_prompts* is set — a ``(full, prompt)`` pair of lists.
     """
-    import random
-
     if src_langs is None:
         src_langs = [""] * len(texts)
     if tgt_langs is None:
@@ -565,20 +625,7 @@ def apply_chat_template_to_texts(
                 raise ValueError(
                     f"Unknown task '{template_task}'. Expected one of: {', '.join(sorted(TASK_TEMPLATES.keys()))}"
                 )
-            if prompt_template_selection == "random":
-                template = random.choice(templates)
-            elif prompt_template_selection == "with_language":
-                lang_templates = [t for t in templates if "{lang}" in t]
-                if not lang_templates:
-                    raise ValueError(
-                        "prompt_template_selection='with_language' but no templates "
-                        f"with {{lang}} placeholder found among: {templates}"
-                    )
-                template = random.choice(lang_templates)
-            else:
-                raise ValueError(
-                    f"Unknown prompt_template_selection: {prompt_template_selection}"
-                )
+            template = select_prompt_template(templates, prompt_template_selection)
 
         lang_key = (lang or "").lower()
         language_name = LANGUAGE_ISO_TO_NAME.get(lang_key)
@@ -646,12 +693,10 @@ def apply_qe_chat_template_to_texts(
             mapping task→template).  Only used when *prompt_template_selection*
             is ``"custom"``.
         prompt_template_selection: Template selection strategy:
-            ``"random"`` (default), ``"with_language"``, or ``"custom"``.
+            ``"random"`` (default), ``"with_language"``, ``"without_language"``, or ``"custom"``.
         src_langs: Source language ISO codes (per sample).  May be empty.
         tgt_langs: Target language ISO codes (per sample).  May be empty.
     """
-    import random
-
     if src_langs is None:
         src_langs = [""] * len(texts)
     if tgt_langs is None:
@@ -668,20 +713,7 @@ def apply_qe_chat_template_to_texts(
         if prompt_template_selection == "custom":
             template = resolve_custom_template(prompt_template, "speechqe")
         else:
-            if prompt_template_selection == "random":
-                template = random.choice(qe_templates)
-            elif prompt_template_selection == "with_language":
-                lang_templates = [t for t in qe_templates if "{lang}" in t]
-                if not lang_templates:
-                    raise ValueError(
-                        "prompt_template_selection='with_language' but no templates "
-                        f"with {{lang}} placeholder found among: {qe_templates}"
-                    )
-                template = random.choice(lang_templates)
-            else:
-                raise ValueError(
-                    f"Unknown prompt_template_selection: {prompt_template_selection}"
-                )
+            template = select_prompt_template(qe_templates, prompt_template_selection)
         lang_key = (lang or "").lower()
         language_name = LANGUAGE_ISO_TO_NAME.get(lang_key)
         if language_name is None:

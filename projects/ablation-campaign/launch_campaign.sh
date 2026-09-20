@@ -46,6 +46,13 @@
 #                                        relabelling any source's tags.task,
 #                                        which keeps identifying the data
 #                                        mixture and the per-task WER/CER split)
+#                  TEMPLATE_SELECTION                            (0-1 CLI override,
+#                                        needs TEMPLATE_TASK_OVERRIDE. Replaces
+#                                        the forced "random" with with_language
+#                                        or without_language, so the language
+#                                        ID in the prompt is a factor, not a
+#                                        per-sample coin flip. Tagged -lid /
+#                                        -nolid into EXP_NAME)
 #
 # Every axis below defaults to EMPTY, which plan_arm.py reads as "inherit
 # the chosen CONFIG's own value" -- no CLI override, no assumption about
@@ -96,6 +103,7 @@ GRAD_ACCUM_STEPS="${GRAD_ACCUM_STEPS:-}"
 GRADIENT_CHECKPOINTING="${GRADIENT_CHECKPOINTING:-}"
 EPOCHS="${EPOCHS:-}"
 TEMPLATE_TASK_OVERRIDE="${TEMPLATE_TASK_OVERRIDE:-}"
+TEMPLATE_SELECTION="${TEMPLATE_SELECTION:-}"
 SEED="${SEED:-42}"
 
 # --- site / topology ----------------------------------------------------------
@@ -138,6 +146,7 @@ PLAN="$(python3 "${SCRIPT_DIR}/plan_arm.py" \
     --batch-duration "$BATCH_DURATION" --grad-accum-steps "$GRAD_ACCUM_STEPS" \
     --gradient-checkpointing "$GRADIENT_CHECKPOINTING" \
     --epochs "$EPOCHS" --template-task-override "$TEMPLATE_TASK_OVERRIDE" \
+    --template-selection "$TEMPLATE_SELECTION" \
     --seed "$SEED")" || { echo "ERROR: plan_arm.py failed (see above)" >&2; exit 1; }
 eval "$PLAN"
 # PLAN sets: EXP_NAME, STEPS, EVAL_STEPS, SAVE_STEPS, SAVE_TOTAL_LIMIT,

@@ -230,6 +230,12 @@ def as_bool(s: str) -> bool:
     die(f"expected true/false, got {s!r}")
 
 
+# Values of ArmAxes.template_selection, and the EXP_NAME tag each one earns.
+# "random" is the pre-existing behaviour, so it adds no tag and no rename.
+TEMPLATE_SELECTIONS = ("random", "with_language", "without_language")
+TEMPLATE_SELECTION_TAGS = {"with_language": "lid", "without_language": "nolid"}
+
+
 def _slug(name: str, maxlen: int) -> str:
     base = name.split("/")[-1]
     return re.sub(r"[^A-Za-z0-9]", "", base)[:maxlen]
@@ -401,14 +407,24 @@ class ArmAxes:
     # config's own value, the same way batch_duration/grad_accum_steps are.
     epochs: str = ""
     # template_task_override: "" means inherit (no override). Non-empty forces
-    # data.prompt_template_selection to "random" and data.template_task_override
-    # to this value, so every sample draws from TASK_TEMPLATES[<value>]
+    # data.prompt_template_selection to "random" (or template_selection, below)
+    # and data.template_task_override to this value, so every sample draws from TASK_TEMPLATES[<value>]
     # (melt/training/data/audio/lhotse/helpers.py) instead of whatever the
     # config's own prompt_template_selection/prompt_template resolve to --
     # without relabelling any source's `tags.task`, which stays the data
     # mixture's own identity and keeps grouping the per-task WER/CER split.
     # Tagged into EXP_NAME when set, same rule as every other axis.
     template_task_override: str = ""
+    # template_selection: "" means inherit, i.e. "random" over the whole
+    # TASK_TEMPLATES bucket exactly as before this axis existed. Otherwise one
+    # of TEMPLATE_SELECTIONS, passed as data.prompt_template_selection so LID
+    # is a factor (with_language / without_language) rather than the per-sample
+    # coin flip "random" gives on a bucket that mixes both. Only meaningful
+    # together with template_task_override: without it selection is pinned to
+    # "custom", which never consults TASK_TEMPLATES, so setting it alone is an
+    # error rather than a silent no-op. Tagged into EXP_NAME (-lid / -nolid)
+    # when it is a language filter.
+    template_selection: str = ""
     seed: int = 42
     # --- policy (not axes) ---------------------------------------------
     # eval_rounds: eval_steps = round(steps / eval_rounds).
@@ -689,17 +705,29 @@ def plan(args: ArmAxes) -> ArmPlan:
     # prompt_template_selection as its own axis: a task-category swap is
     # meaningless under "custom" selection, which never consults
     # TASK_TEMPLATES at all.
+    if args.template_selection and args.template_selection not in TEMPLATE_SELECTIONS:
+        die(
+            f"TEMPLATE_SELECTION={args.template_selection!r} is not one of "
+            f"{', '.join(TEMPLATE_SELECTIONS)}."
+        )
+    if args.template_selection and not args.template_task_override:
+        die(
+            f"TEMPLATE_SELECTION={args.template_selection!r} needs "
+            "TEMPLATE_TASK_OVERRIDE: without it prompt_template_selection is pinned "
+            "to 'custom' and never consults TASK_TEMPLATES, so the mode would do nothing."
+        )
+    template_selection_effective = args.template_selection or "random"
     if args.template_task_override:
         cfg_prompt_template_selection = get(cfg, "data.prompt_template_selection")
         if cfg_prompt_template_selection and cfg_prompt_template_selection != "random":
             print(
                 f"NOTE: overriding data.prompt_template_selection "
-                f"{cfg_prompt_template_selection!r} -> 'random' because "
+                f"{cfg_prompt_template_selection!r} -> {template_selection_effective!r} because "
                 f"TEMPLATE_TASK_OVERRIDE={args.template_task_override!r} was requested "
                 "explicitly.",
                 file=sys.stderr,
             )
-        overrides += ["--data.prompt_template_selection", "random"]
+        overrides += ["--data.prompt_template_selection", template_selection_effective]
         overrides += ["--data.template_task_override", args.template_task_override]
 
     if args.encoder_lr:
@@ -749,6 +777,8 @@ def plan(args: ArmAxes) -> ArmPlan:
         extra_tags.append(f"ep{epochs_effective}")
     if args.template_task_override:
         extra_tags.append(f"tt{_slug(args.template_task_override, 12)}")
+    if args.template_selection in TEMPLATE_SELECTION_TAGS:
+        extra_tags.append(TEMPLATE_SELECTION_TAGS[args.template_selection])
 
     # Same "only when overridden" rule, for the same reason (see ArmAxes).
     stack_factor_tags = [f"sk{stack_factor_effective}"] if stack_factor_overridden else []
@@ -812,6 +842,7 @@ def main() -> None:
     p.add_argument("--gradient-checkpointing", required=True, help="empty string means: use the config's own value, no override")
     p.add_argument("--epochs", required=True, help="empty string means: use the config's own value, no override")
     p.add_argument("--template-task-override", required=True, help="empty string means: use the config's own prompt_template_selection/prompt_template, no override")
+    p.add_argument("--template-selection", required=True, help="empty string means: random over the whole bucket; else random, with_language or without_language (needs --template-task-override)")
     p.add_argument("--seed", required=True, type=int)
     args = p.parse_args()
 
@@ -835,6 +866,7 @@ def main() -> None:
         gradient_checkpointing=args.gradient_checkpointing,
         epochs=args.epochs,
         template_task_override=args.template_task_override,
+        template_selection=args.template_selection,
         seed=args.seed,
     ))
 
