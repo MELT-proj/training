@@ -3,16 +3,19 @@
 Update this file whenever something starts, finishes, or blocks. Keep it
 short; the reasoning goes to `board.md`, the plan to the numbered files.
 
-**Last updated:** 2026-09-19 (all 8 step 0b arms complete: R/R-seed/R-lr2e3/
-R-b600/R-k5/W/Q2-k5/Q4-k5. Headline result -- encoder choice dominates every
-other factor tested: W (Whisper-large-v3) reaches dev-clean/dev-other WER
-0.038/0.061, 3-6x better than the best w2v-BERT arm on any other axis
-(decoder size, stacking, schedule/LR/batch); decision rule 4 (encoder)
-triggers unambiguously. Rules 1 and 2 (schedule, stacking) also trigger;
-rule 3 (size) is a near-miss -- Q4-k5 lands at dev-clean 10.36%, just over
-the bar, beating Q2-k5 by a consistent margin but not literally crossing
-the threshold. Full rule-by-rule writeup and table in
-`01-interface-recipe.md` §5, board entries 2026-09-18/19 -- prior updates:
+**Last updated:** 2026-09-20 (all 9 step 0b arms complete: R/R-seed/R-lr2e3/
+R-b600/R-k5/W/Q2-k5/Q4-k5 plus the Orchestrator-requested seed replicate
+`Q4-k5-seed2`. Headline result -- encoder choice dominates every other
+factor tested: W (Whisper-large-v3) reaches dev-clean/dev-other WER
+0.038/0.061, the smallest decoder tested with no stacking beating w2v-BERT
+arms running up to 4x the decoder and 5x the sequence length; decision
+rule 4 (encoder) triggers unambiguously. Rules 1 and 2 (schedule,
+stacking) also trigger; rule 3 (size) is a near-miss confirmed by the seed
+replicate -- Q4-k5 lands at dev-clean 10.36%/10.53% across two seeds
+(spread 0.0017/0.0023, tight), a real ~2B->4B gap that reproducibly falls
+short of the <10% bar. Full rule-by-rule writeup and table in
+`01-interface-recipe.md` §5, board entries 2026-09-18/19/20; PR #133
+updated to cover all 9 arms -- prior updates:
 step 0b pre-flight cleared 2026-09-17; the "insertions dominate" pre-flight
 STOP was reviewed and reversed (main commit `ad07b3f`); the full-set
 decoding diagnostic (job 45985475) found runaway is real but only 2.4-3.3%

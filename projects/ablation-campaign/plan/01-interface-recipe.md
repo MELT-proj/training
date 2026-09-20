@@ -456,9 +456,9 @@ Launched 2026-09-17/18: R, R-seed, R-lr2e3, R-b600, R-k5, W, Q2-k5, Q4-k5
 and were resumed as jobs 46077302/46077303). In-training eval,
 `max_samples 500`/set, the metrics from `melt/training/metrics.py`'s
 update (full-set S/D/I/length ratio/runaway fraction, not the old
-200-sample log). A ninth arm, `Q4-k5-seed2` (seed 53, job 46143618), is
-running to check the 2B->4B size gap against seed noise before it is
-quotable -- see the decision-rules discussion below.
+200-sample log). A ninth arm, `Q4-k5-seed2` (seed 53, job 46143618),
+requested by the Orchestrator to check the 2B->4B size gap against seed
+noise, landed 2026-09-20 -- see the decision-rules discussion below.
 
 **Resume note.** Several arms hit their original 3h wall-clock budget at
 ~87% (the 500-sample eval costs more per round than A0/l4-ep3's 200) and
@@ -481,8 +481,9 @@ on a resumed arm.
 | **W** | `MA-librispeech-whisperlargeF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr1e3-s50-8g` | **0.038** | **0.061** | 0.137 | 0.191 | 0.0% / 0.0% | job 46050285 (resubmitted with the `max_audio_seq_len 3000` fix). Whisper-large-v3 encoder, `stack_factor 1`, same steps/schedule as R. Crosses the <10% threshold decisively on both sets -- the only step-0b arm to do so, by a wide margin over every w2v-BERT arm including R-k5. |
 | Q2-k5 | `MA-librispeech-w2vbF-qwen35_2bInsF-mlpT-sk5-bd30-ga5-elr6e6-dlr2e5-lr1e3-s51-8g` | 0.169 | 0.312 | 0.369 | 0.545 | 0.0% / 0.0% | job 46077302 (resumed from 45987899, TIMEOUT at 41%). Qwen3.5-2B decoder, `stack_factor 5`, same w2v-BERT encoder as R-k5. Beats R-k5 (0.314/0.490) by a wide margin but does not cross <10%. |
 | Q4-k5 | `MA-librispeech-w2vbF-qwen35_4bInsF-mlpT-sk5-bd30-ga5-elr6e6-dlr2e5-lr1e3-s52-8g` | 0.104 | 0.239 | 0.253 | 0.403 | 0.0% / 0.0% | job 46077303 (resumed from 45987998, TIMEOUT at 45%). Qwen3.5-4B decoder, otherwise identical to Q2-k5. Beats Q2-k5 on both sets (0.104 vs 0.169 clean, 0.239 vs 0.312 other) but lands just above the <10% bar on dev-clean (10.36%) and well above it on dev-other. Last of the 8 step-0b arms to land. |
+| Q4-k5-seed2 | `MA-librispeech-w2vbF-qwen35_4bInsF-mlpT-sk5-bd30-ga5-elr6e6-dlr2e5-lr1e3-s53-8g` | 0.105 | 0.237 | 0.250 | 0.409 | 0.0% / 0.0% | job 46143618, seed 53, otherwise identical to Q4-k5. Landed 0.0017/0.0023 from Q4-k5 (seed 52) on clean/other -- a tight, well-behaved seed spread at this error regime, nothing like the 0.11 spread measured on R/R-seed at a much higher error rate. |
 
-All 8 original step-0b arms are complete; `Q4-k5-seed2` is running (see below).
+All 9 step-0b arms (8 original plus the seed replicate) are complete.
 
 **Decision rules applied to the numbers above** (not adjudicated here, per
 the Orchestrator's instruction -- flagging what the raw numbers say against
@@ -528,23 +529,24 @@ each rule as written):
   be tested and a ~4B point joins the backbone grid." Literally, neither
   arm reaches the <10% dev-clean bar: Q4-k5 lands at 0.1036, just 0.36
   points over; Q2-k5 at 0.1686, well over. The rule's stated trigger
-  condition does not fire. Q4-k5 beats Q2-k5 by a consistent margin on both
-  sets (0.104 vs 0.169 clean, ~38% relative; 0.239 vs 0.312 other, ~23%
-  relative) -- but this is one seed per arm, the same trap the LR 2e-3
-  contrast fell into, and the gap (0.065 dev-clean) is not yet safe to
-  quote against the measured seed-only spread (0.11, from `R`/`R-seed`,
-  though at a much higher error rate so probably pessimistic here).
-  `MA-librispeech-q4-k5-seed2` (seed 53, job 46143618, launched
-  2026-09-19) is running to settle both the spread and whether 0.104
-  sitting just over the bar is itself a seed draw. This is
-  `02-backbones.md`'s question; reported here as a prior, not decided.
+  condition does not fire. The seed replicate (`Q4-k5-seed2`, seed 53, job
+  46143618) now settles both open questions it was launched to answer:
+  the seed-only spread at this error regime is 0.0017 (clean) / 0.0023
+  (other) -- tight, nothing like the 0.11 spread measured on `R`/`R-seed`
+  at a much higher error rate -- so the 2B->4B gap (0.104 vs 0.169 clean,
+  ~38% relative; 0.239 vs 0.312 other, ~23% relative) is now safely
+  quotable as a real, consistent effect. It also settles that Q4-k5's
+  10.36%/10.53% landing just over the bar on both seeds is not a seed
+  draw: the 4B decoder genuinely falls short of <10% dev-clean on this
+  encoder, reproducibly. This is `02-backbones.md`'s question; reported
+  here as a prior, not decided.
 
-**All 8 original step-0b arms are in; a ninth (Q4-k5's seed replicate) is
-running.** Schedule (Rule 1) and stacking (Rule 2) both trigger clearly;
-the 600 s batch clause does not. Size (Rule 3) is a near-miss that doesn't
-literally trigger, and the gap behind it is not yet quotable (single seed).
-Encoder (Rule 4) triggers decisively and unblocks the week-2 screen's
-budget (Rule 5 does not fire). Size and encoder are `02-backbones.md`'s
-and `03-audio-stack.md`'s questions respectively -- the numbers above are
-reported as priors for those sections, not as a backbone or encoder
-recommendation from this file.
+**All 9 step-0b arms are in** (8 original plus the seed replicate).
+Schedule (Rule 1) and stacking (Rule 2) both trigger clearly; the 600 s
+batch clause does not. Size (Rule 3) is a reproducible near-miss -- a
+real, seed-confirmed ~2B->4B gap that still falls short of <10% dev-clean
+on both seeds. Encoder (Rule 4) triggers decisively and unblocks the
+week-2 screen's budget (Rule 5 does not fire). Size and encoder are
+`02-backbones.md`'s and `03-audio-stack.md`'s questions respectively --
+the numbers above are reported as priors for those sections, not as a
+backbone or encoder recommendation from this file.
