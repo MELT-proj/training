@@ -41,6 +41,30 @@ Two consequences for how the crossing is run:
   first, then `02` runs on it. The encoder × backbone interaction is still
   assumed small, and that assumption is now doing less work than before.
 
+## 0.1 The configuration the PI expects to win (2026-09-20)
+
+Stated on PR #134, recorded here so the crossing reports this cell
+explicitly rather than leaving it to be noticed afterwards:
+
+> Whisper features, verbatim templates with a language ID in the prompt,
+> stacking, and a MoE adapter that allows language-specific expert
+> specialisation.
+
+Three of the four are already axes of the crossing — Whisper is one of the
+four encoders, the MoE one of the four adapters, and every stack is
+configured to a common frame rate, so `Whisper × MoE` is a cell of the 4×4
+grid and not a special case. **The fourth is not in any plan yet:** the
+prompt levels in `01-interface-recipe.md` §3 are audio-only and verbatim,
+with no language-ID variant. See that section for the proposed level.
+
+The MoE rationale is worth stating because it is testable and currently
+untested: the claim is that top-2-of-8 routing lets experts specialise by
+language, which would matter most exactly where the data is thinnest. The
+crossing scores CER on FLEURS-24 split high- against low-resource (§2), so
+it can support or refute that directly — and the router's own entropy and
+per-language expert usage should be logged alongside, or the mechanism is
+asserted rather than shown.
+
 ## 1. What is wired
 
 | encoder | params | input | native rate | notes |

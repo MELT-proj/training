@@ -359,7 +359,7 @@ constraint:
 | adapter LR | 2e-4, 1e-3 (2e-5 as a single control run, not a grid level) |
 | effective batch | 1200 s, 4800 s |
 | `stack_factor` | 1 (50 Hz), 4 (12.5 Hz) |
-| MA prompt | audio only; plus one verbatim run at the best corner |
+| MA prompt | audio only; plus one verbatim run at the best corner; **proposed third level (PI, 2026-09-20): verbatim with a language ID in the prompt** — see below |
 
 Eight grid runs, one verbatim run, one 2e-5 control, two extra seeds at the
 best corner: twelve runs, ≈ 60 GPU-h. Metrics: MA-stage generative WER and
@@ -375,6 +375,20 @@ until `04-regime.md` says otherwise.
 Why a 4× stack and not 5: 4 keeps the 60 s cut at 750 positions and divides
 the w2v-BERT frame count evenly; 5 would match SLAM-ASR. Either is fine; 4 is
 the default so that 2 and 8 are one halving away if the crossing needs them.
+
+**Proposed prompt level: verbatim with a language ID (PI, 2026-09-20).**
+Part of the configuration the PI expects to win (`03-audio-stack.md` §0.1).
+The argument for it is that MA is where the model learns what the audio *is*,
+and a frozen decoder cannot infer the target language from 10–50 Hz features
+as reliably as it can be told; the August failure mode included hypotheses
+"sometimes in the wrong language" (§1), which is exactly what an LID tag
+would suppress. The argument against is that it hands the model at training
+time something no realistic deployment knows, so a model trained with it
+either needs the tag at inference or has to be shown to survive without it.
+**Not adopted yet — the PI decides.** If it goes in, it is a third prompt
+level here and every arm that uses it must be scored twice, once with the
+tag and once with it withheld, or the comparison against the audio-only and
+verbatim arms measures a different task rather than a different prompt.
 
 ## 4. What `stack_factor` has to do
 
