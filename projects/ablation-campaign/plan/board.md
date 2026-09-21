@@ -15,6 +15,55 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-21 — screen-launch session — WSD grid resubmitted: six w2v-BERT arms and the Whisper canary in; five Whisper arms held
+
+Context: the PI decided to cancel the five pending cosine Whisper arms, keep
+the seven completed ones as the cosine control, and resubmit the grid under
+the fixed rows (`2ed8af2`).
+
+Finding / proposal:
+1. **Cancelled** the five PENDING cosine Whisper jobs (lr1e3-b600, lr1e3-b300,
+   lr2e3-b1200, lr2e3-b600, lr2e3-b300) before any started; each was checked
+   PENDING first. They stay in `arms.tsv` as submitted-then-cancelled rows
+   (the ledger has no status column). The seven completed arms and their
+   output directories are untouched.
+2. **All twelve WSD plans verified before submitting**: steps 10,500 / 21,000 /
+   42,000 with 8 / 8 / 4 ranks, `num_decay_steps` 2,100 / 4,200 / 8,400,
+   `warmup_ratio 0.03` with `warmup_steps 0`, seed 42, k=5, one epoch, and
+   both Whisper flags on all six Whisper rows.
+3. **Whisper 1200 s changed to `batch_duration 150 / grad_accum 1`** (PI,
+   2026-09-21), on `campaign.yaml` and `01` §3, so both encoder halves differ
+   only in the encoder. Effective batch and steps are unchanged. The cosine
+   canary measured 11.5 GB at 75 x 2; 150 x 1 extrapolates to ~23 GB, still
+   3x headroom, and the preallocation pass will show it. The cosine Whisper
+   control therefore differs from its WSD twin in batch layout as well as
+   schedule.
+4. **Submitted:** the six w2v-BERT WSD arms, then `MA-700-screen-whisper-lr1e3-b1200`
+   as the canary. Job ids are in `arms.tsv`; all seven were PENDING at the
+   time of writing. **Held: the other five Whisper WSD arms**, until the
+   canary clears preallocation and its first eval.
+5. **`01` §5 corrected:** all seven cosine arms are labelled "cosine,
+   warmup_steps 20", and the two 300 s w2v-BERT rows are in (0.898 and 0.913
+   mean WER; 0.76 s/step; ~36 GPU-h each). My earlier entry below said five
+   arms had landed; it was seven.
+6. **Ledger.** `arms.tsv` is committed and pushed. On the MN5 checkout I
+   stashed the uncommitted ledger (`git stash`, tag `screen-ledger-2026-09-21`)
+   to let `infra/sync_repo.sh mn5` through, after checking it was byte-identical
+   to the pushed file. A safety guard blocked `git checkout --` there, so the
+   stash entry remains and can be dropped by whoever wants to. The MN5
+   ledger is dirty again with the new rows and needs the same treatment at
+   the next sync.
+
+Action needed: next session, when the canary starts, read (a) world_size
+8, (b) the preallocation peak at 150 x 1, (c) the first eval at step 955, and
+whether it OOMs; then submit the five held arms in yaml order. If it OOMs, do
+not retune: post the peak and stop. Once the WSD Whisper arm lands, compare
+its second half to the cosine arm's (flat from ~step 5,700, LR ~1e-9 by the
+end): the WSD floor of 0.1x peak is real where cosine's `min_lr_scale` is a
+dead key.
+
+---
+
 ## 2026-09-21 — Fondue Orchestrator — the cosine pass is in: the w2v-BERT half of the grid is entirely inside its own noise, the Whisper arm aligned
 
 Context: the seven screen arms that ran on the wrong schedule (cosine,
