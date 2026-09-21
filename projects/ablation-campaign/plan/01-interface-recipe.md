@@ -746,3 +746,20 @@ week-2 screen's budget (Rule 5 does not fire). Size and encoder are
 `02-backbones.md`'s and `03-audio-stack.md`'s questions respectively --
 the numbers above are reported as priors for those sections, not as a
 backbone or encoder recommendation from this file.
+
+### Five-language screen arms (§3)
+
+Measured 2026-09-21, final in-training generative eval, 200 utterances per
+language, seed 42, k=5, one epoch of 700 h/lang. Rows are added as arms land;
+the 300 s w2v-BERT arms and all other Whisper arms are still running. `s/step`
+is the run's elapsed training time over `global_step` and includes the
+in-training evals; the tqdm second-to-last line was too noisy to use on the
+600 s arms (27.6 and 25.8 s/it, an end-of-run eval stall).
+
+| run | exp_name | steps | en / de / es / fr / it WER | s/step | GPU-h | notes |
+|---|---|---|---|---|---|---|
+| w2vb-lr1e3-b1200 | `MA-700asr-w2vbF-llama1bInsF-mlpT-sk5-ga1-elr6e6-dlr2e5-lr1e3-s42-8g` | 10,500 | 0.971 / 0.928 / 0.860 / 0.912 / 0.813 | 1.15 | 27 | measured. Not aligned at one epoch. |
+| w2vb-lr2e3-b1200 | `MA-700asr-w2vbF-llama1bInsF-mlpT-sk5-ga1-elr6e6-dlr2e5-lr2e3-s42-8g` | 10,500 | 1.046 / 0.985 / 0.940 / 0.935 / 0.973 | 1.15 | 27 | measured. Not aligned at one epoch. |
+| w2vb-lr1e3-b600 | `MA-700asr-w2vbF-llama1bInsF-mlpT-sk5-bd75-ga1-elr6e6-dlr2e5-lr1e3-s42-8g` | 21,000 | 0.898 / 0.880 / 0.844 / 1.013 / 0.762 | 0.80 | 37 | measured. Not aligned at one epoch. |
+| w2vb-lr2e3-b600 | `MA-700asr-w2vbF-llama1bInsF-mlpT-sk5-bd75-ga1-elr6e6-dlr2e5-lr2e3-s42-8g` | 21,000 | 0.930 / 0.987 / 0.848 / 0.846 / 0.882 | 0.80 | 37 | measured. Not aligned at one epoch. |
+| whisper-lr1e3-b1200 | `MA-700asr-whisperlargeF-llama1bInsF-mlpT-sk5-bd75-ga2-elr6e6-dlr2e5-lr1e3-s42-8g` | 10,500 | 0.124 / 0.115 / 0.087 / 0.124 / 0.207 | 1.34 | 32 | measured. Peak training memory 11.5 GB of 64 GB (w2v-BERT 1200 s: 19.7 GB). |

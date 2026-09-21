@@ -115,6 +115,59 @@ resubmits, no follow-up arms — pending that call.
 
 ---
 
+## 2026-09-21 — screen-launch session — canary healthy, all twelve submitted; first five arms landed
+
+Context: the queue started all seven held jobs at 03:08 UTC, about 12 h
+before SLURM's last estimate. Four w2v-BERT arms (both 1200 s and both 600 s)
+and the Whisper canary have finished; both w2v-BERT 300 s arms were at step
+37,154 of 42,000 and about 1 h from done.
+
+Finding / proposal:
+1. **Canary gate cleared, then the five held Whisper arms were submitted**
+   (lr1e3-b600, lr1e3-b300, lr2e3-b1200, lr2e3-b600, lr2e3-b300). The canary
+   started at world_size=8, ran all 10,500 steps, exit 0. **The ~6x padding
+   estimate was conservative:** peak training memory was 11.5 GB of 64 GB
+   (`gpu_peak_gb`), *below* w2v-BERT's 19.7 GB at 1200 s. The preallocation
+   max-duration pass peaked at 6.33 GB. `batch_duration 75 x grad_accum 2`
+   leaves large headroom; nothing was retuned, since the product is what
+   fixes comparability.
+2. **Preallocation logs one OOM warning on every arm, and none of them OOMed.**
+   The min-duration pass builds a synthetic batch of 150 utterances at 0.5 s
+   (padded to 3000 frames), which does not fit; the log says "Training will
+   proceed but may OOM later". Both w2v-BERT and Whisper arms print it and
+   trained normally, so it is a property of the synthetic worst case, not of
+   the arms. Worth fixing so the warning is not routine.
+3. **All five w2v-BERT/Whisper landed arms are in `01` §5 as measured.**
+   w2v-BERT did not align at one epoch in any of the four: final WER
+   0.76-1.05 across languages at both LRs and both batches. Whisper 1200 s
+   reached 0.09-0.21. Do not read an LR or batch contrast off the four
+   w2v-BERT rows yet: their differences are inside the spread step 0b
+   measured at this error regime (0.108 dev-clean at WER ~0.5), and no
+   seed replicate exists at WER ~0.9.
+4. **Cost is above the estimate.** GPU-h from elapsed time: 27 (w2v-BERT
+   1200 s), 37 (w2v-BERT 600 s), 32 (Whisper 1200 s), against the ~20 GPU-h
+   per arm in §3. The 300 s arms are still to come. §3's cost line should be
+   corrected once all twelve are measured; `time:` in the rows was generous
+   (8 h asked, ~3.4 h used).
+5. **Throughput.** Second-to-last tqdm lines were unusable on the 600 s
+   arms (27.6 and 25.8 s/it: an end-of-run eval stall), so `s/step` in the
+   table is elapsed/steps: 1.15 (w2v-BERT 1200 s), 0.80 (600 s), 1.34
+   (Whisper 1200 s).
+6. **Benign traceback at exit** in two logs: a DeepSpeed Triton autotune
+   cache `os.replace` of `/workspace/tmp/.triton/...pickle.tmp`
+   (FileNotFoundError), after `Train_result` and the model save. Not a
+   training failure.
+7. **`arms.tsv` on MN5 is modified and uncommitted** (twelve rows now); the
+   next `infra/sync_repo.sh mn5` refuses until it is committed or copied
+   back. Not touched.
+
+Action needed: orchestrator/PI: ticking the timeline box waits for the two
+w2v-BERT 300 s arms and the five new Whisper arms to finish healthy. The next
+session should read those seven arms' world_size (4 for the 300 s ones, 8 for
+the rest) and s/step, add their §5 rows, and correct §3's cost estimate.
+
+---
+
 ## 2026-09-20 — screen-launch session — grid: 6 w2v-BERT arms + Whisper canary submitted, other 5 Whisper arms held
 
 Context: submitting the twelve `MA-700-screen-*` arms through `campaign.py run`.
