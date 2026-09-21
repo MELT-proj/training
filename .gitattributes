@@ -1,0 +1,14 @@
+# The submission ledger is append-only: every line is an independent record of
+# one `campaign.py run`, and no line is ever edited or removed. Two sessions
+# submitting on different branches therefore both append at the end, which is
+# a textbook git conflict over changes that do not actually disagree.
+#
+# `union` resolves it by keeping every line from both sides, which is exactly
+# right here and would be exactly wrong for prose. Order is not preserved
+# across the merge, and that is fine: campaign.py reads the ledger by
+# exp_name, never positionally, and each row carries its own UTC timestamp.
+#
+# Do NOT extend this to board.md. Its entries are multi-line prose prepended
+# newest-first, so a union merge would interleave two entries into nonsense
+# instead of failing loudly and asking a human.
+projects/ablation-campaign/arms.tsv merge=union
