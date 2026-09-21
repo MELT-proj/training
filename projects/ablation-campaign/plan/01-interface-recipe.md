@@ -379,6 +379,23 @@ utterance its encoder input inflates ~6× against ~2.5× on LibriSpeech, where
 unchanged. `max_audio_seq_len` is derived from the encoder name rather than
 passed by hand (`plan_arm.py`'s `ENCODER_WINDOW_FRAMES`).
 
+**The schedule is warmup-stable-decay, and it is now an axis (2026-09-21).**
+Step 0b's Rule 1 adopted WSD as the MA default, but the screen's first twelve
+arms ran **cosine**: `ABL-MA-700-asr.yaml` declares `lr_scheduler_type:
+cosine`, WSD was never a campaign axis, and step 0b had obtained it only by
+hand-passing `--trainer.lr_scheduler_kwargs` on each submission. The reason it
+was hand-passed is that `num_decay_steps` is an *absolute* count that differs
+per arm — so `plan_arm.py` now derives it (20% of the arm's own steps,
+`min_lr_ratio` 0.1, `decay_type` cosine) and tags `-wsd` into `EXP_NAME`,
+because the schedule is recoverable from no other tag.
+
+The same config also sets **`warmup_steps: 20`**, a fixed count. Across the
+screen's own batch levels that is 0.19% / 0.10% / 0.05% of training — so
+warmup length was confounded with the batch factor the screen exists to
+measure. `warmup_ratio: 0.03` is now set per arm, matching §2b's common
+settings, and `warmup_steps` is forced to 0 alongside it because HF's
+`get_warmup_steps` only consults the ratio when the count is ≤ 0.
+
 **Cost.** ≈ 20 GPU-h per arm at k=5, extrapolated from the measured 30 GPU-h
 of a 700 h/lang 50 Hz MA arm. The "≈ 65 GPU-h" written here before was
 computed at 125 h/lang and is superseded.

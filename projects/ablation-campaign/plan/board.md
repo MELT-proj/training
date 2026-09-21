@@ -15,6 +15,49 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-21 — Fondue Orchestrator — the screen's first twelve arms ran cosine, not warmup-stable-decay; schedule and warmup are now axes
+
+Context: the PI noticed the five-language screen arms were on a cosine LR and
+asked whether that was intended. It was not. My error when I wrote the rows.
+
+Finding / proposal:
+1. **Two settings were wrong, both inherited from `ABL-MA-700-asr.yaml`.**
+   It declares `lr_scheduler_type: cosine` and `warmup_steps: 20`. Step 0b's
+   recipe (§2b common settings) is warmup-stable-decay at a 3% warmup ratio,
+   and Rule 1 adopted WSD as the MA default on the numbers. The screen rows
+   carried neither.
+2. **Root cause is the same class as the Whisper `max_audio_seq_len` bug.**
+   WSD was never a campaign axis, because `num_decay_steps` is an absolute
+   step count that differs per arm (R-b600 halves world_size and doubles
+   steps). Step 0b therefore hand-passed the whole `--trainer.
+   lr_scheduler_kwargs` blob on every submission — see the comment block
+   above the step-0b rows in `campaign.yaml`. A setting that only lands when
+   an operator remembers an undocumented extra argument will eventually not
+   land.
+3. **`warmup_steps: 20` is worse than it looks.** The screen's three batch
+   levels are 10,500 / 21,000 / 42,000 steps, so a fixed 20-step warmup is
+   0.19% / 0.10% / 0.05% of training. Warmup length was confounded with the
+   batch factor — the screen's main contrast. `ABL-MA-librispeech.yaml`
+   moved to `warmup_ratio` for exactly this reason in step 0; the 700 h
+   config never did.
+4. **Fixed.** `lr_scheduler` and `warmup_ratio` are now axes.
+   `warmup_stable_decay` composes its own kwargs from the arm's derived step
+   count (2100 decay steps at 1200 s, 8400 at 300 s — per arm, as it
+   should have been all along), tags `-wsd`, and `warmup_ratio` forces
+   `warmup_steps` to 0 because HF's `get_warmup_steps` otherwise ignores the
+   ratio. All twelve rows set both. Ten new tests, one of which asserts no
+   `MA-700-screen-*` row can inherit a schedule. 138 pass.
+5. **The arms rename**, to `...-sk5-ga1-wsd-wu0p03-...`. That is wanted: the
+   cosine runs and the WSD runs are different experiments and must not share
+   an output directory. Any cosine arm already on disk stays where it is.
+
+Action needed: PI decides whether the cosine arms are kept as a deliberate
+schedule control (they are a clean A0-style reference at 700 h/lang, and
+that contrast is otherwise unmeasured at this scale) or discarded. Either
+way the twelve WSD arms are what the screen's factor levels are read from.
+The `MELT 5-lang screen` session has been told to hold — no cancels, no
+resubmits, no follow-up arms — pending that call.
+
 ## 2026-09-20 — Fondue Orchestrator — the week-2 screen needs no new config; grid rendered on both encoders; `max_audio_seq_len` is now derived
 
 Context: MN5 queue empty on a Sunday, PI wanted something launchable. The

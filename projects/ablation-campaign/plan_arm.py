@@ -57,6 +57,7 @@ GRAD_ACCUM_STEPS it needs no compensating override.
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import os
 import re
@@ -235,6 +236,24 @@ def as_bool(s: str) -> bool:
 TEMPLATE_SELECTIONS = ("random", "with_language", "without_language")
 TEMPLATE_SELECTION_TAGS = {"with_language": "lid", "without_language": "nolid"}
 
+# LR schedules the campaign composes, and the EXP_NAME tag each one earns.
+# "" (inherit the config's own) adds no tag and renames nothing.
+#
+# warmup_stable_decay is the MA default step 0b's Rule 1 adopted
+# (01-interface-recipe.md sec2b: R beat A0 by 0.14/0.25 against a same-regime
+# seed spread of 0.11/0.002). It was never a campaign axis, because its
+# `num_decay_steps` is an ABSOLUTE step count that differs per arm -- so step
+# 0b hand-passed the whole `--trainer.lr_scheduler_kwargs` blob on every
+# submission, and the five-language screen's first twelve arms inherited
+# `cosine` from ABL-MA-700-asr.yaml because nobody remembered to. This script
+# already derives `steps`, so it derives the decay tail from it too rather
+# than asking an operator to compute 20% of a number they cannot see yet.
+LR_SCHEDULERS = ("cosine", "linear", "constant_with_warmup", "warmup_stable_decay")
+LR_SCHEDULER_TAGS = {"warmup_stable_decay": "wsd"}
+WSD_DECAY_FRACTION = 0.2   # decay over the last 20% of steps
+WSD_MIN_LR_RATIO = 0.1     # decay to 0.1x peak, not to zero
+WSD_DECAY_TYPE = "cosine"
+
 # Encoders that demand an exact input length, and the frame count they demand.
 # Mirrors ENCODER_SPECS[...].window_frames in melt/modeling/encoder_specs.py,
 # which is the source of truth -- this script never imports melt (see the LR
@@ -389,6 +408,23 @@ class ArmAxes:
     stack_factor: str = ""
     encoder: str = ""
     encoder_freeze: str = ""
+    # lr_scheduler: "" inherits the base config's own lr_scheduler_type.
+    # Set to one of LR_SCHEDULERS to override it; warmup_stable_decay also
+    # gets its lr_scheduler_kwargs composed here from the arm's own derived
+    # step count. Tagged into EXP_NAME when overridden, because unlike
+    # max_audio_seq_len the schedule is NOT recoverable from any other tag --
+    # step 0b's A0 (cosine) and R (WSD) differ in EXP_NAME only by seed, which
+    # is precisely how a schedule silently goes missing.
+    lr_scheduler: str = ""
+    # warmup_ratio: "" inherits. When set, warmup_steps is ALSO forced to 0,
+    # because HF's Trainer.get_warmup_steps only consults warmup_ratio when
+    # warmup_steps <= 0 -- and ABL-MA-700-asr.yaml sets warmup_steps: 20, so
+    # a ratio alone would be silently ignored there. A fixed step count is not
+    # comparable across arms that vary the effective batch (the screen's 1200/
+    # 600/300 s levels are 10,500/21,000/42,000 steps, so 20 steps of warmup
+    # means three different fractions of training); ABL-MA-librispeech.yaml
+    # moved to a ratio for exactly this reason. Tagged when overridden.
+    warmup_ratio: str = ""
     # max_audio_seq_len: input frames the encoder is fed per forward window.
     # "" means "derive it", NOT "inherit blindly": when the arm overrides the
     # encoder to one in ENCODER_WINDOW_FRAMES, the required window is emitted
@@ -825,6 +861,37 @@ def plan(args: ArmAxes) -> ArmPlan:
             )
         overrides += ["--model.ckpt", args.init_from]
 
+    # LR schedule. Emitted after `steps` exists, because warmup_stable_decay's
+    # num_decay_steps is an absolute count derived from it.
+    cfg_lr_scheduler = get(cfg, "trainer.lr_scheduler_type")
+    if args.lr_scheduler and args.lr_scheduler not in LR_SCHEDULERS:
+        die(
+            f"LR_SCHEDULER={args.lr_scheduler!r} is not one of "
+            f"{', '.join(LR_SCHEDULERS)}."
+        )
+    if args.lr_scheduler and args.lr_scheduler != cfg_lr_scheduler:
+        overrides += ["--trainer.lr_scheduler_type", args.lr_scheduler]
+    if args.lr_scheduler == "warmup_stable_decay":
+        overrides += [
+            "--trainer.lr_scheduler_kwargs",
+            json.dumps(
+                {
+                    "num_decay_steps": round(WSD_DECAY_FRACTION * steps),
+                    "min_lr_ratio": WSD_MIN_LR_RATIO,
+                    "decay_type": WSD_DECAY_TYPE,
+                }
+            ),
+        ]
+
+    cfg_warmup_ratio = get(cfg, "trainer.warmup_ratio")
+    cfg_warmup_steps = get(cfg, "trainer.warmup_steps")
+    if args.warmup_ratio:
+        if float(args.warmup_ratio) != (cfg_warmup_ratio or 0.0):
+            overrides += ["--trainer.warmup_ratio", args.warmup_ratio]
+        # See ArmAxes.warmup_ratio: a nonzero warmup_steps silently wins.
+        if cfg_warmup_steps:
+            overrides += ["--trainer.warmup_steps", "0"]
+
     # Only appear when overridden, unlike the always-present LR tags: adding
     # them unconditionally would rename every arm ever composed under the old
     # scheme (batch_duration/grad_accum_steps/epochs/template_task_override were
@@ -842,6 +909,10 @@ def plan(args: ArmAxes) -> ArmPlan:
         extra_tags.append(f"tt{_slug(args.template_task_override, 12)}")
     if args.template_selection in TEMPLATE_SELECTION_TAGS:
         extra_tags.append(TEMPLATE_SELECTION_TAGS[args.template_selection])
+    if args.lr_scheduler in LR_SCHEDULER_TAGS:
+        extra_tags.append(LR_SCHEDULER_TAGS[args.lr_scheduler])
+    if args.warmup_ratio:
+        extra_tags.append(lr_tag(args.warmup_ratio, "wu"))
 
     # Same "only when overridden" rule, for the same reason (see ArmAxes).
     stack_factor_tags = [f"sk{stack_factor_effective}"] if stack_factor_overridden else []
@@ -894,6 +965,8 @@ def main() -> None:
     p.add_argument("--stack-factor", required=True, help="empty string means: use the config's own value, no override")
     p.add_argument("--encoder", required=True)
     p.add_argument("--encoder-freeze", required=True)
+    p.add_argument("--lr-scheduler", required=True, help="empty string means: use the config's own lr_scheduler_type")
+    p.add_argument("--warmup-ratio", required=True, help="empty string means: use the config's own warmup settings")
     p.add_argument("--max-audio-seq-len", required=True, help="empty string means: derive it from the encoder, else use the config's own value")
     p.add_argument("--decoder", required=True)
     p.add_argument("--decoder-freeze", required=True)
@@ -919,6 +992,8 @@ def main() -> None:
         stack_factor=args.stack_factor,
         encoder=args.encoder,
         encoder_freeze=args.encoder_freeze,
+        lr_scheduler=args.lr_scheduler,
+        warmup_ratio=args.warmup_ratio,
         max_audio_seq_len=args.max_audio_seq_len,
         decoder=args.decoder,
         decoder_freeze=args.decoder_freeze,

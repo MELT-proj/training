@@ -457,6 +457,8 @@ arms:
     stage: MA
     config: ABL-MA-700-asr.yaml
     stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
     adapter_lr: 1e-3
     batch_duration: 150
     grad_accum_steps: 1
@@ -467,6 +469,8 @@ arms:
     stage: MA
     config: ABL-MA-700-asr.yaml
     stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
     adapter_lr: 1e-3
     batch_duration: 75
     grad_accum_steps: 1
@@ -477,6 +481,8 @@ arms:
     stage: MA
     config: ABL-MA-700-asr.yaml
     stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
     adapter_lr: 1e-3
     batch_duration: 75
     grad_accum_steps: 1
@@ -488,6 +494,8 @@ arms:
     stage: MA
     config: ABL-MA-700-asr.yaml
     stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
     adapter_lr: 2e-3
     batch_duration: 150
     grad_accum_steps: 1
@@ -498,6 +506,8 @@ arms:
     stage: MA
     config: ABL-MA-700-asr.yaml
     stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
     adapter_lr: 2e-3
     batch_duration: 75
     grad_accum_steps: 1
@@ -508,6 +518,8 @@ arms:
     stage: MA
     config: ABL-MA-700-asr.yaml
     stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
     adapter_lr: 2e-3
     batch_duration: 75
     grad_accum_steps: 1
@@ -520,6 +532,8 @@ arms:
     config: ABL-MA-700-asr.yaml
     encoder: openai/whisper-large-v3
     stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
     adapter_lr: 1e-3
     batch_duration: 75       # halved, grad_accum doubled: 75 x 2 x 8 = 1200 s
     grad_accum_steps: 2
@@ -531,6 +545,8 @@ arms:
     config: ABL-MA-700-asr.yaml
     encoder: openai/whisper-large-v3
     stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
     adapter_lr: 1e-3
     batch_duration: 75
     grad_accum_steps: 1
@@ -542,6 +558,8 @@ arms:
     config: ABL-MA-700-asr.yaml
     encoder: openai/whisper-large-v3
     stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
     adapter_lr: 1e-3
     batch_duration: 75
     grad_accum_steps: 1
@@ -554,6 +572,8 @@ arms:
     config: ABL-MA-700-asr.yaml
     encoder: openai/whisper-large-v3
     stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
     adapter_lr: 2e-3
     batch_duration: 75       # halved, grad_accum doubled: 75 x 2 x 8 = 1200 s
     grad_accum_steps: 2
@@ -565,6 +585,8 @@ arms:
     config: ABL-MA-700-asr.yaml
     encoder: openai/whisper-large-v3
     stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
     adapter_lr: 2e-3
     batch_duration: 75
     grad_accum_steps: 1
@@ -576,6 +598,8 @@ arms:
     config: ABL-MA-700-asr.yaml
     encoder: openai/whisper-large-v3
     stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
     adapter_lr: 2e-3
     batch_duration: 75
     grad_accum_steps: 1

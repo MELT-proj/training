@@ -96,6 +96,10 @@ ENCODER_FREEZE="${ENCODER_FREEZE:-}"
 # Empty = derive from ENCODER (a fixed-window encoder gets the window it
 # demands) and otherwise inherit from CONFIG. See plan_arm.py.
 MAX_AUDIO_SEQ_LEN="${MAX_AUDIO_SEQ_LEN:-}"
+# Empty = inherit the config's own schedule. LR_SCHEDULER=warmup_stable_decay
+# also composes lr_scheduler_kwargs from the arm's derived step count.
+LR_SCHEDULER="${LR_SCHEDULER:-}"
+WARMUP_RATIO="${WARMUP_RATIO:-}"
 DECODER="${DECODER:-}"
 DECODER_FREEZE="${DECODER_FREEZE:-}"
 DECODER_LORA="${DECODER_LORA:-}"
@@ -145,6 +149,7 @@ PLAN="$(python3 "${SCRIPT_DIR}/plan_arm.py" \
     --stack-factor "$STACK_FACTOR" \
     --encoder "$ENCODER" --encoder-freeze "$ENCODER_FREEZE" \
     --max-audio-seq-len "$MAX_AUDIO_SEQ_LEN" \
+    --lr-scheduler "$LR_SCHEDULER" --warmup-ratio "$WARMUP_RATIO" \
     --decoder "$DECODER" --decoder-freeze "$DECODER_FREEZE" \
     --decoder-lora "$DECODER_LORA" \
     --encoder-lr "$ENCODER_LR" --decoder-lr "$DECODER_LR" --adapter-lr "$ADAPTER_LR" \
