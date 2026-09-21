@@ -107,6 +107,28 @@ not where this section says, ask the PI and the answer gets added here.
   grid against SLURM and the output dirs; `plan` prints the exact command;
   `run` submits and appends to `arms.tsv` (timestamp, `EXP_NAME`, job id,
   command). `arms.tsv` is the ledger and is committed; do not hand-edit.
+- **The ledger and the sync fight each other, every time (2026-09-21).**
+  `campaign.py run` appends to `arms.tsv` *on MN5*, and `arms.tsv` is a
+  committed file, so every batch of submissions leaves the MN5 checkout
+  dirty. `infra/sync_repo.sh mn5` then refuses to push — deliberately, so it
+  can never clobber work done on the cluster. MN5 has no internet, so the
+  cluster cannot push the rows out itself. The reconciliation is:
+
+  1. Copy `arms.tsv` back from MN5 to a connected checkout.
+  2. Commit and push it from there, so the rows are on `main`.
+  3. On MN5, verify the working copy is **byte-identical** to what you just
+     pushed, then discard MN5's copy (`git checkout --` it, or stash it) so
+     the tree is clean.
+  4. `infra/sync_repo.sh mn5` now succeeds and fast-forwards MN5 onto the
+     commit that already contains those rows.
+
+  Step 3 is the one that looks wrong and is not: you are discarding a file
+  whose content you have just verified is already committed. Do not skip the
+  byte-identity check, and do not `--dirty` your way around it — that pushes
+  an unprovenanced tree over the cluster's ledger. If a guard blocks the
+  `checkout --`, stash that one file with a unique tag and **drop the stash
+  once the sync lands**; the worktrees share one stash stack, so a forgotten
+  entry is another session's hazard.
 - `EXP_NAME` grammar: `{STAGE}-{data}-{encoder}{F|T}-{decoder}{F|T}[-lora]-{adapter}{F|T}[-bdN][-gaN][-skN][-epN][-tt<template>]-{elr}-{dlr}-{lr}-s{seed}-{world}g`.
 - `build_campaign_config.py` renders the data axis (budget × task) from the
   Italian-anchored corpus template; run it where the data is, keep the
