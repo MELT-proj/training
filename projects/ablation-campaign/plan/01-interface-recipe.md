@@ -396,9 +396,15 @@ measure. `warmup_ratio: 0.03` is now set per arm, matching §2b's common
 settings, and `warmup_steps` is forced to 0 alongside it because HF's
 `get_warmup_steps` only consults the ratio when the count is ≤ 0.
 
-**Cost.** ≈ 20 GPU-h per arm at k=5, extrapolated from the measured 30 GPU-h
-of a 700 h/lang 50 Hz MA arm. The "≈ 65 GPU-h" written here before was
-computed at 125 h/lang and is superseded.
+**Cost, measured 2026-09-21** on the seven arms that ran before the schedule
+was corrected: **27 GPU-h** at 1200 s, **37** at 600 s, **32** for Whisper at
+1200 s — against ≈ 20 extrapolated. Twelve arms are therefore ≈ 380 GPU-h,
+nineteen ≈ 500. Note that 600 s costs *more* than 1200 s for the same audio
+(37 vs 27): per-step overhead does not halve when the batch does, so the
+batch axis is not cost-neutral and the 300 s level is the most expensive
+point on it. Memory is not the constraint anyone expected: Whisper at
+`batch_duration 75` peaked at **11.5 GB of 64**, below w2v-BERT's 19.7 GB at
+150, so the ~6x padding estimate was conservative.
 
 **Levels re-set from step 0b, 2026-09-20 (PI).** The table below previously
 carried levels chosen before step 0b ran, and three of them were settings
@@ -411,6 +417,23 @@ screen before it settled:
 | effective batch | 1200 s, 600 s, 300 s | **4800 s is dropped.** It is the August recipe: ~2,600 optimizer steps, the diagnosed cause of the failure in §1. `wsd-50hz-batch600` beat `wsd-50hz` 0.543 vs 0.664 on dev-other (a 0.002 seed regime), so smaller is still winning and 300 s tests whether that has bottomed out |
 | `stack_factor` | fixed at **5** (10 Hz) | continuity with `wsd-10hz`, the best w2v-BERT arm of step 0b, and with SLAM-ASR. Not a grid factor here; see the sweep below |
 | MA prompt | audio only; plus one verbatim run at the best corner; **proposed third level (PI, 2026-09-20): verbatim with a language ID in the prompt** — see below |
+
+**What the first pass showed (measured 2026-09-21).** Seven arms ran before
+the schedule was corrected, so their absolute numbers belong to the cosine
+control, not to this screen. The *shape* is still informative, and it settles
+why the grid runs on two encoders. All six w2v-BERT arms finished one epoch
+at **WER 0.879–0.976**, a total range of 0.097 — smaller than the 0.108
+seed-only spread step 0b measured at WER ≈ 0.5, at a *lower* error rate than
+these arms sit at, and noise grows with the error rate (`agent-protocol.md`
+§3). **No LR or batch contrast in the w2v-BERT half is separable from noise.**
+The single Whisper arm finished at **0.131 / CER 0.068**, an aligned model, in
+the regime where the measured spread is 0.002. A single-encoder screen on
+w2v-BERT would have produced six numbers and no decision.
+
+That also reads on `03-audio-stack.md`: one epoch of 700 h/lang at k=5 does
+not align w2v-BERT 2.0 on this mixture, while the same recipe on Whisper
+does. It is the strongest evidence yet that the encoder is a first-order
+factor for this campaign, and it is a prior for `03`, not a decision here.
 
 **The grid runs on both encoders (PI, 2026-09-20).** The screen has to
 resolve LR and batch contrasts, and step 0b measured exactly those against

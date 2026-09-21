@@ -15,6 +15,61 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-21 — Fondue Orchestrator — the cosine pass is in: the w2v-BERT half of the grid is entirely inside its own noise, the Whisper arm aligned
+
+Context: the seven screen arms that ran on the wrong schedule (cosine,
+warmup_steps 20) have landed. Numbers from the `MELT 5-lang screen` session,
+read off MN5 and arms.tsv. PI decisions taken on both open questions.
+
+Finding / proposal:
+1. **The two-encoder decision is what saved the screen.** The six w2v-BERT
+   arms finished one epoch at WER 0.879 / 0.897 / 0.898 / 0.898 / 0.913 /
+   0.976 — a total range of **0.097**. The seed-only spread step 0b measured
+   is **0.108**, and it was measured at WER ≈ 0.5, a *lower* error rate than
+   these arms sit at. Noise grows with the error rate (agent-protocol §3), so
+   the whole grid's spread is under its own noise floor: **no LR or batch
+   contrast in that half is separable.** The single Whisper arm finished at
+   **0.131 WER / 0.068 CER**, aligned, in the regime where the measured
+   spread is 0.002. A w2v-BERT-only screen would have produced six numbers
+   and no decision.
+2. **Prior for `03`, not a decision here.** One epoch of 700 h/lang at k=5
+   does not align w2v-BERT 2.0 on this mixture; the same recipe on Whisper
+   does. Strongest evidence so far that the encoder is first-order for this
+   campaign. `03-audio-stack.md` decides it, at equal budget, on FLEURS-24.
+3. **`min_lr_scale` just became a measured problem, not a documentation
+   one.** The screen session logged end-of-run LR at **1e-11..1e-9** on every
+   arm: the key is dead, so cosine decayed to zero rather than to 0.1x peak.
+   The Whisper arm was 0.132 at ~step 5,700 and 0.131 at 10,500 — flat
+   through the entire second half, which is exactly what a vanishing LR
+   predicts. WSD floors the LR at 0.1x via `min_lr_ratio`, a kwarg the
+   trainer does read, so the WSD rerun is a direct test. If it keeps
+   improving where the cosine arm stopped, that is the evidence the PI needs
+   to decide wire-or-delete.
+4. **Cost was underestimated ~40%**: measured 27 GPU-h at 1200 s, 37 at
+   600 s, 32 for Whisper at 1200 s, against ≈ 20 extrapolated. Twelve arms
+   ≈ 380 GPU-h, nineteen ≈ 500. **600 s costs more than 1200 s for the same
+   audio** (37 vs 27) — per-step overhead does not halve when the batch does,
+   so the batch axis is not cost-neutral and 300 s is its most expensive
+   point. Folded into §3.
+5. **Memory was the wrong thing to be cautious about.** Whisper at
+   `batch_duration 75` peaked at 11.5 GB of 64, *below* w2v-BERT's 19.7 GB at
+   150. The ~6x padding estimate was conservative. The per-corpus
+   padding-ratio measurement (week 2 Track B) is still worth doing for `03`'s
+   cost axis, but it is no longer a risk to this grid.
+
+PI decisions, 2026-09-21:
+- The five PENDING Whisper cosine arms are **cancelled** (jobs 46250650,
+  46250652, 46250653, 46250654, 46250655) — free at the time, ~160 GPU-h
+  saved, and the queue matters more than the hours with the gate on 09-27.
+- The seven completed arms are **kept as the cosine control**, relabelled as
+  such in §5. They are the only cosine-vs-WSD contrast at 700 h/lang on real
+  five-language data; step 0b measured that on LibriSpeech only.
+
+Action needed: screen session resubmits the twelve WSD arms from `main`
+(2ed8af2 or later) with the same canary discipline. When they land, compare
+the Whisper WSD arm's second half against the cosine one's flat tail and post
+the result — that is the `min_lr_scale` decision.
+
 ## 2026-09-21 — Fondue Orchestrator — the screen's first twelve arms ran cosine, not warmup-stable-decay; schedule and warmup are now axes
 
 Context: the PI noticed the five-language screen arms were on a cosine LR and
