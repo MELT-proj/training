@@ -438,14 +438,13 @@ arms:
   # exists to replace.
   #
   # Topology per batch level (batch_duration x grad_accum x world_size):
-  #   1200 s  ->  150 x 1 x 8   (2 nodes; Whisper 75 x 2 x 8, see below)
+  #   1200 s  ->  150 x 1 x 8   (2 nodes)
   #    600 s  ->   75 x 1 x 8   (2 nodes)
   #    300 s  ->   75 x 1 x 4   (1 node)
-  # The Whisper 1200 s arms halve batch_duration and double grad_accum to keep
-  # the product: Whisper pads every cut to a whole 30 s window, so at ~5 s mean
-  # utterance this mixture inflates its encoder input ~6x, against ~2.5x on
-  # LibriSpeech where MA-librispeech-w ran at batch_duration 150. Same
-  # effective batch, same steps/epoch, lower activation peak.
+  # Whisper at 1200 s runs at 150 x 1 like w2v-BERT, so the two encoder halves
+  # differ only in the encoder. The cosine pass ran Whisper at 75 x 2 out of
+  # padding caution (every cut pads to a whole 30 s window, estimated ~6x) and
+  # peaked at 11.5 GB of 64, below w2v-BERT's 19.7 GB at 150.
   # No max_audio_seq_len rows: plan_arm.py derives Whisper's 3000 from the
   # encoder name (ENCODER_WINDOW_FRAMES).
   #
@@ -535,8 +534,8 @@ arms:
     lr_scheduler: warmup_stable_decay
     warmup_ratio: 0.03
     adapter_lr: 1e-3
-    batch_duration: 75       # halved, grad_accum doubled: 75 x 2 x 8 = 1200 s
-    grad_accum_steps: 2
+    batch_duration: 150
+    grad_accum_steps: 1
     seed: 42
     time: "14:00:00"
 
@@ -575,8 +574,8 @@ arms:
     lr_scheduler: warmup_stable_decay
     warmup_ratio: 0.03
     adapter_lr: 2e-3
-    batch_duration: 75       # halved, grad_accum doubled: 75 x 2 x 8 = 1200 s
-    grad_accum_steps: 2
+    batch_duration: 150
+    grad_accum_steps: 1
     seed: 42
     time: "14:00:00"
 
