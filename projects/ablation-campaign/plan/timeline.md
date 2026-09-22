@@ -159,7 +159,7 @@ frame rate) or a multilingual-data problem? Decided by LibriSpeech step 0.
       at which each dev set went below WER 0.10. No GPU. It is the only
       hours-to-threshold number step 0b will produce, and the week-2 screen
       budget is derived from it (`01-interface-recipe.md` §2b, Consequence).
-- [ ] **Whisper-large-v3's own WER** on the same normalised dev-clean and
+- [x] **Whisper-large-v3's own WER** on the same normalised dev-clean and
       dev-other, as a reference line for the arm above. A decode, no
       training; artemis preferred so it does not queue behind MN5 work.
       *Outcome:* `wsd-50hz-whisper`'s 0.038/0.061 restated as the fraction
