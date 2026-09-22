@@ -115,11 +115,17 @@ def test_campaign_accepts_both_as_grid_fields():
 
 
 def test_every_screen_row_sets_the_schedule():
-    """The regression this file exists for: no screen arm may inherit cosine."""
+    """The regression this file exists for: no screen arm may inherit cosine.
+
+    Deliberately not pinned to a row count. The screen grows as follow-up arms
+    are added -- the 2e-5 control took it from 12 to 14 -- and an exact count
+    would fail on every addition while saying nothing about the schedule,
+    which is the thing worth guarding.
+    """
     _, arms = campaign.load_grid()
     screen = [a for a in arms if a["id"].startswith("MA-700-screen-")]
 
-    assert len(screen) == 12
+    assert len(screen) >= 12
     for arm in screen:
         assert arm.get("lr_scheduler") == "warmup_stable_decay", arm["id"]
         assert str(arm.get("warmup_ratio")) == "0.03", arm["id"]
