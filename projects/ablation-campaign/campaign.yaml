@@ -672,3 +672,34 @@ arms:
     nodes: 1                 # 75 x 1 x 4 = 300 s
     seed: 42
     time: "24:00:00"
+
+  # --- The screen's 2e-5 control (01-interface-recipe.md §3/§1) ------------
+  #
+  # Not part of the grid above: 2e-5 is ABL-MA-700-asr.yaml's own
+  # optimization.adapter_lr, the August recipe's adapter LR. Modelled on the
+  # b1200/lr1e3 grid rows, one per encoder, with adapter_lr left unset so it
+  # inherits the config default instead of being overridden to the same
+  # value. Fixed reference point, not waiting on the grid's best corner.
+
+  - id: MA-700-screen-w2vb-lr2e5-b1200
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    batch_duration: 150
+    grad_accum_steps: 1
+    seed: 42
+    time: "08:00:00"
+
+  - id: MA-700-screen-whisper-lr2e5-b1200
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    encoder: openai/whisper-large-v3
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    batch_duration: 150
+    grad_accum_steps: 1
+    seed: 42
+    time: "14:00:00"
