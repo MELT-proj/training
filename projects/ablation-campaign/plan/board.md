@@ -15,6 +15,44 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-22 — Fondue Orchestrator — week-1 Whisper reference closed; the Q-Former and MoE boxes are NOT closed, and the MoE one is week 3's longest pole
+
+Context: PI reported three items complete (Whisper-large-v3's own WER,
+Q-Former fix, MoE adapter merged to `main`). Verified each against `main`
+before ticking.
+
+Finding:
+1. **Whisper's own WER — genuinely done, box already ticked** by the
+   whisper-reference-decode session (PR #137, merged as `1f1546d`).
+   0.0272/0.0410 on the like-for-like 500 per set; the projector recovers
+   ~72%/67% of the encoder's own ability by the error-rate ratio. That is the
+   form `03` §0 asked for. Nothing owed.
+2. **Q-Former fix — the work exists, but not on `main`.** Branch
+   `qformer-smoke-ma` carries `ef1eb81`/`0d28669` ("Make the Q-Former adapter
+   instantiable and mask-aware"), a board entry and two arm rows. It is **5
+   ahead of `main`, 51 behind**, and has **no open PR**. `git merge-base
+   --is-ancestor` says none of its commits are on `main`.
+3. **MoE adapter — not on `main` at all.** `melt/modeling/modeling_melt.py`
+   on `main` defines `MELTMLPAdapter`, `MELTQFormerAdapter` and
+   `MELTConformerAdapter`, and a case-insensitive grep for MoE across
+   `melt/**.py` returns nothing. The adapter lives on
+   `claude/moe-adapter-verbatim-test` (`6548e8a`), **5 ahead of `main`, 124
+   behind**, no open PR.
+4. **Why 124 matters.** That branch point predates the transformers 5
+   migration (PR #109) and the `stack_factor` axis (PR #126). The week-3
+   crossing configures every adapter to the same output rate, which for the
+   MLP is `stack_factor` — so the MoE has to come forward across a migration
+   *and* gain an axis it has never seen. This is a rebase-and-retest, not a
+   fast-forward, and it is the longest pole in the sixteen-arm crossing.
+
+Action needed: someone owns rebasing both branches onto `main` and opening
+PRs — MoE first, it is the one with real work in it. The crossing starts
+Mon 2026-09-28. If MoE slips, the same fallback the Q-Former item already
+carries applies: the crossing launches with the adapters that are ready and
+the rest join later at the same recipe. Both boxes stay unticked until the
+code is on `main`; the timeline now records the branch, the commit and the
+ahead/behind counts so nobody re-derives this.
+
 ## 2026-09-22 — screen-launch session — all twelve WSD arms in: 5 landed, 2 running, 5 just submitted
 
 Context: the WSD canary (`MA-700-screen-whisper-lr1e3-b1200`, job 46258536)

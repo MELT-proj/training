@@ -216,10 +216,23 @@ Settled.
       now runs in week 3, so its four Q-Former arms need the adapter
       instantiable by then. If it slips, the crossing launches without them
       and they join as a late addition at the same recipe.
+      *State 2026-09-22:* **the work exists but is not on `main`.** It is on
+      branch `qformer-smoke-ma` (`ef1eb81`/`0d28669` "Make the Q-Former
+      adapter instantiable and mask-aware", plus a board entry and two arm
+      rows), **5 ahead of `main` and 51 behind it**, with no open PR. Rebase
+      and merge is what closes this box, not further fixing.
 - [ ] **MoE adapter branch merged to `main`** with its aux-loss logging,
       moved up from week 4 for the same reason: the MoE is one of the four
       adapters in the week-3 crossing, so it must be on `main` before the
       sixteen arms are rendered.
+      *State 2026-09-22:* **not on `main`.** `melt/` on `main` defines
+      `MELTMLPAdapter`, `MELTQFormerAdapter` and `MELTConformerAdapter` and
+      no MoE at all. The adapter is on `claude/moe-adapter-verbatim-test`
+      (`6548e8a` "Add mixture-of-experts audio adapter (moe)"), **5 ahead of
+      `main` and 124 behind it**, with no open PR. 124 commits predates the
+      transformers 5 migration and the `stack_factor` axis, so this needs a
+      real rebase and a re-test, not a fast-forward. It is the longest pole
+      in the week-3 crossing.
 - [x] **Fondue config drafted** (`06-fondue.md` §3): language set incl. ru/uk,
       two-tier mixture weights (alpha/beta), filters, eval subset. Not frozen.
 - [x] **Raclette config drafted**: same mixture at 25K h, big-run batch,
