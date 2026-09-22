@@ -15,6 +15,63 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-22 — screen 2e-5 control session — both arms submitted, not part of the grid
+
+Context: `01-interface-recipe.md` §3 names 2e-5 as a fixed reference point (the
+August recipe's own adapter LR), tied to the §1 diagnosis and to LibriSpeech
+step 0 — needed regardless of where the grid's best corner lands, so it does
+not wait on the twelve grid arms. Added the two arms (one per encoder),
+modelled on the `b1200/lr1e3` grid rows with only `adapter_lr` changed.
+
+Finding / proposal:
+1. **Rows added:** `MA-700-screen-w2vb-lr2e5-b1200`,
+   `MA-700-screen-whisper-lr2e5-b1200`. `adapter_lr` is left **unset** in both
+   rows rather than written as `2e-5`, because 2e-5 is already
+   `ABL-MA-700-asr.yaml`'s own `optimization.adapter_lr` — `plan_arm.py` only
+   emits `--optimization.adapter_lr` when the row's value differs from the
+   config, so setting it explicitly to the same value would still be inert
+   but reads as if the row forgot the axis. Composed exp_names carry `lr2e5`
+   regardless, since that tag is emitted unconditionally from the effective
+   (inherited) value:
+   - `MA-700asr-w2vbF-llama1bInsF-mlpT-sk5-ga1-wsd-wu0p03-elr6e6-dlr2e5-lr2e5-s42-8g`
+   - `MA-700asr-whisperlargeF-llama1bInsF-mlpT-sk5-ga1-wsd-wu0p03-elr6e6-dlr2e5-lr2e5-s42-8g`
+   Checked against every existing arm in `arms.tsv`: no collision.
+2. **Verified against the grid's own numbers before submitting** (`campaign.py
+   plan`, then re-checked from MN5 itself after sync): 10,500 steps,
+   `num_decay_steps` 2100 (20%), `warmup_ratio 0.03` / `warmup_steps 0`, seed
+   42, `stack_factor 5`, one epoch, topology 2×4 = 8 ranks. The Whisper
+   command carries both `--model.encoder.name openai/whisper-large-v3` and
+   `--model.encoder.max_audio_seq_len 3000`; the second is `plan_arm.py`'s own
+   derivation from the encoder name, not typed in the row. Neither command
+   carries `--optimization.adapter_lr` — expected, not a sign the row was
+   ignored (see above).
+3. **Submitted via `campaign.py run` on `alogin1`:** job 46368424 (w2v-BERT,
+   08:00:00 wall) and job 46368425 (Whisper, 14:00:00 wall). Both `PENDING`
+   at submission time (priority queue); world_size-8 confirmation from the
+   `[run_train] starting` log line is **still pending** as of this entry — a
+   background watch is armed and will report once both jobs start.
+4. **Ledger reconciliation done the documented way** (`infrastructure.md`
+   §3): MN5's `arms.tsv` was already dirty on arrival with the twelve grid
+   arms' rows, verified byte-identical to what commit `463867f` already has
+   on `main`, so that diff was stashed (not discarded) rather than checked
+   out over, per the `checkout --`-vs-destructive-op guard, then dropped once
+   verified. Same pattern after submitting these two: copied back, committed
+   (`899a81d`), pushed to `main`, verified MN5's working copy byte-identical,
+   stashed and dropped, then `sync_repo.sh mn5` confirmed clean.
+5. **Proposal for `timeline.md`:** the "Screen follow-ups at the best corner"
+   box bundles the 2e-5 control with the stacking sweep, prompt runs and seed
+   replicates — but per `01-interface-recipe.md` §3 and this task's brief,
+   the 2e-5 control is a fixed reference and does not block on the grid's
+   corner the way the other five follow-ups do. Consider splitting it into
+   its own line so it can be ticked independently once these two land.
+
+Action needed: orchestrator — consider the `timeline.md` split in point 5.
+Whoever next has cluster access — check `squeue -j 46368424,46368425` /
+`arms.tsv` for `[run_train] starting`, confirm world_size 8, and land the
+results in `01-interface-recipe.md` §5 as "measured" once both finish.
+
+---
+
 ## 2026-09-22 — Fondue Orchestrator — week-1 Whisper reference closed; the Q-Former and MoE boxes are NOT closed, and the MoE one is week 3's longest pole
 
 Context: PI reported three items complete (Whisper-large-v3's own WER,
