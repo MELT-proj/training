@@ -15,6 +15,74 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-22 — screen-launch session — all twelve WSD arms in: 5 landed, 2 running, 5 just submitted
+
+Context: the WSD canary (`MA-700-screen-whisper-lr1e3-b1200`, job 46258536)
+finished healthy overnight, so the five held Whisper arms went in.
+
+Finding / proposal:
+1. **Canary result: peak training memory 19.11 GB at `batch_duration 150 /
+   grad_accum 1`**, close to w2v-BERT's own 19.71 GB at the same setting and
+   well under the Orchestrator's ~23 GB extrapolation. World_size 8 as
+   expected. No traceback/OOM/kill in any of the seven logs checked.
+2. **Five w2v-BERT/Whisper WSD arms landed**, all world_size 8, no errors:
+
+   | arm | job | peak mem | s/step | GPU-h | mean WER @ epoch 1 |
+   |---|---|---|---|---|---|
+   | w2vb lr1e3 b1200 | 46258529 | 19.71 GB | 1.30 | 30 | 0.852 |
+   | w2vb lr2e3 b1200 | 46258533 | 19.71 GB | 1.19 | 28 | 0.822 |
+   | w2vb lr1e3 b600  | 46258531 | 12.04 GB | 1.10 | 51 | 0.788 |
+   | w2vb lr2e3 b600  | 46258534 | 12.04 GB | 1.10 | 51 | 0.850 |
+   | whisper lr1e3 b1200 (canary) | 46258536 | 19.11 GB | 1.19 | 28 | 0.126 |
+
+   All four w2v-BERT WSD arms beat their cosine counterparts (0.897 / 0.976 /
+   0.879 / 0.898) but none is aligned at one epoch. **b600 GPU-h roughly
+   doubled against the cosine pass at the same setting** (51 vs 37); b1200
+   and the canary are flat or slightly up. Not investigated — plausibly
+   node/network contention on the specific allocation rather than anything
+   about WSD, since s/step for b1200 and the canary are unchanged from the
+   cosine numbers. Flagging, not blocking.
+3. **The `min_lr_scale` contrast the Orchestrator wanted:** the WSD Whisper
+   canary kept improving through the second half of training (mean WER 0.142
+   at step ~5,730 -> 0.126 at step 10,500), where the cosine Whisper arm went
+   flat (0.132 -> 0.131) over the same span. LR floors at 0.1x peak (1e-4 for
+   lr1e3, 2e-4 for lr2e3) on every WSD arm checked, confirming the floor is
+   real and cosine's dead `min_lr_scale` key is the likely explanation for
+   the cosine Whisper plateau. This is a measured result for the PI's
+   wire-or-delete decision on `min_lr_scale`, not yet written up as such
+   anywhere but here.
+4. **Two w2v-BERT b300 arms (46258532, 46258535) still RUNNING** at last
+   check, ~82% through their 42,000 steps (step ~34,575), ~9 h into a 16 h
+   budget — on track, no `--resume` expected.
+5. **Submitted the five held Whisper WSD arms**, PI-approved: lr1e3-b600
+   (46366412), lr1e3-b300 (46366413), lr2e3-b1200 (46366414), lr2e3-b600
+   (46366418), lr2e3-b300 (46366420). All PENDING at submission.
+6. **All twelve `MA-700-screen-*` rows are now either landed or in the
+   queue** — the submission task this session was given is complete once the
+   last seven finish healthy. That is narrower than the item's *outcome*:
+   none of the twelve has been read against step 0b's seed-noise floor yet,
+   no transition step has been located on any WSD arm, and **no FLEURS-24
+   zero-shot CER has been run on any checkpoint** — a separate `melt-eval`
+   step on the saved checkpoint, not produced by training, still fully open.
+   Per `01` §3 those are part of what the screen is for, so flagging them
+   here even though they are not what gates the tick below.
+7. **Ledger**: `arms.tsv` copied back from MN5, matches byte-for-byte up to
+   the previously-pushed content, five new rows appended. Not yet
+   committed/pushed — doing so next along with this entry.
+
+Action needed: next session — (a) verify the two running b300 arms and the
+five just-submitted Whisper arms finish COMPLETED at the expected
+world_size (the canary discipline is now moot, all Whisper arms are in);
+(b) tick the timeline box once all twelve read COMPLETED and healthy — that
+is the tick criterion this session was given, distinct from (c)-(e); (c)
+read `01` §3's transition-step definition against each WSD arm's loss curve;
+(d) run FLEURS-24 zero-shot via melt-eval on the twelve final checkpoints;
+(e) compare the grid against step 0b's noise floor and pick the best corner
+per encoder — (c)-(e) are the screen's own outcome and belong to whoever
+picks this up next, not necessarily gated behind the tick.
+
+---
+
 ## 2026-09-21 — screen-launch session — WSD grid resubmitted: six w2v-BERT arms and the Whisper canary in; five Whisper arms held
 
 Context: the PI decided to cancel the five pending cosine Whisper arms, keep
