@@ -1,0 +1,137 @@
+# Raclette -- the Fondue LR pilot, DRAFT -- week 2, 2026-09-18.
+# NOT RUNNABLE. NOT FROZEN. Runs week 6 (timeline.md), after the week-5
+# backbone gate, over fondue-ift-draft.yaml's mixture.
+#
+# 06-fondue.md §4: "Raclette sets it: the Fondue mixture at ~25K h (5-10% of
+# the pool), the Fondue batch and topology, three LR points, chosen on loss
+# at matched steps and FLEURS-24 dev CER."
+#
+# WHICH LR: this draft assumes Raclette pilots optimization.decoder_lr for
+# the IFT stage. That is the largest, most expensive, most novel-at-scale
+# stage (~17,800 GPU-h vs stage 1's ~3,800, 06-fondue.md §2) and the one
+# whose LR is genuinely unset -- the MA-stage adapter_lr is instead the
+# subject of 01-interface-recipe.md / step 0b, a separate, already-running,
+# PI-held investigation this draft does not touch or duplicate. 06-fondue.md
+# §4 does not itself disambiguate "the learning rate" between the two
+# stages; flagged on the board as worth a PI confirmation before week 6,
+# since if Raclette is meant to also cover the MA adapter_lr, it needs a
+# fourth axis, not just three points on one parameter.
+#
+# THE MIXTURE: identical to fondue-ift-draft.yaml (same alpha=0.2, beta=0.5,
+# same input_cfg, same languages) with train_ds.total_hours lowered to
+# ~25,000 (about 7.6% of the ~330,000 h IFT pool -- inside the "5-10%"
+# window §4 asks for). Nothing in the mixture's sampling *proportions*
+# changes: p_l and p_c are properties of the corpus/language shares, not of
+# how many steps are drawn from them, so shrinking total_hours only shortens
+# the one-epoch run (fewer steps), it does not resample which languages get
+# weight. This is the same total_hours-only lever build_campaign_config.py
+# and compute_mix_weights.py already use for every other budget in this
+# campaign -- no new mechanism, per the task's instruction to follow
+# existing conventions.
+#
+#   python3 infra/compute_mix_weights.py \
+#       --config      projects/ablation-campaign/plan/fondue-ift-draft.yaml \
+#       --alpha 0.2 --beta 0.5 \
+#       --cache       infra/.mix_weights_hours.json \
+#       --emit-config projects/ablation-campaign/Raclette.yaml \
+#       --exp-name    Raclette
+#   # then hand-edit train_ds.total_hours: 330000.0 -> 25000.0
+#
+# THE BATCH AND TOPOLOGY: OPEN, same as Fondue's own "effective batch and
+# LR" / "topology" rows in 06-fondue.md §3 -- both are gated on the
+# week-5 backbone decision. What IS decidable now is which of the already-
+# MEASURED candidates Raclette slots into once that gate closes; both use
+# grad_accum 20 held fixed while nodes scale, the regime 06-fondue.md §2
+# measured flat across 2/8/16 nodes for Qwen (and which Llama's own
+# "keep grad_accum, add nodes" convention already matches at 2/8 nodes):
+#
+#   | nodes | effective batch (audio-s/step) | measured / used |
+#   |-------|--------------------------------:|------------------|
+#   |     2 |                           4,800 | the one completed Qwen IFT
+#   |       |                                 | production arm (2026-09-12)
+#   |       |                                 | AND every current Llama IFT
+#   |       |                                 | row in campaign.yaml -- both
+#   |       |                                 | backbones already use this.
+#   |     8 |                          19,200 | measured, job 45902184;
+#   |       |                                 | 06-fondue.md §2's planned
+#   |       |                                 | Fondue topology
+#   |    16 |                          38,400 | measured, job 45902185;
+#   |       |                                 | contingency
+#
+# NOTE (flag for the board, not decided here): 06-fondue.md §3's own
+# "topology" row currently reads "8 nodes x 4 GPUs, grad_accum 4", which
+# does not match any of the three measured rows above -- every one of them,
+# and every real arm in campaign.yaml, uses grad_accum 20 at this node
+# count, not 4. "grad_accum 4" looks like infrastructure.md's OLDER,
+# pre-Qwen-measurement Llama figure (2 nodes, grad_accum 4, effective
+# 3,840 s/step) that was never reconciled with the batch campaign.yaml's
+# IFT rows actually run today (batch_duration 30 x grad_accum 20 x world
+# 8 = 4,800 s/step, for BOTH backbones). Left as found; not corrected here
+# since "topology" is 06-fondue.md's row to resolve, not this draft's.
+#
+# THREE LR POINTS, reasoning from measured numbers rather than a default
+# (the task's own instruction) -- extrapolation, per 06-fondue.md §4's own
+# framing ("the learning rate at that batch is an extrapolation"):
+#
+#   Anchor: decoder_lr = 2e-5. This is not a guess -- it is the exact value
+#   every completed IFT arm in this campaign has used so far, at both
+#   candidate backbones, at the 4,800 audio-s/step batch in the table
+#   above (campaign.yaml's IFT-700-* rows; the completed
+#   IFT-700-qwen35-2b-ins production run, 06-fondue.md §2). It has not
+#   been shown to be right, only that it is the number the campaign has
+#   actually run and not yet had a reason to move off of.
+#
+#   Scaling rule: sqrt(batch ratio), the standard Adam-family heuristic for
+#   carrying a learning rate to a larger effective batch (distinct from,
+#   and not a substitute for, whatever 01-interface-recipe.md separately
+#   settles for the MA-stage adapter_lr -- that is a different parameter,
+#   a different stage, and this draft does not assume its answer).
+#     - 8-node candidate:  ratio 19,200/4,800 = 4x  -> sqrt(4)  = 2.0x -> 4e-5
+#     - 16-node candidate: ratio 38,400/4,800 = 8x  -> sqrt(8)  = 2.83x -> 5.7e-5
+#
+#   The three points bracket the anchor and this estimate with a consistent
+#   ~2.5x step each way, wide enough that the heuristic being off by a
+#   couple of x (it usually is, for a jump this large, and it has never
+#   been checked in this codebase before) still lands inside the search:
+#
+#     LR1 = 2e-5    -- the null hypothesis: the batch increase alone does
+#                      not require moving off what has already been run.
+#     LR2 = 5e-5    -- the central estimate: inside the 4e-5 (8-node) to
+#                      5.7e-5 (16-node) sqrt-scaled range above.
+#     LR3 = 1.2e-4  -- ~2.4x above LR2: tests whether a full-decoder
+#                      fine-tune at this batch tolerates or wants steeper
+#                      scaling than sqrt (which is known to sometimes
+#                      undershoot at very large effective batches), rather
+#                      than only confirming the conservative estimate.
+#
+#   Chosen on loss at matched steps and FLEURS-24 dev CER, per 06-fondue.md
+#   §4 -- unchanged from that file.
+
+# =============================================================================
+# The three arms -- identical except decoder_lr. Not campaign.yaml rows yet
+# (no id/exp_name -- those are plan_arm.py's to compose, and this is week 2,
+# not week 6); shown here as the override each becomes.
+# =============================================================================
+arms:
+  - name: raclette-lr2e5
+    base_config: fondue-ift-draft.yaml    # with total_hours: 25000.0
+    optimization: { decoder_lr: 2e-5 }
+    batch_duration: null       # OPEN -- see topology table above
+    gradient_accumulation_steps: null
+
+  - name: raclette-lr5e5
+    base_config: fondue-ift-draft.yaml
+    optimization: { decoder_lr: 5e-5 }
+    batch_duration: null
+    gradient_accumulation_steps: null
+
+  - name: raclette-lr1p2e4
+    base_config: fondue-ift-draft.yaml
+    optimization: { decoder_lr: 1.2e-4 }
+    batch_duration: null
+    gradient_accumulation_steps: null
+
+# Everything else (encoder/decoder/adapter identity, checkpoint cadence) is
+# inherited from whatever fondue-ift-draft.yaml resolves to by week 6 --
+# Raclette's whole point is to run at Fondue's real batch and architecture,
+# not a stand-in for it.

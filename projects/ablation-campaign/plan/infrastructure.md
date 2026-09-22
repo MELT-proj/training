@@ -82,6 +82,13 @@ anything time-sensitive.
 
 ## 2. Repositories
 
+**They are siblings under `/home/giuseppe/melt-proj/`** — `training` (this
+one), `preprocessing`, `melt-eval` and `handoff-extras` sit next to each
+other in that directory. That is the entire search space: this repo, those
+siblings, and the checkouts named below. **Never `find /` or grep from `/`
+or `$HOME` looking for a file** (`agent-protocol.md` §1); if something is
+not where this section says, ask the PI and the answer gets added here.
+
 | repo | role |
 |---|---|
 | `MELT-proj/training` (this) | model, trainer, lhotse data pipeline, launchers, the campaign under `projects/ablation-campaign/` |
@@ -100,10 +107,40 @@ anything time-sensitive.
   grid against SLURM and the output dirs; `plan` prints the exact command;
   `run` submits and appends to `arms.tsv` (timestamp, `EXP_NAME`, job id,
   command). `arms.tsv` is the ledger and is committed; do not hand-edit.
+- **The ledger and the sync fight each other, every time (2026-09-21).**
+  `campaign.py run` appends to `arms.tsv` *on MN5*, and `arms.tsv` is a
+  committed file, so every batch of submissions leaves the MN5 checkout
+  dirty. `infra/sync_repo.sh mn5` then refuses to push — deliberately, so it
+  can never clobber work done on the cluster. MN5 has no internet, so the
+  cluster cannot push the rows out itself. The reconciliation is:
+
+  1. Copy `arms.tsv` back from MN5 to a connected checkout.
+  2. Commit and push it from there, so the rows are on `main`.
+  3. On MN5, verify the working copy is **byte-identical** to what you just
+     pushed, then discard MN5's copy (`git checkout --` it, or stash it) so
+     the tree is clean.
+  4. `infra/sync_repo.sh mn5` now succeeds and fast-forwards MN5 onto the
+     commit that already contains those rows.
+
+  Step 3 is the one that looks wrong and is not: you are discarding a file
+  whose content you have just verified is already committed. Do not skip the
+  byte-identity check, and do not `--dirty` your way around it — that pushes
+  an unprovenanced tree over the cluster's ledger. If a guard blocks the
+  `checkout --`, stash that one file with a unique tag and **drop the stash
+  once the sync lands**; the worktrees share one stash stack, so a forgotten
+  entry is another session's hazard.
 - `EXP_NAME` grammar: `{STAGE}-{data}-{encoder}{F|T}-{decoder}{F|T}[-lora]-{adapter}{F|T}[-bdN][-gaN][-skN][-epN][-tt<template>]-{elr}-{dlr}-{lr}-s{seed}-{world}g`.
 - `build_campaign_config.py` renders the data axis (budget × task) from the
   Italian-anchored corpus template; run it where the data is, keep the
   `--cache` file, never train on a `--sample-shards` render.
+- `infra/compute_mix_weights.py` (**in this repo**, documented at
+  `docs/mixture_weights.md`) computes the per-source mux sampling weights:
+  two-tier balancing, corpora within a language by `alpha` first, then
+  languages against each other by `beta`, `n(.)` measured in **hours of
+  audio** and not utterance counts. Its output is a training config whose
+  `train_ds.input_cfg` carries the weights. Read the doc before changing a
+  mixture. This is the tooling `06-fondue.md` §3 means by "the config
+  builder already implements it"; it is not in `preprocessing`.
 - Effective batch = `batch_duration × gradient_accumulation_steps ×
   world_size` in audio seconds (with `quadratic_duration` unset). One epoch
   is derived from it; never pin `max_steps` per arm.

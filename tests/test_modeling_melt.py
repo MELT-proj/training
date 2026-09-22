@@ -1,6 +1,7 @@
 """Tests for MELTForCausalLM and adapter components."""
 
 import math
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -11,6 +12,7 @@ from melt.modeling import (
     MELTConfig,
     MELTConformerAdapter,
     MELTForCausalLM,
+    MELTForSequenceClassification,
     MELTMLPAdapter,
 )
 
@@ -689,3 +691,63 @@ class TestInjectTensor:
                 source_tensor_mask=None,
                 pad_item=0.0,
             )
+
+
+# ============================================================================
+# MELTForSequenceClassification._inject_tensor -- a *separate* method from
+# MELTForCausalLM's above, and the only one that reads
+# text_decoder.config.eos_token_id directly rather than a pre-cached scalar
+# (see MELTForCausalLM.__init__'s self._eos_token_id). A chat-formatted
+# decoder's eos_token_id is a list of valid stop tokens (issue #124's fix, in
+# melt.training.setup._merge_chat_template_eos_token_id), so this must not
+# break when the two batch items below merge to different lengths and force
+# the embedding padding path to actually run.
+# ============================================================================
+
+
+class _FakeTextDecoderForInjectTensor:
+    """Exposes only what _inject_tensor touches -- no real HF model needed."""
+
+    def __init__(self, eos_token_id):
+        self.config = SimpleNamespace(eos_token_id=eos_token_id)
+        self._embedding = torch.nn.Embedding(num_embeddings=16, embedding_dim=4)
+
+    def get_input_embeddings(self):
+        return self._embedding
+
+
+class TestInjectTensorSequenceClassificationEosTokenId:
+    def _call(self, eos_token_id):
+        fake_self = SimpleNamespace(
+            text_decoder=_FakeTextDecoderForInjectTensor(eos_token_id)
+        )
+        inject_id = 9
+        # Item 0 injects a 1-frame audio span, item 1 a 3-frame one -- the
+        # two batch items merge to different lengths (4 vs 6), which is what
+        # exercises the `pad_item.unsqueeze(0).expand(...)` padding path.
+        input_ids = torch.tensor([[1, inject_id, 2, 0], [1, inject_id, 2, 0]])
+        target_tensor = torch.zeros(2, 4, 4)  # (batch, seq_len, hidden_size)
+        source_tensor = torch.ones(2, 3, 4)
+        source_tensor_mask = torch.tensor(
+            [[True, False, False], [True, True, True]]
+        )
+        source_lengths = torch.tensor([[1], [3]])
+
+        return MELTForSequenceClassification._inject_tensor(
+            fake_self,
+            source_tensor=source_tensor,
+            target_tensor=target_tensor,
+            inject_token_id=inject_id,
+            input_ids=input_ids,
+            source_lengths=source_lengths,
+            source_tensor_mask=source_tensor_mask,
+        )
+
+    def test_scalar_eos_token_id(self):
+        assert self._call(eos_token_id=5).shape == (2, 6, 4)
+
+    def test_list_eos_token_id_does_not_break_padding(self):
+        """Pre-fix, torch.tensor([[5, 7]]) gave a (1, 2, hidden) embedding
+        instead of (hidden,), and `.expand(pad_len, hidden_size)` on that
+        raised RuntimeError as soon as padding was needed."""
+        assert self._call(eos_token_id=[5, 7]).shape == (2, 6, 4)

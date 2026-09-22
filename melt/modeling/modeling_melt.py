@@ -1780,6 +1780,15 @@ class MELTForSequenceClassification(MELTPreTrainedModel):
         if ndim == 3:
             hidden_size = target_tensor.shape[-1]
             eos_token_id = self.text_decoder.config.eos_token_id
+            # Some decoders (chat-formatted ones in particular, see MELTForCausalLM
+            # __init__) carry a *list* of valid stop tokens rather than a single id.
+            # Only one embedding row is needed as a placeholder here, so take the
+            # first -- matching MELTForCausalLM's own eos_id[0] fallback -- instead
+            # of feeding the whole list to torch.tensor([eos_token_id]) and getting
+            # an extra (num_eos, hidden_size) axis back where a single (D,) row is
+            # expected.
+            if isinstance(eos_token_id, list):
+                eos_token_id = eos_token_id[0]
             pad_item = self.text_decoder.get_input_embeddings()(
                 torch.tensor(
                     [eos_token_id], device=target_tensor.device, dtype=torch.long

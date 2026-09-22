@@ -3,7 +3,8 @@ name: Tests
 # Tests do NOT re-run on every push to a PR. They run once when the PR opens,
 # and after that only on demand:
 #
-#   * comment `/test` on the pull request, or
+#   * comment `/test` on the pull request (the result is posted back as a
+#     comment), or
 #   * `gh workflow run ci.yml --ref <branch>`
 #
 # Rationale: a PR under active development pushed five commits and paid for five
@@ -42,11 +43,17 @@ jobs:
 
     permissions:
       contents: read
-      issues: write  # solely to react to the `/test` comment
+      # React to the `/test` comment and post the result on the PR. The comment
+      # is on a pull request, so the API asks for pull-requests: write as well;
+      # with issues: write alone both calls return 403.
+      issues: write
+      pull-requests: write
 
     steps:
     - name: Acknowledge the /test comment
       if: github.event_name == 'issue_comment'
+      # Cosmetic: a failed reaction must not fail the test run.
+      continue-on-error: true
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
@@ -98,3 +105,20 @@ jobs:
         # where the HF cache is warm (nyx/artemis) with `pytest tests/`, or
         # `pytest tests/ -m hub` for just that set.
         pytest tests/ -v -m "not hub"
+
+    - name: Report the result on the pull request
+      # A comment-triggered run is not attached to the PR head SHA, so no check
+      # appears on the PR; a comment is the only place the outcome can surface.
+      # PR comments go through the issues API, which `issues: write` covers.
+      if: always() && github.event_name == 'issue_comment'
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        case "${{ job.status }}" in
+          success)   verdict="passed" ;;
+          cancelled) verdict="was cancelled (a newer run superseded it)" ;;
+          *)         verdict="failed" ;;
+        esac
+        gh api -X POST \
+          "/repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments" \
+          -f body="\`/test\` $verdict: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

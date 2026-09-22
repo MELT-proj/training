@@ -47,9 +47,11 @@ LEDGER_PATH = os.path.join(HERE, "arms.tsv")
 # claims to be.
 AXIS_FIELDS = {
     "adapter", "adapter_freeze", "stack_factor", "encoder", "encoder_freeze",
+    "max_audio_seq_len", "lr_scheduler", "warmup_ratio",
     "decoder", "decoder_freeze", "decoder_lora",
     "encoder_lr", "decoder_lr", "adapter_lr",
     "batch_duration", "grad_accum_steps", "gradient_checkpointing",
+    "epochs", "template_task_override", "template_selection",
 }
 POLICY_FIELDS = {
     "seed", "eval_rounds", "keep_checkpoints", "checkpoint_count",
@@ -157,7 +159,6 @@ def render(
         "--run.exp_name", p.exp_name,
         "--trainer.output_dir", f"/workspace/outputs/{p.exp_name}",
         *p.overrides,
-        "--trainer.num_train_epochs", "1",
         "--trainer.eval_steps", str(p.eval_steps),
         "--trainer.save_steps", str(p.save_steps),
         "--trainer.save_total_limit", str(p.save_total_limit),

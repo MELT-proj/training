@@ -9,7 +9,8 @@ effect on low-resource Slavic languages is a named probe.
 **Open:** which high-resource language per family is dropped in each
 mixed-tier run; the exact language of each probe; whether Russian sits in the
 base tiers or only in the probe (proposal: only in the probe, so the base
-ladder is EU-24 only).
+ladder is EU-24 only); **whether the ladder runs on a supervised encoder at
+all** (added 2026-09-18, see §4.1).
 **Owner:** PI, when the ladder configs are built (week 3–5).
 
 ## 1. The data, and what it forces
@@ -165,6 +166,27 @@ tiers. Report "hours to reach CER ≤ 10%" per language with a confidence
 band from the seed replicates, and the transfer effect per family from
 §2. Fondue supplies one out-of-sample point per language; plot predicted vs
 achieved.
+
+### 4.1 What a supervised encoder does to the x-axis (open, 2026-09-18)
+
+Raised after `wsd-50hz-whisper` crossed the step-0b threshold by an order of
+magnitude (`01-interface-recipe.md` §5, board 2026-09-18). If the winning
+stack uses Whisper, N stops being the model's exposure to language X: the
+encoder arrives with its own per-language supervised hours, unevenly spread
+across the EU-24 by orders of magnitude. The 10 h and 30 h tiers would then
+largely measure that prior, and a low tier could look strong for reasons
+unrelated to our data. Three options, PI's call before the ladder configs
+are built:
+
+| option | what the ladder then claims | cost |
+|---|---|---|
+| (a) run the ladder on the SSL encoder, keep the supervised one for the performance sections | "N hours gives P", clean, but not the shipping system | no extra runs |
+| (b) keep the supervised encoder, reframe the axis as fine-tuning hours on top of it, and report its per-language pretraining hours as a covariate | honest, and matches the shipping system, but the curve is no longer a data-scaling law | no extra runs; needs the encoder's published per-language hours as a table |
+| (c) run both encoders at two tiers (10 h, 100 h) for a handful of languages spanning the coverage range | adds "does supervised pretraining substitute for in-domain hours, and for how many hours?" | 4 extra MA+IFT runs at two tiers, on a language subset |
+
+(c) is the recommendation: it is the smallest experiment that turns the
+confound into a result, and the substitution rate it measures is the kind of
+number a reader of the ladder section will want anyway.
 
 ## 5. Results
 

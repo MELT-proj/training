@@ -72,6 +72,28 @@ arms:
     # max_tokens" section.
     exp_name: MA-700asr-w2vbF-llama1bInsF-mlpT-s42-8g-md60
 
+  - id: MA-700-verbatim-llama1b-ins
+    stage: MA
+    config: ABL-MA-700-asr.yaml     # same ASR mixture/bins/budget as
+                                    # MA-700-llama1b-ins -- only the prompt
+                                    # STYLE changes, via template_task_override
+                                    # below. tags.task stays "asr" (unchanged
+                                    # data/eval-set identity and per-task
+                                    # WER/CER grouping); only which
+                                    # TASK_TEMPLATES bucket gets drawn from
+                                    # changes. See melt/training/data/audio/
+                                    # lhotse/helpers.py's TASK_TEMPLATES and
+                                    # plan_arm.py's ArmAxes.template_task_override.
+    template_task_override: verbatim
+    epochs: 3
+    seed: 42
+    # 3x MA-700-llama1b-ins's own "06:00:00" (measured comfortably covering
+    # one epoch of this same config) minus one epoch's worth of the startup
+    # overhead that only happens once per job, then rounded up for margin.
+    # Unmeasured for 3 epochs specifically -- check the first run's actual
+    # rate before trusting this on a resume.
+    time: "18:00:00"
+
   - id: MA-700-llama1b-base
     stage: MA
     config: ABL-MA-700-asr.yaml     # deliberately the SAME config as the
@@ -456,3 +478,197 @@ arms:
     gradient_checkpointing: false
     time: "46:00:00"
     checkpoint_count: 7
+
+  # --- Week 2: the five-language interface screen, LR x batch grid ----------
+  #
+  # plan/01-interface-recipe.md §3. Twelve arms: adapter LR {1e-3, 2e-3} x
+  # effective batch {1200, 600, 300} s x encoder {w2v-BERT 2.0, Whisper-
+  # large-v3}, all at stack_factor 5 (10 Hz) on ABL-MA-700-asr.yaml, one epoch
+  # of 700 h per language.
+  #
+  # Why both encoders. The screen has to resolve LR and batch contrasts, and
+  # step 0b measured those at 0.112/0.065 (LR) and 0.148/0.121 (batch) on
+  # dev-clean/dev-other against a seed-only spread of 0.108/0.002 at the same
+  # error regime -- so on dev-clean the LR contrast is the size of the noise.
+  # w2v-BERT's best step-0b arm sat at WER 0.314 on easier data than this
+  # mixture; Whisper sat at 0.038, where the measured spread is 0.002. Running
+  # the grid on w2v-BERT alone risks a screen that cannot answer its own
+  # question. Running it on Whisper alone is the selection bias §2b warns
+  # about. Running both costs ~120 GPU-h more and tests whether the recipe
+  # optimum is encoder-invariant -- which 03-audio-stack.md's crossing already
+  # ASSUMES when it fixes "one recipe for all sixteen" arms.
+  #
+  # Why grad_accum_steps is set on every row. ABL-MA-700-asr.yaml's own
+  # batch_duration 150 x grad_accum 4 x 8 ranks is 4800 s -- the August recipe,
+  # diagnosed in §1 as the cause of the failed alignment and explicitly
+  # dropped in §3. Inheriting it silently would re-run the thing this screen
+  # exists to replace.
+  #
+  # Topology per batch level (batch_duration x grad_accum x world_size):
+  #   1200 s  ->  150 x 1 x 8   (2 nodes)
+  #    600 s  ->   75 x 1 x 8   (2 nodes)
+  #    300 s  ->   75 x 1 x 4   (1 node)
+  # Whisper at 1200 s runs at 150 x 1 like w2v-BERT, so the two encoder halves
+  # differ only in the encoder. The cosine pass ran Whisper at 75 x 2 out of
+  # padding caution (every cut pads to a whole 30 s window, estimated ~6x) and
+  # peaked at 11.5 GB of 64, below w2v-BERT's 19.7 GB at 150.
+  # No max_audio_seq_len rows: plan_arm.py derives Whisper's 3000 from the
+  # encoder name (ENCODER_WINDOW_FRAMES).
+  #
+  # Seed 42 on all twelve, per agent-protocol.md §3: step 0b drew a different
+  # seed per arm, which is how a 0.11 contrast turned out to be a seed draw.
+  # The seed replicates are their own arms, added once the best corner is known.
+
+  - id: MA-700-screen-w2vb-lr1e3-b1200
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 1e-3
+    batch_duration: 150
+    grad_accum_steps: 1
+    seed: 42
+    time: "08:00:00"
+
+  - id: MA-700-screen-w2vb-lr1e3-b600
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 1e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    seed: 42
+    time: "10:00:00"
+
+  - id: MA-700-screen-w2vb-lr1e3-b300
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 1e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    seed: 42
+    time: "16:00:00"
+
+  - id: MA-700-screen-w2vb-lr2e3-b1200
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 150
+    grad_accum_steps: 1
+    seed: 42
+    time: "08:00:00"
+
+  - id: MA-700-screen-w2vb-lr2e3-b600
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    seed: 42
+    time: "10:00:00"
+
+  - id: MA-700-screen-w2vb-lr2e3-b300
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    seed: 42
+    time: "16:00:00"
+
+  - id: MA-700-screen-whisper-lr1e3-b1200
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    encoder: openai/whisper-large-v3
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 1e-3
+    batch_duration: 150
+    grad_accum_steps: 1
+    seed: 42
+    time: "14:00:00"
+
+  - id: MA-700-screen-whisper-lr1e3-b600
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    encoder: openai/whisper-large-v3
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 1e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    seed: 42
+    time: "16:00:00"
+
+  - id: MA-700-screen-whisper-lr1e3-b300
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    encoder: openai/whisper-large-v3
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 1e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    seed: 42
+    time: "24:00:00"
+
+  - id: MA-700-screen-whisper-lr2e3-b1200
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    encoder: openai/whisper-large-v3
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 150
+    grad_accum_steps: 1
+    seed: 42
+    time: "14:00:00"
+
+  - id: MA-700-screen-whisper-lr2e3-b600
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    encoder: openai/whisper-large-v3
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    seed: 42
+    time: "16:00:00"
+
+  - id: MA-700-screen-whisper-lr2e3-b300
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    encoder: openai/whisper-large-v3
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    seed: 42
+    time: "24:00:00"

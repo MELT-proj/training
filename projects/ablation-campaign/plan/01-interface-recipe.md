@@ -72,32 +72,21 @@ arm's own final (step 2600) `eval_<lang>_loss`:
 | it | 4.154 | 2.674 | +1.480 |
 | overall (token-weighted) | 4.133 | — | — |
 
-**This contradicts the line above it and the framing in `00-status.md`**
-("eval loss 2.6–3.1 ... roughly what a 1B text LM scores ... with no
-audio"): the floor is *not* close to the observed loss, it is 1.1–1.5
-nats/token *above* it, consistently across all five languages. Audio was
-not ignored — conditioning on it lowers the loss by a factor of
-e^1.1..1.5 ≈ 3–4.4x in per-token perplexity versus no audio at all. That
-signal just is not the right signal for correct tokens: WER stayed at
-1.10–1.16 and hypotheses were fluent but unrelated to the audio. Read as:
-the adapter learned something coarse (e.g. "audio present -> respond in
-this register/language") that measurably helps next-token prediction
-without helping transcription. This does not by itself say the recipe is
-fine -- WER is still catastrophic and the suspects table above still holds
-end to end -- but "the adapter did nothing" is no longer the failure mode to
-assume; whatever it did learn should factor into interpreting the
-LibriSpeech screen below (e.g. a run that drops the loss further without
-moving WER would be repeating this same coarse-signal pattern, not
-progress).
+The floor is not close to the observed loss: it is 1.1–1.5 nats/token
+*above* it, consistently across all five languages. Audio was not ignored —
+conditioning on it lowers per-token perplexity by a factor of
+e^1.1..1.5 ≈ 3–4.4× against no audio at all. That signal is simply not the
+right signal for correct tokens: WER stayed at 1.10–1.16 and hypotheses were
+fluent but unrelated to the audio. The adapter learned something coarse
+("audio present → answer in this register and language") that helps
+next-token prediction without helping transcription.
 
-**Action needed (flagged, not resolved here):** PI review -- this changes
-the interpretation the week-2 gate reads section 1 through. Board entry
-with the full numbers is at the top of `board.md`.
-
-*Strategy session, 2026-09-15:* §1's diagnosis, the Settled block and the
-step-0 interpretation rules were updated to this reading (a coarse-feature
-plateau; loss is read together with WER). Confirmed by the PI on
-2026-09-15.
+**How this is read downstream:** "the adapter did nothing" is not the
+failure mode to assume, and a run that lowers loss without moving WER is
+repeating the coarse-signal plateau rather than making progress. The
+suspects table in §1 still holds end to end. Confirmed by the PI
+2026-09-15; the Settled block and the step-0 interpretation rules were
+written to this reading.
 
 ## 2. Step 0 — LibriSpeech
 
@@ -145,7 +134,7 @@ hypothesis/reference length ratio (so "does not stop" is distinguishable from
   plausibly 0.2–0.5. A run whose loss drops while WER stays above 0.5 is
   repeating the August coarse-signal plateau (§1a), not fixing the recipe.
 
-## 2b. Step 0b — schedule, stacking, encoder and decoder size (added 2026-09-17)
+## 2b. Step 0b — the optimisation recipe (added 2026-09-17, scope narrowed 2026-09-18)
 
 Step 0 was inconclusive (results in §5). All five one-epoch runs stayed above
 WER 1.0. A post-hoc three-epoch rerun of L4 broke the plateau, reaching
@@ -157,13 +146,26 @@ aggressive schedule, stacking to 10 Hz as SLAM-ASR does, and a larger
 decoder. Step 0b runs them together, plus a seed replicate and an encoder
 control, because each question can mask the others.
 
-**A dead config key found while designing this.** `optimization.min_lr_scale:
-0.1` appears in every campaign and SFT config, but no code reads it
-(`git grep` on main, 2026-09-17). Every cosine run so far decayed to zero,
-not to 10% of the peak. It does not invalidate comparisons between arms,
-which all shared it, but the configs misstate what ran. Step 0b sets its
-floor through `lr_scheduler_kwargs` instead. Wiring or deleting the key is a
-PI decision.
+### What step 0b settles, and what it does not (PI, 2026-09-18)
+
+Step 0b produces **a working recipe, not the best configuration**. It settles
+only what this file owns: schedule, learning rate, effective batch and frame
+rate. Its two remaining arms ask questions that belong to other sections,
+and they are **diagnostic controls** whose results are handed on as stated
+priors, never as decisions:
+
+| arm | reads as | belongs to |
+|---|---|---|
+| `wsd-50hz-whisper` | can the pipeline transcribe at all with an easy encoder? Answered: yes, so a null result elsewhere is the encoder, not the recipe | `03-audio-stack.md` decides the encoder |
+| `wsd-10hz-qwen2b`, `wsd-10hz-qwen4b` | does decoder size move the interface? | `02-backbones.md` decides the decoder |
+
+The reason for the line is selection bias, not tidiness. If the encoder is
+picked here — English, one dataset, one seed per arm — and the crossing in
+`03` then runs with a recipe tuned around that winner, `03`'s central
+comparison is biased toward it. Either `03` repeats the work properly, in
+which case picking early bought nothing, or it does not, and the paper's
+audio-stack section rests on one English run. The same argument applies to
+decoder size and `02`.
 
 ### Common settings
 
@@ -177,19 +179,39 @@ In-training eval on dev-clean and dev-other at **500 utterances per set**
 
 ### Arms
 
-| arm | differs from R in | question | GPU-h, extrapolated |
-|---|---|---|---|
-| A0 | cosine decay to zero, seed 44: the existing `MA-librispeech-l4-ep3` | schedule reference | done |
-| R | warmup-stable-decay: warmup 3%, constant, cosine decay over the last 20% to 0.1× peak | schedule shape, against A0 | ~20 |
-| R-seed | seed 43 | noise on hours-to-threshold | ~20 |
-| R-lr2e3 | peak LR 2e-3 | learning rate | ~20 |
-| R-b600 | effective batch 600 s: one node × 4 GPUs, `batch_duration 150`, `grad_accum 1` | twice the optimizer steps at the same GPU-h, twice the wall clock | ~20 |
-| R-k5 | `stack_factor 5`, 50 Hz to 10 Hz | stacking | ~12 |
-| W | Whisper-large-v3 encoder, stack 1 | supervised-ASR encoder against self-supervised w2v-BERT | ~35 |
-| Q2-k5 | Qwen3.5-2B (instruct) decoder, stack 5 | size control, same family | ~40 |
-| Q4-k5 | Qwen3.5-4B (instruct) decoder, stack 5 | decoder size | ~80 |
+**Names (PI's instruction, 2026-09-18): letters do not survive a week away,
+so every arm carries a descriptive name.** The name says schedule, frame
+rate and the one thing that differs. Everything unnamed is the common
+setting above: Llama-3.2-1B-Instruct decoder, w2v-BERT 2.0 encoder, adapter
+LR 1e-3, 1200 s effective batch, three epochs. `wsd` is
+warmup-stable-decay; 50 Hz is `stack_factor 1` and 10 Hz is
+`stack_factor 5`. The letters in the middle column are the labels the first
+step-0b reports used; they are kept only so older entries can be read.
 
-About 250 GPU-h in total.
+| name | was | campaign row | seed | differs from `wsd-50hz` in | question | GPU-h |
+|---|---|---|---|---|---|---|
+| `cosine-50hz` | A0 | `MA-librispeech-l4-ep3` | 44 | cosine decay to zero, the old schedule | schedule reference | done |
+| `wsd-50hz` | R | `MA-librispeech-r` | 45 | the reference: warmup 3%, constant, cosine decay over the last 20% to 0.1× peak | schedule shape, against `cosine-50hz` | ~20 |
+| `wsd-50hz-seed2` | R-seed | `MA-librispeech-r-seed` | 46 | seed only | the noise floor | ~20 |
+| `wsd-50hz-lr2e3` | R-lr2e3 | `MA-librispeech-r-lr2e3` | 47 | peak LR 2e-3 | learning rate | ~20 |
+| `wsd-50hz-batch600` | R-b600 | `MA-librispeech-r-b600` | 48 | 600 s effective batch, one node × 4 GPUs | twice the optimizer steps at the same GPU-h | ~20 |
+| `wsd-10hz` | R-k5 | `MA-librispeech-r-k5` | 49 | `stack_factor 5` | stacking | ~12 |
+| `wsd-50hz-whisper` | W | `MA-librispeech-w` | 50 | Whisper-large-v3 encoder | **control only:** can the pipeline transcribe at all? The encoder is decided in `03` | ~35 |
+| `wsd-10hz-qwen2b` | Q2-k5 | `MA-librispeech-q2-k5` | 51 | Qwen3.5-2B decoder, stack 5 | **control only:** size, same family; the decoder is decided in `02` | ~40 |
+| `wsd-10hz-qwen4b` | Q4-k5 | `MA-librispeech-q4-k5` | 52 | Qwen3.5-4B decoder, stack 5 | **control only:** size; the decoder is decided in `02` | ~80 |
+
+About 250 GPU-h in total. Campaign row ids may be renamed to match the
+names above; the row id is only the grid key, so nothing in `arms.tsv`,
+W&B or an output directory depends on it. `exp_name` is composed from the
+axes and must not be touched for a run that already exists.
+
+**Every arm drew a different seed, so each contrast carries one seed draw**
+(45 through 52; only `wsd-50hz` against `wsd-50hz-seed2` isolates the
+seed). That was not the intent and it matters, because the measured
+dev-clean spread between those two is 0.11, not the 0.02 seen on the
+one-epoch pair. Contrasts larger than the spread survive it; contrasts of
+the same size as the spread do not, and need a replicate before they are
+quoted. Future arms hold the seed fixed unless the seed is the variable.
 
 **Why warmup-stable-decay and not a pure constant schedule.** Its stable
 phase *is* a constant-LR run, so the evals up to the start of decay give the
@@ -284,6 +306,13 @@ which MELT does not load), vocabulary shared with the 2B, ungated.
 
 ### Decision rules, fixed before the runs
 
+**Hold, PI's instruction 2026-09-18: no rule is applied until all eight arms
+have finished.** Partial results are recorded in §5 as they land, and a rule
+may be reported as "would trigger", but the schedule, stacking, learning
+rate, encoder and size questions are settled together, once, on the full
+set of arms. The reason is in the table above: with one seed per arm, a
+contrast read early against a single reference arm can be a seed draw.
+
 1. **Schedule.** Warmup-stable-decay becomes the MA default if R beats A0 at
    equal steps by more than the R/R-seed spread. LR 2e-3 is adopted if it
    reaches the threshold in fewer audio hours without loss spikes. The 600 s
@@ -291,12 +320,19 @@ which MELT does not load), vocabulary shared with the 2B, ungated.
 2. **Stacking.** Stack 5 becomes the default if R-k5 is within noise of R or
    better, since it cuts decoder positions five-fold. If clearly worse, the
    screen tests stack 2 and 4.
-3. **Size.** If Q4-k5 reaches the threshold and Q2-k5 does not, or does so in
-   markedly fewer hours, the paper's "2–3B is enough" framing must be tested
-   and a ~4B point joins the backbone grid. It does not change the screen's
-   backbone by itself.
-4. **Encoder.** If W reaches the threshold much earlier than R, the encoder
-   question moves ahead of the backbone grid.
+3. **Size — reported, not decided here.** If `wsd-10hz-qwen4b` reaches the
+   threshold and `wsd-10hz-qwen2b` does not, or does so in markedly fewer
+   hours, that is written into `02-backbones.md` as a prior and a ~4B point
+   is added to its grid. It does not change this screen's backbone, and it
+   does not settle the "2–3B is enough" framing, which `02` owns.
+4. **Encoder — reported, not decided here.** `wsd-50hz-whisper` reaching the
+   threshold where the w2v-BERT arms do not says the representation is a
+   first-order factor, which the campaign had assumed it was not. What
+   triggers is a **calendar reorder, not an adoption**: `03-audio-stack.md`
+   runs before `02-backbones.md`, so the backbone grid is compared on a
+   stack that has been chosen rather than assumed. The encoder itself is
+   decided by `03`'s crossing, at equal budget, over five languages, on the
+   eval that matters. Recorded 2026-09-18.
 5. **Nothing reaches 10% in three epochs.** Take the best arm to six epochs
    before starting the screen. The screen does not start on a recipe that
    has never transcribed LibriSpeech.
@@ -311,22 +347,122 @@ settles leave the screen's grid.
 ## 3. The five-language interface screen (week 2)
 
 *Revised 2026-09-17: the budget and factor levels below are re-set from step
-0b (§2b) before launch.*
+0b (§2b) before launch. Budget re-derived and the grid rendered 2026-09-20.*
 
-Same five languages and corpus mix as the campaign, ASR-only MA, rendered at
-`--budget-hours 125` (625 h total, ≈ 35 min per run on 8 GPUs). Full grid,
+Same five languages and corpus mix as the campaign, ASR-only MA. Full grid,
 not a fraction, because MA-stage runs are cheap and the grant is not the
 constraint:
 
-| factor | levels |
-|---|---|
-| adapter LR | 2e-4, 1e-3 (2e-5 as a single control run, not a grid level) |
-| effective batch | 1200 s, 4800 s |
-| `stack_factor` | 1 (50 Hz), 4 (12.5 Hz) |
-| MA prompt | audio only; plus one verbatim run at the best corner |
+**Budget, derived 2026-09-20.** §2b's Consequence sets the per-arm budget at
+≥ 1.5× the best arm's hours-to-threshold (1.5 × 87.3 = 131 h) **and never
+under one epoch of 700 h per language**. The floor binds, and 700 h × 5 is
+exactly `ABL-MA-700-asr.yaml` (`total_hours: 3500.00`), so the screen needs
+no new config: it is campaign.yaml rows against the config the campaign
+already trains on. The `--budget-hours 125` figure written here before is
+withdrawn — at ~1,900 steps it was below where the transition appeared.
 
-Eight grid runs, one verbatim run, one 2e-5 control, two extra seeds at the
-best corner: twelve runs, ≈ 60 GPU-h. Metrics: MA-stage generative WER and
+One override is not optional. `ABL-MA-700-asr.yaml`'s own `batch_duration
+150 × grad_accum 4 × 8 ranks` is **4800 s**, the August recipe this screen
+exists to replace, so every arm sets `grad_accum_steps` explicitly. The
+three batch levels are reached as:
+
+| effective batch | `batch_duration` × `grad_accum` × world | steps/epoch |
+|---|---|---|
+| 1200 s | 150 × 1 × 8 | 10,500 |
+| 600 s | 75 × 1 × 8 | 21,000 |
+| 300 s | 75 × 1 × 4 | 42,000 |
+
+Whisper at 1200 s runs at 150 × 1 like w2v-BERT (PI, 2026-09-21), so the two
+encoder halves differ only in the encoder. The cosine pass had run it at
+75 × 2 on a ~6× padding estimate and measured 11.5 GB of 64 (below).
+`max_audio_seq_len` is derived from the encoder name rather than
+passed by hand (`plan_arm.py`'s `ENCODER_WINDOW_FRAMES`).
+
+**The schedule is warmup-stable-decay, and it is now an axis (2026-09-21).**
+Step 0b's Rule 1 adopted WSD as the MA default, but the screen's first twelve
+arms ran **cosine**: `ABL-MA-700-asr.yaml` declares `lr_scheduler_type:
+cosine`, WSD was never a campaign axis, and step 0b had obtained it only by
+hand-passing `--trainer.lr_scheduler_kwargs` on each submission. The reason it
+was hand-passed is that `num_decay_steps` is an *absolute* count that differs
+per arm — so `plan_arm.py` now derives it (20% of the arm's own steps,
+`min_lr_ratio` 0.1, `decay_type` cosine) and tags `-wsd` into `EXP_NAME`,
+because the schedule is recoverable from no other tag.
+
+The same config also sets **`warmup_steps: 20`**, a fixed count. Across the
+screen's own batch levels that is 0.19% / 0.10% / 0.05% of training — so
+warmup length was confounded with the batch factor the screen exists to
+measure. `warmup_ratio: 0.03` is now set per arm, matching §2b's common
+settings, and `warmup_steps` is forced to 0 alongside it because HF's
+`get_warmup_steps` only consults the ratio when the count is ≤ 0.
+
+**Cost, measured 2026-09-21** on the seven arms that ran before the schedule
+was corrected: **27 GPU-h** at 1200 s, **37** at 600 s, **32** for Whisper at
+1200 s — against ≈ 20 extrapolated. Twelve arms are therefore ≈ 380 GPU-h,
+nineteen ≈ 500. Note that 600 s costs *more* than 1200 s for the same audio
+(37 vs 27): per-step overhead does not halve when the batch does, so the
+batch axis is not cost-neutral and the 300 s level is the most expensive
+point on it. Memory is not the constraint anyone expected: Whisper at
+`batch_duration 75` peaked at **11.5 GB of 64**, below w2v-BERT's 19.7 GB at
+150, so the ~6x padding estimate was conservative.
+
+**Levels re-set from step 0b, 2026-09-20 (PI).** The table below previously
+carried levels chosen before step 0b ran, and three of them were settings
+step 0b had already ruled out. A screen must not re-test a factor the
+screen before it settled:
+
+| factor | levels | why these |
+|---|---|---|
+| adapter LR | 1e-3, 2e-3 | step 0 put 2e-5 at WER 1.12 and 2e-4 at 1.08; `wsd-50hz-lr2e3` beat `wsd-50hz` 0.599 vs 0.664 on dev-other. 2e-5 stays as **one control run**, not a grid level — it is the only thing tying this screen to the August failure and to LibriSpeech, and it costs ~5 GPU-h |
+| effective batch | 1200 s, 600 s, 300 s | **4800 s is dropped.** It is the August recipe: ~2,600 optimizer steps, the diagnosed cause of the failure in §1. `wsd-50hz-batch600` beat `wsd-50hz` 0.543 vs 0.664 on dev-other (a 0.002 seed regime), so smaller is still winning and 300 s tests whether that has bottomed out |
+| `stack_factor` | fixed at **5** (10 Hz) | continuity with `wsd-10hz`, the best w2v-BERT arm of step 0b, and with SLAM-ASR. Not a grid factor here; see the sweep below |
+| MA prompt | audio only; plus one verbatim run at the best corner; **proposed third level (PI, 2026-09-20): verbatim with a language ID in the prompt** — see below |
+
+**What the first pass showed (measured 2026-09-21).** Seven arms ran before
+the schedule was corrected, so their absolute numbers belong to the cosine
+control, not to this screen. The *shape* is still informative, and it settles
+why the grid runs on two encoders. All six w2v-BERT arms finished one epoch
+at **WER 0.879–0.976**, a total range of 0.097 — smaller than the 0.108
+seed-only spread step 0b measured at WER ≈ 0.5, at a *lower* error rate than
+these arms sit at, and noise grows with the error rate (`agent-protocol.md`
+§3). **No LR or batch contrast in the w2v-BERT half is separable from noise.**
+The single Whisper arm finished at **0.131 / CER 0.068**, an aligned model, in
+the regime where the measured spread is 0.002. A single-encoder screen on
+w2v-BERT would have produced six numbers and no decision.
+
+That also reads on `03-audio-stack.md`: one epoch of 700 h/lang at k=5 does
+not align w2v-BERT 2.0 on this mixture, while the same recipe on Whisper
+does. It is the strongest evidence yet that the encoder is a first-order
+factor for this campaign, and it is a prior for `03`, not a decision here.
+
+**The grid runs on both encoders (PI, 2026-09-20).** The screen has to
+resolve LR and batch contrasts, and step 0b measured exactly those against
+the seed-only spread at the same error regime:
+
+| contrast | dev-clean Δ | dev-other Δ |
+|---|---|---|
+| seed only (`wsd-50hz` vs `wsd-50hz-seed2`) | 0.108 | 0.002 |
+| adapter LR 1e-3 → 2e-3 | 0.112 | 0.065 |
+| effective batch 1200 → 600 s | 0.148 | 0.121 |
+
+On dev-clean the LR contrast is the size of the noise. w2v-BERT's best
+step-0b arm sat at WER 0.314 on data easier than this mixture, so the spread
+here is likelier to widen than narrow; Whisper sat at 0.038, where the
+measured spread is 0.002. Running the grid on w2v-BERT alone risks a screen
+that cannot answer its own question; running it on Whisper alone is the
+selection bias §2b warns about. Running both costs ~120 GPU-h more and tests
+whether the recipe optimum is encoder-invariant — which `03-audio-stack.md`
+§2 already *assumes* when it fixes one recipe across all sixteen crossing
+arms. If the optimum differs by encoder, that assumption is wrong, and this
+screen is where it is cheapest to find out.
+
+Twelve grid runs (2 LR × 3 batch × 2 encoders, all at k=5), then at the best
+corner: two stacking-sweep runs (k=2 and k=10), one 2e-5 control, two prompt
+runs (verbatim, and verbatim+LID if adopted), two extra seeds. **Nineteen
+runs, ≈ 380 GPU-h.** Only the twelve grid runs can be submitted up front; the
+other seven are defined relative to a corner the grid has to find first.
+Seed fixed at 42 across all twelve, per `agent-protocol.md` §3 — step 0b drew
+a different seed per arm, which is how a 0.11 contrast turned out to be a
+seed draw. Metrics: MA-stage generative WER and
 CER per language from the in-training eval (200 utterances per set), the loss
 transition step, and FLEURS-24 zero-shot CER from melt-eval on the final
 checkpoint, which gives a first 24-language signal for free.
@@ -336,9 +472,55 @@ batch, stack factor, prompt. IFT keeps its own effective batch (3840 s at
 2 nodes / grad_accum 4, measured to hide the all-reduce) and decoder LR 2e-5
 until `04-regime.md` says otherwise.
 
-Why a 4× stack and not 5: 4 keeps the 60 s cut at 750 positions and divides
-the w2v-BERT frame count evenly; 5 would match SLAM-ASR. Either is fine; 4 is
-the default so that 2 and 8 are one halving away if the crossing needs them.
+**Stacking is a sweep, not a grid factor (revised 2026-09-20).** The earlier
+note here preferred k=4 because it "divides the w2v-BERT frame count
+evenly"; that is not a reason, since a 60 s cut at 50 Hz is 3,000 frames and
+5 divides it exactly as evenly as 4. The real argument for 12.5 Hz was to
+pick one rate every adapter in `03-audio-stack.md` can hit — but the
+Q-Former is natively 10 Hz, so 10 Hz is at least as natural a common rate,
+and it is the rate SLAM-ASR uses and the one `wsd-10hz` was measured at.
+
+So k=5 is the default, and stacking gets a **one-dimensional sweep at the
+best LR/batch corner: k ∈ {2, 5, 10}** (25, 10 and 5 Hz). Three adjacent
+values such as {4, 5, 6} span 12.5 to 8.3 Hz — under 30% apart, likely
+inside noise, and they would not draw a curve. The efficiency figure in
+`03-audio-stack.md` §4 plots CER against decoder positions per audio second,
+so what it needs from this screen is *spread* on that axis and the point
+where accuracy starts to pay for it.
+
+**Prompt level: verbatim with a language ID (PI, 2026-09-20).** MA is where
+the model learns what the audio *is*, and a frozen decoder cannot infer the
+target language from 10–50 Hz features as reliably as it can be told; the
+August failure included hypotheses "sometimes in the wrong language" (§1),
+which is exactly what naming the language would suppress.
+
+**What it means concretely** (`melt/training/data/audio/lhotse/helpers.py`):
+add `{lang}` variants of the six `verbatim` templates, each saying that what
+sits between the audio tags will be in that language — the PI's wording is
+"Everything between those tags will be in {lang}." `{lang}` already resolves
+through `LANGUAGE_ISO_TO_NAME` to a language *name*, not an ISO code, so
+this needs no new machinery.
+
+**Two things to get right, both of which the existing `asr` family gets
+wrong today:**
+
+1. **LID must be selectable, not sampled.** The `asr` family already holds
+   six `{lang}` templates and six explicitly-no-LID copies *in one list*, and
+   `prompt_template_selection: "random"` draws from the whole list. Any run
+   using it therefore trains on a random mixture of LID and no-LID prompts,
+   which makes LID a per-sample coin flip rather than a factor — no existing
+   run can say anything about it. `"with_language"` filters to the `{lang}`
+   templates, but there is **no `"without_language"`**, so the no-LID control
+   cannot currently be selected cleanly either. Adding that selection mode is
+   the prerequisite for testing this at all.
+2. **Score with and without the tag.** A model trained with the language
+   named either needs it at inference or must be shown to survive without it.
+   Our eval sets are per-language so supplying it is easy, which is exactly
+   why the withheld-tag score is the one that matters.
+
+Also stale in that file: the comment above the templates claims every
+template must contain `{audio_token}` and `{lang}`, which is already untrue
+of half the `asr` list and all of `verbatim`.
 
 ## 4. What `stack_factor` has to do
 
@@ -456,9 +638,9 @@ Launched 2026-09-17/18: R, R-seed, R-lr2e3, R-b600, R-k5, W, Q2-k5, Q4-k5
 and were resumed as jobs 46077302/46077303). In-training eval,
 `max_samples 500`/set, the metrics from `melt/training/metrics.py`'s
 update (full-set S/D/I/length ratio/runaway fraction, not the old
-200-sample log). A ninth arm, `Q4-k5-seed2` (seed 53, job 46143618), is
-running to check the 2B->4B size gap against seed noise before it is
-quotable -- see the decision-rules discussion below.
+200-sample log). A ninth arm, `Q4-k5-seed2` (seed 53, job 46143618),
+requested by the Orchestrator to check the 2B->4B size gap against seed
+noise, landed 2026-09-20 -- see the decision-rules discussion below.
 
 **Resume note.** Several arms hit their original 3h wall-clock budget at
 ~87% (the 500-sample eval costs more per round than A0/l4-ep3's 200) and
@@ -481,8 +663,26 @@ on a resumed arm.
 | **W** | `MA-librispeech-whisperlargeF-llama1bInsF-mlpT-ga1-elr6e6-dlr2e5-lr1e3-s50-8g` | **0.038** | **0.061** | 0.137 | 0.191 | 0.0% / 0.0% | job 46050285 (resubmitted with the `max_audio_seq_len 3000` fix). Whisper-large-v3 encoder, `stack_factor 1`, same steps/schedule as R. Crosses the <10% threshold decisively on both sets -- the only step-0b arm to do so, by a wide margin over every w2v-BERT arm including R-k5. |
 | Q2-k5 | `MA-librispeech-w2vbF-qwen35_2bInsF-mlpT-sk5-bd30-ga5-elr6e6-dlr2e5-lr1e3-s51-8g` | 0.169 | 0.312 | 0.369 | 0.545 | 0.0% / 0.0% | job 46077302 (resumed from 45987899, TIMEOUT at 41%). Qwen3.5-2B decoder, `stack_factor 5`, same w2v-BERT encoder as R-k5. Beats R-k5 (0.314/0.490) by a wide margin but does not cross <10%. |
 | Q4-k5 | `MA-librispeech-w2vbF-qwen35_4bInsF-mlpT-sk5-bd30-ga5-elr6e6-dlr2e5-lr1e3-s52-8g` | 0.104 | 0.239 | 0.253 | 0.403 | 0.0% / 0.0% | job 46077303 (resumed from 45987998, TIMEOUT at 45%). Qwen3.5-4B decoder, otherwise identical to Q2-k5. Beats Q2-k5 on both sets (0.104 vs 0.169 clean, 0.239 vs 0.312 other) but lands just above the <10% bar on dev-clean (10.36%) and well above it on dev-other. Last of the 8 step-0b arms to land. |
+| Q4-k5-seed2 | `MA-librispeech-w2vbF-qwen35_4bInsF-mlpT-sk5-bd30-ga5-elr6e6-dlr2e5-lr1e3-s53-8g` | 0.105 | 0.237 | 0.250 | 0.409 | 0.0% / 0.0% | job 46143618, seed 53, otherwise identical to Q4-k5. Landed 0.0017/0.0023 from Q4-k5 (seed 52) on clean/other -- a tight, well-behaved seed spread at this error regime, nothing like the 0.11 spread measured on R/R-seed at a much higher error rate. |
 
-All 8 original step-0b arms are complete; `Q4-k5-seed2` is running (see below).
+All 9 step-0b arms (8 original plus the seed replicate) are complete.
+
+**Whisper-large-v3 decoding the same sets by itself** (measured 2026-09-20,
+`whisper_reference_decode.py`; no MELT model, no adapter, no LLM). Same cuts,
+`custom.pnc_text` reference, `BasicTextNormalizer`, greedy, duration-sorted
+batches of 16, `flash_attention_2`, language forced to English. "First 500"
+is the arm's own `max_samples: 500` subset (seeded shuffle, not shard order),
+so it is the like-for-like row; cuts over 30 s use Whisper long-form. The arm
+column is `wsd-50hz-whisper`'s in-training eval (`MA-librispeech-whisperlargeF-...-s50-8g`).
+
+| set | cuts | Whisper WER | Whisper CER | arm WER | arm WER / Whisper WER | Whisper WER / arm WER |
+|---|---|---|---|---|---|---|
+| dev-clean, first 500 (like-for-like) | 500 | 0.0272 | 0.0118 | 0.038 | 1.40 | 0.72 |
+| dev-other, first 500 (like-for-like) | 500 | 0.0410 | 0.0186 | 0.061 | 1.49 | 0.67 |
+| dev-clean, full set | 2,703 | 0.0249 | 0.0115 | -- | -- | -- |
+| dev-other, full set | 2,864 | 0.0416 | 0.0189 | -- | -- | -- |
+
+The arm has no full-set number, so the full-set rows carry no ratio.
 
 **Decision rules applied to the numbers above** (not adjudicated here, per
 the Orchestrator's instruction -- flagging what the raw numbers say against
@@ -491,13 +691,16 @@ each rule as written):
 - **Rule 1 (schedule).** "Warmup-stable-decay becomes the MA default if R
   beats A0 at equal steps by more than the R/R-seed spread." R beats A0 by
   0.14 (clean) / 0.25 (other); the R/R-seed spread is 0.11 (clean) / 0.002
-  (other). R's margin over A0 exceeds the spread on both sets -- the rule
-  as written triggers, though the spread itself (0.11 on dev-clean) is
-  large enough that a single extra seed pair is a thin basis for "the
-  spread." "LR 2e-3 is adopted if it reaches the threshold in fewer audio
-  hours without loss spikes" -- R-lr2e3 beats R on both sets at the same
-  step count, but nothing has reached the <10% threshold yet, so this half
-  of the rule has no threshold-crossing to measure against.
+  (other), measured at WER 0.44-0.55 dev-clean -- the same regime as R and
+  A0 themselves, so it is the right spread for this contrast. R's margin
+  over A0 exceeds it on both sets -- the rule as written triggers, though a
+  single extra seed pair is a thin basis for "the spread," and (per the
+  regime note below) this 0.11 figure should not be exported to contrasts
+  at a different error rate. "LR 2e-3 is adopted if it reaches the
+  threshold in fewer audio hours without loss spikes" -- R-lr2e3 beats R
+  on both sets at the same step count, but nothing has reached the <10%
+  threshold yet, so this half of the rule has no threshold-crossing to
+  measure against.
 - **Rule 2 (stacking).** "Stack 5 becomes the default if R-k5 is within
   noise of R or better." R-k5 (0.314/0.490) clearly beats R (0.549/0.664)
   by more than the measured R/R-seed spread on both sets -- the rule
@@ -528,23 +731,58 @@ each rule as written):
   be tested and a ~4B point joins the backbone grid." Literally, neither
   arm reaches the <10% dev-clean bar: Q4-k5 lands at 0.1036, just 0.36
   points over; Q2-k5 at 0.1686, well over. The rule's stated trigger
-  condition does not fire. Q4-k5 beats Q2-k5 by a consistent margin on both
-  sets (0.104 vs 0.169 clean, ~38% relative; 0.239 vs 0.312 other, ~23%
-  relative) -- but this is one seed per arm, the same trap the LR 2e-3
-  contrast fell into, and the gap (0.065 dev-clean) is not yet safe to
-  quote against the measured seed-only spread (0.11, from `R`/`R-seed`,
-  though at a much higher error rate so probably pessimistic here).
-  `MA-librispeech-q4-k5-seed2` (seed 53, job 46143618, launched
-  2026-09-19) is running to settle both the spread and whether 0.104
-  sitting just over the bar is itself a seed draw. This is
-  `02-backbones.md`'s question; reported here as a prior, not decided.
+  condition does not fire. The seed replicate (`Q4-k5-seed2`, seed 53, job
+  46143618) now settles both open questions it was launched to answer:
+  the seed-only spread at WER 0.10-0.24 (Q4-k5's own regime) is 0.0017
+  (clean) / 0.0023 (other) -- tight, nothing like the 0.11 spread measured
+  on `R`/`R-seed` at WER 0.44-0.55. So the 2B->4B gap (0.104 vs 0.169
+  clean, ~38% relative; 0.239 vs 0.312 other, ~23% relative) is now safely
+  quotable as a real, consistent effect. It also settles that Q4-k5's
+  10.36%/10.53% landing just over the bar on both seeds is not a seed
+  draw: the 4B decoder genuinely falls short of <10% dev-clean on this
+  encoder, reproducibly. This is `02-backbones.md`'s question; reported
+  here as a prior, not decided.
 
-**All 8 original step-0b arms are in; a ninth (Q4-k5's seed replicate) is
-running.** Schedule (Rule 1) and stacking (Rule 2) both trigger clearly;
-the 600 s batch clause does not. Size (Rule 3) is a near-miss that doesn't
-literally trigger, and the gap behind it is not yet quotable (single seed).
-Encoder (Rule 4) triggers decisively and unblocks the week-2 screen's
-budget (Rule 5 does not fire). Size and encoder are `02-backbones.md`'s
-and `03-audio-stack.md`'s questions respectively -- the numbers above are
-reported as priors for those sections, not as a backbone or encoder
-recommendation from this file.
+**Regime note, added 2026-09-20 (Orchestrator).** Seed noise scales with
+the error rate, not a campaign-wide constant: 0.11 dev-clean at WER
+0.44-0.55 (`R`/`R-seed`), 0.0017 dev-clean at WER 0.10-0.24
+(`Q4-k5`/`Q4-k5-seed2`) -- roughly two orders of magnitude apart. A spread
+measured at one WER level is not a safe stand-in for a contrast at
+another; every spread quoted above is now labelled with the WER range it
+came from rather than reported as one number. This is now `agent-protocol.md`
+§3's standing rule, since the campaign's later, lower-error arms would
+otherwise inherit the 0.11 figure by default.
+
+**All 9 step-0b arms are in** (8 original plus the seed replicate).
+Schedule (Rule 1) and stacking (Rule 2) both trigger clearly; the 600 s
+batch clause does not. Size (Rule 3) is a reproducible near-miss -- a
+real, seed-confirmed ~2B->4B gap that still falls short of <10% dev-clean
+on both seeds. Encoder (Rule 4) triggers decisively and unblocks the
+week-2 screen's budget (Rule 5 does not fire). Size and encoder are
+`02-backbones.md`'s and `03-audio-stack.md`'s questions respectively --
+the numbers above are reported as priors for those sections, not as a
+backbone or encoder recommendation from this file.
+
+### Five-language screen arms (§3): the cosine pass
+
+**These seven arms ran cosine with `warmup_steps 20`, not the screen's
+warmup-stable-decay.** `ABL-MA-700-asr.yaml` declares that schedule and the
+rows carried no override, so their `exp_name`s say nothing about it. They are
+kept as the cosine-vs-WSD control at 700 h/lang and are not the screen's
+results. The WSD arms are named `...-sk5-ga1-wsd-wu0p03-...`.
+
+Measured 2026-09-21, final in-training generative eval, 200 utterances per
+language, seed 42, k=5, one epoch of 700 h/lang. `s/step` is the run's tqdm
+training time over `global_step` and includes the in-training evals; the
+tqdm second-to-last line was too noisy to use (27.6 and 25.8 s/it on the
+600 s arms, an end-of-run eval stall).
+
+| run | schedule | exp_name | steps | en / de / es / fr / it WER | s/step | GPU-h | notes |
+|---|---|---|---|---|---|---|---|
+| w2vb-lr1e3-b1200 | cosine, warmup_steps 20 | `MA-700asr-w2vbF-llama1bInsF-mlpT-sk5-ga1-elr6e6-dlr2e5-lr1e3-s42-8g` | 10,500 | 0.971 / 0.928 / 0.860 / 0.912 / 0.813 | 1.15 | 27 | measured. Mean WER 0.897. |
+| w2vb-lr2e3-b1200 | cosine, warmup_steps 20 | `MA-700asr-w2vbF-llama1bInsF-mlpT-sk5-ga1-elr6e6-dlr2e5-lr2e3-s42-8g` | 10,500 | 1.046 / 0.985 / 0.940 / 0.935 / 0.973 | 1.15 | 27 | measured. Mean WER 0.976. |
+| w2vb-lr1e3-b600 | cosine, warmup_steps 20 | `MA-700asr-w2vbF-llama1bInsF-mlpT-sk5-bd75-ga1-elr6e6-dlr2e5-lr1e3-s42-8g` | 21,000 | 0.898 / 0.880 / 0.844 / 1.013 / 0.762 | 0.80 | 37 | measured. Mean WER 0.879. |
+| w2vb-lr2e3-b600 | cosine, warmup_steps 20 | `MA-700asr-w2vbF-llama1bInsF-mlpT-sk5-bd75-ga1-elr6e6-dlr2e5-lr2e3-s42-8g` | 21,000 | 0.930 / 0.987 / 0.848 / 0.846 / 0.882 | 0.80 | 37 | measured. Mean WER 0.898. |
+| w2vb-lr1e3-b300 | cosine, warmup_steps 20 | `MA-700asr-w2vbF-llama1bInsF-mlpT-sk5-bd75-ga1-elr6e6-dlr2e5-lr1e3-s42-4g` | 42,000 | 0.857 / 0.925 / 0.852 / 1.004 / 0.852 | 0.76 | 36 | measured. Mean WER 0.898. |
+| w2vb-lr2e3-b300 | cosine, warmup_steps 20 | `MA-700asr-w2vbF-llama1bInsF-mlpT-sk5-bd75-ga1-elr6e6-dlr2e5-lr2e3-s42-4g` | 42,000 | 0.959 / 0.927 / 0.910 / 0.867 / 0.904 | 0.76 | 36 | measured. Mean WER 0.913. |
+| whisper-lr1e3-b1200 | cosine, warmup_steps 20 | `MA-700asr-whisperlargeF-llama1bInsF-mlpT-sk5-bd75-ga2-elr6e6-dlr2e5-lr1e3-s42-8g` | 10,500 | 0.124 / 0.115 / 0.087 / 0.124 / 0.207 | 1.34 | 32 | measured. Peak training memory 11.5 GB of 64 GB (w2v-BERT 1200 s: 19.7 GB). Mean WER 0.131, already 0.132 at about step 5,700. |
