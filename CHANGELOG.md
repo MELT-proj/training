@@ -13,6 +13,15 @@ directly from GitHub.
 
 ## [Unreleased]
 
+- The Q-Former adapter (`adapter_config._type: qformer`) can be instantiated
+  again: it built its inner model with `AutoModel.from_config` on a
+  `MELTAdapterConfig`, which no model class maps to, so construction raised.
+  It now builds a `Blip2QFormerModel` from the adapter config
+  (`encoder_hidden_size` from the audio encoder, cross-attention in every
+  layer), broadcasts the learned queries to one copy per window, masks padded
+  frames in cross-attention, and returns a prefix output mask instead of all
+  ones.
+
 ## [0.8.0] - 2026-09-12
 
 - [#107](https://github.com/MELT-proj/training/pull/107) — a per-encoder spec

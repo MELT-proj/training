@@ -272,6 +272,73 @@ arms:
     seed: 49
     time: "04:00:00"
 
+  # Q-Former smoke test (2026-09-19), not a campaign arm. Does the fixed
+  # Q-Former (window 15, 3 queries = 10 Hz) train and generate at all? Same
+  # recipe as R-k5 (the other 10 Hz arm): adapter LR 1e-3, 1200 s effective
+  # batch (bd 150 x ga 4 x 2 ranks), warmup 260 steps then constant, so its
+  # loss at steps 262 and 524 reads directly against R-k5's. Stopped at 524
+  # steps (max_steps pinned on purpose, this is a smoke test) by a `--`
+  # passthrough; see the board entry for the command.
+  - id: MA-librispeech-qformer-smoke
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter: qformer
+    adapter_lr: 1e-3
+    grad_accum_steps: 4
+    nodes: 1
+    gpus_per_node: 2
+    site: artemis
+    qos: gpu-h100
+    seed: 49              # R-k5's seed, so only the adapter differs
+    time: "04:00:00"
+
+  # Q-Former, one full epoch (2026-09-19). SUBMITTED THEN CANCELLED before it
+  # started, superseded by MA-librispeech-qformer-b600 below at the PI's request. The 524-step smoke run above matched
+  # R-k5's loss on the plateau; R-k5 left it between steps 1048 and 1572 and
+  # was at dev-clean WER 0.60 / loss 1.01 by step 2620. Same recipe again for
+  # a full epoch (2884 steps at 1200 s), no warmup because R-k5 had none
+  # (`warmup_ratio` is dropped by transformers 5), warmup-stable-decay with
+  # the last 20% decaying. Eval/save every 524 steps. Submit as:
+  #   campaign.py run MA-librispeech-qformer-1ep -- --trainer.warmup_steps 0 \
+  #     --trainer.eval_steps 524 --trainer.save_steps 524 \
+  #     --data.validation_ds.max_samples 500 \
+  #     --trainer.lr_scheduler_type warmup_stable_decay \
+  #     --trainer.lr_scheduler_kwargs '{"num_decay_steps": 577, "min_lr_ratio": 0.1, "decay_type": "cosine"}'
+  - id: MA-librispeech-qformer-1ep
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter: qformer
+    adapter_lr: 1e-3
+    grad_accum_steps: 4
+    nodes: 1
+    gpus_per_node: 2
+    site: artemis
+    qos: gpu-h100
+    seed: 49
+    time: "12:00:00"
+
+  # Q-Former, one epoch at a 600 s effective batch (2026-09-19, PI's request):
+  # bd 150 x ga 2 x 2 ranks, twice the optimizer steps of qformer-1ep (5768).
+  # Read against R-b600 (50 Hz MLP, same batch) and R-k5 (10 Hz MLP at 1200 s).
+  # No warmup (the reference arms had none), last 20% (1153 steps) decays.
+  #   campaign.py run MA-librispeech-qformer-b600 -- --trainer.warmup_steps 0 \
+  #     --trainer.eval_steps 1048 --trainer.save_steps 1048 \
+  #     --data.validation_ds.max_samples 500 \
+  #     --trainer.lr_scheduler_type warmup_stable_decay \
+  #     --trainer.lr_scheduler_kwargs '{"num_decay_steps": 1153, "min_lr_ratio": 0.1, "decay_type": "cosine"}'
+  - id: MA-librispeech-qformer-b600
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter: qformer
+    adapter_lr: 1e-3
+    grad_accum_steps: 2
+    nodes: 1
+    gpus_per_node: 2
+    site: artemis
+    qos: gpu-h100
+    seed: 49
+    time: "12:00:00"
+
   - id: MA-librispeech-w
     stage: MA
     config: ABL-MA-librispeech.yaml

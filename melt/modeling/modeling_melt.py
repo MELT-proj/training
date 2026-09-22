@@ -13,6 +13,8 @@ from transformers.generation.utils import GenerationMixin
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.modeling_utils import PreTrainedModel
 from transformers.models.auto.modeling_auto import MODEL_MAPPING
+from transformers.models.blip_2.configuration_blip_2 import Blip2QFormerConfig
+from transformers.models.blip_2.modeling_blip_2 import Blip2QFormerModel
 from transformers.models.wav2vec2_bert.modeling_wav2vec2_bert import (
     Wav2Vec2BertAdapterLayer,
 )
@@ -190,8 +192,29 @@ class MELTQFormerAdapter(nn.Module):
         )
         self.query.data.normal_(mean=0.0, std=1.0)
 
-        # Q-Former model from config (typically blip_2_qformer)
-        self.qformer = AutoModel.from_config(adapter_cfg)
+        # The adapter config is a MELTAdapterConfig, which no AutoModel maps to a
+        # model class, so the Q-Former config is built from it explicitly. Cross-
+        # attention reads the *encoder's* output, hence encoder_hidden_size.
+        # Every layer cross-attends (the GraniteSpeech choice) rather than every
+        # second one, which would leave a 2-layer Q-Former with one.
+        self.qformer = Blip2QFormerModel(
+            Blip2QFormerConfig(
+                hidden_size=adapter_cfg.hidden_size,
+                num_hidden_layers=adapter_cfg.num_hidden_layers,
+                num_attention_heads=getattr(
+                    adapter_cfg, "num_attention_heads", None
+                )
+                or max(1, adapter_cfg.hidden_size // 64),
+                intermediate_size=adapter_cfg.intermediate_size,
+                hidden_act=adapter_cfg.hidden_act,
+                hidden_dropout_prob=adapter_cfg.dropout,
+                attention_probs_dropout_prob=adapter_cfg.dropout,
+                encoder_hidden_size=_get_encoder_hidden_size(
+                    config.audio_encoder_config
+                ),
+                cross_attention_frequency=1,
+            )
+        )
 
         # Final projection to text decoder hidden size
         self.linear = nn.Linear(adapter_cfg.hidden_size, self.output_hidden_size)
@@ -214,37 +237,66 @@ class MELTQFormerAdapter(nn.Module):
         Returns:
             Tuple of (output_shape, output_attention_mask):
                 - output_shape: (batch_size, output_seq_len, output_hidden_size)
-                - output_attention_mask: All ones since Q-Former doesn't use input mask
+                - output_attention_mask: a prefix mask; a window that holds any real
+                  frame keeps all of its ``num_queries`` outputs (real audio occupies
+                  a prefix of the frames, so ceil(valid_len / window_size) windows
+                  are live). All ones when no input mask is given.
         """
         batch_size, seq_len, _ = input_shape
         nblocks = math.ceil(seq_len / self.window_size)
         output_seq_len = nblocks * self.num_queries
         output_shape = (batch_size, output_seq_len, self.output_hidden_size)
-        # Q-Former doesn't propagate the attention mask; output is always valid
-        output_attention_mask = torch.ones(
-            batch_size, output_seq_len, device=device
+
+        if features_attention_mask is None:
+            return output_shape, torch.ones(batch_size, output_seq_len, device=device)
+
+        mask_device = device if device is not None else features_attention_mask.device
+        valid_lengths = features_attention_mask.to(torch.long).sum(dim=-1)
+        live_blocks = torch.div(
+            valid_lengths + self.window_size - 1, self.window_size, rounding_mode="floor"
         )
+        out_lengths = (live_blocks * self.num_queries).clamp(min=0, max=output_seq_len)
+        positions = torch.arange(output_seq_len, device=mask_device)
+        output_attention_mask = (
+            positions.unsqueeze(0) < out_lengths.to(mask_device).unsqueeze(-1)
+        ).to(features_attention_mask.dtype)
         return output_shape, output_attention_mask
 
-    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, hidden_states: torch.Tensor, attention_mask: torch.Tensor | None = None
+    ) -> torch.Tensor:
         batch_size, seq_len, dim = hidden_states.size()
         nblocks = math.ceil(seq_len / self.window_size)
         pad = nblocks * self.window_size - seq_len
         hidden_states = F.pad(hidden_states, (0, 0, 0, pad), "constant", 0)
-        hidden_states = hidden_states.view(batch_size * nblocks, self.window_size, dim)
+        hidden_states = hidden_states.reshape(
+            batch_size * nblocks, self.window_size, dim
+        )
 
+        encoder_attention_mask = None
+        if attention_mask is not None:
+            mask = F.pad(attention_mask.to(torch.long), (0, pad), "constant", 0)
+            mask = mask.reshape(batch_size * nblocks, self.window_size)
+            # A window with no real frame has every key masked, which makes the
+            # softmax NaN and poisons the backward pass even though the output
+            # is masked downstream. Let those windows see everything instead.
+            encoder_attention_mask = torch.where(
+                mask.any(dim=-1, keepdim=True), mask, torch.ones_like(mask)
+            )
+
+        # One copy of the learned queries per window
+        queries = self.query.expand(batch_size * nblocks, -1, -1)
         query_output = self.qformer(
-            query_embeds=self.query,
+            query_embeds=queries,
             encoder_hidden_states=hidden_states,
-            encoder_attention_mask=None,
+            encoder_attention_mask=encoder_attention_mask,
             return_dict=True,
         )
-        query_proj = self.linear(
-            query_output.last_hidden_state.view(
-                batch_size, nblocks * self.window_size // self.downsample_rate, -1
-            )
+        # The Q-Former runs in fp32; match the projection's dtype
+        last_hidden_state = query_output.last_hidden_state.to(self.linear.weight.dtype)
+        return self.linear(
+            last_hidden_state.reshape(batch_size, nblocks * self.num_queries, -1)
         )
-        return query_proj
 
 
 class MELTConformerAdapter(nn.Module):
@@ -450,8 +502,8 @@ class MELTAudioAdapter(nn.Module):
     def forward(
         self, hidden_states: torch.Tensor, attention_mask: torch.Tensor | None = None
     ) -> torch.Tensor:
-        # Some adapters (conformer) need attention_mask, others don't
-        if isinstance(self.adapter, MELTConformerAdapter):
+        # The conformer and Q-Former need the attention mask, the MLP does not
+        if isinstance(self.adapter, (MELTConformerAdapter, MELTQFormerAdapter)):
             return self.adapter(hidden_states, attention_mask=attention_mask)
         return self.adapter(hidden_states)
 
