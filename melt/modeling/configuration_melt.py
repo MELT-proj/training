@@ -41,6 +41,10 @@ class MELTAdapterConfig(PretrainedConfig):
             Kernel size for conformer convolutions (used by Conformer adapter).
         adapter_stride (`int`, *optional*, defaults to 2):
             Stride for conformer convolutions (used by Conformer adapter).
+        stack_factor (`int`, *optional*, defaults to 1):
+            Number of consecutive encoder frames the MLP adapter concatenates along
+            the feature axis before its first projection (used by MLP adapter). 1
+            leaves the frame rate unchanged; k lowers it by k.
         num_experts (`int`, *optional*, defaults to 8):
             Number of experts (used by MoE adapter).
         num_experts_per_tok (`int`, *optional*, defaults to 2):
@@ -81,6 +85,7 @@ class MELTAdapterConfig(PretrainedConfig):
         layerdrop=0.0,
         adapter_kernel_size=3,
         adapter_stride=2,
+        stack_factor=1,
         num_experts=8,
         num_experts_per_tok=2,
         moe_intermediate_size=1024,
@@ -99,6 +104,7 @@ class MELTAdapterConfig(PretrainedConfig):
         self.intermediate_size = intermediate_size
         self.hidden_act = hidden_act
         self.dropout = dropout
+        self.stack_factor = stack_factor
 
         # Q-Former specific
         self.downsample_rate = downsample_rate

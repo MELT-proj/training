@@ -19,8 +19,12 @@
 #   Data           CONFIG               one YAML per budget x task (~550 lines,
 #                                        rendered by build_campaign_config.py --
 #                                        never write a new one per arm)
-#   Architecture   ADAPTER, ADAPTER_FREEZE, ENCODER, ENCODER_FREEZE,
-#                  DECODER, DECODER_FREEZE, DECODER_LORA     (2-7 CLI overrides)
+#   Architecture   ADAPTER, ADAPTER_FREEZE, STACK_FACTOR, ENCODER, ENCODER_FREEZE,
+#                  MAX_AUDIO_SEQ_LEN,
+#                  DECODER, DECODER_FREEZE, DECODER_LORA     (2-8 CLI overrides;
+#                  STACK_FACTOR only affects the MLP adapter -- see
+#                  plan_arm.py's ArmAxes and melt/modeling/modeling_melt.py's
+#                  MELTMLPAdapter)
 #   Optimisation   ENCODER_LR, DECODER_LR, ADAPTER_LR         (0-3 CLI overrides)
 #   Batch/accum    BATCH_DURATION, GRAD_ACCUM_STEPS            (0-2 CLI overrides,
 #                                        coupled -- see plan_arm.py's ArmAxes)
@@ -43,6 +47,13 @@
 #                                        relabelling any source's tags.task,
 #                                        which keeps identifying the data
 #                                        mixture and the per-task WER/CER split)
+#                  TEMPLATE_SELECTION                            (0-1 CLI override,
+#                                        needs TEMPLATE_TASK_OVERRIDE. Replaces
+#                                        the forced "random" with with_language
+#                                        or without_language, so the language
+#                                        ID in the prompt is a factor, not a
+#                                        per-sample coin flip. Tagged -lid /
+#                                        -nolid into EXP_NAME)
 #
 # Every axis below defaults to EMPTY, which plan_arm.py reads as "inherit
 # the chosen CONFIG's own value" -- no CLI override, no assumption about
@@ -79,8 +90,16 @@ ACCELERATE_CONFIG="${ACCELERATE_CONFIG:-config/accelerate/ddp.yaml}"
 # overrides that key and always feeds the *requested* value into EXP_NAME.
 ADAPTER="${ADAPTER:-}"
 ADAPTER_FREEZE="${ADAPTER_FREEZE:-}"
+STACK_FACTOR="${STACK_FACTOR:-}"
 ENCODER="${ENCODER:-}"
 ENCODER_FREEZE="${ENCODER_FREEZE:-}"
+# Empty = derive from ENCODER (a fixed-window encoder gets the window it
+# demands) and otherwise inherit from CONFIG. See plan_arm.py.
+MAX_AUDIO_SEQ_LEN="${MAX_AUDIO_SEQ_LEN:-}"
+# Empty = inherit the config's own schedule. LR_SCHEDULER=warmup_stable_decay
+# also composes lr_scheduler_kwargs from the arm's derived step count.
+LR_SCHEDULER="${LR_SCHEDULER:-}"
+WARMUP_RATIO="${WARMUP_RATIO:-}"
 DECODER="${DECODER:-}"
 DECODER_FREEZE="${DECODER_FREEZE:-}"
 DECODER_LORA="${DECODER_LORA:-}"
@@ -92,6 +111,7 @@ GRAD_ACCUM_STEPS="${GRAD_ACCUM_STEPS:-}"
 GRADIENT_CHECKPOINTING="${GRADIENT_CHECKPOINTING:-}"
 EPOCHS="${EPOCHS:-}"
 TEMPLATE_TASK_OVERRIDE="${TEMPLATE_TASK_OVERRIDE:-}"
+TEMPLATE_SELECTION="${TEMPLATE_SELECTION:-}"
 SEED="${SEED:-42}"
 
 # --- site / topology ----------------------------------------------------------
@@ -126,13 +146,17 @@ PLAN="$(python3 "${SCRIPT_DIR}/plan_arm.py" \
     --stage "$STAGE" \
     --world-size "$WORLD_SIZE" \
     --adapter "$ADAPTER" --adapter-freeze "$ADAPTER_FREEZE" \
+    --stack-factor "$STACK_FACTOR" \
     --encoder "$ENCODER" --encoder-freeze "$ENCODER_FREEZE" \
+    --max-audio-seq-len "$MAX_AUDIO_SEQ_LEN" \
+    --lr-scheduler "$LR_SCHEDULER" --warmup-ratio "$WARMUP_RATIO" \
     --decoder "$DECODER" --decoder-freeze "$DECODER_FREEZE" \
     --decoder-lora "$DECODER_LORA" \
     --encoder-lr "$ENCODER_LR" --decoder-lr "$DECODER_LR" --adapter-lr "$ADAPTER_LR" \
     --batch-duration "$BATCH_DURATION" --grad-accum-steps "$GRAD_ACCUM_STEPS" \
     --gradient-checkpointing "$GRADIENT_CHECKPOINTING" \
     --epochs "$EPOCHS" --template-task-override "$TEMPLATE_TASK_OVERRIDE" \
+    --template-selection "$TEMPLATE_SELECTION" \
     --seed "$SEED")" || { echo "ERROR: plan_arm.py failed (see above)" >&2; exit 1; }
 eval "$PLAN"
 # PLAN sets: EXP_NAME, STEPS, EVAL_STEPS, SAVE_STEPS, SAVE_TOTAL_LIMIT,

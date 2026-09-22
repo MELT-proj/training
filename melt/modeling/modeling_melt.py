@@ -13,6 +13,8 @@ from transformers.generation.utils import GenerationMixin
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.modeling_utils import PreTrainedModel
 from transformers.models.auto.modeling_auto import MODEL_MAPPING
+from transformers.models.blip_2.configuration_blip_2 import Blip2QFormerConfig
+from transformers.models.blip_2.modeling_blip_2 import Blip2QFormerModel
 from transformers.models.wav2vec2_bert.modeling_wav2vec2_bert import (
     Wav2Vec2BertAdapterLayer,
 )
@@ -72,13 +74,38 @@ class MELTMLPAdapter(nn.Module):
         if mid is None:
             mid = out
 
-        self.fc1 = nn.Linear(audio_hidden_size, mid, bias=True)
+        stack_factor = (
+            getattr(adapter_cfg, "stack_factor", None) if adapter_cfg is not None else None
+        )
+        # 1 = no stacking, the pre-stack_factor behavior. Guards a None from a
+        # config that sets the key to `null` the same way `mid`/`mlp_hidden_size`
+        # does above.
+        self.stack_factor = stack_factor if stack_factor else 1
+
+        self.fc1 = nn.Linear(audio_hidden_size * self.stack_factor, mid, bias=True)
         self.act = nn.GELU()
         self.fc2 = nn.Linear(mid, out, bias=True)
 
         self.post_norm = nn.LayerNorm(out)
         self.gain = nn.Parameter(torch.tensor([0.1]))
         self.output_hidden_size = out
+
+    def _stack_frames(self, audio_features: torch.Tensor) -> torch.Tensor:
+        """Concatenate ``stack_factor`` consecutive frames along the feature axis.
+
+        Pads the frame count up to a multiple of ``stack_factor`` with zeros at the
+        end before reshaping -- the same frame count ``_get_output_features_shape``
+        predicts, since both derive the padded length from ``seq_len`` alone rather
+        than from where real audio ends within the batch.
+        """
+        if self.stack_factor <= 1:
+            return audio_features
+        batch_size, seq_len, hidden_size = audio_features.shape
+        pad = (-seq_len) % self.stack_factor
+        if pad:
+            audio_features = F.pad(audio_features, (0, 0, 0, pad))
+        stacked_len = (seq_len + pad) // self.stack_factor
+        return audio_features.reshape(batch_size, stacked_len, hidden_size * self.stack_factor)
 
     def _get_output_features_shape(
         self,
@@ -97,16 +124,42 @@ class MELTMLPAdapter(nn.Module):
 
         Returns:
             Tuple of (output_shape, output_attention_mask):
-                - output_shape: (batch_size, output_seq_len, output_hidden_size)
-                - output_attention_mask: Same as input (MLP preserves sequence length)
+                - output_shape: (batch_size, output_seq_len, output_hidden_size), with
+                  output_seq_len == seq_len when stack_factor is 1 and
+                  ceil(seq_len / stack_factor) otherwise
+                - output_attention_mask: Same as input when stack_factor is 1;
+                  otherwise a prefix mask subsampled by stack_factor (real audio
+                  occupies a prefix of the frames, so ceil(valid_len / stack_factor)
+                  is exact)
         """
         batch_size, seq_len, _ = input_shape
-        output_shape = (batch_size, seq_len, self.output_hidden_size)
-        return output_shape, features_attention_mask
+        k = self.stack_factor
+        output_seq_len = math.ceil(seq_len / k) if k > 1 else seq_len
+        output_shape = (batch_size, output_seq_len, self.output_hidden_size)
+
+        if k <= 1:
+            return output_shape, features_attention_mask
+
+        output_attention_mask = None
+        if features_attention_mask is not None:
+            mask_device = device if device is not None else features_attention_mask.device
+            non_padded_lengths = features_attention_mask.to(torch.long).sum(dim=-1)
+            out_lengths = torch.div(non_padded_lengths + k - 1, k, rounding_mode="floor")
+            out_lengths = out_lengths.clamp(min=0, max=output_seq_len).to(mask_device)
+            positions = torch.arange(output_seq_len, device=mask_device)
+            output_attention_mask = (positions.unsqueeze(0) < out_lengths.unsqueeze(-1)).to(
+                features_attention_mask.dtype
+            )
+
+        return output_shape, output_attention_mask
 
     def forward(
         self, audio_features: torch.Tensor, attention_mask: torch.Tensor | None = None
     ) -> torch.Tensor:
+        # attention_mask is accepted and unused: MELTAudioAdapter.forward calls every
+        # adapter with the same signature, which is what lets the MoE receive the mask
+        # it needs for load balancing without an isinstance ladder in the dispatcher.
+        audio_features = self._stack_frames(audio_features)
         hidden_states = self.fc1(audio_features)
         hidden_states = self.act(hidden_states)
         hidden_states = self.fc2(hidden_states)
@@ -286,8 +339,29 @@ class MELTQFormerAdapter(nn.Module):
         )
         self.query.data.normal_(mean=0.0, std=1.0)
 
-        # Q-Former model from config (typically blip_2_qformer)
-        self.qformer = AutoModel.from_config(adapter_cfg)
+        # The adapter config is a MELTAdapterConfig, which no AutoModel maps to a
+        # model class, so the Q-Former config is built from it explicitly. Cross-
+        # attention reads the *encoder's* output, hence encoder_hidden_size.
+        # Every layer cross-attends (the GraniteSpeech choice) rather than every
+        # second one, which would leave a 2-layer Q-Former with one.
+        self.qformer = Blip2QFormerModel(
+            Blip2QFormerConfig(
+                hidden_size=adapter_cfg.hidden_size,
+                num_hidden_layers=adapter_cfg.num_hidden_layers,
+                num_attention_heads=getattr(
+                    adapter_cfg, "num_attention_heads", None
+                )
+                or max(1, adapter_cfg.hidden_size // 64),
+                intermediate_size=adapter_cfg.intermediate_size,
+                hidden_act=adapter_cfg.hidden_act,
+                hidden_dropout_prob=adapter_cfg.dropout,
+                attention_probs_dropout_prob=adapter_cfg.dropout,
+                encoder_hidden_size=_get_encoder_hidden_size(
+                    config.audio_encoder_config
+                ),
+                cross_attention_frequency=1,
+            )
+        )
 
         # Final projection to text decoder hidden size
         self.linear = nn.Linear(adapter_cfg.hidden_size, self.output_hidden_size)
@@ -310,16 +384,29 @@ class MELTQFormerAdapter(nn.Module):
         Returns:
             Tuple of (output_shape, output_attention_mask):
                 - output_shape: (batch_size, output_seq_len, output_hidden_size)
-                - output_attention_mask: All ones since Q-Former doesn't use input mask
+                - output_attention_mask: a prefix mask; a window that holds any real
+                  frame keeps all of its ``num_queries`` outputs (real audio occupies
+                  a prefix of the frames, so ceil(valid_len / window_size) windows
+                  are live). All ones when no input mask is given.
         """
         batch_size, seq_len, _ = input_shape
         nblocks = math.ceil(seq_len / self.window_size)
         output_seq_len = nblocks * self.num_queries
         output_shape = (batch_size, output_seq_len, self.output_hidden_size)
-        # Q-Former doesn't propagate the attention mask; output is always valid
-        output_attention_mask = torch.ones(
-            batch_size, output_seq_len, device=device
+
+        if features_attention_mask is None:
+            return output_shape, torch.ones(batch_size, output_seq_len, device=device)
+
+        mask_device = device if device is not None else features_attention_mask.device
+        valid_lengths = features_attention_mask.to(torch.long).sum(dim=-1)
+        live_blocks = torch.div(
+            valid_lengths + self.window_size - 1, self.window_size, rounding_mode="floor"
         )
+        out_lengths = (live_blocks * self.num_queries).clamp(min=0, max=output_seq_len)
+        positions = torch.arange(output_seq_len, device=mask_device)
+        output_attention_mask = (
+            positions.unsqueeze(0) < out_lengths.to(mask_device).unsqueeze(-1)
+        ).to(features_attention_mask.dtype)
         return output_shape, output_attention_mask
 
     def forward(
@@ -329,20 +416,34 @@ class MELTQFormerAdapter(nn.Module):
         nblocks = math.ceil(seq_len / self.window_size)
         pad = nblocks * self.window_size - seq_len
         hidden_states = F.pad(hidden_states, (0, 0, 0, pad), "constant", 0)
-        hidden_states = hidden_states.view(batch_size * nblocks, self.window_size, dim)
+        hidden_states = hidden_states.reshape(
+            batch_size * nblocks, self.window_size, dim
+        )
 
+        encoder_attention_mask = None
+        if attention_mask is not None:
+            mask = F.pad(attention_mask.to(torch.long), (0, pad), "constant", 0)
+            mask = mask.reshape(batch_size * nblocks, self.window_size)
+            # A window with no real frame has every key masked, which makes the
+            # softmax NaN and poisons the backward pass even though the output
+            # is masked downstream. Let those windows see everything instead.
+            encoder_attention_mask = torch.where(
+                mask.any(dim=-1, keepdim=True), mask, torch.ones_like(mask)
+            )
+
+        # One copy of the learned queries per window
+        queries = self.query.expand(batch_size * nblocks, -1, -1)
         query_output = self.qformer(
-            query_embeds=self.query,
+            query_embeds=queries,
             encoder_hidden_states=hidden_states,
-            encoder_attention_mask=None,
+            encoder_attention_mask=encoder_attention_mask,
             return_dict=True,
         )
-        query_proj = self.linear(
-            query_output.last_hidden_state.view(
-                batch_size, nblocks * self.window_size // self.downsample_rate, -1
-            )
+        # The Q-Former runs in fp32; match the projection's dtype
+        last_hidden_state = query_output.last_hidden_state.to(self.linear.weight.dtype)
+        return self.linear(
+            last_hidden_state.reshape(batch_size, nblocks * self.num_queries, -1)
         )
-        return query_proj
 
 
 class MELTConformerAdapter(nn.Module):
@@ -551,6 +652,10 @@ class MELTAudioAdapter(nn.Module):
     def forward(
         self, hidden_states: torch.Tensor, attention_mask: torch.Tensor | None = None
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        # Every adapter takes the same (hidden_states, attention_mask) signature, so
+        # there is no isinstance ladder here. The MLP ignores the mask; the Conformer
+        # and Q-Former attend with it; the MoE needs it because its load-balancing
+        # loss must count real tokens only.
         output = self.adapter(hidden_states, attention_mask=attention_mask)
         aux_loss = getattr(self.adapter, "aux_loss", None)
         return output, aux_loss
@@ -1852,6 +1957,15 @@ class MELTForSequenceClassification(MELTPreTrainedModel):
         if ndim == 3:
             hidden_size = target_tensor.shape[-1]
             eos_token_id = self.text_decoder.config.eos_token_id
+            # Some decoders (chat-formatted ones in particular, see MELTForCausalLM
+            # __init__) carry a *list* of valid stop tokens rather than a single id.
+            # Only one embedding row is needed as a placeholder here, so take the
+            # first -- matching MELTForCausalLM's own eos_id[0] fallback -- instead
+            # of feeding the whole list to torch.tensor([eos_token_id]) and getting
+            # an extra (num_eos, hidden_size) axis back where a single (D,) row is
+            # expected.
+            if isinstance(eos_token_id, list):
+                eos_token_id = eos_token_id[0]
             pad_item = self.text_decoder.get_input_embeddings()(
                 torch.tensor(
                     [eos_token_id], device=target_tensor.device, dtype=torch.long

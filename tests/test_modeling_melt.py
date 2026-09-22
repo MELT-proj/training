@@ -1,6 +1,7 @@
 """Tests for MELTForCausalLM and adapter components."""
 
 import math
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -11,6 +12,7 @@ from melt.modeling import (
     MELTConfig,
     MELTConformerAdapter,
     MELTForCausalLM,
+    MELTForSequenceClassification,
     MELTMLPAdapter,
 )
 
@@ -76,12 +78,21 @@ class TestAdapterOutputFeaturesShape:
         config = MagicMock(spec=MELTConfig)
         config.adapter_config = MagicMock()
         config.adapter_config._type = "mlp"
+        # Explicit, not left to the MagicMock's auto-vivified default: an
+        # unset attribute on a plain MagicMock() is truthy and not an int, so
+        # `self.stack_factor <= 1` etc. would silently take an unintended
+        # branch rather than raising.
+        config.adapter_config.stack_factor = 1
         config.audio_encoder_config = MagicMock()
         config.audio_encoder_config.hidden_size = 768
         config.audio_encoder_config.output_hidden_size = 768
         config.text_decoder_config = MagicMock()
         config.text_decoder_config.hidden_size = 1024
         return config
+
+    def _stacked_mlp_config(self, mlp_config, stack_factor):
+        mlp_config.adapter_config.stack_factor = stack_factor
+        return mlp_config
 
     @pytest.fixture
     def qformer_config(self):
@@ -165,18 +176,162 @@ class TestAdapterOutputFeaturesShape:
 
         assert actual_output.shape == predicted_shape
 
-    def test_qformer_adapter_downsampling(self, qformer_config):
-        """Q-Former adapter should downsample sequence by downsample_rate."""
-        pytest.importorskip("transformers")
+    # -- stack_factor -----------------------------------------------------
+    # Concatenates k consecutive encoder frames along the feature axis before
+    # fc1, lowering the adapter's own output frame rate by k
+    # (`plan/01-interface-recipe.md` §4).
 
-        seq_len = 45
-        window_size = 15
-        num_queries = window_size // 5
+    def test_stack_factor_widens_fc1_input(self, mlp_config):
+        """fc1 takes k x encoder hidden size, not just the encoder hidden size."""
+        adapter = MELTMLPAdapter(self._stacked_mlp_config(mlp_config, stack_factor=4))
+        assert adapter.fc1.in_features == 768 * 4
 
-        nblocks = math.ceil(seq_len / window_size)
-        expected_output_len = nblocks * num_queries
+    def test_stack_factor_one_matches_pre_stacking_behavior(self, mlp_config):
+        """stack_factor=1 (the default) is exactly the old, unstacked adapter."""
+        adapter = MELTMLPAdapter(self._stacked_mlp_config(mlp_config, stack_factor=1))
+        assert adapter.fc1.in_features == 768
 
-        assert expected_output_len == 9
+    def test_stack_factor_downsamples_exact_multiple(self, mlp_config):
+        """seq_len an exact multiple of k: output length is exactly seq_len / k."""
+        adapter = MELTMLPAdapter(self._stacked_mlp_config(mlp_config, stack_factor=4))
+
+        batch_size, seq_len = 2, 48
+        input_features = torch.randn(batch_size, seq_len, 768)
+        attention_mask = torch.ones(batch_size, seq_len)
+
+        output_shape, output_mask = adapter._get_output_features_shape(
+            input_features.shape, attention_mask
+        )
+
+        assert output_shape == (batch_size, 12, 1024)
+        assert output_mask.shape == (batch_size, 12)
+        assert output_mask.bool().all()
+
+        actual_output = adapter(input_features)
+        assert actual_output.shape == output_shape
+
+    def test_stack_factor_pads_a_non_multiple_seq_len(self, mlp_config):
+        """seq_len 50 with k=4 pads to 52 frames, i.e. ceil(50/4) = 13 output frames."""
+        adapter = MELTMLPAdapter(self._stacked_mlp_config(mlp_config, stack_factor=4))
+
+        batch_size, seq_len = 2, 50
+        input_features = torch.randn(batch_size, seq_len, 768)
+
+        output_shape, _ = adapter._get_output_features_shape(input_features.shape, None)
+        assert output_shape == (batch_size, 13, 1024)
+
+        actual_output = adapter(input_features)
+        assert actual_output.shape == output_shape
+
+    def test_stack_factor_subsamples_the_attention_mask(self, mlp_config):
+        """Per-example valid length is subsampled by k, as a prefix mask."""
+        adapter = MELTMLPAdapter(self._stacked_mlp_config(mlp_config, stack_factor=4))
+
+        batch_size, seq_len = 2, 48
+        input_features = torch.randn(batch_size, seq_len, 768)
+        attention_mask = torch.zeros(batch_size, seq_len, dtype=torch.long)
+        attention_mask[0, :48] = 1  # full 48 frames -> ceil(48/4) = 12
+        attention_mask[1, :10] = 1  # 10 frames -> ceil(10/4) = 3
+
+        output_shape, output_mask = adapter._get_output_features_shape(
+            input_features.shape, attention_mask
+        )
+
+        assert output_shape == (batch_size, 12, 1024)
+        assert output_mask.sum(-1).tolist() == [12, 3]
+        # A prefix, not scattered.
+        assert output_mask[1, :3].all() and not output_mask[1, 3:].any()
+
+    def test_stack_factor_without_attention_mask(self, mlp_config):
+        adapter = MELTMLPAdapter(self._stacked_mlp_config(mlp_config, stack_factor=4))
+        input_features = torch.randn(2, 48, 768)
+
+        output_shape, output_mask = adapter._get_output_features_shape(input_features.shape, None)
+
+        assert output_shape == (2, 12, 1024)
+        assert output_mask is None
+
+    @staticmethod
+    def _real_qformer_adapter(window_size=15, downsample_rate=5, encoder_width=64):
+        """A Q-Former adapter built from real configs, no hub access."""
+        from transformers import GPT2Config, Wav2Vec2Config
+
+        from melt.modeling import MELTAdapterConfig, MELTQFormerAdapter
+
+        config = SimpleNamespace(
+            adapter_config=MELTAdapterConfig(
+                _type="qformer",
+                hidden_size=32,
+                num_hidden_layers=2,
+                intermediate_size=64,
+                window_size=window_size,
+                downsample_rate=downsample_rate,
+            ),
+            audio_encoder_config=Wav2Vec2Config(hidden_size=encoder_width),
+            text_decoder_config=GPT2Config(n_embd=48),
+        )
+        return MELTQFormerAdapter(config).eval()
+
+    def test_qformer_adapter_instantiates_and_downsamples(self):
+        """Regression: the adapter used to fail at construction (no AutoModel maps
+        MELTAdapterConfig), and its forward broadcast one query over B*nblocks."""
+        adapter = self._real_qformer_adapter()
+        features = torch.randn(2, 45, 64)
+
+        out = adapter(features)
+        shape, mask = adapter._get_output_features_shape(features.shape)
+
+        # 45 frames / window 15 = 3 windows x 3 queries
+        assert out.shape == (2, 9, 48) == shape
+        assert mask.shape == (2, 9) and bool(mask.all())
+
+    def test_qformer_adapter_pads_a_partial_window(self):
+        adapter = self._real_qformer_adapter()
+        out = adapter(torch.randn(2, 40, 64))
+        assert out.shape == (2, 9, 48)
+
+    def test_qformer_output_mask_follows_valid_windows(self):
+        adapter = self._real_qformer_adapter()
+        input_mask = torch.zeros(2, 45, dtype=torch.long)
+        input_mask[0, :45] = 1
+        input_mask[1, :16] = 1  # 16 frames touch two windows
+
+        _, mask = adapter._get_output_features_shape((2, 45, 64), input_mask)
+
+        assert mask.sum(dim=-1).tolist() == [9, 6]
+        assert mask[1].tolist() == [1, 1, 1, 1, 1, 1, 0, 0, 0]
+
+    def test_qformer_forward_is_finite_with_a_fully_padded_window(self):
+        adapter = self._real_qformer_adapter().train()
+        features = torch.randn(2, 45, 64, requires_grad=True)
+        input_mask = torch.ones(2, 45, dtype=torch.long)
+        input_mask[1, 10:] = 0  # windows 1 and 2 hold no real frame
+
+        out = adapter(features, attention_mask=input_mask)
+        out.sum().backward()
+
+        assert torch.isfinite(out).all()
+        assert torch.isfinite(features.grad).all()
+
+    def test_qformer_padding_does_not_change_live_outputs(self):
+        adapter = self._real_qformer_adapter()
+        torch.manual_seed(0)
+        short = torch.randn(1, 10, 64)
+        padded = torch.cat([short, torch.randn(1, 20, 64)], dim=1)
+        mask = torch.zeros(1, 30, dtype=torch.long)
+        mask[0, :10] = 1
+
+        alone = adapter(short)
+        batched = adapter(padded, attention_mask=mask)
+
+        # Window 0 holds frames 0-14: 10 real, 5 padding. Masked padding must not
+        # leak into the first window's outputs.
+        alone_masked = adapter(
+            torch.nn.functional.pad(short, (0, 0, 0, 5)),
+            attention_mask=torch.tensor([[1] * 10 + [0] * 5]),
+        )
+        assert torch.allclose(batched[:, :3], alone_masked, atol=1e-5)
+        assert alone.shape == (1, 3, 48)
 
     def test_conformer_adapter_downsampling_single_layer(self):
         """Test Conformer adapter downsampling with a single layer."""
@@ -536,3 +691,63 @@ class TestInjectTensor:
                 source_tensor_mask=None,
                 pad_item=0.0,
             )
+
+
+# ============================================================================
+# MELTForSequenceClassification._inject_tensor -- a *separate* method from
+# MELTForCausalLM's above, and the only one that reads
+# text_decoder.config.eos_token_id directly rather than a pre-cached scalar
+# (see MELTForCausalLM.__init__'s self._eos_token_id). A chat-formatted
+# decoder's eos_token_id is a list of valid stop tokens (issue #124's fix, in
+# melt.training.setup._merge_chat_template_eos_token_id), so this must not
+# break when the two batch items below merge to different lengths and force
+# the embedding padding path to actually run.
+# ============================================================================
+
+
+class _FakeTextDecoderForInjectTensor:
+    """Exposes only what _inject_tensor touches -- no real HF model needed."""
+
+    def __init__(self, eos_token_id):
+        self.config = SimpleNamespace(eos_token_id=eos_token_id)
+        self._embedding = torch.nn.Embedding(num_embeddings=16, embedding_dim=4)
+
+    def get_input_embeddings(self):
+        return self._embedding
+
+
+class TestInjectTensorSequenceClassificationEosTokenId:
+    def _call(self, eos_token_id):
+        fake_self = SimpleNamespace(
+            text_decoder=_FakeTextDecoderForInjectTensor(eos_token_id)
+        )
+        inject_id = 9
+        # Item 0 injects a 1-frame audio span, item 1 a 3-frame one -- the
+        # two batch items merge to different lengths (4 vs 6), which is what
+        # exercises the `pad_item.unsqueeze(0).expand(...)` padding path.
+        input_ids = torch.tensor([[1, inject_id, 2, 0], [1, inject_id, 2, 0]])
+        target_tensor = torch.zeros(2, 4, 4)  # (batch, seq_len, hidden_size)
+        source_tensor = torch.ones(2, 3, 4)
+        source_tensor_mask = torch.tensor(
+            [[True, False, False], [True, True, True]]
+        )
+        source_lengths = torch.tensor([[1], [3]])
+
+        return MELTForSequenceClassification._inject_tensor(
+            fake_self,
+            source_tensor=source_tensor,
+            target_tensor=target_tensor,
+            inject_token_id=inject_id,
+            input_ids=input_ids,
+            source_lengths=source_lengths,
+            source_tensor_mask=source_tensor_mask,
+        )
+
+    def test_scalar_eos_token_id(self):
+        assert self._call(eos_token_id=5).shape == (2, 6, 4)
+
+    def test_list_eos_token_id_does_not_break_padding(self):
+        """Pre-fix, torch.tensor([[5, 7]]) gave a (1, 2, hidden) embedding
+        instead of (hidden,), and `.expand(pad_len, hidden_size)` on that
+        raised RuntimeError as soon as padding was needed."""
+        assert self._call(eos_token_id=[5, 7]).shape == (2, 6, 4)

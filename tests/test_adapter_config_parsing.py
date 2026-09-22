@@ -22,6 +22,7 @@ def test_adapter_defaults_in_training_config():
     assert ad.adapter_kernel_size == 3
     assert ad.adapter_stride == 2
     assert ad.mlp_hidden_size is None
+    assert ad.stack_factor == 1
     assert ad.num_experts == 8
     assert ad.num_experts_per_tok == 2
     assert ad.moe_intermediate_size == 1024
@@ -51,6 +52,7 @@ def test_config_merge_parses_adapter_fields():
                     "adapter_kernel_size": 5,
                     "adapter_stride": 3,
                     "mlp_hidden_size": 256,
+                    "stack_factor": 4,
                     "num_experts": 16,
                     "num_experts_per_tok": 4,
                     "moe_intermediate_size": 2048,
@@ -79,6 +81,7 @@ def test_config_merge_parses_adapter_fields():
     assert ad.adapter_kernel_size == 5
     assert ad.adapter_stride == 3
     assert ad.mlp_hidden_size == 256
+    assert ad.stack_factor == 4
     assert ad.num_experts == 16
     assert ad.num_experts_per_tok == 4
     assert ad.moe_intermediate_size == 2048

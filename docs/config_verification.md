@@ -155,7 +155,7 @@ CI or for diffing two configs.
 
 ```bash
 singularity exec --bind /mnt/scratch-nyx,/mnt/scratch-artemis \
-    /mnt/scratch-artemis/giuseppe/melt-data/melt_cuda126_lhotse2_td.sif \
+    /mnt/scratch-artemis/giuseppe/melt-data/melt_cuda126.sif \
     bash -c 'source /workspace/venv/bin/activate && \
       PYTHONPATH=/mnt/scratch-nyx/giuseppe/container-extras \
       python -m pytest tests/test_check_training_config.py -q'

@@ -5,11 +5,13 @@ These functions encapsulate processor and model-config construction so that
 """
 
 from omegaconf import DictConfig
+
 from transformers import AutoFeatureExtractor, AutoTokenizer
 
 from ..logging_utils import get_logger
 from ..modeling import MELTConfig, MELTProcessor
 from ..modeling.configuration_melt import MELT_REQUIRED_SPECIAL_TOKENS
+from .data.chat_templates import get_chat_template_config
 
 
 logger = get_logger(__name__)
@@ -148,6 +150,62 @@ def prepare_processor(cfg: DictConfig) -> MELTProcessor:
     )
 
 
+def _merge_chat_template_eos_token_id(cfg: DictConfig, tokenizer, text_decoder_config) -> None:
+    """Extend ``text_decoder_config.eos_token_id`` with the chat template's turn-end token.
+
+    A decoder backbone's own ``config.json`` carries its raw pretraining EOS
+    (e.g. Qwen's ``<|endoftext|>``), not necessarily the token that actually
+    closes a rendered chat turn (e.g. ``<|im_end|>``). ``MELTForCausalLM``
+    builds its decoder via ``AutoModelForCausalLM.from_config``, which never
+    sees a ``generation_config.json`` -- HF synthesizes the decoder's
+    ``generation_config`` from this config object directly, so it is the only
+    place a stopping criterion can come from. Left as-is, generation on a
+    freshly-built ChatML decoder never stops at the end of a turn and instead
+    keeps emitting further turns until ``max_new_tokens`` (issue #124). Llama's
+    upstream ``config.json`` already lists its chat stop tokens alongside the
+    raw EOS, which is why Llama runs never hit this.
+
+    A no-op when ``data.apply_chat_template`` is off: without chat formatting
+    the model is never trained to emit a turn-end token, so there is nothing
+    to add.
+
+    Args:
+        cfg: Full training configuration.
+        tokenizer: The decoder's tokenizer (already carries the chat template).
+        text_decoder_config: ``MELTConfig.text_decoder_config``, mutated in place.
+
+    Raises:
+        RuntimeError: If the chat template's turn-end token is not in the
+            tokenizer's vocabulary, which would otherwise silently add the
+            wrong id (or ``<unk>``'s) as a stop condition.
+    """
+    data_cfg = cfg.get("data", {})
+    if not data_cfg.get("apply_chat_template", False):
+        return
+
+    ct_name = str(data_cfg.get("chat_template_config", "chatml"))
+    turn_end_token = get_chat_template_config(ct_name).turn_end_token
+
+    if turn_end_token not in tokenizer.get_vocab():
+        raise RuntimeError(
+            f"prepare_melt_config: chat_template_config {ct_name!r} expects a "
+            f"{turn_end_token!r} turn-end token, but it is not in this decoder's "
+            "tokenizer vocabulary. Generation would have no way to stop on it."
+        )
+    turn_end_id = tokenizer.convert_tokens_to_ids([turn_end_token])[0]
+
+    existing = text_decoder_config.eos_token_id
+    existing_ids = [] if existing is None else (list(existing) if isinstance(existing, list) else [existing])
+    if turn_end_id not in existing_ids:
+        text_decoder_config.eos_token_id = [*existing_ids, turn_end_id]
+        logger.info(
+            "Added chat-template turn-end token %r (id %d) to text_decoder_config.eos_token_id -> %s",
+            turn_end_token,
+            turn_end_id,
+            text_decoder_config.eos_token_id,
+        )
+
+
 def prepare_melt_config(cfg: DictConfig, processor: MELTProcessor) -> MELTConfig:
     """Build a :class:`MELTConfig` from a training config and processor.
 
@@ -192,5 +250,7 @@ def prepare_melt_config(cfg: DictConfig, processor: MELTProcessor) -> MELTConfig
     pad_token_id = tokenizer.convert_tokens_to_ids([tokenizer.pad_token])[0]
     if pad_token_id < config.vocab_size:
         config.text_decoder_config.pad_token_id = pad_token_id
+
+    _merge_chat_template_eos_token_id(cfg, tokenizer, config.text_decoder_config)
 
     return config

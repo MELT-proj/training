@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "melt-proj"
-version = "0.6.2"
+version = "0.8.0"
 description = "MELT project training utilities"
 readme = "README.md"
 license = {text = "MIT"}
@@ -101,3 +101,4 @@ flash-attn = { url = "https://github.com/Dao-AILab/flash-attention/releases/down
 [[tool.uv.index]]
 name = "pytorch"
 url = "https://download.pytorch.org/whl/cu126"
+explicit = true

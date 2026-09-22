@@ -161,6 +161,280 @@ arms:
     checkpoint_count: 2
     time: "28:00:00"
 
+  # ------------------------------------------------- LibriSpeech step 0 (MA)
+  # plan/01-interface-recipe.md §2: is the August recipe (adapter LR 2e-5,
+  # effective batch 4800 s) or its step budget why the multilingual MA arms
+  # never leave the "fluent but unrelated to audio" plateau? L1 is the
+  # control; L2 isolates LR; L3 adds 4x the optimizer steps at the same LR;
+  # L4 pushes LR further at L3's step budget. L5 (second seed of the best of
+  # L2-L4) is added once that winner is known -- see the interpretation rules
+  # in the plan file. ~7 GPU-h each at the measured MA rate (~1,000
+  # audio-s/wall-s on 8 GPUs) for one ~961 h epoch.
+  - id: MA-librispeech-l1
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 2e-5      # the August recipe, as control (== config default)
+    seed: 42
+    time: "02:00:00"
+
+  - id: MA-librispeech-l2
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 2e-4      # LR alone, same 4800 s effective batch as L1
+    seed: 42
+    time: "02:00:00"
+
+  - id: MA-librispeech-l3
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 2e-4      # LR plus 4x more optimizer steps than L1/L2
+    grad_accum_steps: 1   # batch_duration 150 x 1 x 8 = 1200 s effective batch
+    seed: 42
+    time: "02:00:00"
+
+  - id: MA-librispeech-l4
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 1e-3      # upper end of the LR range, L3's step budget
+    grad_accum_steps: 1   # 1200 s effective batch, same as L3
+    seed: 42
+    time: "02:00:00"
+
+  # L5: second seed of the best of L2-L4. Measured (dev-clean, final epoch):
+  # L1 loss 3.072/WER 1.12, L2 loss 3.012/WER 1.084, L3 loss 2.943/WER 1.076,
+  # L4 loss 2.625/WER 1.04 -- L4 wins clearly and was still declining fastest
+  # at epoch end, so it is the noise check.
+  - id: MA-librispeech-l5
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 1e-3
+    grad_accum_steps: 1
+    seed: 43
+    time: "02:00:00"
+
+  # Diagnostic, not a campaign comparison point: L4's loss delta accelerated
+  # through the back half of its one epoch (-0.03/step early -> -0.108 near
+  # epoch 0.8) before flattening in the last ~10% -- consistent with the
+  # SLAM-ASR plateau-then-drop caught mid-transition, not a dead recipe. A
+  # fresh 3-epoch run at L4's LR/batch re-derives the cosine schedule over
+  # the full 3-epoch horizon, so LR stays higher for longer through exactly
+  # the region L4 showed acceleration in, testing "does it just need more
+  # gradient updates" without confounding decoder/encoder capacity or data
+  # volume. ~21-24 GPU-h (3x L4). Deliberately breaks the one-epoch
+  # convention (agent-protocol.md §3) via the documented `--` passthrough,
+  # not a new campaign axis -- submit as:
+  #   campaign.py run MA-librispeech-l4-ep3 -- --trainer.num_train_epochs 3
+  # eval_steps/save_steps stay at the single-epoch cadence (262), so this
+  # evaluates ~3x more often than a normal arm; harmless at this scale.
+  # New seed (44, continuing l1-l4's 42 / l5's 43) so the composed exp_name
+  # cannot collide with l4's already-completed run directory.
+  - id: MA-librispeech-l4-ep3
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 1e-3
+    grad_accum_steps: 1
+    seed: 44
+    time: "03:00:00"
+
+  # -------------------------------------------------- Step 0b (01-interface-recipe.md sec2b)
+  # Common to all of R/R-seed/R-lr2e3/R-b600/R-k5/W: adapter LR 1e-3, three
+  # epochs, warmup-stable-decay (num_decay_steps = round(0.2 x each arm's
+  # own derived steps) -- differs by arm since R-b600 halves world_size and
+  # doubles steps, so it is passed as a per-submission `--` override, not
+  # baked into these rows), min_lr_ratio 0.1, decay_type cosine, and eval
+  # max_samples 500/set (200 made the epoch-3 trajectory noisy). All via the
+  # same `--` passthrough l4-ep3 uses, not new campaign axes:
+  #   campaign.py run MA-librispeech-r -- --trainer.num_train_epochs 3 \
+  #     --data.validation_ds.max_samples 500 \
+  #     --trainer.lr_scheduler_type warmup_stable_decay \
+  #     --trainer.lr_scheduler_kwargs '{"num_decay_steps": N, "min_lr_ratio": 0.1, "decay_type": "cosine"}'
+  # `time:` on R/R-seed/R-lr2e3/R-k5 bumped 03:00:00 -> 04:00:00 (2026-09-18):
+  # the eval max_samples bump from l4-ep3's 200 to 500/set adds enough
+  # per-round generation cost that all four hit the 3h wall clock at ~87%
+  # (jobs 45985909/24/30/44) and needed `--resume`. No change needed to
+  # R-b600 (8h, ~2x steps but comfortable margin observed) or W (6h, not
+  # yet a binding constraint).
+  # A0 (schedule reference) is MA-librispeech-l4-ep3 above -- not rerun.
+  - id: MA-librispeech-r
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 1e-3
+    grad_accum_steps: 1   # 1200 s effective batch, same as l4-ep3/A0
+    seed: 45
+    time: "04:00:00"
+
+  - id: MA-librispeech-r-seed
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 1e-3
+    grad_accum_steps: 1
+    seed: 46              # noise check against MA-librispeech-r (seed 45)
+    time: "04:00:00"
+
+  - id: MA-librispeech-r-lr2e3
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 2e-3      # R's peak LR pushed further
+    grad_accum_steps: 1
+    seed: 47
+    time: "04:00:00"
+
+  - id: MA-librispeech-r-b600
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 1e-3
+    grad_accum_steps: 1   # batch_duration 150 x 1 x 4 = 600 s effective batch
+    nodes: 1
+    gpus_per_node: 4      # world_size 4, half of R's 8 -> ~2x the steps
+    seed: 48
+    time: "08:00:00"
+
+  - id: MA-librispeech-r-k5
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 1e-3
+    grad_accum_steps: 1
+    stack_factor: 5        # 50 Hz -> 10 Hz, as SLAM-ASR does
+    seed: 49
+    time: "04:00:00"
+
+  # Q-Former smoke test (2026-09-19), not a campaign arm. Does the fixed
+  # Q-Former (window 15, 3 queries = 10 Hz) train and generate at all? Same
+  # recipe as R-k5 (the other 10 Hz arm): adapter LR 1e-3, 1200 s effective
+  # batch (bd 150 x ga 4 x 2 ranks), warmup 260 steps then constant, so its
+  # loss at steps 262 and 524 reads directly against R-k5's. Stopped at 524
+  # steps (max_steps pinned on purpose, this is a smoke test) by a `--`
+  # passthrough; see the board entry for the command.
+  - id: MA-librispeech-qformer-smoke
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter: qformer
+    adapter_lr: 1e-3
+    grad_accum_steps: 4
+    nodes: 1
+    gpus_per_node: 2
+    site: artemis
+    qos: gpu-h100
+    seed: 49              # R-k5's seed, so only the adapter differs
+    time: "04:00:00"
+
+  # Q-Former, one full epoch (2026-09-19). SUBMITTED THEN CANCELLED before it
+  # started, superseded by MA-librispeech-qformer-b600 below at the PI's request. The 524-step smoke run above matched
+  # R-k5's loss on the plateau; R-k5 left it between steps 1048 and 1572 and
+  # was at dev-clean WER 0.60 / loss 1.01 by step 2620. Same recipe again for
+  # a full epoch (2884 steps at 1200 s), no warmup because R-k5 had none
+  # (`warmup_ratio` is dropped by transformers 5), warmup-stable-decay with
+  # the last 20% decaying. Eval/save every 524 steps. Submit as:
+  #   campaign.py run MA-librispeech-qformer-1ep -- --trainer.warmup_steps 0 \
+  #     --trainer.eval_steps 524 --trainer.save_steps 524 \
+  #     --data.validation_ds.max_samples 500 \
+  #     --trainer.lr_scheduler_type warmup_stable_decay \
+  #     --trainer.lr_scheduler_kwargs '{"num_decay_steps": 577, "min_lr_ratio": 0.1, "decay_type": "cosine"}'
+  - id: MA-librispeech-qformer-1ep
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter: qformer
+    adapter_lr: 1e-3
+    grad_accum_steps: 4
+    nodes: 1
+    gpus_per_node: 2
+    site: artemis
+    qos: gpu-h100
+    seed: 49
+    time: "12:00:00"
+
+  # Q-Former, one epoch at a 600 s effective batch (2026-09-19, PI's request):
+  # bd 150 x ga 2 x 2 ranks, twice the optimizer steps of qformer-1ep (5768).
+  # Read against R-b600 (50 Hz MLP, same batch) and R-k5 (10 Hz MLP at 1200 s).
+  # No warmup (the reference arms had none), last 20% (1153 steps) decays.
+  #   campaign.py run MA-librispeech-qformer-b600 -- --trainer.warmup_steps 0 \
+  #     --trainer.eval_steps 1048 --trainer.save_steps 1048 \
+  #     --data.validation_ds.max_samples 500 \
+  #     --trainer.lr_scheduler_type warmup_stable_decay \
+  #     --trainer.lr_scheduler_kwargs '{"num_decay_steps": 1153, "min_lr_ratio": 0.1, "decay_type": "cosine"}'
+  - id: MA-librispeech-qformer-b600
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter: qformer
+    adapter_lr: 1e-3
+    grad_accum_steps: 2
+    nodes: 1
+    gpus_per_node: 2
+    site: artemis
+    qos: gpu-h100
+    seed: 49
+    time: "12:00:00"
+
+  - id: MA-librispeech-w
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    adapter_lr: 1e-3
+    grad_accum_steps: 1
+    encoder: openai/whisper-large-v3   # supervised-ASR encoder control, stack 1 (default)
+    seed: 50
+    time: "06:00:00"       # Whisper pads every cut to its fixed 30 s window, slower per step
+    # Job 45985946 (2026-09-18) failed at startup: Whisper-large-v3 only
+    # accepts exactly 3000 frames (its fixed 30 s window), not the
+    # w2v-BERT-tuned model.encoder.max_audio_seq_len default of 1500 --
+    # there is no campaign axis for this yet, so every submission of this
+    # arm (and any future Whisper arm in 03-audio-stack.md's crossing)
+    # needs `-- --model.encoder.max_audio_seq_len 3000` passed explicitly.
+    # Resubmitted as job 46050285 with it.
+
+  # Decoder-size control, gated on PR #132 (merged 2026-09-17: Qwen chat-
+  # formatted decoders never stopped generation) plus Qwen/Qwen3.5-4B staged
+  # to MN5 and a DECODER_PROFILES entry for it (plan_arm.py, added
+  # 2026-09-17, verified against the real tokenizer -- same vocab as the 2B,
+  # <|text_pad|> equally absent). Same batch_duration 30 the existing
+  # MA-700-qwen35-2b-ins arm needed for a frozen Qwen3.5-2B decoder under
+  # DDP (campaign.yaml, above); grad_accum_steps 5 instead of that arm's 20
+  # gives 30 x 5 x 8 = 1200 s effective batch, matching R. stack_factor 5 is
+  # what makes the 4B affordable at all (see the sec2b comment on
+  # MA-librispeech-r-k5) -- read size only from Q4-k5 against Q2-k5, since
+  # Llama-vs-Qwen already confounds size with family/attention type.
+  - id: MA-librispeech-q2-k5
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    decoder: Qwen/Qwen3.5-2B
+    adapter_lr: 1e-3
+    batch_duration: 30
+    grad_accum_steps: 5    # 30 x 5 x 8 = 1200 s effective batch
+    gradient_checkpointing: false
+    stack_factor: 5
+    seed: 51
+    time: "04:00:00"
+
+  - id: MA-librispeech-q4-k5
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    decoder: Qwen/Qwen3.5-4B
+    adapter_lr: 1e-3
+    batch_duration: 30
+    grad_accum_steps: 5
+    gradient_checkpointing: false
+    stack_factor: 5
+    seed: 52
+    time: "05:00:00"       # ~2x the 2B's decoder; wider margin until measured
+
+  # Seed replicate of Q4-k5, requested by the Orchestrator 2026-09-19: the
+  # 2B->4B gap (0.065 dev-clean, 0.073 dev-other) is not yet quotable
+  # against a single seed per arm -- same trap as the LR 2e-3 contrast.
+  # This also settles whether Q4-k5's 10.36% dev-clean (0.36 pts over the
+  # <10% bar) is itself a seed draw. Identical to Q4-k5 in every other
+  # axis; total elapsed compute across Q4-k5's two submissions was
+  # ~11h -- budgeted higher here to avoid a second TIMEOUT/resume cycle.
+  - id: MA-librispeech-q4-k5-seed2
+    stage: MA
+    config: ABL-MA-librispeech.yaml
+    decoder: Qwen/Qwen3.5-4B
+    adapter_lr: 1e-3
+    batch_duration: 30
+    grad_accum_steps: 5
+    gradient_checkpointing: false
+    stack_factor: 5
+    seed: 53
+    time: "12:00:00"
+
   # --------------------------------------------------------------- IFT (stage 2)
   - id: IFT-700-llama1b-ins
     stage: IFT
@@ -230,3 +504,228 @@ arms:
     gradient_checkpointing: false
     time: "46:00:00"
     checkpoint_count: 7
+
+  # --- Week 2: the five-language interface screen, LR x batch grid ----------
+  #
+  # plan/01-interface-recipe.md §3. Twelve arms: adapter LR {1e-3, 2e-3} x
+  # effective batch {1200, 600, 300} s x encoder {w2v-BERT 2.0, Whisper-
+  # large-v3}, all at stack_factor 5 (10 Hz) on ABL-MA-700-asr.yaml, one epoch
+  # of 700 h per language.
+  #
+  # Why both encoders. The screen has to resolve LR and batch contrasts, and
+  # step 0b measured those at 0.112/0.065 (LR) and 0.148/0.121 (batch) on
+  # dev-clean/dev-other against a seed-only spread of 0.108/0.002 at the same
+  # error regime -- so on dev-clean the LR contrast is the size of the noise.
+  # w2v-BERT's best step-0b arm sat at WER 0.314 on easier data than this
+  # mixture; Whisper sat at 0.038, where the measured spread is 0.002. Running
+  # the grid on w2v-BERT alone risks a screen that cannot answer its own
+  # question. Running it on Whisper alone is the selection bias §2b warns
+  # about. Running both costs ~120 GPU-h more and tests whether the recipe
+  # optimum is encoder-invariant -- which 03-audio-stack.md's crossing already
+  # ASSUMES when it fixes "one recipe for all sixteen" arms.
+  #
+  # Why grad_accum_steps is set on every row. ABL-MA-700-asr.yaml's own
+  # batch_duration 150 x grad_accum 4 x 8 ranks is 4800 s -- the August recipe,
+  # diagnosed in §1 as the cause of the failed alignment and explicitly
+  # dropped in §3. Inheriting it silently would re-run the thing this screen
+  # exists to replace.
+  #
+  # Topology per batch level (batch_duration x grad_accum x world_size):
+  #   1200 s  ->  150 x 1 x 8   (2 nodes)
+  #    600 s  ->   75 x 1 x 8   (2 nodes)
+  #    300 s  ->   75 x 1 x 4   (1 node)
+  # Whisper at 1200 s runs at 150 x 1 like w2v-BERT, so the two encoder halves
+  # differ only in the encoder. The cosine pass ran Whisper at 75 x 2 out of
+  # padding caution (every cut pads to a whole 30 s window, estimated ~6x) and
+  # peaked at 11.5 GB of 64, below w2v-BERT's 19.7 GB at 150.
+  # No max_audio_seq_len rows: plan_arm.py derives Whisper's 3000 from the
+  # encoder name (ENCODER_WINDOW_FRAMES).
+  #
+  # Seed 42 on all twelve, per agent-protocol.md §3: step 0b drew a different
+  # seed per arm, which is how a 0.11 contrast turned out to be a seed draw.
+  # The seed replicates are their own arms, added once the best corner is known.
+
+  - id: MA-700-screen-w2vb-lr1e3-b1200
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 1e-3
+    batch_duration: 150
+    grad_accum_steps: 1
+    seed: 42
+    time: "08:00:00"
+
+  - id: MA-700-screen-w2vb-lr1e3-b600
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 1e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    seed: 42
+    time: "10:00:00"
+
+  - id: MA-700-screen-w2vb-lr1e3-b300
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 1e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    seed: 42
+    time: "16:00:00"
+
+  - id: MA-700-screen-w2vb-lr2e3-b1200
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 150
+    grad_accum_steps: 1
+    seed: 42
+    time: "08:00:00"
+
+  - id: MA-700-screen-w2vb-lr2e3-b600
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    seed: 42
+    time: "10:00:00"
+
+  - id: MA-700-screen-w2vb-lr2e3-b300
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    seed: 42
+    time: "16:00:00"
+
+  - id: MA-700-screen-whisper-lr1e3-b1200
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    encoder: openai/whisper-large-v3
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 1e-3
+    batch_duration: 150
+    grad_accum_steps: 1
+    seed: 42
+    time: "14:00:00"
+
+  - id: MA-700-screen-whisper-lr1e3-b600
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    encoder: openai/whisper-large-v3
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 1e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    seed: 42
+    time: "16:00:00"
+
+  - id: MA-700-screen-whisper-lr1e3-b300
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    encoder: openai/whisper-large-v3
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 1e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    seed: 42
+    time: "24:00:00"
+
+  - id: MA-700-screen-whisper-lr2e3-b1200
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    encoder: openai/whisper-large-v3
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 150
+    grad_accum_steps: 1
+    seed: 42
+    time: "14:00:00"
+
+  - id: MA-700-screen-whisper-lr2e3-b600
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    encoder: openai/whisper-large-v3
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    seed: 42
+    time: "16:00:00"
+
+  - id: MA-700-screen-whisper-lr2e3-b300
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    encoder: openai/whisper-large-v3
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    seed: 42
+    time: "24:00:00"
+
+  # --- The screen's 2e-5 control (01-interface-recipe.md §3/§1) ------------
+  #
+  # Not part of the grid above: 2e-5 is ABL-MA-700-asr.yaml's own
+  # optimization.adapter_lr, the August recipe's adapter LR. Modelled on the
+  # b1200/lr1e3 grid rows, one per encoder, with adapter_lr left unset so it
+  # inherits the config default instead of being overridden to the same
+  # value. Fixed reference point, not waiting on the grid's best corner.
+
+  - id: MA-700-screen-w2vb-lr2e5-b1200
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    batch_duration: 150
+    grad_accum_steps: 1
+    seed: 42
+    time: "08:00:00"
+
+  - id: MA-700-screen-whisper-lr2e5-b1200
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    encoder: openai/whisper-large-v3
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    batch_duration: 150
+    grad_accum_steps: 1
+    seed: 42
+    time: "14:00:00"

@@ -57,6 +57,7 @@ GRAD_ACCUM_STEPS it needs no compensating override.
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import os
 import re
@@ -120,6 +121,44 @@ DECODER_PROFILES = {
         "pad_token": "<|text_pad|>",
         "chat_template_config": "chatml",
     },
+    # Step 0b's decoder-size control (plan/01-interface-recipe.md §2b, Q4-k5
+    # against Q2-k5). Verified directly against the real downloaded
+    # tokenizer_config.json (2026-09-17), not assumed from "shares the 2B's
+    # vocabulary": identical vocab size (248,077), identical token ids for
+    # <|endoftext|> (248044) and <|im_end|> (248046), <|text_pad|> equally
+    # absent. Same MELT-convention override as Qwen/Qwen3.5-2B above, for the
+    # same reason -- the whole Qwen3.x/3.5 line shares it.
+    "Qwen/Qwen3.5-4B": {
+        "eos_token": "<|endoftext|>",
+        "pad_token": "<|text_pad|>",
+        "chat_template_config": "chatml",
+    },
+    # eos_token/pad_token verified directly against tokenizer.json,
+    # special_tokens_map.json and generation_config.json on MN5 (2026-09-18):
+    # EuroLLM-1.7B-Instruct's own eos_token_id (4) is "<|im_end|>" -- its
+    # chatml turn marker doubles as the real generation-stop token here,
+    # unlike Qwen -- and pad_token "</s>" (id 2) is already a separate token,
+    # so nothing needs a fresh add_special_tokens entry. Chat template is
+    # plain ChatML, confirmed directly (`02-backbones.md` §3.1).
+    "utter-project/EuroLLM-1.7B-Instruct": {
+        "eos_token": "<|im_end|>",
+        "pad_token": "</s>",
+        "chat_template_config": "chatml",
+    },
+    # The Base half of the pair does NOT share Instruct's vocabulary --
+    # verified (2026-09-18): base's tokenizer.json has only 3 added tokens
+    # (<unk>, <s>, </s>), no "<|im_start|>"/"<|im_end|>" at all, unlike the
+    # Llama Base/Instruct pair above. Borrowing Instruct's eos_token here
+    # means add_special_tokens grows base's embedding table by one row, the
+    # same mechanism MELT already uses for Qwen's pad_token. Base ships no
+    # chat template of its own, so chat_template_from is required the same
+    # way meta-llama/Llama-3.2-1B needs it.
+    "utter-project/EuroLLM-1.7B": {
+        "eos_token": "<|im_end|>",
+        "pad_token": "</s>",
+        "chat_template_config": "chatml",
+        "chat_template_from": "utter-project/EuroLLM-1.7B-Instruct",
+    },
 }
 
 # Short tags for EXP_NAME. Unknown names fall back to a sanitised slug (see
@@ -132,6 +171,7 @@ DECODER_TAGS = {
     "Qwen/Qwen3-1.7B": "qwen1_7b",
     "Qwen/Qwen3.5-2B": "qwen35_2bIns",
     "Qwen/Qwen3.5-2B-Base": "qwen35_2bBase",
+    "Qwen/Qwen3.5-4B": "qwen35_4bIns",
 }
 
 # Wall-clock defaults. 06:00:00 for the 700 h arm: measured
@@ -162,6 +202,11 @@ DEFAULT_ENCODER_LR = "6e-6"
 DEFAULT_DECODER_LR = "2e-5"
 DEFAULT_ADAPTER_LR = "2e-4"
 
+# Same fallback reasoning as the LR constants above: no ABL-*.yaml declares
+# model.adapter.stack_factor (the key is new), so every existing config omits
+# it and this is the value melt/training/config.py's DEFAULT_CONFIG fills in.
+DEFAULT_STACK_FACTOR = 1
+
 
 def die(msg: str) -> None:
     print(f"ERROR: {msg}", file=sys.stderr)
@@ -184,6 +229,50 @@ def as_bool(s: str) -> bool:
     if v in ("false", "0", "no"):
         return False
     die(f"expected true/false, got {s!r}")
+
+
+# Values of ArmAxes.template_selection, and the EXP_NAME tag each one earns.
+# "random" is the pre-existing behaviour, so it adds no tag and no rename.
+TEMPLATE_SELECTIONS = ("random", "with_language", "without_language")
+TEMPLATE_SELECTION_TAGS = {"with_language": "lid", "without_language": "nolid"}
+
+# LR schedules the campaign composes, and the EXP_NAME tag each one earns.
+# "" (inherit the config's own) adds no tag and renames nothing.
+#
+# warmup_stable_decay is the MA default step 0b's Rule 1 adopted
+# (01-interface-recipe.md sec2b: R beat A0 by 0.14/0.25 against a same-regime
+# seed spread of 0.11/0.002). It was never a campaign axis, because its
+# `num_decay_steps` is an ABSOLUTE step count that differs per arm -- so step
+# 0b hand-passed the whole `--trainer.lr_scheduler_kwargs` blob on every
+# submission, and the five-language screen's first twelve arms inherited
+# `cosine` from ABL-MA-700-asr.yaml because nobody remembered to. This script
+# already derives `steps`, so it derives the decay tail from it too rather
+# than asking an operator to compute 20% of a number they cannot see yet.
+LR_SCHEDULERS = ("cosine", "linear", "constant_with_warmup", "warmup_stable_decay")
+LR_SCHEDULER_TAGS = {"warmup_stable_decay": "wsd"}
+WSD_DECAY_FRACTION = 0.2   # decay over the last 20% of steps
+WSD_MIN_LR_RATIO = 0.1     # decay to 0.1x peak, not to zero
+WSD_DECAY_TYPE = "cosine"
+
+# Encoders that demand an exact input length, and the frame count they demand.
+# Mirrors ENCODER_SPECS[...].window_frames in melt/modeling/encoder_specs.py,
+# which is the source of truth -- this script never imports melt (see the LR
+# constants above), so the value is restated here, keyed on hub name rather
+# than on `config.model_type` because that is all an arm row gives us.
+#
+# Why this table exists at all: WhisperEncoder.forward raises on anything that
+# is not exactly `max_source_positions * 2` mel frames, so a Whisper arm run
+# against a config written for w2v-BERT (max_audio_seq_len 1500) dies at
+# startup -- which is what happened to job 45985946 on 2026-09-18, and was
+# then worked around by hand-passing the override on every submission. An arm
+# that only runs when the operator remembers an undocumented extra argument is
+# off the ledger the moment they forget, so it is derived here instead.
+ENCODER_WINDOW_FRAMES: dict[str, int] = {
+    "openai/whisper-large-v3": 3000,
+    "openai/whisper-large-v3-turbo": 3000,
+    "openai/whisper-medium": 3000,
+    "openai/whisper-small": 3000,
+}
 
 
 def _slug(name: str, maxlen: int) -> str:
@@ -307,8 +396,50 @@ class ArmAxes:
     world_size: int
     adapter: str = ""
     adapter_freeze: str = ""
+    # stack_factor: how many consecutive encoder frames the MLP adapter
+    # concatenates before fc1 (`melt/modeling/modeling_melt.py`'s
+    # MELTMLPAdapter); a no-op for the other adapter types, which downsample
+    # through their own knobs instead. Same inherit-or-override rule as every
+    # other axis, but tagged into EXP_NAME only when overridden -- like
+    # batch_duration/grad_accum_steps below, not like the always-present LR
+    # tags -- since every arm composed before this axis existed has no value
+    # for it to differ from, and tagging it unconditionally would rename (and
+    # orphan the output directory of) all of them.
+    stack_factor: str = ""
     encoder: str = ""
     encoder_freeze: str = ""
+    # lr_scheduler: "" inherits the base config's own lr_scheduler_type.
+    # Set to one of LR_SCHEDULERS to override it; warmup_stable_decay also
+    # gets its lr_scheduler_kwargs composed here from the arm's own derived
+    # step count. Tagged into EXP_NAME when overridden, because unlike
+    # max_audio_seq_len the schedule is NOT recoverable from any other tag --
+    # step 0b's A0 (cosine) and R (WSD) differ in EXP_NAME only by seed, which
+    # is precisely how a schedule silently goes missing.
+    lr_scheduler: str = ""
+    # warmup_ratio: "" inherits. When set, warmup_steps is ALSO forced to 0,
+    # because HF's Trainer.get_warmup_steps only consults warmup_ratio when
+    # warmup_steps <= 0 -- and ABL-MA-700-asr.yaml sets warmup_steps: 20, so
+    # a ratio alone would be silently ignored there. A fixed step count is not
+    # comparable across arms that vary the effective batch (the screen's 1200/
+    # 600/300 s levels are 10,500/21,000/42,000 steps, so 20 steps of warmup
+    # means three different fractions of training); ABL-MA-librispeech.yaml
+    # moved to a ratio for exactly this reason. Tagged when overridden.
+    warmup_ratio: str = ""
+    # max_audio_seq_len: input frames the encoder is fed per forward window.
+    # "" means "derive it", NOT "inherit blindly": when the arm overrides the
+    # encoder to one in ENCODER_WINDOW_FRAMES, the required window is emitted
+    # automatically, because the alternative is an arm that only runs when the
+    # operator remembers an extra CLI argument (see that table's comment).
+    # An explicit value overrides both, and is the only way to set it for an
+    # encoder the table does not know.
+    #
+    # Deliberately NOT tagged into EXP_NAME. It is a property of the encoder,
+    # which the name already carries in its own tag, so tagging it would
+    # rename every Whisper arm -- including MA-librispeech-w, which has run --
+    # and orphan its output directory for no gain. plan() rejects an explicit
+    # value that contradicts a known fixed-window encoder instead, so the
+    # untagged case cannot silently mean two different things.
+    max_audio_seq_len: str = ""
     decoder: str = ""
     decoder_freeze: str = ""
     decoder_lora: str = ""
@@ -347,14 +478,24 @@ class ArmAxes:
     # config's own value, the same way batch_duration/grad_accum_steps are.
     epochs: str = ""
     # template_task_override: "" means inherit (no override). Non-empty forces
-    # data.prompt_template_selection to "random" and data.template_task_override
-    # to this value, so every sample draws from TASK_TEMPLATES[<value>]
+    # data.prompt_template_selection to "random" (or template_selection, below)
+    # and data.template_task_override to this value, so every sample draws from TASK_TEMPLATES[<value>]
     # (melt/training/data/audio/lhotse/helpers.py) instead of whatever the
     # config's own prompt_template_selection/prompt_template resolve to --
     # without relabelling any source's `tags.task`, which stays the data
     # mixture's own identity and keeps grouping the per-task WER/CER split.
     # Tagged into EXP_NAME when set, same rule as every other axis.
     template_task_override: str = ""
+    # template_selection: "" means inherit, i.e. "random" over the whole
+    # TASK_TEMPLATES bucket exactly as before this axis existed. Otherwise one
+    # of TEMPLATE_SELECTIONS, passed as data.prompt_template_selection so LID
+    # is a factor (with_language / without_language) rather than the per-sample
+    # coin flip "random" gives on a bucket that mixes both. Only meaningful
+    # together with template_task_override: without it selection is pinned to
+    # "custom", which never consults TASK_TEMPLATES, so setting it alone is an
+    # error rather than a silent no-op. Tagged into EXP_NAME (-lid / -nolid)
+    # when it is a language filter.
+    template_selection: str = ""
     seed: int = 42
     # --- policy (not axes) ---------------------------------------------
     # eval_rounds: eval_steps = round(steps / eval_rounds).
@@ -465,6 +606,7 @@ def plan(args: ArmAxes) -> ArmPlan:
     # what it already declares unless a human says so.
     cfg_adapter_type = get(cfg, "model.adapter._type")
     cfg_adapter_freeze = bool(get(cfg, "model.adapter.freeze"))
+    cfg_stack_factor = get(cfg, "model.adapter.stack_factor", DEFAULT_STACK_FACTOR)
     cfg_encoder_name = get(cfg, "model.encoder.name")
     cfg_encoder_freeze = bool(get(cfg, "model.encoder.freeze"))
     cfg_decoder_name = get(cfg, "model.decoder.name")
@@ -492,6 +634,7 @@ def plan(args: ArmAxes) -> ArmPlan:
     encoder_freeze = as_bool(args.encoder_freeze) if args.encoder_freeze else cfg_encoder_freeze
     decoder_freeze = as_bool(args.decoder_freeze) if args.decoder_freeze else cfg_decoder_freeze
     decoder_lora = as_bool(args.decoder_lora) if args.decoder_lora else cfg_decoder_lora
+    stack_factor_effective = int(args.stack_factor) if args.stack_factor else int(cfg_stack_factor)
 
     overrides: list[str] = []
 
@@ -499,6 +642,34 @@ def plan(args: ArmAxes) -> ArmPlan:
         overrides += ["--model.encoder.name", encoder_effective]
     if args.encoder_freeze and encoder_freeze != cfg_encoder_freeze:
         overrides += ["--model.encoder.freeze", str(encoder_freeze).lower()]
+
+    # max_audio_seq_len: explicit value wins; otherwise derive the window a
+    # fixed-window encoder demands. Only emitted when it differs from what the
+    # config already declares, so arms that do not move the encoder produce a
+    # byte-identical command to the one they produced before this axis existed.
+    cfg_max_audio_seq_len = get(cfg, "model.encoder.max_audio_seq_len")
+    required_window = ENCODER_WINDOW_FRAMES.get(encoder_effective)
+    if args.max_audio_seq_len:
+        try:
+            max_audio_seq_len_effective = int(args.max_audio_seq_len)
+        except ValueError:
+            die(f"MAX_AUDIO_SEQ_LEN={args.max_audio_seq_len!r} is not an integer.")
+        if required_window is not None and max_audio_seq_len_effective != required_window:
+            die(
+                f"MAX_AUDIO_SEQ_LEN={max_audio_seq_len_effective} contradicts "
+                f"{encoder_effective}, which accepts exactly {required_window} frames "
+                "and raises on anything else (melt/modeling/encoder_specs.py). Drop "
+                "the override and it is derived, or fix the value."
+            )
+    elif required_window is not None:
+        max_audio_seq_len_effective = required_window
+    else:
+        max_audio_seq_len_effective = cfg_max_audio_seq_len
+    if (
+        max_audio_seq_len_effective is not None
+        and max_audio_seq_len_effective != cfg_max_audio_seq_len
+    ):
+        overrides += ["--model.encoder.max_audio_seq_len", str(max_audio_seq_len_effective)]
 
     if args.decoder and decoder_effective != cfg_decoder_name:
         profile = DECODER_PROFILES.get(decoder_effective)
@@ -584,6 +755,15 @@ def plan(args: ArmAxes) -> ArmPlan:
     if args.adapter_freeze and adapter_freeze != cfg_adapter_freeze:
         overrides += ["--model.adapter.freeze", str(adapter_freeze).lower()]
 
+    # See ArmAxes's comment on stack_factor for why this is only emitted (and
+    # only tagged into EXP_NAME below) when it actually differs from the
+    # config -- same rule as batch_duration/grad_accum_steps just below.
+    stack_factor_overridden = bool(args.stack_factor) and (
+        stack_factor_effective != int(cfg_stack_factor)
+    )
+    if stack_factor_overridden:
+        overrides += ["--model.adapter.stack_factor", str(stack_factor_effective)]
+
     # batch_duration/grad_accum_steps overrides -- see ArmAxes's comment on
     # why these two are coupled. Only emitted (and only tagged into EXP_NAME
     # below) when they actually differ from the config, same rule as every
@@ -624,17 +804,29 @@ def plan(args: ArmAxes) -> ArmPlan:
     # prompt_template_selection as its own axis: a task-category swap is
     # meaningless under "custom" selection, which never consults
     # TASK_TEMPLATES at all.
+    if args.template_selection and args.template_selection not in TEMPLATE_SELECTIONS:
+        die(
+            f"TEMPLATE_SELECTION={args.template_selection!r} is not one of "
+            f"{', '.join(TEMPLATE_SELECTIONS)}."
+        )
+    if args.template_selection and not args.template_task_override:
+        die(
+            f"TEMPLATE_SELECTION={args.template_selection!r} needs "
+            "TEMPLATE_TASK_OVERRIDE: without it prompt_template_selection is pinned "
+            "to 'custom' and never consults TASK_TEMPLATES, so the mode would do nothing."
+        )
+    template_selection_effective = args.template_selection or "random"
     if args.template_task_override:
         cfg_prompt_template_selection = get(cfg, "data.prompt_template_selection")
         if cfg_prompt_template_selection and cfg_prompt_template_selection != "random":
             print(
                 f"NOTE: overriding data.prompt_template_selection "
-                f"{cfg_prompt_template_selection!r} -> 'random' because "
+                f"{cfg_prompt_template_selection!r} -> {template_selection_effective!r} because "
                 f"TEMPLATE_TASK_OVERRIDE={args.template_task_override!r} was requested "
                 "explicitly.",
                 file=sys.stderr,
             )
-        overrides += ["--data.prompt_template_selection", "random"]
+        overrides += ["--data.prompt_template_selection", template_selection_effective]
         overrides += ["--data.template_task_override", args.template_task_override]
 
     if args.encoder_lr:
@@ -669,6 +861,37 @@ def plan(args: ArmAxes) -> ArmPlan:
             )
         overrides += ["--model.ckpt", args.init_from]
 
+    # LR schedule. Emitted after `steps` exists, because warmup_stable_decay's
+    # num_decay_steps is an absolute count derived from it.
+    cfg_lr_scheduler = get(cfg, "trainer.lr_scheduler_type")
+    if args.lr_scheduler and args.lr_scheduler not in LR_SCHEDULERS:
+        die(
+            f"LR_SCHEDULER={args.lr_scheduler!r} is not one of "
+            f"{', '.join(LR_SCHEDULERS)}."
+        )
+    if args.lr_scheduler and args.lr_scheduler != cfg_lr_scheduler:
+        overrides += ["--trainer.lr_scheduler_type", args.lr_scheduler]
+    if args.lr_scheduler == "warmup_stable_decay":
+        overrides += [
+            "--trainer.lr_scheduler_kwargs",
+            json.dumps(
+                {
+                    "num_decay_steps": round(WSD_DECAY_FRACTION * steps),
+                    "min_lr_ratio": WSD_MIN_LR_RATIO,
+                    "decay_type": WSD_DECAY_TYPE,
+                }
+            ),
+        ]
+
+    cfg_warmup_ratio = get(cfg, "trainer.warmup_ratio")
+    cfg_warmup_steps = get(cfg, "trainer.warmup_steps")
+    if args.warmup_ratio:
+        if float(args.warmup_ratio) != (cfg_warmup_ratio or 0.0):
+            overrides += ["--trainer.warmup_ratio", args.warmup_ratio]
+        # See ArmAxes.warmup_ratio: a nonzero warmup_steps silently wins.
+        if cfg_warmup_steps:
+            overrides += ["--trainer.warmup_steps", "0"]
+
     # Only appear when overridden, unlike the always-present LR tags: adding
     # them unconditionally would rename every arm ever composed under the old
     # scheme (batch_duration/grad_accum_steps/epochs/template_task_override were
@@ -684,6 +907,15 @@ def plan(args: ArmAxes) -> ArmPlan:
         extra_tags.append(f"ep{epochs_effective}")
     if args.template_task_override:
         extra_tags.append(f"tt{_slug(args.template_task_override, 12)}")
+    if args.template_selection in TEMPLATE_SELECTION_TAGS:
+        extra_tags.append(TEMPLATE_SELECTION_TAGS[args.template_selection])
+    if args.lr_scheduler in LR_SCHEDULER_TAGS:
+        extra_tags.append(LR_SCHEDULER_TAGS[args.lr_scheduler])
+    if args.warmup_ratio:
+        extra_tags.append(lr_tag(args.warmup_ratio, "wu"))
+
+    # Same "only when overridden" rule, for the same reason (see ArmAxes).
+    stack_factor_tags = [f"sk{stack_factor_effective}"] if stack_factor_overridden else []
 
     composed_name = "-".join([
         args.stage,
@@ -691,6 +923,7 @@ def plan(args: ArmAxes) -> ArmPlan:
         f"{encoder_tag(encoder_effective)}{'F' if encoder_freeze else 'T'}",
         f"{decoder_tag(decoder_effective)}{'F' if decoder_freeze else 'T'}" + ("-lora" if decoder_lora else ""),
         f"{adapter_effective}{'F' if adapter_freeze else 'T'}",
+        *stack_factor_tags,
         *extra_tags,
         lr_tag(encoder_lr_effective, "elr"),
         lr_tag(decoder_lr_effective, "dlr"),
@@ -729,8 +962,12 @@ def main() -> None:
     p.add_argument("--world-size", required=True, type=int)
     p.add_argument("--adapter", required=True)
     p.add_argument("--adapter-freeze", required=True)
+    p.add_argument("--stack-factor", required=True, help="empty string means: use the config's own value, no override")
     p.add_argument("--encoder", required=True)
     p.add_argument("--encoder-freeze", required=True)
+    p.add_argument("--lr-scheduler", required=True, help="empty string means: use the config's own lr_scheduler_type")
+    p.add_argument("--warmup-ratio", required=True, help="empty string means: use the config's own warmup settings")
+    p.add_argument("--max-audio-seq-len", required=True, help="empty string means: derive it from the encoder, else use the config's own value")
     p.add_argument("--decoder", required=True)
     p.add_argument("--decoder-freeze", required=True)
     p.add_argument("--decoder-lora", required=True, help="empty string means: use the config's own value, no override")
@@ -742,6 +979,7 @@ def main() -> None:
     p.add_argument("--gradient-checkpointing", required=True, help="empty string means: use the config's own value, no override")
     p.add_argument("--epochs", required=True, help="empty string means: use the config's own value, no override")
     p.add_argument("--template-task-override", required=True, help="empty string means: use the config's own prompt_template_selection/prompt_template, no override")
+    p.add_argument("--template-selection", required=True, help="empty string means: random over the whole bucket; else random, with_language or without_language (needs --template-task-override)")
     p.add_argument("--seed", required=True, type=int)
     args = p.parse_args()
 
@@ -751,8 +989,12 @@ def main() -> None:
         world_size=args.world_size,
         adapter=args.adapter,
         adapter_freeze=args.adapter_freeze,
+        stack_factor=args.stack_factor,
         encoder=args.encoder,
         encoder_freeze=args.encoder_freeze,
+        lr_scheduler=args.lr_scheduler,
+        warmup_ratio=args.warmup_ratio,
+        max_audio_seq_len=args.max_audio_seq_len,
         decoder=args.decoder,
         decoder_freeze=args.decoder_freeze,
         decoder_lora=args.decoder_lora,
@@ -764,6 +1006,7 @@ def main() -> None:
         gradient_checkpointing=args.gradient_checkpointing,
         epochs=args.epochs,
         template_task_override=args.template_task_override,
+        template_selection=args.template_selection,
         seed=args.seed,
     ))
 

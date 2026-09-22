@@ -23,6 +23,7 @@ class TestMELTAdapterConfig:
         assert config.intermediate_size == 4096
         assert config.hidden_act == "gelu"
         assert config.dropout == 0.1
+        assert config.stack_factor == 1
         assert config.model_type == "melt_adapter"
 
     def test_custom_initialization(self):
@@ -47,6 +48,11 @@ class TestMELTAdapterConfig:
         assert config._type == "qformer"
         assert config.downsample_rate == 7
         assert config.window_size == 21
+
+    def test_stack_factor_param(self):
+        config = MELTAdapterConfig(_type="mlp", stack_factor=4)
+        assert config._type == "mlp"
+        assert config.stack_factor == 4
 
 
 @pytest.mark.hub

@@ -26,6 +26,8 @@ import argparse
 import os
 import re
 import sys
+import types
+import typing
 
 from omegaconf import DictConfig, OmegaConf
 
@@ -116,6 +118,11 @@ model:
     adapter_kernel_size: 3
     adapter_stride: 2
     mlp_hidden_size: null
+    # MLP only: concatenate this many consecutive encoder frames along the
+    # feature axis before fc1, lowering the adapter's output frame rate by the
+    # same factor. 1 = no stacking (the historical MLP behavior).
+    stack_factor: 1
+    # MoE only: routed-expert FFN in place of the MLP's single fc pair.
     num_experts: 8
     num_experts_per_tok: 2
     moe_intermediate_size: 1024
@@ -505,6 +512,50 @@ def config_to_dict(cfg: DictConfig) -> dict:
     return OmegaConf.to_container(cfg, resolve=True)
 
 
+def _type_accepts_bool(field_type: object) -> bool:
+    """Check whether a (possibly Union) type annotation includes `bool`."""
+    if field_type is bool:
+        return True
+    origin = typing.get_origin(field_type)
+    if origin in (typing.Union, types.UnionType):
+        return any(_type_accepts_bool(arg) for arg in typing.get_args(field_type))
+    return False
+
+
+def _fix_yaml_bool_leaks(result: dict) -> dict:
+    """Undo OmegaConf's YAML 1.1 boolean coercion for string/enum trainer fields.
+
+    CLI overrides go through `OmegaConf.from_dotlist`, which parses each value
+    as YAML. Under YAML 1.1, bare `no`/`off`/`false` and `yes`/`on`/`true` are
+    booleans rather than strings, so e.g. `--trainer.eval_strategy no` reaches
+    Seq2SeqTrainingArguments as `False` instead of the string "no", and HF's
+    IntervalStrategy(False) raises a ValueError that never mentions the
+    override or the quoting workaround.
+
+    Detect a bool value landing on a Seq2SeqTrainingArguments field whose
+    declared type does not accept bool, and convert it back to its YAML
+    spelling ("no"/"yes") rather than letting it crash downstream.
+    """
+    hints = typing.get_type_hints(Seq2SeqTrainingArguments)
+    fixed = {}
+    for key, value in result.items():
+        if isinstance(value, bool) and key in hints and not _type_accepts_bool(hints[key]):
+            spelling = "yes" if value else "no"
+            logger.warning(
+                "trainer.%s=%s was parsed as a YAML boolean by the CLI override "
+                "parser, but this field expects a string; treating it as %r. "
+                "Quote the value (e.g. --trainer.%s '\"%s\"') to avoid this warning.",
+                key,
+                value,
+                spelling,
+                key,
+                spelling,
+            )
+            value = spelling
+        fixed[key] = value
+    return fixed
+
+
 def trainer_args_dict(cfg: DictConfig) -> dict:
     """Extract Seq2SeqTrainingArguments-compatible dict from config.
 
@@ -526,6 +577,11 @@ def trainer_args_dict(cfg: DictConfig) -> dict:
     if "output_dir" in result:
         result["output_dir"] = expand_env_vars(result["output_dir"])
         result["output_dir"] = os.path.expanduser(result["output_dir"])
+
+    # Undo YAML 1.1's bool coercion of bare `no`/`off`/`yes`/`on` tokens on
+    # fields (eval_strategy, save_strategy, hub_strategy, lr_scheduler_type,
+    # ...) that are typed as str/enum, not bool. See issue #77.
+    result = _fix_yaml_bool_leaks(result)
 
     # Handle exp_name from run section (previously was in trainer)
     # exp_name is not a training argument, so we don't include it
