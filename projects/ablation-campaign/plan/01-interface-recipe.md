@@ -368,20 +368,42 @@ three batch levels are reached as:
 
 | effective batch | `batch_duration` × `grad_accum` × world | steps/epoch |
 |---|---|---|
-| 1200 s | 150 × 1 × 8 (Whisper: 75 × 2 × 8) | 10,500 |
+| 1200 s | 150 × 1 × 8 | 10,500 |
 | 600 s | 75 × 1 × 8 | 21,000 |
 | 300 s | 75 × 1 × 4 | 42,000 |
 
-Whisper halves `batch_duration` and doubles `grad_accum` at the 1200 s level:
-it pads every cut to a whole 30 s window, so at this mixture's ~5 s mean
-utterance its encoder input inflates ~6× against ~2.5× on LibriSpeech, where
-`MA-librispeech-w` ran at 150. The product, and therefore steps per epoch, is
-unchanged. `max_audio_seq_len` is derived from the encoder name rather than
+Whisper at 1200 s runs at 150 × 1 like w2v-BERT (PI, 2026-09-21), so the two
+encoder halves differ only in the encoder. The cosine pass had run it at
+75 × 2 on a ~6× padding estimate and measured 11.5 GB of 64 (below).
+`max_audio_seq_len` is derived from the encoder name rather than
 passed by hand (`plan_arm.py`'s `ENCODER_WINDOW_FRAMES`).
 
-**Cost.** ≈ 20 GPU-h per arm at k=5, extrapolated from the measured 30 GPU-h
-of a 700 h/lang 50 Hz MA arm. The "≈ 65 GPU-h" written here before was
-computed at 125 h/lang and is superseded.
+**The schedule is warmup-stable-decay, and it is now an axis (2026-09-21).**
+Step 0b's Rule 1 adopted WSD as the MA default, but the screen's first twelve
+arms ran **cosine**: `ABL-MA-700-asr.yaml` declares `lr_scheduler_type:
+cosine`, WSD was never a campaign axis, and step 0b had obtained it only by
+hand-passing `--trainer.lr_scheduler_kwargs` on each submission. The reason it
+was hand-passed is that `num_decay_steps` is an *absolute* count that differs
+per arm — so `plan_arm.py` now derives it (20% of the arm's own steps,
+`min_lr_ratio` 0.1, `decay_type` cosine) and tags `-wsd` into `EXP_NAME`,
+because the schedule is recoverable from no other tag.
+
+The same config also sets **`warmup_steps: 20`**, a fixed count. Across the
+screen's own batch levels that is 0.19% / 0.10% / 0.05% of training — so
+warmup length was confounded with the batch factor the screen exists to
+measure. `warmup_ratio: 0.03` is now set per arm, matching §2b's common
+settings, and `warmup_steps` is forced to 0 alongside it because HF's
+`get_warmup_steps` only consults the ratio when the count is ≤ 0.
+
+**Cost, measured 2026-09-21** on the seven arms that ran before the schedule
+was corrected: **27 GPU-h** at 1200 s, **37** at 600 s, **32** for Whisper at
+1200 s — against ≈ 20 extrapolated. Twelve arms are therefore ≈ 380 GPU-h,
+nineteen ≈ 500. Note that 600 s costs *more* than 1200 s for the same audio
+(37 vs 27): per-step overhead does not halve when the batch does, so the
+batch axis is not cost-neutral and the 300 s level is the most expensive
+point on it. Memory is not the constraint anyone expected: Whisper at
+`batch_duration 75` peaked at **11.5 GB of 64**, below w2v-BERT's 19.7 GB at
+150, so the ~6x padding estimate was conservative.
 
 **Levels re-set from step 0b, 2026-09-20 (PI).** The table below previously
 carried levels chosen before step 0b ran, and three of them were settings
@@ -394,6 +416,23 @@ screen before it settled:
 | effective batch | 1200 s, 600 s, 300 s | **4800 s is dropped.** It is the August recipe: ~2,600 optimizer steps, the diagnosed cause of the failure in §1. `wsd-50hz-batch600` beat `wsd-50hz` 0.543 vs 0.664 on dev-other (a 0.002 seed regime), so smaller is still winning and 300 s tests whether that has bottomed out |
 | `stack_factor` | fixed at **5** (10 Hz) | continuity with `wsd-10hz`, the best w2v-BERT arm of step 0b, and with SLAM-ASR. Not a grid factor here; see the sweep below |
 | MA prompt | audio only; plus one verbatim run at the best corner; **proposed third level (PI, 2026-09-20): verbatim with a language ID in the prompt** — see below |
+
+**What the first pass showed (measured 2026-09-21).** Seven arms ran before
+the schedule was corrected, so their absolute numbers belong to the cosine
+control, not to this screen. The *shape* is still informative, and it settles
+why the grid runs on two encoders. All six w2v-BERT arms finished one epoch
+at **WER 0.879–0.976**, a total range of 0.097 — smaller than the 0.108
+seed-only spread step 0b measured at WER ≈ 0.5, at a *lower* error rate than
+these arms sit at, and noise grows with the error rate (`agent-protocol.md`
+§3). **No LR or batch contrast in the w2v-BERT half is separable from noise.**
+The single Whisper arm finished at **0.131 / CER 0.068**, an aligned model, in
+the regime where the measured spread is 0.002. A single-encoder screen on
+w2v-BERT would have produced six numbers and no decision.
+
+That also reads on `03-audio-stack.md`: one epoch of 700 h/lang at k=5 does
+not align w2v-BERT 2.0 on this mixture, while the same recipe on Whisper
+does. It is the strongest evidence yet that the encoder is a first-order
+factor for this campaign, and it is a prior for `03`, not a decision here.
 
 **The grid runs on both encoders (PI, 2026-09-20).** The screen has to
 resolve LR and batch contrasts, and step 0b measured exactly those against
@@ -723,3 +762,27 @@ week-2 screen's budget (Rule 5 does not fire). Size and encoder are
 `02-backbones.md`'s and `03-audio-stack.md`'s questions respectively --
 the numbers above are reported as priors for those sections, not as a
 backbone or encoder recommendation from this file.
+
+### Five-language screen arms (§3): the cosine pass
+
+**These seven arms ran cosine with `warmup_steps 20`, not the screen's
+warmup-stable-decay.** `ABL-MA-700-asr.yaml` declares that schedule and the
+rows carried no override, so their `exp_name`s say nothing about it. They are
+kept as the cosine-vs-WSD control at 700 h/lang and are not the screen's
+results. The WSD arms are named `...-sk5-ga1-wsd-wu0p03-...`.
+
+Measured 2026-09-21, final in-training generative eval, 200 utterances per
+language, seed 42, k=5, one epoch of 700 h/lang. `s/step` is the run's tqdm
+training time over `global_step` and includes the in-training evals; the
+tqdm second-to-last line was too noisy to use (27.6 and 25.8 s/it on the
+600 s arms, an end-of-run eval stall).
+
+| run | schedule | exp_name | steps | en / de / es / fr / it WER | s/step | GPU-h | notes |
+|---|---|---|---|---|---|---|---|
+| w2vb-lr1e3-b1200 | cosine, warmup_steps 20 | `MA-700asr-w2vbF-llama1bInsF-mlpT-sk5-ga1-elr6e6-dlr2e5-lr1e3-s42-8g` | 10,500 | 0.971 / 0.928 / 0.860 / 0.912 / 0.813 | 1.15 | 27 | measured. Mean WER 0.897. |
+| w2vb-lr2e3-b1200 | cosine, warmup_steps 20 | `MA-700asr-w2vbF-llama1bInsF-mlpT-sk5-ga1-elr6e6-dlr2e5-lr2e3-s42-8g` | 10,500 | 1.046 / 0.985 / 0.940 / 0.935 / 0.973 | 1.15 | 27 | measured. Mean WER 0.976. |
+| w2vb-lr1e3-b600 | cosine, warmup_steps 20 | `MA-700asr-w2vbF-llama1bInsF-mlpT-sk5-bd75-ga1-elr6e6-dlr2e5-lr1e3-s42-8g` | 21,000 | 0.898 / 0.880 / 0.844 / 1.013 / 0.762 | 0.80 | 37 | measured. Mean WER 0.879. |
+| w2vb-lr2e3-b600 | cosine, warmup_steps 20 | `MA-700asr-w2vbF-llama1bInsF-mlpT-sk5-bd75-ga1-elr6e6-dlr2e5-lr2e3-s42-8g` | 21,000 | 0.930 / 0.987 / 0.848 / 0.846 / 0.882 | 0.80 | 37 | measured. Mean WER 0.898. |
+| w2vb-lr1e3-b300 | cosine, warmup_steps 20 | `MA-700asr-w2vbF-llama1bInsF-mlpT-sk5-bd75-ga1-elr6e6-dlr2e5-lr1e3-s42-4g` | 42,000 | 0.857 / 0.925 / 0.852 / 1.004 / 0.852 | 0.76 | 36 | measured. Mean WER 0.898. |
+| w2vb-lr2e3-b300 | cosine, warmup_steps 20 | `MA-700asr-w2vbF-llama1bInsF-mlpT-sk5-bd75-ga1-elr6e6-dlr2e5-lr2e3-s42-4g` | 42,000 | 0.959 / 0.927 / 0.910 / 0.867 / 0.904 | 0.76 | 36 | measured. Mean WER 0.913. |
+| whisper-lr1e3-b1200 | cosine, warmup_steps 20 | `MA-700asr-whisperlargeF-llama1bInsF-mlpT-sk5-bd75-ga2-elr6e6-dlr2e5-lr1e3-s42-8g` | 10,500 | 0.124 / 0.115 / 0.087 / 0.124 / 0.207 | 1.34 | 32 | measured. Peak training memory 11.5 GB of 64 GB (w2v-BERT 1200 s: 19.7 GB). Mean WER 0.131, already 0.132 at about step 5,700. |

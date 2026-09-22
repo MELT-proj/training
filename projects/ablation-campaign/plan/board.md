@@ -15,6 +15,74 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-22 — screen-launch session — all twelve WSD arms in: 5 landed, 2 running, 5 just submitted
+
+Context: the WSD canary (`MA-700-screen-whisper-lr1e3-b1200`, job 46258536)
+finished healthy overnight, so the five held Whisper arms went in.
+
+Finding / proposal:
+1. **Canary result: peak training memory 19.11 GB at `batch_duration 150 /
+   grad_accum 1`**, close to w2v-BERT's own 19.71 GB at the same setting and
+   well under the Orchestrator's ~23 GB extrapolation. World_size 8 as
+   expected. No traceback/OOM/kill in any of the seven logs checked.
+2. **Five w2v-BERT/Whisper WSD arms landed**, all world_size 8, no errors:
+
+   | arm | job | peak mem | s/step | GPU-h | mean WER @ epoch 1 |
+   |---|---|---|---|---|---|
+   | w2vb lr1e3 b1200 | 46258529 | 19.71 GB | 1.30 | 30 | 0.852 |
+   | w2vb lr2e3 b1200 | 46258533 | 19.71 GB | 1.19 | 28 | 0.822 |
+   | w2vb lr1e3 b600  | 46258531 | 12.04 GB | 1.10 | 51 | 0.788 |
+   | w2vb lr2e3 b600  | 46258534 | 12.04 GB | 1.10 | 51 | 0.850 |
+   | whisper lr1e3 b1200 (canary) | 46258536 | 19.11 GB | 1.19 | 28 | 0.126 |
+
+   All four w2v-BERT WSD arms beat their cosine counterparts (0.897 / 0.976 /
+   0.879 / 0.898) but none is aligned at one epoch. **b600 GPU-h roughly
+   doubled against the cosine pass at the same setting** (51 vs 37); b1200
+   and the canary are flat or slightly up. Not investigated — plausibly
+   node/network contention on the specific allocation rather than anything
+   about WSD, since s/step for b1200 and the canary are unchanged from the
+   cosine numbers. Flagging, not blocking.
+3. **The `min_lr_scale` contrast the Orchestrator wanted:** the WSD Whisper
+   canary kept improving through the second half of training (mean WER 0.142
+   at step ~5,730 -> 0.126 at step 10,500), where the cosine Whisper arm went
+   flat (0.132 -> 0.131) over the same span. LR floors at 0.1x peak (1e-4 for
+   lr1e3, 2e-4 for lr2e3) on every WSD arm checked, confirming the floor is
+   real and cosine's dead `min_lr_scale` key is the likely explanation for
+   the cosine Whisper plateau. This is a measured result for the PI's
+   wire-or-delete decision on `min_lr_scale`, not yet written up as such
+   anywhere but here.
+4. **Two w2v-BERT b300 arms (46258532, 46258535) still RUNNING** at last
+   check, ~82% through their 42,000 steps (step ~34,575), ~9 h into a 16 h
+   budget — on track, no `--resume` expected.
+5. **Submitted the five held Whisper WSD arms**, PI-approved: lr1e3-b600
+   (46366412), lr1e3-b300 (46366413), lr2e3-b1200 (46366414), lr2e3-b600
+   (46366418), lr2e3-b300 (46366420). All PENDING at submission.
+6. **All twelve `MA-700-screen-*` rows are now either landed or in the
+   queue** — the submission task this session was given is complete once the
+   last seven finish healthy. That is narrower than the item's *outcome*:
+   none of the twelve has been read against step 0b's seed-noise floor yet,
+   no transition step has been located on any WSD arm, and **no FLEURS-24
+   zero-shot CER has been run on any checkpoint** — a separate `melt-eval`
+   step on the saved checkpoint, not produced by training, still fully open.
+   Per `01` §3 those are part of what the screen is for, so flagging them
+   here even though they are not what gates the tick below.
+7. **Ledger**: `arms.tsv` copied back from MN5, matches byte-for-byte up to
+   the previously-pushed content, five new rows appended. Not yet
+   committed/pushed — doing so next along with this entry.
+
+Action needed: next session — (a) verify the two running b300 arms and the
+five just-submitted Whisper arms finish COMPLETED at the expected
+world_size (the canary discipline is now moot, all Whisper arms are in);
+(b) tick the timeline box once all twelve read COMPLETED and healthy — that
+is the tick criterion this session was given, distinct from (c)-(e); (c)
+read `01` §3's transition-step definition against each WSD arm's loss curve;
+(d) run FLEURS-24 zero-shot via melt-eval on the twelve final checkpoints;
+(e) compare the grid against step 0b's noise floor and pick the best corner
+per encoder — (c)-(e) are the screen's own outcome and belong to whoever
+picks this up next, not necessarily gated behind the tick.
+
+---
+
 ## 2026-09-20 — Claude session (Whisper reference decode) — Whisper-large-v3 alone scores 0.027/0.041; `wsd-50hz-whisper` is at 1.40x/1.49x its error rate
 
 Context: week 1 Track B, "Whisper-large-v3's own WER". Decoded dev_clean and
@@ -101,6 +169,252 @@ if `03` will compare four encoders on WER, give each the same "encoder alone"
 line only where the encoder has a decoder; w2v-BERT, MMS and mHuBERT have no
 CTC head staged here, so the equivalent for them is not measurable from this
 setup.
+
+---
+
+## 2026-09-21 — screen-launch session — WSD grid resubmitted: six w2v-BERT arms and the Whisper canary in; five Whisper arms held
+
+Context: the PI decided to cancel the five pending cosine Whisper arms, keep
+the seven completed ones as the cosine control, and resubmit the grid under
+the fixed rows (`2ed8af2`).
+
+Finding / proposal:
+1. **Cancelled** the five PENDING cosine Whisper jobs (lr1e3-b600, lr1e3-b300,
+   lr2e3-b1200, lr2e3-b600, lr2e3-b300) before any started; each was checked
+   PENDING first. They stay in `arms.tsv` as submitted-then-cancelled rows
+   (the ledger has no status column). The seven completed arms and their
+   output directories are untouched.
+2. **All twelve WSD plans verified before submitting**: steps 10,500 / 21,000 /
+   42,000 with 8 / 8 / 4 ranks, `num_decay_steps` 2,100 / 4,200 / 8,400,
+   `warmup_ratio 0.03` with `warmup_steps 0`, seed 42, k=5, one epoch, and
+   both Whisper flags on all six Whisper rows.
+3. **Whisper 1200 s changed to `batch_duration 150 / grad_accum 1`** (PI,
+   2026-09-21), on `campaign.yaml` and `01` §3, so both encoder halves differ
+   only in the encoder. Effective batch and steps are unchanged. The cosine
+   canary measured 11.5 GB at 75 x 2; 150 x 1 extrapolates to ~23 GB, still
+   3x headroom, and the preallocation pass will show it. The cosine Whisper
+   control therefore differs from its WSD twin in batch layout as well as
+   schedule.
+4. **Submitted:** the six w2v-BERT WSD arms, then `MA-700-screen-whisper-lr1e3-b1200`
+   as the canary. Job ids are in `arms.tsv`; all seven were PENDING at the
+   time of writing. **Held: the other five Whisper WSD arms**, until the
+   canary clears preallocation and its first eval.
+5. **`01` §5 corrected:** all seven cosine arms are labelled "cosine,
+   warmup_steps 20", and the two 300 s w2v-BERT rows are in (0.898 and 0.913
+   mean WER; 0.76 s/step; ~36 GPU-h each). My earlier entry below said five
+   arms had landed; it was seven.
+6. **Ledger.** `arms.tsv` is committed and pushed. On the MN5 checkout I
+   stashed the uncommitted ledger (`git stash`, tag `screen-ledger-2026-09-21`)
+   to let `infra/sync_repo.sh mn5` through, after checking it was byte-identical
+   to the pushed file. A safety guard blocked `git checkout --` there, so the
+   stash entry remains and can be dropped by whoever wants to. The MN5
+   ledger is dirty again with the new rows and needs the same treatment at
+   the next sync.
+
+Action needed: next session, when the canary starts, read (a) world_size
+8, (b) the preallocation peak at 150 x 1, (c) the first eval at step 955, and
+whether it OOMs; then submit the five held arms in yaml order. If it OOMs, do
+not retune: post the peak and stop. Once the WSD Whisper arm lands, compare
+its second half to the cosine arm's (flat from ~step 5,700, LR ~1e-9 by the
+end): the WSD floor of 0.1x peak is real where cosine's `min_lr_scale` is a
+dead key.
+
+---
+
+## 2026-09-21 — Fondue Orchestrator — the cosine pass is in: the w2v-BERT half of the grid is entirely inside its own noise, the Whisper arm aligned
+
+Context: the seven screen arms that ran on the wrong schedule (cosine,
+warmup_steps 20) have landed. Numbers from the `MELT 5-lang screen` session,
+read off MN5 and arms.tsv. PI decisions taken on both open questions.
+
+Finding / proposal:
+1. **The two-encoder decision is what saved the screen.** The six w2v-BERT
+   arms finished one epoch at WER 0.879 / 0.897 / 0.898 / 0.898 / 0.913 /
+   0.976 — a total range of **0.097**. The seed-only spread step 0b measured
+   is **0.108**, and it was measured at WER ≈ 0.5, a *lower* error rate than
+   these arms sit at. Noise grows with the error rate (agent-protocol §3), so
+   the whole grid's spread is under its own noise floor: **no LR or batch
+   contrast in that half is separable.** The single Whisper arm finished at
+   **0.131 WER / 0.068 CER**, aligned, in the regime where the measured
+   spread is 0.002. A w2v-BERT-only screen would have produced six numbers
+   and no decision.
+2. **Prior for `03`, not a decision here.** One epoch of 700 h/lang at k=5
+   does not align w2v-BERT 2.0 on this mixture; the same recipe on Whisper
+   does. Strongest evidence so far that the encoder is first-order for this
+   campaign. `03-audio-stack.md` decides it, at equal budget, on FLEURS-24.
+3. **`min_lr_scale` just became a measured problem, not a documentation
+   one.** The screen session logged end-of-run LR at **1e-11..1e-9** on every
+   arm: the key is dead, so cosine decayed to zero rather than to 0.1x peak.
+   The Whisper arm was 0.132 at ~step 5,700 and 0.131 at 10,500 — flat
+   through the entire second half, which is exactly what a vanishing LR
+   predicts. WSD floors the LR at 0.1x via `min_lr_ratio`, a kwarg the
+   trainer does read, so the WSD rerun is a direct test. If it keeps
+   improving where the cosine arm stopped, that is the evidence the PI needs
+   to decide wire-or-delete.
+4. **Cost was underestimated ~40%**: measured 27 GPU-h at 1200 s, 37 at
+   600 s, 32 for Whisper at 1200 s, against ≈ 20 extrapolated. Twelve arms
+   ≈ 380 GPU-h, nineteen ≈ 500. **600 s costs more than 1200 s for the same
+   audio** (37 vs 27) — per-step overhead does not halve when the batch does,
+   so the batch axis is not cost-neutral and 300 s is its most expensive
+   point. Folded into §3.
+5. **Memory was the wrong thing to be cautious about.** Whisper at
+   `batch_duration 75` peaked at 11.5 GB of 64, *below* w2v-BERT's 19.7 GB at
+   150. The ~6x padding estimate was conservative. The per-corpus
+   padding-ratio measurement (week 2 Track B) is still worth doing for `03`'s
+   cost axis, but it is no longer a risk to this grid.
+
+PI decisions, 2026-09-21:
+- The five PENDING Whisper cosine arms are **cancelled** (jobs 46250650,
+  46250652, 46250653, 46250654, 46250655) — free at the time, ~160 GPU-h
+  saved, and the queue matters more than the hours with the gate on 09-27.
+- The seven completed arms are **kept as the cosine control**, relabelled as
+  such in §5. They are the only cosine-vs-WSD contrast at 700 h/lang on real
+  five-language data; step 0b measured that on LibriSpeech only.
+
+Action needed: screen session resubmits the twelve WSD arms from `main`
+(2ed8af2 or later) with the same canary discipline. When they land, compare
+the Whisper WSD arm's second half against the cosine one's flat tail and post
+the result — that is the `min_lr_scale` decision.
+
+## 2026-09-21 — Fondue Orchestrator — the screen's first twelve arms ran cosine, not warmup-stable-decay; schedule and warmup are now axes
+
+Context: the PI noticed the five-language screen arms were on a cosine LR and
+asked whether that was intended. It was not. My error when I wrote the rows.
+
+Finding / proposal:
+1. **Two settings were wrong, both inherited from `ABL-MA-700-asr.yaml`.**
+   It declares `lr_scheduler_type: cosine` and `warmup_steps: 20`. Step 0b's
+   recipe (§2b common settings) is warmup-stable-decay at a 3% warmup ratio,
+   and Rule 1 adopted WSD as the MA default on the numbers. The screen rows
+   carried neither.
+2. **Root cause is the same class as the Whisper `max_audio_seq_len` bug.**
+   WSD was never a campaign axis, because `num_decay_steps` is an absolute
+   step count that differs per arm (R-b600 halves world_size and doubles
+   steps). Step 0b therefore hand-passed the whole `--trainer.
+   lr_scheduler_kwargs` blob on every submission — see the comment block
+   above the step-0b rows in `campaign.yaml`. A setting that only lands when
+   an operator remembers an undocumented extra argument will eventually not
+   land.
+3. **`warmup_steps: 20` is worse than it looks.** The screen's three batch
+   levels are 10,500 / 21,000 / 42,000 steps, so a fixed 20-step warmup is
+   0.19% / 0.10% / 0.05% of training. Warmup length was confounded with the
+   batch factor — the screen's main contrast. `ABL-MA-librispeech.yaml`
+   moved to `warmup_ratio` for exactly this reason in step 0; the 700 h
+   config never did.
+4. **Fixed.** `lr_scheduler` and `warmup_ratio` are now axes.
+   `warmup_stable_decay` composes its own kwargs from the arm's derived step
+   count (2100 decay steps at 1200 s, 8400 at 300 s — per arm, as it
+   should have been all along), tags `-wsd`, and `warmup_ratio` forces
+   `warmup_steps` to 0 because HF's `get_warmup_steps` otherwise ignores the
+   ratio. All twelve rows set both. Ten new tests, one of which asserts no
+   `MA-700-screen-*` row can inherit a schedule. 138 pass.
+5. **The arms rename**, to `...-sk5-ga1-wsd-wu0p03-...`. That is wanted: the
+   cosine runs and the WSD runs are different experiments and must not share
+   an output directory. Any cosine arm already on disk stays where it is.
+
+Action needed: PI decides whether the cosine arms are kept as a deliberate
+schedule control (they are a clean A0-style reference at 700 h/lang, and
+that contrast is otherwise unmeasured at this scale) or discarded. Either
+way the twelve WSD arms are what the screen's factor levels are read from.
+The `MELT 5-lang screen` session has been told to hold — no cancels, no
+resubmits, no follow-up arms — pending that call.
+
+---
+
+## 2026-09-21 — screen-launch session — canary healthy, all twelve submitted; first five arms landed
+
+Context: the queue started all seven held jobs at 03:08 UTC, about 12 h
+before SLURM's last estimate. Four w2v-BERT arms (both 1200 s and both 600 s)
+and the Whisper canary have finished; both w2v-BERT 300 s arms were at step
+37,154 of 42,000 and about 1 h from done.
+
+Finding / proposal:
+1. **Canary gate cleared, then the five held Whisper arms were submitted**
+   (lr1e3-b600, lr1e3-b300, lr2e3-b1200, lr2e3-b600, lr2e3-b300). The canary
+   started at world_size=8, ran all 10,500 steps, exit 0. **The ~6x padding
+   estimate was conservative:** peak training memory was 11.5 GB of 64 GB
+   (`gpu_peak_gb`), *below* w2v-BERT's 19.7 GB at 1200 s. The preallocation
+   max-duration pass peaked at 6.33 GB. `batch_duration 75 x grad_accum 2`
+   leaves large headroom; nothing was retuned, since the product is what
+   fixes comparability.
+2. **Preallocation logs one OOM warning on every arm, and none of them OOMed.**
+   The min-duration pass builds a synthetic batch of 150 utterances at 0.5 s
+   (padded to 3000 frames), which does not fit; the log says "Training will
+   proceed but may OOM later". Both w2v-BERT and Whisper arms print it and
+   trained normally, so it is a property of the synthetic worst case, not of
+   the arms. Worth fixing so the warning is not routine.
+3. **All five w2v-BERT/Whisper landed arms are in `01` §5 as measured.**
+   w2v-BERT did not align at one epoch in any of the four: final WER
+   0.76-1.05 across languages at both LRs and both batches. Whisper 1200 s
+   reached 0.09-0.21. Do not read an LR or batch contrast off the four
+   w2v-BERT rows yet: their differences are inside the spread step 0b
+   measured at this error regime (0.108 dev-clean at WER ~0.5), and no
+   seed replicate exists at WER ~0.9.
+4. **Cost is above the estimate.** GPU-h from elapsed time: 27 (w2v-BERT
+   1200 s), 37 (w2v-BERT 600 s), 32 (Whisper 1200 s), against the ~20 GPU-h
+   per arm in §3. The 300 s arms are still to come. §3's cost line should be
+   corrected once all twelve are measured; `time:` in the rows was generous
+   (8 h asked, ~3.4 h used).
+5. **Throughput.** Second-to-last tqdm lines were unusable on the 600 s
+   arms (27.6 and 25.8 s/it: an end-of-run eval stall), so `s/step` in the
+   table is elapsed/steps: 1.15 (w2v-BERT 1200 s), 0.80 (600 s), 1.34
+   (Whisper 1200 s).
+6. **Benign traceback at exit** in two logs: a DeepSpeed Triton autotune
+   cache `os.replace` of `/workspace/tmp/.triton/...pickle.tmp`
+   (FileNotFoundError), after `Train_result` and the model save. Not a
+   training failure.
+7. **`arms.tsv` on MN5 is modified and uncommitted** (twelve rows now); the
+   next `infra/sync_repo.sh mn5` refuses until it is committed or copied
+   back. Not touched.
+
+Action needed: orchestrator/PI: ticking the timeline box waits for the two
+w2v-BERT 300 s arms and the five new Whisper arms to finish healthy. The next
+session should read those seven arms' world_size (4 for the 300 s ones, 8 for
+the rest) and s/step, add their §5 rows, and correct §3's cost estimate.
+
+---
+
+## 2026-09-20 — screen-launch session — grid: 6 w2v-BERT arms + Whisper canary submitted, other 5 Whisper arms held
+
+Context: submitting the twelve `MA-700-screen-*` arms through `campaign.py run`.
+
+Finding / proposal:
+1. **All twelve plans verified before any submit** against the steps/topology
+   table: 10,500 steps (2x4) at 1200 s, 21,000 (2x4) at 600 s, 42,000 (1x4)
+   at 300 s. All twelve carry seed 42, `--model.adapter.stack_factor 5` and
+   `--trainer.num_train_epochs 1`; the six Whisper rows carry both
+   `--model.encoder.name openai/whisper-large-v3` and
+   `--model.encoder.max_audio_seq_len 3000`.
+2. **Submitted, in order:** the six w2v-BERT arms (lr1e3 b1200/b600/b300,
+   then lr2e3 b1200/b600/b300), then the canary
+   `MA-700-screen-whisper-lr1e3-b1200`. Job ids are in `arms.tsv`.
+3. **Held: the other five Whisper arms** (lr1e3-b600, lr1e3-b300,
+   lr2e3-b1200, lr2e3-b600, lr2e3-b300). At submit time all seven jobs were
+   PENDING (queue was empty before, so this is fresh contention, not a
+   backlog), so the canary has not yet run its memory-preallocation pass.
+   No memory number and no s/step exist yet; the ~6x padding estimate is
+   still unmeasured.
+4. **MN5's checkout was stale** (`2c94f83`, on the old librispeech-step0
+   branch, no screen rows). I ran `infra/sync_repo.sh mn5`, which checked out
+   this session's branch there at `294ae08`. The submit commands were
+   regenerated on MN5 and matched nyx's.
+5. **`arms.tsv` on MN5 is now modified and uncommitted** (seven new rows;
+   the file is tracked). The next `infra/sync_repo.sh mn5` will refuse
+   ("remote tree dirty") until those rows are committed or copied back.
+   Not touched: it is the ledger and an operator call.
+6. Whisper-large-v3 IS staged on MN5 (`hf_cache/hub/models--openai--whisper-large-v3`,
+   `model.safetensors` present), so `infrastructure.md` §6's "not yet staged"
+   is stale. An offline load has not been verified; the canary is that test.
+
+Action needed: next session, once job for the canary starts, read (a) the
+`[run_train] starting` line: world_size must be 8, (b) the
+memory-preallocation peak in the log, (c) whether it reaches the first eval
+at step 955. If healthy, submit the five held Whisper arms in the yaml order;
+if it OOMs, do not retune: post the peak and a compensating
+`batch_duration` x `grad_accum_steps` pair here and stop. Also check the six
+w2v-BERT arms' world_size (8/8/4/8/8/4) and read s/step from the
+second-to-last tqdm line. The timeline box stays unticked until all twelve
+are in and healthy.
 
 ---
 
