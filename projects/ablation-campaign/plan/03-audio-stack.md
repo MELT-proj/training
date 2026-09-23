@@ -117,14 +117,26 @@ gradient steps they demonstrably need.
 3. **Split the budget by encoder family**, which breaks "one recipe for all
    sixteen" and costs the comparison its main claim. Not recommended.
 
-Until this is decided, the sixteen-arm render is on hold; it is the
-difference between a section and a re-run of step 0b.
+**Decided (PI, 2026-09-23): five epochs per arm**, i.e. `num_train_epochs
+5` on the one-epoch config, for all sixteen arms, so that the
+self-supervised encoders have room to finish the transition the screen
+caught them part-way through. "Epoch" here is a step budget, not a pass over a fixed
+set: hours are enforced by sampling weights plus a derived step count, never
+by subsetting (`build_campaign_config.py` docstring), and the dataloader is
+infinite. Five epochs is therefore **17,500 audio-h sampled per arm**. Italian,
+whose four corpora *are* the 700 h, repeats about five times; a source larger
+than its share (most of en/de/es/fr) mostly yields new cuts. The repetition
+is the same in every arm, so the crossing stays a fair comparison, but
+per-language in-domain numbers mix fresh and repeated data. Report the
+budget in sampled hours. Cost extrapolated from the screen: ≈ 150 GPU-h per
+arm at 1200 s, ≈ 2,400 for sixteen; at 300 s roughly 200 GPU-h and ~50 h
+wall per arm, which is part of the corner call.
 
 ## 2. The crossing
 
 Four encoders × four adapters = 16 MA arms on the provisional backbone
 (Llama-3.2-1B-Instruct) with the recipe from `01-interface-recipe.md`, five
-languages at 700 h, ASR-only, one epoch. ≈ 30 GPU-h each, all in the queue
+languages at 700 h, ASR-only, five epochs (§1b). ≈ 150 GPU-h each, all in the queue
 at once in **week 3**. Scored on MA-stage generative WER/CER in-domain and
 FLEURS-24 zero-shot CER from melt-eval.
 

@@ -57,15 +57,10 @@ Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
 - **Two pre-existing test failures on `main`** (sdpa propagation into
   `Wav2Vec2BertConfig`; all of `test_processing_melt.py`), likely
   transformers version skew. Not blocking any week.
-- **The week-3 audio-stack crossing is on hold pending a budget decision**
-  (2026-09-23). The five-language screen ran §2's exact recipe at one epoch
-  of 700 h/lang: Whisper reached 0.119 mean WER, w2v-BERT 0.743 and unaligned
-  at every LR/batch combination tried. Three of the crossing's four encoders
-  are self-supervised, so as designed it would return twelve unaligned arms
-  and four aligned ones — a re-run of step 0b at sixteen times the price.
-  **PI decides** between raising the per-arm budget to three epochs (~1,440
-  GPU-h for sixteen) and accepting a screen rather than a ranking.
-  `03-audio-stack.md` §1b.
+- **The week-3 crossing render waits on three things** (budget decided
+  2026-09-23: five epochs per arm, `03-audio-stack.md` §1b): the LR/batch
+  corner (waits on the seed-43 replicates), the MoE crossing-ready item
+  (week 2 Track B), and an offline-load check of mHuBERT-147 on MN5.
 - **`optimization.min_lr_scale` is a dead config key** — set in every
   campaign and SFT config, read by no code, so every cosine run decayed to
   zero rather than to 10% of peak. Comparisons between arms are unaffected;
@@ -204,9 +199,8 @@ Settled.
       three things none of which are derivable from the WER table: the
       seed-43 replicates (jobs 46396669/46396670, submitted 2026-09-23) to
       give a noise floor *at this error regime*; FLEURS-24 zero-shot CER on
-      the twelve final checkpoints (jobs 46398587-46398598, resubmitted
-      2026-09-23 after the first batch, 46396800-46396811, failed on the
-      checkpoint path and scorer; see the board); and the
+      the twelve final checkpoints (**landed 2026-09-23**, jobs
+      46398587-46398598, numbers on the board, not yet folded into §3); and the
       transition step per arm (§1's plateau-then-drop definition). **No
       LR/batch corner is called until the replicates land** — Whisper's whole
       grid spans 0.017 and five of its six arms span 0.006, and the only
@@ -280,9 +274,9 @@ Settled.
       crossing render). Verified on `main`: `MELTMoEAdapter` has no
       `stack_factor`, so it runs at 50 Hz against the crossing's common
       10 Hz, and its load-balancing loss is folded into the training loss
-      but never logged. Two parts, one PR: (a) reach the common 10 Hz —
-      proposed: stack frames before the router, same `stack_factor`
-      semantics and tag as the MLP (PI confirms the design); (b) log the
+      but never logged. Two parts, one PR: (a) reach the common 10 Hz by
+      stacking frames before the router, same `stack_factor` semantics and
+      tag as the MLP (design confirmed by the PI 2026-09-23); (b) log the
       aux loss on its own, router entropy, and per-language expert usage
       (`03-audio-stack.md` §0.1). Unit tests. If it slips past the render,
       the crossing launches without the MoE arms.
@@ -323,8 +317,10 @@ assumed one (`03-audio-stack.md` §0).*
       *Outcome:* the new baseline numbers, replacing the August ones.
 - [ ] **Audio-stack MA crossing** (`03-audio-stack.md` §2), moved from week 4:
       4 encoders × 4 adapters at MA-stage cost on Llama-3.2-1B-Instruct, one
-      recipe for all sixteen, all at the same frame rate. ~16 × 30 GPU-h,
-      all in the queue at once. Q-Former arms wait for its fix.
+      recipe for all sixteen, all at the same frame rate, **five epochs per
+      arm** (PI, 2026-09-23; 17,500 sampled audio-h, `03` §1b). ≈ 150 GPU-h
+      per arm at 1200 s, ≈ 2,400 for sixteen, all in the queue at once.
+      Render waits on the corner and the MoE item (Blocked / waiting).
       *Outcome:* the audio stack — encoder, adapter, frame rate — read on
       FLEURS-24 split into high- and low-resource halves, not on the
       in-domain five alone.

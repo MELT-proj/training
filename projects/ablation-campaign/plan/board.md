@@ -15,6 +15,46 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-23 — Fondue Orchestrator — FLEURS-24 zero-shot on the twelve screen checkpoints; PI decides five epochs for the crossing
+
+Context: the twelve resubmitted FLEURS-24 dev evals finished; PI answered `03` §1b.
+
+Finding:
+1. **All twelve evals COMPLETED** (17-18 min for Whisper, 32-34 min for w2v-BERT, 1 GPU,
+   batch 4, bf16, `task_filter=asr`). Mean CER, FLEURS-24 dev, zero-shot:
+
+   | arm | 5 trained langs | 21 others (incl. ru/uk) | nl | pt |
+   |---|---|---|---|---|
+   | whisper-lr1e3-b1200 | 0.037 | 0.80 | 0.43 | 0.22 |
+   | whisper-lr2e3-b1200 | 0.033 | 0.84 | 0.47 | 0.22 |
+   | whisper-lr1e3-b600 | 0.036 | 0.88 | 0.40 | 0.22 |
+   | whisper-lr2e3-b600 | 0.039 | 0.87 | 0.44 | 0.21 |
+   | whisper-lr1e3-b300 | 0.043 | 0.82 | 0.43 | 0.22 |
+   | whisper-lr2e3-b300 | 0.037 | 0.87 | 0.44 | 0.23 |
+   | w2vb-lr1e3-b1200 | 0.90 | 1.86 | 1.39 | 1.74 |
+   | w2vb-lr2e3-b1200 | 0.95 | 1.86 | 1.71 | 1.86 |
+   | w2vb-lr1e3-b600 | 0.81 | 1.77 | 1.14 | 2.08 |
+   | w2vb-lr2e3-b600 | 0.82 | 1.87 | 1.38 | 1.69 |
+   | w2vb-lr1e3-b300 | 0.79 | 1.91 | 1.35 | 1.97 |
+   | w2vb-lr2e3-b300 | 0.79 | 1.82 | 1.43 | 1.57 |
+
+   Same picture as the in-domain WER: Whisper flat across the grid (0.033-0.043 on
+   the trained five), w2v-BERT unaligned everywhere, with b300 again the best
+   w2v-BERT level (0.79). Every arm is degenerate on the unseen languages, as
+   expected of five-language MA. pt (0.22) and nl (0.43) are the only unseen
+   languages Whisper carries partially. Unweighted means of per-language
+   corpus CER; not yet folded into `01` §3.
+2. **PI decision: the crossing runs five epochs per arm.** Checked what an
+   "epoch" means here, since the PI suspected lhotse draws new data: it does.
+   Hours are enforced by weights plus a derived step count, never by subsetting
+   (`build_campaign_config.py`), and the dataloader is infinite. So five
+   epochs = 17,500 sampled audio-h. Italian repeats about five times, and
+   sources larger than their share mostly yield new cuts. Written into `03` §1b.
+3. **PI decision: the MoE reaches 10 Hz by stacking before the router.**
+   Timeline item updated; cold-agent prompt handed to the PI.
+
+Action needed: whoever reads the screen folds point 1 into `01` §3.
+
 ## 2026-09-23 — Fondue Orchestrator (handover session) — the twelve FLEURS-24 evals failed and are resubmitted; the grid already contains an eval-noise floor, and w2v-BERT is mid-transition at the end of its epoch
 
 Context: first actions after taking over the orchestrator role: check the

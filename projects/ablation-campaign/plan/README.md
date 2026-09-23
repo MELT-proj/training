@@ -106,6 +106,7 @@ session, post to `board.md` instead if you think one is wrong.
 | 2026-09-15 | the August MA failure is a coarse-feature plateau, not ignored audio (no-audio floor measured); step 0 reads loss together with WER | `01-interface-recipe.md` §1a |
 | 2026-09-16 | the MA:IFT hours ratio is a named study, run after the regime decision, splitting ASR hours only while ST hours stay fixed; the decoder-frozen IFT regime joins the regime comparison as R9/R10 | `04-regime.md` §3, §6 |
 | 2026-09-17 | step 0 was inconclusive; step 0b (schedule, stacking to 10 Hz, decoder size, plus a seed replicate and an encoder control) runs before the week-2 screen, whose budget is then re-set from step 0b's hours-to-threshold | `01-interface-recipe.md` §2b |
+| 2026-09-23 | the audio-stack crossing runs five epochs per arm (17,500 sampled audio-h; Italian repeats ~5×, larger sources mostly yield new data), one recipe for all sixteen; the MoE reaches the common rate by stacking frames before the router | `03-audio-stack.md` §1b |
 | 2026-09-18 | step 0b settles the optimisation recipe only; its Whisper and Qwen arms are diagnostic controls handed to `03` and `02` as priors, never decisions. The audio-stack section runs **before** the backbone grid, so backbones are compared on a chosen stack; the encoder itself is decided by `03`'s crossing, read on FLEURS-24 split high- against low-resource | `01-interface-recipe.md` §2b, `03-audio-stack.md` §0, `02-backbones.md` |
 
 ## Conventions for editing this folder
