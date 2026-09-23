@@ -106,6 +106,14 @@ box you finished is always yours to do.
   audit. A training loss is a health check, not a result.
 - Compare batched WER only at the same batch width, with
   `flash_attention_2` and duration-sorted batches.
+- **melt-eval logs are JSON, never the compressed `.eval` format** (PI,
+  2026-09-23). Pass `--log-format json` to every `inspect eval`, and convert
+  any `.eval` log you find with `inspect log convert --to json --output-dir
+  <dir>`. `.eval` files need inspect_ai to read, and the MN5 login node
+  cannot open them.
+- Checkpoints from the screen and the crossing are ranked by the selection
+  metric in `projects/ablation-campaign/selection-metric/README.md`, and by
+  nothing else.
 - Stay inside the current week of `timeline.md`. Do not start Fondue,
   Raclette, or a later week's arms unless the PI says so in the session.
 

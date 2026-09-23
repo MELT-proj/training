@@ -83,6 +83,8 @@ anything time-sensitive.
   `OSError: Can't load feature extractor`. And always pass
   `-T task_filter=asr` (or `st`): without it the task scores with `exact()`,
   a plumbing check, and the job "succeeds" with a meaningless number.
+  Also pass `--log-format json` (`agent-protocol.md` §3): the default `.eval`
+  log uses a compression the login node's Python cannot read.
 
 ### artemis (internal, SARDINE) — GPU jobs for eval and small runs
 
