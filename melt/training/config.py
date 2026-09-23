@@ -122,6 +122,13 @@ model:
     # feature axis before fc1, lowering the adapter's output frame rate by the
     # same factor. 1 = no stacking (the historical MLP behavior).
     stack_factor: 1
+    # MoE only: routed-expert FFN in place of the MLP's single fc pair.
+    num_experts: 8
+    num_experts_per_tok: 2
+    moe_intermediate_size: 1024
+    use_shared_expert: false
+    shared_expert_intermediate_size: 1024
+    router_aux_loss_coef: 0.01
 
   lora:
     enabled: false

@@ -6,6 +6,7 @@ from .modeling_melt import (
     MELTForCausalLM,
     MELTForSequenceClassification,
     MELTMLPAdapter,
+    MELTMoEAdapter,
     MELTPreTrainedModel,
     MELTQFormerAdapter,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "MELTMLPAdapter",
     "MELTQFormerAdapter",
     "MELTConformerAdapter",
+    "MELTMoEAdapter",
     "MELTProcessor",
     "MELT_REQUIRED_SPECIAL_TOKENS",
 ]

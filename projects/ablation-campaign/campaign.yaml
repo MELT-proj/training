@@ -94,6 +94,32 @@ arms:
     # rate before trusting this on a resume.
     time: "18:00:00"
 
+  - id: MA-700-verbatim-llama1b-ins-moe
+    stage: MA
+    config: ABL-MA-700-asr.yaml     # identical to MA-700-verbatim-llama1b-ins
+                                    # in every other axis -- only the adapter
+                                    # architecture changes, to smoke-test the
+                                    # new moe adapter (melt/modeling/
+                                    # modeling_melt.py's MELTMoEAdapter) on a
+                                    # real ablation arm. Default MoE
+                                    # hyperparameters (8 experts, top-2, no
+                                    # shared expert) come from
+                                    # melt/training/config.py; not overridden
+                                    # here.
+    adapter: moe
+    template_task_override: verbatim
+    epochs: 10                      # bumped from 3: routing through 8 experts
+                                    # needs more steps than a single dense MLP
+                                    # to give every expert enough signal to
+                                    # specialize before judging the arm.
+    seed: 42
+    time: "60:00:00"                 # 10x MA-700-llama1b-ins's measured
+                                    # 06:00:00/epoch (same linear scaling the
+                                    # 3-epoch sibling used: 3x6h=18h). Within
+                                    # acc_ehpc's 3-day cap with ~12h margin.
+                                    # Unmeasured for 10 epochs -- watch the
+                                    # first run's step rate.
+
   - id: MA-700-llama1b-base
     stage: MA
     config: ABL-MA-700-asr.yaml     # deliberately the SAME config as the
