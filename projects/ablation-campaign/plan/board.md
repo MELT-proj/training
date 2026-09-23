@@ -15,6 +15,47 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-23 — screen-launch session — all twelve WSD grid arms COMPLETED; timeline box ticked
+
+Context: verifying the last seven arms (two w2v-BERT b300, five Whisper)
+after they were submitted 2026-09-22.
+
+Finding / proposal:
+1. **All twelve `MA-700-screen-*` arms are COMPLETED, exit 0, at the expected
+   world_size** (8 for 1200/600 s, 4 for 300 s) and `global_step`. One log
+   (whisper-lr2e3-b1200, job 46366414) shows a Triton/DeepSpeed atexit
+   traceback identical to the one already on the board for the cosine pass —
+   raised after `Train_result`, training already complete, not a failure.
+2. **Full grid results written to `01` §3** as a new "WSD grid — all twelve,
+   measured" table (distinct from the existing cosine-pass and 2e-5-control
+   tables already there). Best w2v-BERT point: `w2vb-lr1e3-b300`, mean WER
+   0.743. Best overall: `whisper-lr2e3-b1200`, mean WER 0.119. Every Whisper
+   arm sits in 0.119-0.136; every w2v-BERT arm sits in 0.743-0.976 and none
+   is aligned at one epoch.
+3. **Cost note carried over from 2026-09-22 stands**: the b600 arms (w2v-BERT
+   and Whisper alike) cost noticeably more GPU-h than their 1200 s
+   counterparts for the same audio, consistent with the cosine pass's own
+   b600-more-than-b1200 anomaly. Not investigated.
+4. **Explicitly not done**: the transition-step reading (§1's definition),
+   FLEURS-24 zero-shot CER on any of the twelve checkpoints, and the
+   noise-floor comparison against step 0b (0.108 dev-clean at a different
+   error regime than either encoder family here). No best-corner-per-encoder
+   call is made in `01` §3 for that reason — the table there is measured
+   numbers only, not yet a decision.
+5. **Timeline box ticked**: "all twelve submitted and healthy" is the
+   criterion this session was given, and it is met. The outcome list in
+   item 3 above (transition step, FLEURS-24, noise-floor comparison, best
+   corner) is separate follow-on work, flagged but not gating.
+
+Action needed: whoever picks up the screen's analysis next — read the
+transition step per arm, run FLEURS-24 via melt-eval on the twelve final
+checkpoints, and compare the grid against step 0b's noise floor before
+calling a best LR/batch corner per encoder. Also worth a look, not urgent:
+why b600 consistently costs more than b1200 across both the cosine and WSD
+passes.
+
+---
+
 ## 2026-09-23 — screen 2e-5 control session — both arms landed: clean split by encoder
 
 Context: follow-up to last night's submission (jobs 46368424/46368425). Both

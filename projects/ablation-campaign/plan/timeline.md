@@ -180,7 +180,7 @@ MA prompt) is chosen by Sunday and written into `01-interface-recipe.md` as
 Settled.
 
 ### Track A — GPU
-- [ ] **Five-language interface screen — the LR × batch grid** (twelve arms,
+- [x] **Five-language interface screen — the LR × batch grid** (twelve arms,
       `01-interface-recipe.md` §3, rows `MA-700-screen-*` in `campaign.yaml`,
       added 2026-09-20). Adapter LR {1e-3, 2e-3} × effective batch {1200,
       600, 300} s × encoder {w2v-BERT 2.0, Whisper-large-v3}, all at k=5, on
