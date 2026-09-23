@@ -76,6 +76,13 @@ anything time-sensitive.
   doesn't need (sequential reads) but `inspect eval`'s batched, out-of-order
   generation does; pointing eval at the plain tree fails with `RuntimeError:
   ... has no .idx sidecars` after the model has already loaded.
+  **Two more ways a screen eval fails (2026-09-23, twelve jobs lost):**
+  pass the run's **top-level** output directory, never `checkpoint-N/` —
+  only the top level has `processor_config.json` (plus the final
+  `model.safetensors`), and a checkpoint dir fails at processor load with
+  `OSError: Can't load feature extractor`. And always pass
+  `-T task_filter=asr` (or `st`): without it the task scores with `exact()`,
+  a plumbing check, and the job "succeeds" with a meaningless number.
 
 ### artemis (internal, SARDINE) — GPU jobs for eval and small runs
 
@@ -235,6 +242,7 @@ Staged on MN5 (`/gpfs/scratch/epor48/hf_cache`) as of 2026-09-16:
 `facebook/w2v-bert-2.0`, `facebook/mms-1b`, `meta-llama/Llama-3.2-1B` and
 `-Instruct`, `Qwen/Qwen3.5-2B`, `Qwen/Qwen3.5-2B-Base`,
 `utter-project/EuroLLM-1.7B` and `-Instruct` (offline load verified for the
-last three, board entry 2026-09-16). **Not yet staged:** Whisper-large-v3,
-mHuBERT-147 (both have artemis launchers; confirm they are on MN5 before the
-crossing). Verify each with `HF_HUB_OFFLINE=1` inside the container.
+last three, board entry 2026-09-16). `openai/whisper-large-v3` (trained on
+by the five-language screen) and `utter-project/mHuBERT-147` are in the
+cache as of 2026-09-23; mHuBERT-147's offline load is **not yet verified**.
+Verify each with `HF_HUB_OFFLINE=1` inside the container.

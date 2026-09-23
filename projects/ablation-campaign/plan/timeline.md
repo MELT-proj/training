@@ -69,8 +69,10 @@ Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
 - **`optimization.min_lr_scale` is a dead config key** — set in every
   campaign and SFT config, read by no code, so every cosine run decayed to
   zero rather than to 10% of peak. Comparisons between arms are unaffected;
-  the configs misstate what ran. **PI decides** whether to wire it or delete
-  it.
+  the configs misstate what ran. *Measured since:* every cosine arm logged
+  end-of-run LR at 1e-11..1e-9, and the cosine Whisper arm went flat over
+  its second half where its WSD twin kept improving (board 2026-09-22).
+  **PI decides** whether to wire it or delete it.
 
 ---
 
@@ -202,18 +204,25 @@ Settled.
       three things none of which are derivable from the WER table: the
       seed-43 replicates (jobs 46396669/46396670, submitted 2026-09-23) to
       give a noise floor *at this error regime*; FLEURS-24 zero-shot CER on
-      the twelve final checkpoints (jobs 46396800-46396811); and the
+      the twelve final checkpoints (jobs 46398587-46398598, resubmitted
+      2026-09-23 after the first batch, 46396800-46396811, failed on the
+      checkpoint path and scorer; see the board); and the
       transition step per arm (§1's plateau-then-drop definition). **No
       LR/batch corner is called until the replicates land** — Whisper's whole
       grid spans 0.017 and five of its six arms span 0.006, and the only
       noise floor we have at that regime is step 0b's 0.002 from another task
-      in another language. `01-interface-recipe.md` §3.
+      in another language. Read the replicate gap against the grid's own
+      eval-only noise (0.002-0.010 on Whisper, board 2026-09-23), since the
+      replicates carry both. `01-interface-recipe.md` §3.
 - [ ] **Screen follow-ups at the best corner** (seven arms, ≈ 140 GPU-h).
       Blocked on the grid above, because every one of them is defined
       relative to a corner the grid has to find: stacking sweep k=2 and
       k=10; the 2e-5 control; two prompt runs (verbatim, and verbatim+LID);
       two extra seeds. Rows are not in `campaign.yaml` yet — they are added
       once the corner is known.
+      *State 2026-09-23:* the 2e-5 control landed (`01` §5, it never needed
+      the corner) and the two seeds are the seed-43 replicates under "Read
+      the screen". Still owed: k=2, k=10, and the two prompt runs.
 - [ ] If step 0 was ambiguous, re-run the deciding LibriSpeech pair with the
       second seed before the screen. *Superseded by step 0b (week 1).*
 
@@ -267,6 +276,16 @@ Settled.
       factor instead of a per-sample coin flip. Prerequisite for the
       screen's prompt runs; additive only, no change to `random`'s current
       behaviour. No GPU.
+- [ ] **MoE adapter crossing-ready** (added 2026-09-23; blocks the week-3
+      crossing render). Verified on `main`: `MELTMoEAdapter` has no
+      `stack_factor`, so it runs at 50 Hz against the crossing's common
+      10 Hz, and its load-balancing loss is folded into the training loss
+      but never logged. Two parts, one PR: (a) reach the common 10 Hz —
+      proposed: stack frames before the router, same `stack_factor`
+      semantics and tag as the MLP (PI confirms the design); (b) log the
+      aux loss on its own, router entropy, and per-language expert usage
+      (`03-audio-stack.md` §0.1). Unit tests. If it slips past the render,
+      the crossing launches without the MoE arms.
 - [ ] **Whisper's window-padding ratio per corpus** (`03-audio-stack.md` §3,
       §4), **moved up from week 3 on 2026-09-20**: a fixed-window encoder
       spends a full 30 s of encoder compute on every utterance however short,

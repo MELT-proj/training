@@ -15,6 +15,78 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-23 — Fondue Orchestrator (handover session) — the twelve FLEURS-24 evals failed and are resubmitted; the grid already contains an eval-noise floor, and w2v-BERT is mid-transition at the end of its epoch
+
+Context: first actions after taking over the orchestrator role: check the
+fourteen in-flight jobs, then put `03` §1b in front of the PI.
+
+Finding:
+1. **All twelve FLEURS-24 dev evals FAILED in ~40 s.** There were two
+   defects, and either one alone would have made the column unusable.
+   (a) They pointed at `<run>/checkpoint-N/`, which has no
+   `processor_config.json`, so `MELTProcessor.from_pretrained` raised
+   `OSError: Can't load feature extractor`. The smoke eval that worked had
+   used the run's **top-level** directory, which holds the processor files
+   and the final `model.safetensors` (same size as the last checkpoint's,
+   written seconds after it, checked on all twelve). (b) They passed no
+   `-T task_filter=asr`, so even a successful load would have been scored
+   with `exact()`, the plumbing scorer. **Resubmitted with both fixed**,
+   otherwise unchanged (same frozen set, `batch_size=4`, bf16, `acc_ehpc`,
+   1 GPU, 1 h), logs under the same `screen-fleurs24-dev/<arm>/` dirs. The
+   trap is now in `infrastructure.md` §1.
+2. **The two seed-43 replicates are still PENDING**, with an estimated start
+   of 2026-09-24 01:30. Their commands differ from the seed-42 originals'
+   only in seed and in the `exp_name`/output dir, so they are clean
+   replicates. **Their `arms.tsv` rows were on MN5 only.** Reconciled per
+   `infrastructure.md` §3: committed to `main`, MN5's copy checked
+   byte-identical (sha256), stashed under a unique tag because the guard
+   blocks `checkout --`, synced, and the stash dropped.
+3. **The grid already holds a free eval-noise measurement.** Every 300 s and
+   600 s arm ran its in-training eval at step N-1 or N-2 *and* at N, i.e.
+   twice on effectively the same weights (one or two steps at 0.1x peak
+   LR). Mean-WER differences between the two evals:
+   Whisper 0.002 / 0.003 / 0.004 / **0.010**; w2v-BERT 0.000 / 0.001 /
+   0.007 / **0.030**. That is eval noise alone (200 utterances per
+   language, batched bf16 generation), with no seed involved.
+   - **`whisper-lr2e3-b600`'s English outlier is an eval artefact.** en WER
+     is 0.124 at step 20,999 and 0.184 at 21,000. On the step-20,999 eval
+     the arm's mean is 0.126, inside the other five's cluster. So **all six
+     Whisper arms fall within ~0.007**, not five of six.
+   - **Consequence for the replicates:** they measure seed noise *plus* this
+     eval noise. Whisper's five-arm cluster (0.006) is already the size of
+     eval-only noise, so the "~0.002 vs ~0.01" reading of the replicates
+     should be taken against 0.002–0.010 of pure eval noise. A replicate gap
+     of ~0.01 does not by itself say the seed moves the result.
+4. **Trajectories, a first read of the transition (not yet the formal
+   column).** w2v-BERT sits on a mean-WER plateau of ~1.0–1.15 for roughly
+   the first half of the epoch at every LR/batch, starts dropping at about
+   55–65% of the epoch (~1,900–2,300 audio-h seen), and is **still falling
+   at the end**. For example, `w2vb-lr1e3-b300` reads 0.96 at 36%, 0.86 at
+   64%, 0.83 at 82% (the last eval before the decay phase) and 0.74 at the
+   end. Part of the final drop is the WSD decay itself, so the 82% point is
+   the clean one, and it is still descending. Whisper has no plateau: it is
+   ≤0.18 at the first eval (9%) and then drifts slowly down to 0.12.
+   **Reading:** w2v-BERT's transition starts inside one epoch and does not
+   finish. That is direct evidence for `03` §1b option 1 (more epochs), and
+   it argues against reading the crossing's one-epoch numbers as a ranking.
+5. **The MoE adapter is not crossing-ready, verified on `main`.**
+   `MELTMoEAdapter` has no `stack_factor`, so it runs at 50 Hz against
+   everyone else's 10 Hz. Its load-balancing loss is added into the training
+   loss (`router_aux_loss_coef`) but **never logged on its own**, and nothing
+   logs router entropy or per-language expert usage. So `03` §0.1's "or the
+   mechanism is asserted rather than shown" is currently true. Now a week-2
+   Track B item.
+6. All four crossing encoders are in MN5's `hf_cache` (`w2v-bert-2.0`,
+   `mms-1b`, `whisper-large-v3`, `mHuBERT-147`). `infrastructure.md` §6 said
+   Whisper and mHuBERT were not staged; corrected. Offline load of
+   mHuBERT-147 on MN5 is still not verified.
+
+Action needed: **PI: `03` §1b**, raised in chat today. The render is held
+until then and until the MoE item lands. Whoever reads the screen: fold the
+FLEURS-24 CER (resubmitted jobs) and the replicate gap into `01` §3, quoting
+the replicate gap against the eval-only floor in point 3, and formalise the
+transition-step column from the trajectories in point 4.
+
 ## 2026-09-23 — Fondue Orchestrator — the WSD grid is flat on both encoders; the corner should be chosen on cost, and §2's crossing needs a budget decision before Monday
 
 Context: all twelve WSD arms landed (screen-launch session's entry below has
