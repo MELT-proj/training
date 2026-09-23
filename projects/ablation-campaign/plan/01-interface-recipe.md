@@ -786,3 +786,65 @@ tqdm second-to-last line was too noisy to use (27.6 and 25.8 s/it on the
 | w2vb-lr1e3-b300 | cosine, warmup_steps 20 | `MA-700asr-w2vbF-llama1bInsF-mlpT-sk5-bd75-ga1-elr6e6-dlr2e5-lr1e3-s42-4g` | 42,000 | 0.857 / 0.925 / 0.852 / 1.004 / 0.852 | 0.76 | 36 | measured. Mean WER 0.898. |
 | w2vb-lr2e3-b300 | cosine, warmup_steps 20 | `MA-700asr-w2vbF-llama1bInsF-mlpT-sk5-bd75-ga1-elr6e6-dlr2e5-lr2e3-s42-4g` | 42,000 | 0.959 / 0.927 / 0.910 / 0.867 / 0.904 | 0.76 | 36 | measured. Mean WER 0.913. |
 | whisper-lr1e3-b1200 | cosine, warmup_steps 20 | `MA-700asr-whisperlargeF-llama1bInsF-mlpT-sk5-bd75-ga2-elr6e6-dlr2e5-lr1e3-s42-8g` | 10,500 | 0.124 / 0.115 / 0.087 / 0.124 / 0.207 | 1.34 | 32 | measured. Peak training memory 11.5 GB of 64 GB (w2v-BERT 1200 s: 19.7 GB). Mean WER 0.131, already 0.132 at about step 5,700. |
+
+### Five-language screen arms (§3): the WSD grid — all twelve, measured
+
+The screen itself: warmup-stable-decay, `warmup_ratio 0.03`, `stack_factor 5`,
+seed 42, one epoch of 700 h/lang, `num_decay_steps` 2,100 / 4,200 / 8,400 at
+1200 / 600 / 300 s. Whisper 1200 s runs `batch_duration 150 / grad_accum 1`,
+same as w2v-BERT, so the two encoder halves differ only in the encoder
+(§3, PI 2026-09-21). Measured 2026-09-21/23, final in-training generative
+eval, 200 utterances per language. `s/step` and GPU-h are elapsed wall time
+over `global_step` and `elapsed × ranks` respectively (`sacct`).
+
+| run | exp_name | steps | ranks | en / de / es / fr / it WER | s/step | GPU-h | notes |
+|---|---|---|---|---|---|---|---|
+| w2vb-lr1e3-b1200 | `MA-700asr-w2vbF-llama1bInsF-mlpT-sk5-ga1-wsd-wu0p03-elr6e6-dlr2e5-lr1e3-s42-8g` | 10,500 | 8 | 0.810 / 0.882 / 0.766 / 0.927 / 0.875 | 1.30 | 30 | measured. Mean WER 0.852. Peak mem 19.71 GB. |
+| w2vb-lr2e3-b1200 | `MA-700asr-w2vbF-llama1bInsF-mlpT-sk5-ga1-wsd-wu0p03-elr6e6-dlr2e5-lr2e3-s42-8g` | 10,500 | 8 | 0.782 / 0.879 / 0.778 / 0.850 / 0.820 | 1.19 | 28 | measured. Mean WER 0.822. Peak mem 19.71 GB. |
+| w2vb-lr1e3-b600 | `MA-700asr-w2vbF-llama1bInsF-mlpT-sk5-bd75-ga1-wsd-wu0p03-elr6e6-dlr2e5-lr1e3-s42-8g` | 21,000 | 8 | 0.795 / 0.864 / 0.704 / 0.774 / 0.802 | 1.10 | 51 | measured. Mean WER 0.788, the best w2v-BERT grid point. Peak mem 12.04 GB. GPU-h roughly doubled against the cosine pass (37) at the same setting; s/step for 1200 s and the Whisper canary are unchanged from cosine, so this is plausibly node/network contention on this allocation rather than a WSD effect — not investigated further. |
+| w2vb-lr2e3-b600 | `MA-700asr-w2vbF-llama1bInsF-mlpT-sk5-bd75-ga1-wsd-wu0p03-elr6e6-dlr2e5-lr2e3-s42-8g` | 21,000 | 8 | 0.911 / 0.852 / 0.858 / 0.899 / 0.728 | 1.10 | 51 | measured. Mean WER 0.850. Peak mem 12.04 GB. Same cost anomaly as above. |
+| w2vb-lr1e3-b300 | `MA-700asr-w2vbF-llama1bInsF-mlpT-sk5-bd75-ga1-wsd-wu0p03-elr6e6-dlr2e5-lr1e3-s42-4g` | 42,000 | 4 | 0.835 / 0.723 / 0.712 / 0.713 / 0.733 | 0.884 | 41 | measured. Mean WER 0.743, the best w2v-BERT arm overall. Peak mem 12.07 GB. |
+| w2vb-lr2e3-b300 | `MA-700asr-w2vbF-llama1bInsF-mlpT-sk5-bd75-ga1-wsd-wu0p03-elr6e6-dlr2e5-lr2e3-s42-4g` | 42,000 | 4 | 0.830 / 0.793 / 0.615 / 0.718 / 0.782 | 0.885 | 41 | measured. Mean WER 0.748. Peak mem 12.07 GB. |
+| whisper-lr1e3-b1200 (canary) | `MA-700asr-whisperlargeF-llama1bInsF-mlpT-sk5-ga1-wsd-wu0p03-elr6e6-dlr2e5-lr1e3-s42-8g` | 10,500 | 8 | 0.118 / 0.149 / 0.088 / 0.121 / 0.151 | 1.19 | 28 | measured. Mean WER 0.126, the best Whisper arm and the best of the grid. Peak mem 19.11 GB at 150/1 (extrapolated ~23 GB before the run; measured close to w2v-BERT's own 19.71 GB). Kept improving through the second half (0.142 at step ~5,730 -> 0.126 at 10,500) where its cosine counterpart went flat (0.132 -> 0.131) — the `min_lr_scale` contrast: WSD's LR floor (0.1× peak, real) vs cosine's dead `min_lr_scale` key (decays to ~0). |
+| whisper-lr2e3-b1200 | `MA-700asr-whisperlargeF-llama1bInsF-mlpT-sk5-ga1-wsd-wu0p03-elr6e6-dlr2e5-lr2e3-s42-8g` | 10,500 | 8 | 0.113 / 0.122 / 0.082 / 0.126 / 0.153 | 1.13 | 26 | measured. Mean WER 0.119, the single best point in the whole grid. Peak mem 19.11 GB. Note the atexit DeepSpeed/Triton cache traceback in this job's log is benign (raised after `Train_result`, training already complete). |
+| whisper-lr1e3-b600 | `MA-700asr-whisperlargeF-llama1bInsF-mlpT-sk5-bd75-ga1-wsd-wu0p03-elr6e6-dlr2e5-lr1e3-s42-8g` | 21,000 | 8 | 0.124 / 0.118 / 0.090 / 0.124 / 0.160 | 0.755 | 35 | measured. Mean WER 0.123. Peak mem 11.41 GB. |
+| whisper-lr2e3-b600 | `MA-700asr-whisperlargeF-llama1bInsF-mlpT-sk5-bd75-ga1-wsd-wu0p03-elr6e6-dlr2e5-lr2e3-s42-8g` | 21,000 | 8 | 0.184 / 0.121 / 0.090 / 0.130 / 0.155 | 0.755 | 35 | measured. Mean WER 0.136, the worst Whisper arm (en 0.184 is an outlier against its own family's ~0.12). Peak mem 11.41 GB. |
+| whisper-lr1e3-b300 | `MA-700asr-whisperlargeF-llama1bInsF-mlpT-sk5-bd75-ga1-wsd-wu0p03-elr6e6-dlr2e5-lr1e3-s42-4g` | 42,000 | 4 | 0.115 / 0.118 / 0.086 / 0.129 / 0.159 | 0.731 | 34 | measured. Mean WER 0.122. Peak mem 11.47 GB. |
+| whisper-lr2e3-b300 | `MA-700asr-whisperlargeF-llama1bInsF-mlpT-sk5-bd75-ga1-wsd-wu0p03-elr6e6-dlr2e5-lr2e3-s42-4g` | 42,000 | 4 | 0.115 / 0.120 / 0.088 / 0.122 / 0.165 | 0.731 | 34 | measured. Mean WER 0.122. Peak mem 11.47 GB. |
+
+**Not yet done, and not derivable from the numbers above:** the transition
+step per arm (§1's plateau-then-drop definition), FLEURS-24 zero-shot CER on
+the twelve final checkpoints (a separate `melt-eval` step), and the
+comparison of these WER deltas against step 0b's seed-only noise floor
+(0.108 dev-clean WER, measured at WER ≈ 0.5 — a different regime from both
+the w2v-BERT arms here, ≈ 0.74–0.98, and the Whisper arms, ≈ 0.12–0.15). No
+best-corner-per-encoder conclusion is drawn here for that reason; the
+numbers above are measured, not yet interpreted against the decision rule.
+
+### The screen's 2e-5 control (§3): the August recipe's own adapter LR, at the new recipe
+
+Not a grid arm. 2e-5 is `ABL-MA-700-asr.yaml`'s own `optimization.adapter_lr`
+(the August recipe's LR, §1), so both rows leave `adapter_lr` unset rather
+than overriding it to the same value — `plan_arm.py` emits no
+`--optimization.adapter_lr` for either command. Same reference corner as the
+grid otherwise: warmup-stable-decay, `warmup_ratio 0.03`, `stack_factor 5`,
+seed 42, one epoch of 700 h/lang, 1200 s effective batch, 10,500 steps,
+`num_decay_steps` 2100, world_size 8 (confirmed from the `[run_train]
+starting` log line on both jobs). Measured 2026-09-23, final in-training
+generative eval, 200 utterances per language.
+
+| run | exp_name | jobs | en / de / es / fr / it WER | s/step | GPU-h | notes |
+|---|---|---|---|---|---|---|
+| w2vb-lr2e5-b1200 | `MA-700asr-w2vbF-llama1bInsF-mlpT-sk5-ga1-wsd-wu0p03-elr6e6-dlr2e5-lr2e5-s42-8g` | 46368424 | 1.103 / 1.085 / 1.125 / 1.077 / 1.125 | 1.11 | 26 | measured. Mean WER 1.103 — worse than every LR × batch point in the grid (best w2v-BERT grid arm so far: 0.822, `w2vb-lr2e3-b1200`), and worse than 1.0. Reproduces the August failure's signature (fluent, WER > 1.0) at the new 10 Hz/WSD/1200 s recipe: for w2v-BERT, 2e-5 alone accounts for the plateau, independent of frame rate or schedule. |
+| whisper-lr2e5-b1200 | `MA-700asr-whisperlargeF-llama1bInsF-mlpT-sk5-ga1-wsd-wu0p03-elr6e6-dlr2e5-lr2e5-s42-8g` | 46368425 | 0.132 / 0.163 / 0.110 / 0.164 / 0.170 | 1.11 | 26 | measured. Mean WER 0.148 — worse than the grid's `whisper-lr1e3-b1200` WSD canary (0.126, job 46258536, board 2026-09-22) but in the same regime, nowhere near w2v-BERT's failure at the same LR. For Whisper, 2e-5 still nearly aligns: the encoder carries most of the signal, and LR is a second-order factor here in a way it is not for w2v-BERT. |
+
+**Reading the two together.** The August failure was diagnosed (§1) against a
+w2v-BERT encoder; this control isolates the LR at the new recipe and gets a
+clean split by encoder. On w2v-BERT, 2e-5 alone reproduces the August
+plateau even with 10 Hz stacking and WSD — LR was the (or a) binding
+constraint there, and the grid's higher-LR arms already show what removes
+it. On Whisper, 2e-5 costs about 0.02 WER against the grid's own 1e-3 point
+at the same batch — LR was not the whole story for this encoder, consistent
+with `03-audio-stack.md`'s prior that the encoder is a first-order factor
+here. Both readings hold at once because they are about different encoders,
+not in tension with each other or with §1's original diagnosis.

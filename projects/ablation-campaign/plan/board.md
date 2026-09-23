@@ -127,7 +127,88 @@ left. `melt_eval_cuda126_v3.sif` should be rebuilt (same recipe) whenever
 training gains another axis that changes checkpoint shapes, same as the v2
 image's failure mode here.
 
+## 2026-09-23 — screen-launch session — all twelve WSD grid arms COMPLETED; timeline box ticked
+
+Context: verifying the last seven arms (two w2v-BERT b300, five Whisper)
+after they were submitted 2026-09-22.
+
+Finding / proposal:
+1. **All twelve `MA-700-screen-*` arms are COMPLETED, exit 0, at the expected
+   world_size** (8 for 1200/600 s, 4 for 300 s) and `global_step`. One log
+   (whisper-lr2e3-b1200, job 46366414) shows a Triton/DeepSpeed atexit
+   traceback identical to the one already on the board for the cosine pass —
+   raised after `Train_result`, training already complete, not a failure.
+2. **Full grid results written to `01` §3** as a new "WSD grid — all twelve,
+   measured" table (distinct from the existing cosine-pass and 2e-5-control
+   tables already there). Best w2v-BERT point: `w2vb-lr1e3-b300`, mean WER
+   0.743. Best overall: `whisper-lr2e3-b1200`, mean WER 0.119. Every Whisper
+   arm sits in 0.119-0.136; every w2v-BERT arm sits in 0.743-0.976 and none
+   is aligned at one epoch.
+3. **Cost note carried over from 2026-09-22 stands**: the b600 arms (w2v-BERT
+   and Whisper alike) cost noticeably more GPU-h than their 1200 s
+   counterparts for the same audio, consistent with the cosine pass's own
+   b600-more-than-b1200 anomaly. Not investigated.
+4. **Explicitly not done**: the transition-step reading (§1's definition),
+   FLEURS-24 zero-shot CER on any of the twelve checkpoints, and the
+   noise-floor comparison against step 0b (0.108 dev-clean at a different
+   error regime than either encoder family here). No best-corner-per-encoder
+   call is made in `01` §3 for that reason — the table there is measured
+   numbers only, not yet a decision.
+5. **Timeline box ticked**: "all twelve submitted and healthy" is the
+   criterion this session was given, and it is met. The outcome list in
+   item 3 above (transition step, FLEURS-24, noise-floor comparison, best
+   corner) is separate follow-on work, flagged but not gating.
+
+Action needed: whoever picks up the screen's analysis next — read the
+transition step per arm, run FLEURS-24 via melt-eval on the twelve final
+checkpoints, and compare the grid against step 0b's noise floor before
+calling a best LR/batch corner per encoder. Also worth a look, not urgent:
+why b600 consistently costs more than b1200 across both the cosine and WSD
+passes.
+
 ---
+
+## 2026-09-23 — screen 2e-5 control session — both arms landed: clean split by encoder
+
+Context: follow-up to last night's submission (jobs 46368424/46368425). Both
+were still `PENDING` when that entry was written; checked back after a
+timed-out background watch.
+
+Finding:
+1. **Both completed cleanly**, started 2026-09-23T01:24:42, ~3h18m/3h17m47s
+   wall each — well inside their 08:00:00/14:00:00 budgets. `world_size=8`
+   confirmed from `[run_train] starting` in both logs
+   (`nodes=2, gpus/node=4, world_size=8`). No traceback, OOM kill or CUDA
+   error in either log. Both logs do carry a benign
+   `[Preallocation/min_duration] rank=0 — OOM during warmup pass` WARNING —
+   the same false-positive the twelve grid arms' logs also carry (memory
+   estimate from the preallocation pass, not an actual OOM; training
+   proceeded to completion on both). ~26 GPU-h each.
+2. **w2v-BERT (`w2vb-lr2e5-b1200`, job 46368424): mean WER 1.103**
+   (en/de/es/fr/it: 1.103/1.085/1.125/1.077/1.125) — worse than every point
+   in the twelve-arm grid, including the grid's own worst so far. At the new
+   10 Hz/WSD/1200 s recipe, 2e-5 alone reproduces the August failure's
+   signature (fluent, WER > 1.0) on this encoder. LR is doing the work §1
+   suspected.
+3. **Whisper (`whisper-lr2e5-b1200`, job 46368425): mean WER 0.148**
+   (0.132/0.163/0.110/0.164/0.170) — worse than the grid's own
+   `whisper-lr1e3-b1200` WSD canary (0.126, job 46258536) but in the same
+   regime, nowhere near w2v-BERT's collapse at the identical LR. For Whisper,
+   2e-5 nearly aligns; LR is a second-order factor here.
+4. **Read together:** a clean split by encoder, both readings the task brief
+   flagged as live options turn out to hold simultaneously for different
+   encoders rather than one replacing the other. LR was the (or a) binding
+   constraint for w2v-BERT specifically; for Whisper the encoder carries most
+   of the signal and LR matters less. Consistent with, and sharpens, the
+   `03-audio-stack.md` prior that the encoder is a first-order factor.
+5. Results written into `01-interface-recipe.md` §5 as a new "the screen's
+   2e-5 control" subsection, marked measured, with both exp_names and job
+   ids. `arms.tsv` already carries both entries (previous session's commit
+   `899a81d`) — nothing further to reconcile, MN5's tree was clean on this
+   check.
+
+Action needed: none for these two arms — done. Point 5 of last night's entry
+(the `timeline.md` split proposal) still stands for the orchestrator.
 
 ## 2026-09-22 — screen 2e-5 control session — both arms submitted, not part of the grid
 
