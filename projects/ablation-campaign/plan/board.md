@@ -15,6 +15,25 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-23 — Bridge Agent — PI: per-language expert usage deferred to an issue; MoE adapter crossing-ready item ticked
+
+Context: follow-up to the entry directly below (PR #141, per-language expert
+usage logging not implemented, three options written up, none chosen).
+
+Finding: PI decided not to address per-language expert usage logging now.
+Filed as [training#142](https://github.com/MELT-proj/training/issues/142)
+(`enhancement`), carrying the same three options and the board writeup below
+so the decision isn't re-derived later. `03-audio-stack.md` §0.1's aux
+loss + router entropy logging (also part of that item) already landed in
+PR #141 and is the crossing's actual blocking need — per-language usage was
+a "nice to have alongside" for interpreting the mechanism, not a crossing
+prerequisite. Timeline box for "MoE adapter crossing-ready" ticked
+accordingly: both parts of the item are now resolved, one by code (PR #141)
+and one by explicit deferral (issue #142).
+
+Action needed: whoever picks up #142 reads this entry and the one below for
+the full tradeoff writeup before choosing an option.
+
 ## 2026-09-23 — Bridge Agent — MoE adapter reaches the crossing's 10 Hz and logs aux loss + router entropy; per-language expert usage logging blocked on a design call, not implemented
 
 Context: week-2 Track B item "MoE adapter crossing-ready" (`03-audio-stack.md`
