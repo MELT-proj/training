@@ -344,6 +344,11 @@ class TestMoEAdapterStackFactor:
         output_shape, output_mask = adapter._get_output_features_shape(
             input_features.shape, attention_mask
         )
+        # Feature dim is `text_hidden_size` (10, the decoder width the adapter
+        # projects into), not `audio_hidden_size` (6) and not `6 * stack_factor`
+        # (24): stacking only widens what feeds INTO the router/experts, per
+        # test_stack_factor_widens_router_and_expert_input above. It never
+        # changes what they emit, which is always the fixed decoder width.
         assert output_shape == (batch_size, 2, 10)
         assert output_mask.shape == (batch_size, 2)
         assert output_mask.bool().all()
