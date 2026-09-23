@@ -14,11 +14,12 @@ failure however much the model hallucinates.
 ## Groups
 
 The training languages are en, de, es, fr, it. Everything out of domain (OOD) is
-scored on FLEURS. The FLEURS-24 set covers the 24 EU languages plus ru and uk.
+scored on the FLEURS **dev** split. The FLEURS-24 set covers the 24 EU
+languages plus ru and uk. Every set is used **in full**, never a subset.
 
 | group | languages | source | weight |
 |---|---|---|---|
-| **ID**: in-domain | en, de, es, fr, it | dev sets of the corpora trained on | 1.0 |
+| **ID**: in-domain | en, de, es, fr, it | dev sets of the corpora trained on, pooled per language | 1.0 |
 | **OOD-train**: training languages, other domain | en, de, es, fr, it | FLEURS | 1.5 |
 | **OOD-related**: related Latin-script languages | pt, ro, nl, da, sv | FLEURS | 0.6 |
 | OOD-latin: other Latin-script languages | cs, sk, pl, hr, sl, hu, fi, et, lt, lv, ga, mt | FLEURS | reported only |
@@ -41,19 +42,32 @@ score = (1.0 · med(ID) + 1.5 · med(OOD-train) + 0.6 · med(OOD-related)) / 3.1
 Always report the three weighted group medians alongside the score, plus the
 medians of the two reported-only groups.
 
+## How it is computed
+
+- **Every number comes from melt-eval, run on the saved checkpoint.** The
+  in-training eval history is never used: it covers only 200 utterances per
+  set, and the in-domain sets must be frozen and recomputed the same way as
+  FLEURS.
+- **In-domain:** one frozen melt-eval set per training language, holding the
+  full held-out split of every corpus trained on that has one: `cv22_sidon`,
+  `mls_sidon` and `voxpopuli`. `yodas-granary` has no held-out split. The
+  language's CER is corpus-level over the pooled set, so corpora contribute
+  in proportion to their character count, not equally.
+- **FLEURS:** a frozen set of the full FLEURS dev split for all 26 languages.
+  The existing `fleurs24-asr-dev` (100 utterances per language) is not this
+  set.
+- **Scoring:** a standalone script in this folder reads the melt-eval logs
+  only and prints the per-language CERs, the group medians and the score.
+  It never runs a model.
+
 ## Known limitations
 
 - The weights are a choice, not something derived.
 - The median of five languages ignores how spread out they are, on purpose.
   Report the per-language values next to it.
-- The in-domain and FLEURS terms come from different eval sizes (200 and 100
-  utterances per language). A difference between checkpoints smaller than
-  the measured eval noise is not a ranking.
-
-## Open (implementation)
-
-- In-domain CER per language: pool that language's dev sets, or take one
-  value per corpus?
-- FLEURS dev (100 per language, cheap) or test for the final ranking.
-- Where the score is computed: a melt-eval scorer, or a script over the
-  in-training eval history plus melt-eval logs.
+- The in-domain and FLEURS sets differ in size, so their eval noise differs.
+  A difference between checkpoints smaller than the measured eval noise is
+  not a ranking.
+- The full dev sets cost more to decode than the 100-per-language subset
+  (0.13 GPU-h per checkpoint, measured). Measure the cost on one checkpoint
+  before scoring the whole screen.
