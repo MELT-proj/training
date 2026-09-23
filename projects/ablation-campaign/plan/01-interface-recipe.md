@@ -786,3 +786,31 @@ tqdm second-to-last line was too noisy to use (27.6 and 25.8 s/it on the
 | w2vb-lr1e3-b300 | cosine, warmup_steps 20 | `MA-700asr-w2vbF-llama1bInsF-mlpT-sk5-bd75-ga1-elr6e6-dlr2e5-lr1e3-s42-4g` | 42,000 | 0.857 / 0.925 / 0.852 / 1.004 / 0.852 | 0.76 | 36 | measured. Mean WER 0.898. |
 | w2vb-lr2e3-b300 | cosine, warmup_steps 20 | `MA-700asr-w2vbF-llama1bInsF-mlpT-sk5-bd75-ga1-elr6e6-dlr2e5-lr2e3-s42-4g` | 42,000 | 0.959 / 0.927 / 0.910 / 0.867 / 0.904 | 0.76 | 36 | measured. Mean WER 0.913. |
 | whisper-lr1e3-b1200 | cosine, warmup_steps 20 | `MA-700asr-whisperlargeF-llama1bInsF-mlpT-sk5-bd75-ga2-elr6e6-dlr2e5-lr1e3-s42-8g` | 10,500 | 0.124 / 0.115 / 0.087 / 0.124 / 0.207 | 1.34 | 32 | measured. Peak training memory 11.5 GB of 64 GB (w2v-BERT 1200 s: 19.7 GB). Mean WER 0.131, already 0.132 at about step 5,700. |
+
+### The screen's 2e-5 control (§3): the August recipe's own adapter LR, at the new recipe
+
+Not a grid arm. 2e-5 is `ABL-MA-700-asr.yaml`'s own `optimization.adapter_lr`
+(the August recipe's LR, §1), so both rows leave `adapter_lr` unset rather
+than overriding it to the same value — `plan_arm.py` emits no
+`--optimization.adapter_lr` for either command. Same reference corner as the
+grid otherwise: warmup-stable-decay, `warmup_ratio 0.03`, `stack_factor 5`,
+seed 42, one epoch of 700 h/lang, 1200 s effective batch, 10,500 steps,
+`num_decay_steps` 2100, world_size 8 (confirmed from the `[run_train]
+starting` log line on both jobs). Measured 2026-09-23, final in-training
+generative eval, 200 utterances per language.
+
+| run | exp_name | jobs | en / de / es / fr / it WER | s/step | GPU-h | notes |
+|---|---|---|---|---|---|---|
+| w2vb-lr2e5-b1200 | `MA-700asr-w2vbF-llama1bInsF-mlpT-sk5-ga1-wsd-wu0p03-elr6e6-dlr2e5-lr2e5-s42-8g` | 46368424 | 1.103 / 1.085 / 1.125 / 1.077 / 1.125 | 1.11 | 26 | measured. Mean WER 1.103 — worse than every LR × batch point in the grid (best w2v-BERT grid arm so far: 0.822, `w2vb-lr2e3-b1200`), and worse than 1.0. Reproduces the August failure's signature (fluent, WER > 1.0) at the new 10 Hz/WSD/1200 s recipe: for w2v-BERT, 2e-5 alone accounts for the plateau, independent of frame rate or schedule. |
+| whisper-lr2e5-b1200 | `MA-700asr-whisperlargeF-llama1bInsF-mlpT-sk5-ga1-wsd-wu0p03-elr6e6-dlr2e5-lr2e5-s42-8g` | 46368425 | 0.132 / 0.163 / 0.110 / 0.164 / 0.170 | 1.11 | 26 | measured. Mean WER 0.148 — worse than the grid's `whisper-lr1e3-b1200` WSD canary (0.126, job 46258536, board 2026-09-22) but in the same regime, nowhere near w2v-BERT's failure at the same LR. For Whisper, 2e-5 still nearly aligns: the encoder carries most of the signal, and LR is a second-order factor here in a way it is not for w2v-BERT. |
+
+**Reading the two together.** The August failure was diagnosed (§1) against a
+w2v-BERT encoder; this control isolates the LR at the new recipe and gets a
+clean split by encoder. On w2v-BERT, 2e-5 alone reproduces the August
+plateau even with 10 Hz stacking and WSD — LR was the (or a) binding
+constraint there, and the grid's higher-LR arms already show what removes
+it. On Whisper, 2e-5 costs about 0.02 WER against the grid's own 1e-3 point
+at the same batch — LR was not the whole story for this encoder, consistent
+with `03-audio-stack.md`'s prior that the encoder is a first-order factor
+here. Both readings hold at once because they are about different encoders,
+not in tension with each other or with §1's original diagnosis.

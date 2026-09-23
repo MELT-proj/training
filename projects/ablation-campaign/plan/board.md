@@ -15,6 +15,48 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-23 — screen 2e-5 control session — both arms landed: clean split by encoder
+
+Context: follow-up to last night's submission (jobs 46368424/46368425). Both
+were still `PENDING` when that entry was written; checked back after a
+timed-out background watch.
+
+Finding:
+1. **Both completed cleanly**, started 2026-09-23T01:24:42, ~3h18m/3h17m47s
+   wall each — well inside their 08:00:00/14:00:00 budgets. `world_size=8`
+   confirmed from `[run_train] starting` in both logs
+   (`nodes=2, gpus/node=4, world_size=8`). No traceback, OOM kill or CUDA
+   error in either log. Both logs do carry a benign
+   `[Preallocation/min_duration] rank=0 — OOM during warmup pass` WARNING —
+   the same false-positive the twelve grid arms' logs also carry (memory
+   estimate from the preallocation pass, not an actual OOM; training
+   proceeded to completion on both). ~26 GPU-h each.
+2. **w2v-BERT (`w2vb-lr2e5-b1200`, job 46368424): mean WER 1.103**
+   (en/de/es/fr/it: 1.103/1.085/1.125/1.077/1.125) — worse than every point
+   in the twelve-arm grid, including the grid's own worst so far. At the new
+   10 Hz/WSD/1200 s recipe, 2e-5 alone reproduces the August failure's
+   signature (fluent, WER > 1.0) on this encoder. LR is doing the work §1
+   suspected.
+3. **Whisper (`whisper-lr2e5-b1200`, job 46368425): mean WER 0.148**
+   (0.132/0.163/0.110/0.164/0.170) — worse than the grid's own
+   `whisper-lr1e3-b1200` WSD canary (0.126, job 46258536) but in the same
+   regime, nowhere near w2v-BERT's collapse at the identical LR. For Whisper,
+   2e-5 nearly aligns; LR is a second-order factor here.
+4. **Read together:** a clean split by encoder, both readings the task brief
+   flagged as live options turn out to hold simultaneously for different
+   encoders rather than one replacing the other. LR was the (or a) binding
+   constraint for w2v-BERT specifically; for Whisper the encoder carries most
+   of the signal and LR matters less. Consistent with, and sharpens, the
+   `03-audio-stack.md` prior that the encoder is a first-order factor.
+5. Results written into `01-interface-recipe.md` §5 as a new "the screen's
+   2e-5 control" subsection, marked measured, with both exp_names and job
+   ids. `arms.tsv` already carries both entries (previous session's commit
+   `899a81d`) — nothing further to reconcile, MN5's tree was clean on this
+   check.
+
+Action needed: none for these two arms — done. Point 5 of last night's entry
+(the `timeline.md` split proposal) still stands for the orchestrator.
+
 ## 2026-09-22 — screen 2e-5 control session — both arms submitted, not part of the grid
 
 Context: `01-interface-recipe.md` §3 names 2e-5 as a fixed reference point (the
