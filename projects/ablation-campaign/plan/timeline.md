@@ -237,7 +237,7 @@ Settled.
       two-tier mixture weights (alpha/beta), filters, eval subset. Not frozen.
 - [x] **Raclette config drafted**: same mixture at 25K h, big-run batch,
       three LR points.
-- [ ] melt-eval MN5 venv built and a smoke eval run there, so end-of-run
+- [x] melt-eval MN5 venv built and a smoke eval run there, so end-of-run
       evaluation can happen on MN5 when queues allow.
 - [x] **Re-derive the screen's budget and render its configs** (done
       2026-09-20). `wsd-50hz-whisper` crossed at `global_step` 262, ~87.3
