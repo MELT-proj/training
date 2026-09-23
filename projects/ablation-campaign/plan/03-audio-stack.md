@@ -78,7 +78,7 @@ asserted rather than shown.
 |---|---|---|---|
 | MLP (2-layer, GELU, LayerNorm × gain) | 6.30M | 50 Hz, or 50/k with `stack_factor` k | baseline |
 | Conformer, 1 layer | 27.28M | 25 Hz (stride 2) | ready |
-| MoE, 8 SwiGLU experts, top-2, load-balancing aux loss | 33.57M total, 8.39M active | 50 Hz | on a branch; used by the running 10-epoch verbatim arm |
+| MoE, 8 SwiGLU experts, top-2, load-balancing aux loss | 33.57M total, 8.39M active | 50 Hz, or 50/k with `stack_factor` k | ready |
 | Q-Former, window 15, 3 queries | not instantiable today | 10 Hz by design | broken; PI fixes in week 4 |
 
 ## 1b. The budget problem the five-language screen just exposed (2026-09-23)

@@ -15,6 +15,90 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-23 — Bridge Agent — MoE adapter reaches the crossing's 10 Hz and logs aux loss + router entropy; per-language expert usage logging blocked on a design call, not implemented
+
+Context: week-2 Track B item "MoE adapter crossing-ready" (`03-audio-stack.md`
+§0.1), blocking the week-3 crossing render. Two parts, one PR, per the item.
+
+Finding:
+1. **Part (a), frame stacking, done.** `MELTMoEAdapter` now concatenates
+   `stack_factor` consecutive encoder frames before the router, the same
+   design `MELTMLPAdapter` uses (PI, 2026-09-23) and reusing its logic: the
+   stacking, mask-subsampling and output-shape bookkeeping are factored into
+   module-level `_stack_audio_frames` / `_stack_attention_mask` /
+   `_stacked_output_features_shape` in `modeling_melt.py`, shared by both
+   adapters instead of copied. Router, every expert and the optional shared
+   expert now take `stack_factor` x encoder width. The load-balancing loss
+   uses the STACKED mask (re-derived in `forward` before routing), so a
+   stacked frame beyond `ceil(valid_len / stack_factor)` never counts --
+   never the raw frames underneath it. `stack_factor` 1 (default) and `None`
+   reproduce the pre-stacking adapter exactly, checked with a bit-identical
+   forward-output test, so existing MoE checkpoints still load and behave
+   identically. Checked directly, no code change needed in either: `plan_arm.py`'s
+   `-skN` tag and `model.adapter.stack_factor` override are already
+   adapter-agnostic (keyed on the effective stack_factor value against the
+   config's own, never on `model.adapter._type`), and
+   `run.memory_preallocation`'s warmup passes just run the model's normal
+   forward, so both already work for the MoE unchanged.
+   Params, w2v-BERT/Whisper into a 2048-wide decoder, default MoE config
+   (8 experts, top-2, no shared expert, `moe_intermediate_size` 1024):
+   w2v-BERT k=1 33.57M total / 8.40M active, k=5 100.71M / 25.21M; Whisper
+   k=1 37.76M / 9.45M, k=5 121.69M / 30.46M. `03` §1's MoE row updated
+   (output rate, params; state "on a branch" -> "ready" now PR #139 is on
+   `main`).
+2. **Part (b), aux loss and router entropy on their own, done.** Both are
+   stashed on the adapter as their own scalar tensors -- `self.aux_loss`
+   (already existed) and a new `self.router_entropy` (mean Shannon entropy,
+   nats, of the router's full softmax over valid frames only) -- the same
+   pattern `MELTAudioAdapter` already used to read `aux_loss` back for the
+   loss, not a new one. The trainer reads both off
+   `self.model.audio_stack.adapter.adapter` after every `training_step`,
+   accumulates them as device tensors so nothing forces a `.item()` sync on
+   the hot path, and reduces + merges `train_router/aux_loss` and
+   `train_router/entropy` into `logs` only inside `log()` -- the same
+   accumulate-then-reduce-at-log() shape `_duration_tracker` and
+   `_reduced_batch_cuts_stats` already use, not a parallel logging path.
+3. **Part (b), per-language expert usage: not implemented.** Stopped rather
+   than pick a design, per the task's own instruction. `langs` (one string
+   per cut, collated in `collator.py`) is popped out of `inputs` in
+   `MELTTrainer.training_step` (`trainer.py:1398`) *before*
+   `super().training_step` ever calls the model (`trainer.py:1410`) --
+   deliberately, so `MELTForCausalLM.forward`'s `**kwargs` can't silently
+   swallow it. So language is not reachable from `MELTMoEAdapter.forward`
+   today without adding a `langs` parameter through the whole chain:
+   `MELTTrainer.training_step` (stop popping it) -> `MELTForCausalLM.forward`
+   -> `_get_audio_embeddings` -> `MELTAudioStack.forward` ->
+   `MELTAudioAdapter.forward` -> `MELTMoEAdapter.forward`. Options, not chosen:
+   (i) **plumb `langs` through that whole forward chain** -- the direct fix,
+   but it touches five call sites for a signal only one adapter type uses,
+   and every other adapter's `forward` would carry a parameter it ignores;
+   (ii) **combine post-hoc in the trainer**: have `MELTMoEAdapter.forward`
+   also stash raw per-frame `topk_indices` and the stacked `attention_mask`
+   as instance attributes (same pattern as `aux_loss`/`router_entropy`), and
+   have the trainer zip them against the `langs` list it already pops --
+   touches no `forward()` signature, but stashes a
+   `(batch_size x stacked_seq_len, num_experts_per_tok)` index tensor every
+   step instead of two scalars, and duplicates knowledge of the adapter's
+   internal layout (stacking, flattening order) into `trainer.py`;
+   (iii) **drop it from this PR's scope**, log only aux loss + entropy for
+   the week-3 crossing, and revisit once the crossing's own read (`03` §0.1:
+   CER split by resource level) shows whether interpreting the mechanism
+   needs more than aggregate entropy. Not chosen between -- they trade off
+   "how many files this touches" against "per-step memory/DDP cost" against
+   "encapsulation", which is a design call the task asked me not to make.
+
+Action needed: **PI decides** which of the three options above for
+per-language expert usage, or confirms (iii) is fine for the week-3 crossing
+and this stays open past it. The PR (part (a) plus the aux-loss/entropy half
+of part (b)) is otherwise ready: unit tests added to `tests/test_moe_adapter.py`
+(shape/mask/length/k=1-equivalence for (a); logged-quantity tests for (b)),
+full suite run in the nyx container -- 563 passed, 1 pre-existing failure
+(`Wav2Vec2BertConfig` sdpa) plus the pre-existing `test_processing_melt.py`
+errors, nothing new. Timeline box left unticked (agent-protocol.md §5): part
+(b) is not fully done until per-language usage is resolved one way or another.
+
+---
+
 ## 2026-09-23 — Fondue Orchestrator — FLEURS-24 zero-shot on the twelve screen checkpoints; PI decides five epochs for the crossing
 
 Context: the twelve resubmitted FLEURS-24 dev evals finished; PI answered `03` §1b.
