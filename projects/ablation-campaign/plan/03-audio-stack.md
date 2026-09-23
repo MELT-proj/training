@@ -81,6 +81,45 @@ asserted rather than shown.
 | MoE, 8 SwiGLU experts, top-2, load-balancing aux loss | 33.57M total, 8.39M active | 50 Hz | on a branch; used by the running 10-epoch verbatim arm |
 | Q-Former, window 15, 3 queries | not instantiable today | 10 Hz by design | broken; PI fixes in week 4 |
 
+## 1b. The budget problem the five-language screen just exposed (2026-09-23)
+
+§2's crossing runs sixteen arms at **MA-stage cost, one recipe for all
+sixteen**. The five-language screen (`01` §3) has now run that exact recipe
+at one epoch of 700 h/lang, k=5, on two encoders, and the result is a
+warning for this section:
+
+| encoder | best mean WER over en/de/es/fr/it |
+|---|---|
+| Whisper-large-v3 (supervised ASR) | **0.119** |
+| w2v-BERT 2.0 (self-supervised) | **0.743** |
+
+w2v-BERT does not align at this budget under any of the six LR/batch
+combinations tried; its whole grid sits at 0.74-0.85. Three of this
+section's four encoders are self-supervised. **On present evidence the
+crossing would return twelve unaligned arms and four aligned ones**, which
+ranks encoders by "did it align at all" rather than comparing audio stacks,
+and re-derives step 0b's conclusion at sixteen times the price.
+
+Note this is a *budget* statement, not an encoder verdict. Step 0b's
+`wsd-10hz` reached 0.314 on LibriSpeech at **three** epochs of ~2,900 h in
+one language; the screen gave w2v-BERT **one** epoch of 3,500 h across five
+harder corpora. The self-supervised encoders are not being given the
+gradient steps they demonstrably need.
+
+**Open, for the PI, before the crossing renders:**
+
+1. **Raise the per-arm budget** to three epochs, so a self-supervised
+   encoder has the chance to leave the plateau. ~90 GPU-h per arm, ~1,440
+   for sixteen, against ~49,000 remaining. Expensive in queue time, not in
+   hours, and the calendar is the binding constraint.
+2. **Keep one epoch and accept a screen, not a ranking** -- report which
+   stacks align at a fixed budget, and follow up only the ones that do.
+3. **Split the budget by encoder family**, which breaks "one recipe for all
+   sixteen" and costs the comparison its main claim. Not recommended.
+
+Until this is decided, the sixteen-arm render is on hold; it is the
+difference between a section and a re-run of step 0b.
+
 ## 2. The crossing
 
 Four encoders × four adapters = 16 MA arms on the provisional backbone

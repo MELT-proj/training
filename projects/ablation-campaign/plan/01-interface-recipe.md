@@ -812,6 +812,44 @@ over `global_step` and `elapsed × ranks` respectively (`sacct`).
 | whisper-lr1e3-b300 | `MA-700asr-whisperlargeF-llama1bInsF-mlpT-sk5-bd75-ga1-wsd-wu0p03-elr6e6-dlr2e5-lr1e3-s42-4g` | 42,000 | 4 | 0.115 / 0.118 / 0.086 / 0.129 / 0.159 | 0.731 | 34 | measured. Mean WER 0.122. Peak mem 11.47 GB. |
 | whisper-lr2e3-b300 | `MA-700asr-whisperlargeF-llama1bInsF-mlpT-sk5-bd75-ga1-wsd-wu0p03-elr6e6-dlr2e5-lr2e3-s42-4g` | 42,000 | 4 | 0.115 / 0.120 / 0.088 / 0.122 / 0.165 | 0.731 | 34 | measured. Mean WER 0.122. Peak mem 11.47 GB. |
 
+**Reading the grid (2026-09-23). The screen was built to choose a corner; it
+is telling us the corner barely exists.** Mean WER over the five languages:
+
+| effective batch | w2v-BERT | Whisper | w2v-BERT GPU-h |
+|---|---|---|---|
+| 1200 s | 0.837 | 0.122 | 29 |
+| 600 s | 0.819 | 0.130 | 51 |
+| 300 s | 0.745 | 0.122 | 41 |
+
+- **Whisper: five of the six arms lie within 0.0062 of each other**
+  (0.1192-0.1254). A 4x change in effective batch and a 2x change in adapter
+  LR move mean WER by less than one point. The sixth, `lr2e3-b600` at 0.1360,
+  is an outlier carried entirely by English (0.184 against 0.113-0.124 on
+  every other Whisper arm) and reads as an instability or a bad eval, not a
+  factor effect.
+- **w2v-BERT: total range 0.1088**, which is step 0b's seed-only spread
+  (0.108) almost exactly -- and that floor was measured at WER 0.5, a *lower*
+  error rate than these arms, so the true floor here is wider. The batch
+  trend (b300 better by ~0.09, at both LRs) is suggestive and is **not**
+  separable from noise on this evidence.
+- **Neither half of the grid separates its factor levels.** On the encoder
+  that works, the recipe does not matter; on the encoder that does not work,
+  nothing is measurable. That is a robustness result, not a failure of the
+  screen, and it means **the corner should be chosen on cost.**
+- **Cost is the axis that does separate.** 1200 s is the cheapest (26-30
+  GPU-h) and ties the best Whisper score. 600 s is the worst of both worlds
+  at 51 GPU-h -- it pays 8 ranks' all-reduce on twice as many steps as
+  1200 s, without 300 s's halved rank count. If a 600 s point is ever needed
+  again it should run as 4 ranks x `batch_duration` 150, not 8 x 75.
+
+**No corner is called until the seed-43 replicates land** (`campaign.yaml`,
+submitted 2026-09-23). Whisper's whole spread is 0.017 and its
+five-arm cluster is 0.006; the only noise floor we have at this error regime
+is step 0b's 0.002, from a different task in a different language. The
+replicates measure it here. If they come back at ~0.002, the flatness is
+real and 1200 s is adopted on cost. If they come back at ~0.01, the grid has
+measured nothing at all and that is the finding.
+
 **Not yet done, and not derivable from the numbers above:** the transition
 step per arm (§1's plateau-then-drop definition), FLEURS-24 zero-shot CER on
 the twelve final checkpoints (a separate `melt-eval` step), and the

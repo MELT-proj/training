@@ -60,6 +60,15 @@ Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
 - **Two pre-existing test failures on `main`** (sdpa propagation into
   `Wav2Vec2BertConfig`; all of `test_processing_melt.py`), likely
   transformers version skew. Not blocking any week.
+- **The week-3 audio-stack crossing is on hold pending a budget decision**
+  (2026-09-23). The five-language screen ran §2's exact recipe at one epoch
+  of 700 h/lang: Whisper reached 0.119 mean WER, w2v-BERT 0.743 and unaligned
+  at every LR/batch combination tried. Three of the crossing's four encoders
+  are self-supervised, so as designed it would return twelve unaligned arms
+  and four aligned ones — a re-run of step 0b at sixteen times the price.
+  **PI decides** between raising the per-arm budget to three epochs (~1,440
+  GPU-h for sixteen) and accepting a screen rather than a ranking.
+  `03-audio-stack.md` §1b.
 - **`optimization.min_lr_scale` is a dead config key** — set in every
   campaign and SFT config, read by no code, so every cosine run decayed to
   zero rather than to 10% of peak. Comparisons between arms are unaffected;
@@ -192,6 +201,16 @@ Settled.
       the best LR/batch corner per encoder — which also answers whether the
       recipe optimum is encoder-invariant, the assumption `03`'s crossing
       rests on.
+- [ ] **Read the screen** — distinct from running it, which is done. Needs
+      three things none of which are derivable from the WER table: the
+      seed-43 replicates (jobs 46396669/46396670, submitted 2026-09-23) to
+      give a noise floor *at this error regime*; FLEURS-24 zero-shot CER on
+      the twelve final checkpoints (jobs 46396800-46396811); and the
+      transition step per arm (§1's plateau-then-drop definition). **No
+      LR/batch corner is called until the replicates land** — Whisper's whole
+      grid spans 0.017 and five of its six arms span 0.006, and the only
+      noise floor we have at that regime is step 0b's 0.002 from another task
+      in another language. `01-interface-recipe.md` §3.
 - [ ] **Screen follow-ups at the best corner** (seven arms, ≈ 140 GPU-h).
       Blocked on the grid above, because every one of them is defined
       relative to a corner the grid has to find: stacking sweep k=2 and

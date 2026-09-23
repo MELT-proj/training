@@ -15,6 +15,57 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-23 — Fondue Orchestrator — the WSD grid is flat on both encoders; the corner should be chosen on cost, and §2's crossing needs a budget decision before Monday
+
+Context: all twelve WSD arms landed (screen-launch session's entry below has
+the table). Read the grid; two conclusions, one of which is about `03`.
+
+Finding:
+1. **Whisper: five of six arms within 0.0062** (0.1192-0.1254 mean WER over
+   en/de/es/fr/it). A 4x change in effective batch and 2x in adapter LR move
+   the mean by under a point. The sixth, `lr2e3-b600` at 0.1360, is carried
+   entirely by English (0.184 vs 0.113-0.124 everywhere else) and reads as an
+   instability or a bad eval, not a factor effect.
+2. **w2v-BERT: total range 0.1088**, which is step 0b's seed-only spread
+   (0.108) almost exactly — and that floor came from WER ≈ 0.5, a lower error
+   rate, so the real floor here is wider. The b300 advantage (~0.09, at both
+   LRs) is suggestive and not separable on this evidence.
+3. **So neither half separates its factor levels.** On the encoder that
+   works the recipe does not matter; on the encoder that does not work
+   nothing is measurable. That is a robustness result, and it means the
+   corner is chosen on **cost**, not accuracy.
+4. **Cost does separate, and 600 s is a trap.** 1200 s is cheapest (26-30
+   GPU-h) and ties the best Whisper score. 600 s costs **51** GPU-h against
+   300 s's 41 and 1200 s's 29 — it pays 8 ranks' all-reduce on twice
+   1200 s's steps without 300 s's halved rank count. A future 600 s point
+   should run 4 ranks x `batch_duration` 150, not 8 x 75.
+5. **No corner called.** Whisper's five-arm cluster spans 0.006 and the only
+   noise floor at that regime is step 0b's 0.002, from another task in
+   another language. The seed-43 replicates decide it. ~0.002 and the
+   flatness is real and 1200 s is adopted on cost; ~0.01 and the grid
+   measured nothing, which is itself the finding.
+
+6. **The part that matters most is not about `01`.** §2 of
+   `03-audio-stack.md` runs sixteen arms at **this** recipe and **this**
+   budget, one epoch. The screen just ran it on two encoders: Whisper 0.119,
+   w2v-BERT 0.743 and unaligned at every combination tried. **Three of the
+   crossing's four encoders are self-supervised.** As designed it returns
+   twelve unaligned arms and four aligned ones, which ranks encoders by
+   whether they aligned rather than comparing audio stacks — and re-derives
+   step 0b's conclusion at sixteen times the price. This is a budget
+   statement, not an encoder verdict: step 0b's `wsd-10hz` reached 0.314 on
+   **three** epochs of one language, and the screen gave w2v-BERT **one**
+   epoch of five harder ones.
+
+Action needed: **PI decides the crossing's per-arm budget before it renders**
+— three epochs (~90 GPU-h/arm, ~1,440 for sixteen, against ~49,000
+remaining) or one epoch accepted as a screen rather than a ranking. Written
+up as `03-audio-stack.md` §1b with a third option and why it is not
+recommended. The render is on hold until then; the crossing was due to start
+Mon 2026-09-28. Separately, whoever picks up the screen watches the 14
+pending jobs and folds the replicate spread and FLEURS-24 CER into §3 before
+anyone calls a corner.
+
 ## 2026-09-23 — Claude (worker session, mn5-melt-eval-container) — melt-eval now runs on MN5 end to end; twelve screen checkpoints can be scored there
 
 Context: week-2 Track B item "melt-eval MN5 venv built and a smoke eval run
