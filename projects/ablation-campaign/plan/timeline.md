@@ -46,9 +46,6 @@ board entry saying why.
 Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
 `board.md`; this list is only what is holding something up.
 
-- **Q-Former adapter is not instantiable.** PI fix, week 2 Track B. It gates
-  the four Q-Former arms of the week-3 audio-stack crossing; the other
-  twelve arms do not wait for it.
 - **melt-eval PRs awaiting review/merge:** #14 (the `text-prior` command),
   #12 and #13 (ru/uk added to the FLEURS ASR and ST configs). The ru/uk
   frozen sets are also not yet redeployed to the production copies on
@@ -231,27 +228,23 @@ Settled.
       *Done 2026-09-16,* [melt-eval #14](https://github.com/MELT-proj/eval/pull/14),
       twelve runs. Still open on this item: ru/uk, the cascade oracle
       (§3.2) and the `-test` splits.
-- [ ] **Q-Former fix** (PI), moved up from week 4: the audio-stack crossing
+- [x] **Q-Former fix** (**done 2026-09-23, PR #138**), moved up from week 4: the audio-stack crossing
       now runs in week 3, so its four Q-Former arms need the adapter
       instantiable by then. If it slips, the crossing launches without them
       and they join as a late addition at the same recipe.
-      *State 2026-09-22:* **the work exists but is not on `main`.** It is on
-      branch `qformer-smoke-ma` (`ef1eb81`/`0d28669` "Make the Q-Former
-      adapter instantiable and mask-aware", plus a board entry and two arm
-      rows), **5 ahead of `main` and 51 behind it**, with no open PR. Rebase
-      and merge is what closes this box, not further fixing.
-- [ ] **MoE adapter branch merged to `main`** with its aux-loss logging,
+      *Closed 2026-09-23:* `qformer-smoke-ma` rebased and merged as PR #138.
+- [x] **MoE adapter branch merged to `main`** (**done 2026-09-23, PR #139**) with its aux-loss logging,
       moved up from week 4 for the same reason: the MoE is one of the four
       adapters in the week-3 crossing, so it must be on `main` before the
       sixteen arms are rendered.
-      *State 2026-09-22:* **not on `main`.** `melt/` on `main` defines
-      `MELTMLPAdapter`, `MELTQFormerAdapter` and `MELTConformerAdapter` and
-      no MoE at all. The adapter is on `claude/moe-adapter-verbatim-test`
-      (`6548e8a` "Add mixture-of-experts audio adapter (moe)"), **5 ahead of
-      `main` and 124 behind it**, with no open PR. 124 commits predates the
-      transformers 5 migration and the `stack_factor` axis, so this needs a
-      real rebase and a re-test, not a fast-forward. It is the longest pole
-      in the week-3 crossing.
+      *Closed 2026-09-23:* merged as PR #139. Two conflicts in
+      `modeling_melt.py` needed decisions, both recorded on the PR: the MLP
+      adapter keeps **both** the optional `attention_mask` and main's
+      `_stack_frames` call, and `MELTAudioAdapter.forward` keeps the uniform
+      call with the `(output, aux_loss)` tuple, because the MoE's
+      load-balancing loss needs the mask. **Still open and not a merge
+      question:** the MoE has no defined `stack_factor` answer, which §2's
+      "one output rate for every adapter" requires.
 - [x] **Fondue config drafted** (`06-fondue.md` §3): language set incl. ru/uk,
       two-tier mixture weights (alpha/beta), filters, eval subset. Not frozen.
 - [x] **Raclette config drafted**: same mixture at 25K h, big-run batch,
