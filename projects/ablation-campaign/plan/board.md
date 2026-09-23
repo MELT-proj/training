@@ -15,6 +15,120 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-23 — Claude (worker session, mn5-melt-eval-container) — melt-eval now runs on MN5 end to end; twelve screen checkpoints can be scored there
+
+Context: week-2 Track B item "melt-eval MN5 venv built and a smoke eval run
+there." This gates the screen's FLEURS-24 zero-shot CER column (`01-interface
+-recipe.md` §3) and the twelve landed `MA-700-screen-*` checkpoints, all on
+MN5.
+
+Finding 1: **the MN5 venv was never the right target — container mode is,
+and it now works.** `infra/sites/mn5.sh` (eval repo) already scaffolds both
+paths; the venv (`VENV_PATH`) still doesn't exist and isn't the plan (no
+internet on MN5 to build one). Container mode needed a current image, which
+didn't exist:
+
+- The only MN5 image, `/gpfs/scratch/epor48/itpt955676/melt_eval_cuda126_v2.sif`
+  (built 2026-09-08, the default in `infra/submit_campaign_mn5*.sh`),
+  **predates `stack_factor`** (training PR #126, 2026-09-15). `grep -rl
+  stack_factor` on its bundled `melt-proj` returns nothing. Every
+  `MA-700-screen-*` checkpoint is trained with `stack_factor 5`, so this
+  image cannot load any of them — a hard shape-mismatch failure at load
+  time, not a silent one, but a wasted job each time someone tries. Verified
+  by loading the .sif directly on `alogin1` and grepping the bundled code
+  before spending any GPU time on it.
+- Rebuilt from scratch: training `main` (`acadf22`) + melt-eval `main`
+  (`eb4ff51`) as siblings, on nyx (has apptainer + internet), via the eval
+  repo's own `infra/setup/build_singularity.sh` — the pattern the repo
+  already documents, not invented for this session. Hit a real, previously
+  -flagged bug along the way: `inspect_ai==0.3.254`'s ACP code path imports
+  `acp.helpers` from `agent-client-protocol`, which `pyproject.toml` never
+  declared (same wall a 2026-09-16 CPU-venv build hit, board entry that
+  day — this time fixed properly as a dependency, not a manual post-install
+  step). Rebuild succeeded: torch 2.9.1+cu126, transformers 5.17.0, flash
+  -attn 2.8.3, `melteval --help` and `from melt.modeling import
+  MELTForCausalLM` both clean. 11 GB, staged to MN5 over `mn5transfer` at
+  ~25 MB/s (better than the ~15–20 documented — direction/load dependent).
+  Promoted as `/gpfs/scratch/epor48/melt_eval_cuda126.sif` (symlink to
+  `melt_eval_cuda126_v3.sif`) only after the smoke eval below proved it,
+  per the "prove before `ln -sfn`" rule.
+
+Finding 2: **a second, unrelated trap** — `infra/sites/mn5.sh`'s
+`LOCAL_DATASETS_DIR` pointed at the plain `melt-data/shar` tree.
+`melteval freeze` reads it sequentially and works fine (froze
+`fleurs24-asr-dev`, 26 langs incl. ru/uk, 2,600 samples/7.99h, in ~1s on the
+login node, CPU-only, no `sbatch` needed). `inspect eval`'s batched,
+out-of-order generation needs the `.idx` sidecars only the **indexed** copy
+(`melt-data/shar-indexed`) has; the plain tree raises `RuntimeError: ... has
+no .idx sidecars` — cleanly, after the model has already loaded (first smoke
+attempt, job 46369306, "Task interrupted (no samples completed)"). Re-froze
+against the indexed tree and fixed the site file's default.
+
+Finding 3: **the smoke eval itself, on the second attempt (job 46387679).**
+Also caught a config gap the hard way: the eval log's default scorer is
+`exact()` ("a plumbing check, not a real metric" per `melteval/tasks.py`)
+unless `-T task_filter=asr` is passed — the first successful run (job
+46369950, indexed tree, no `task_filter`) completed cleanly but reported a
+meaningless `exact` score of 0.067, not WER/CER. Rerun with `task_filter=asr`
+gave the real numbers:
+
+Checkpoint: `MA-700asr-whisperlargeF-llama1bInsF-mlpT-sk5-ga1-wsd-wu0p03-elr6e6-dlr2e5-lr1e3-s42-8g`
+(row `MA-700-screen-whisper-lr1e3-b1200`, job 46258536 — the WSD Whisper
+canary, mean in-training WER 0.126 at end of training). FLEURS-24 ASR dev,
+zero-shot:
+
+| | corpus | en | es | fr | de | it | 21 unseen langs |
+|---|---|---|---|---|---|---|---|
+| WER | 0.974 | 0.084 | 0.052 | 0.099 | 0.101 | 0.064 | 0.90–1.85 |
+| CER | 0.646 | 0.044 | 0.025 | 0.043 | 0.039 | 0.030 | 0.22–1.34 |
+
+Shape is exactly right: 3–4.4% CER on the five languages this arm was
+trained on, degenerate (WER > 0.9, mostly > 1.0) on all 21 it was never
+shown — a coherent zero-shot MA-stage signal, not noise, and the first real
+confirmation that the pipeline (checkpoint → prompt-matched generation →
+scoring) works end to end on MN5. **Cost: 8m03s wall (7m15s
+generation+scoring), CPUTimeRAW 19,320s → 0.134 GPU-h** (`agent-protocol.md`
+divisor: GPUh = CPUTimeRAW / 3600 / 40).
+
+Finding 4, cost projection for the other eleven arms: **≈ 1.6 GPU-h total**
+for all twelve on this same dev-subset set (12 × 0.134), a few minutes each,
+easily run in parallel as separate `sbatch` jobs (or serially under
+`acc_debug`'s one-job-per-user limit). If the screen instead wants the full
+`fleurs24-asr-test` set (26 langs, ~20,988 samples vs the dev set's 2,600 —
+**not run this session**, extrapolated by sample-count ratio only): **≈
+1.1 GPU-h and ~65 min wall per arm, ≈ 13 GPU-h for all twelve.** Either is
+small against the campaign's remaining budget.
+
+Finding 5, things a future session should not have to re-derive:
+- `ru`/`uk` are already in melt-eval `main`'s FLEURS-24 configs (PR #12/#13,
+  merged 2026-09-16) — the "not yet redeployed to artemis production copies"
+  note in `timeline.md`'s Blocked/waiting list is about the **artemis**
+  scratch copy specifically; MN5 has its own fresh freeze now and never
+  needed that copy.
+- The two known-stale test failures (`Wav2Vec2BertConfig` sdpa,
+  `test_processing_melt.py`) were not touched and are unrelated to any of
+  this.
+- `melt-eval` has no `sync_repo.sh` of its own; pushed to `~/eval` on MN5
+  with a plain `git push mn5:eval HEAD:refs/heads/<branch>` after confirming
+  `receive.denyCurrentBranch updateInstead` was already set there (it was,
+  from an earlier session). Left `~/eval` on branch
+  `claude/mn5-melt-eval-container`; the frozen sets used for this smoke test
+  live under `~/eval/smoke-frozen-sets/` there (tiny, harmless, reusable —
+  regenerate instead of trusting them stale once the FLEURS configs change
+  again).
+- Code: melt-eval branch `claude/mn5-melt-eval-container`,
+  [eval#20](https://github.com/MELT-proj/eval/pull/20) (not yet merged).
+  Nothing changed in the training repo's code, only this plan.
+
+Action needed: merge eval#20. Whoever runs the twelve-arm campaign should
+decide dev-subset vs full-test-set before submitting (cost difference above)
+and can reuse `~/eval` on MN5 as-is once the PR lands — no environment work
+left. `melt_eval_cuda126_v3.sif` should be rebuilt (same recipe) whenever
+training gains another axis that changes checkpoint shapes, same as the v2
+image's failure mode here.
+
+---
+
 ## 2026-09-22 — screen 2e-5 control session — both arms submitted, not part of the grid
 
 Context: `01-interface-recipe.md` §3 names 2e-5 as a fixed reference point (the

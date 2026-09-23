@@ -45,6 +45,37 @@ anything time-sensitive.
   `WANDB_TAGS=debug` at creation.
 - Rendered `ABL-*.yaml` configs are gitignored: **regenerate them on MN5**
   rather than syncing a copy (`build_campaign_config.py`, cache file kept).
+- **melt-eval on MN5 runs in container mode, not the venv** (built and
+  smoke-tested 2026-09-22/23, [eval#20](https://github.com/MELT-proj/eval/pull/20);
+  see the board entry for the full numbers). The MN5 `VENV_PATH`
+  (`infra/sites/mn5.sh` in the eval repo) is still not built and is not the
+  supported path — use `infra/run_eval_container_mn5.sbatch` instead.
+  Image: `/gpfs/scratch/epor48/melt_eval_cuda126.sif`, a symlink (same
+  discipline as the training image) to `melt_eval_cuda126_v3.sif`
+  (transformers 5.17.0, torch 2.9.1+cu126, matches the training image's pins;
+  built from melt-eval `main` + training `main` as of 2026-09-22, siblings,
+  via the eval repo's own `infra/setup/build_singularity.sh` — same pattern
+  as training's own image, built elsewhere with internet, on nyx, and copied
+  over with `rsync`). **An older image existed** at
+  `/gpfs/scratch/epor48/itpt955676/melt_eval_cuda126_v2.sif` (built
+  2026-09-08, was `infra/submit_campaign_mn5*.sh`'s default, now fixed) but
+  predates `stack_factor` (training PR #126, 2026-09-15) — its bundled
+  `melt-proj` has no `stack_factor` code at all, so it cannot load any
+  checkpoint trained with `stack_factor != 1`, which is every
+  `MA-700-screen-*` arm. Do not reuse it; rebuild instead whenever the
+  training side gains an axis that changes checkpoint shapes.
+  A checkout of `melt-eval` at `~/eval` on MN5 (relative to `$HOME`, pushed
+  the same way `sync_repo.sh` pushes the training repo — plain `git push` to
+  a `receive.denyCurrentBranch updateInstead` remote, since melt-eval has no
+  `sync_repo.sh` of its own yet) supplies the code the container binds over
+  its baked-in copy; `melteval freeze` runs directly on the login node
+  (CPU-only, ~1 s for a 2,600-sample set). **Use the indexed Shar tree**
+  (`LOCAL_DATASETS_DIR=/gpfs/projects/epor48/melt-data/shar-indexed`, now
+  the site file's default) **for both freeze and eval** — the plain
+  `melt-data/shar` tree has no `.idx` sidecars, which `melteval freeze`
+  doesn't need (sequential reads) but `inspect eval`'s batched, out-of-order
+  generation does; pointing eval at the plain tree fails with `RuntimeError:
+  ... has no .idx sidecars` after the model has already loaded.
 
 ### artemis (internal, SARDINE) — GPU jobs for eval and small runs
 
@@ -92,7 +123,7 @@ not where this section says, ask the PI and the answer gets added here.
 | repo | role |
 |---|---|
 | `MELT-proj/training` (this) | model, trainer, lhotse data pipeline, launchers, the campaign under `projects/ablation-campaign/` |
-| `MELT-proj/eval` (`melt-eval`, checkout `~/melt-proj/melt-eval`) | generative evaluation as an `inspect_ai` extension: `melteval freeze` builds zero-copy frozen sets (audio locators, not copies), `inspect eval` generates and scores corpus-level WER/CER/BLEU/chrF with per-language breakdowns, `melteval rescore` adds COMET/MetricX in a separate env. Prompt parity with training is enforced (`melteval/prompt.py`). Launchers for artemis work; the MN5 venv is scaffolded, not built |
+| `MELT-proj/eval` (`melt-eval`, checkout `~/melt-proj/melt-eval`) | generative evaluation as an `inspect_ai` extension: `melteval freeze` builds zero-copy frozen sets (audio locators, not copies), `inspect eval` generates and scores corpus-level WER/CER/BLEU/chrF with per-language breakdowns, `melteval rescore` adds COMET/MetricX in a separate env. Prompt parity with training is enforced (`melteval/prompt.py`). Launchers for artemis work; the MN5 **venv** (`infra/sites/mn5.sh`'s `VENV_PATH`) is still not built. MN5 **container mode** works (below) |
 | `MELT-proj/preprocessing` | shar building, the truecase/PNC pass, `verification/check_st_sources.py`, `check_shar_content.py`, chat-template checks |
 | `g8a9/agents-info` (private) | cross-project infrastructure facts (`HPCs/`), for any agent |
 | `deep-spin/wiki` (private) | SARDINE cluster wiki; drifts from the live cluster, verify with `sacctmgr`/`nvidia-smi` |
@@ -163,6 +194,7 @@ not where this section says, ask the PI and the answer gets added here.
 | in-training generative eval | ~3 min per 5-set round at 200 utterances per set on 8 GPUs; `max_samples` is per named set |
 | first step of any run | 9–20 min (dataloader build, `eval_on_start`); read steady-state s/it from the second-to-last tqdm line |
 | MN5 → internal transfer | ~15–20 MB/s over `mn5transfer` |
+| melt-eval on MN5, one arm, FLEURS-24 ASR dev (26 langs, 2,600 samples, batch 16, 1 GPU) | 8m03s wall (7m15s generation+scoring), 0.134 GPU-h — measured 2026-09-22, [eval#20](https://github.com/MELT-proj/eval/pull/20) |
 
 ## 5. Traps that have already cost days
 
