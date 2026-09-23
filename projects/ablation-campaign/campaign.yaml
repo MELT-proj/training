@@ -729,3 +729,43 @@ arms:
     grad_accum_steps: 1
     seed: 42
     time: "14:00:00"
+
+  # --- Screen follow-up: seed replicate at the best corner per encoder -----
+  # (01-interface-recipe.md §3/§5, PI 2026-09-23) -----------------------------
+  #
+  # Two of the seven "screen follow-ups at the best corner" (timeline.md
+  # week 2). Step 0b's seed-only spread (0.108 dev-clean/0.002 dev-other) was
+  # measured on English-only LibriSpeech at WER ~= 0.5 and does not transfer
+  # to this screen's regime (five-language mixture; w2v-BERT arms at WER
+  # 0.74-0.98, Whisper arms at 0.12-0.14) -- agent-protocol.md §3. A real
+  # noise floor for this screen needs a seed replicate measured here, not
+  # borrowed. Best corner per encoder from the WSD grid (01 §3, measured
+  # 2026-09-21/23): w2v-BERT lr1e3/b300 (mean WER 0.743, job 46258532);
+  # Whisper lr2e3/b1200 (mean WER 0.119, job 46366414). Same settings, seed
+  # 43 (base seed + 1, matching step 0b's R/R-seed and L4/L5 convention).
+
+  - id: MA-700-screen-w2vb-lr1e3-b300-seed43
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 1e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    seed: 43
+    time: "16:00:00"
+
+  - id: MA-700-screen-whisper-lr2e3-b1200-seed43
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    encoder: openai/whisper-large-v3
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 150
+    grad_accum_steps: 1
+    seed: 43
+    time: "14:00:00"
