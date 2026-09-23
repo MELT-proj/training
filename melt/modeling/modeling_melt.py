@@ -58,6 +58,104 @@ def _get_encoder_hidden_size(encoder_config) -> int:
     )
 
 
+def _resolve_stack_factor(adapter_cfg) -> int:
+    """1 = no stacking, the pre-stack_factor behavior. Guards a None from a config
+
+    that sets the key to `null` the same way `mid`/`mlp_hidden_size` do in
+    MELTMLPAdapter. Shared by every adapter that reaches the crossing's common
+    frame rate by stacking consecutive encoder frames before its own computation
+    (`03-audio-stack.md` §3).
+    """
+    stack_factor = getattr(adapter_cfg, "stack_factor", None) if adapter_cfg is not None else None
+    return stack_factor if stack_factor else 1
+
+
+def _stack_audio_frames(audio_features: torch.Tensor, stack_factor: int) -> torch.Tensor:
+    """Concatenate ``stack_factor`` consecutive frames along the feature axis.
+
+    Pads the frame count up to a multiple of ``stack_factor`` with zeros at the
+    end before reshaping -- the same frame count ``_stacked_output_features_shape``
+    predicts, since both derive the padded length from ``seq_len`` alone rather
+    than from where real audio ends within the batch.
+    """
+    if stack_factor <= 1:
+        return audio_features
+    batch_size, seq_len, hidden_size = audio_features.shape
+    pad = (-seq_len) % stack_factor
+    if pad:
+        audio_features = F.pad(audio_features, (0, 0, 0, pad))
+    stacked_len = (seq_len + pad) // stack_factor
+    return audio_features.reshape(batch_size, stacked_len, hidden_size * stack_factor)
+
+
+def _stack_attention_mask(
+    attention_mask: torch.Tensor,
+    stack_factor: int,
+    output_seq_len: int,
+    device: torch.device | None = None,
+) -> torch.Tensor:
+    """Subsample a frame-level attention mask to match ``_stack_audio_frames``.
+
+    Real audio occupies a prefix of the frames, so ``ceil(valid_len /
+    stack_factor)`` is an exact prefix length for the stacked sequence -- no
+    scattered positions to reconstruct.
+    """
+    mask_device = device if device is not None else attention_mask.device
+    non_padded_lengths = attention_mask.to(torch.long).sum(dim=-1)
+    out_lengths = torch.div(non_padded_lengths + stack_factor - 1, stack_factor, rounding_mode="floor")
+    out_lengths = out_lengths.clamp(min=0, max=output_seq_len).to(mask_device)
+    positions = torch.arange(output_seq_len, device=mask_device)
+    return (positions.unsqueeze(0) < out_lengths.unsqueeze(-1)).to(attention_mask.dtype)
+
+
+def _stacked_output_features_shape(
+    stack_factor: int,
+    output_hidden_size: int,
+    input_shape: tuple[int, int, int],
+    features_attention_mask: torch.Tensor | None = None,
+    device: torch.device | None = None,
+) -> tuple[tuple[int, int, int], torch.Tensor | None]:
+    """
+    Compute the expected output shape of a frame-stacking adapter, without running it.
+
+    Shared by every adapter whose frame rate is configured with ``stack_factor``
+    (currently the MLP and MoE adapters -- `03-audio-stack.md` §3).
+
+    Args:
+        stack_factor: How many consecutive encoder frames this adapter concatenates.
+        output_hidden_size: The adapter's own output width.
+        input_shape: Shape of the adapter's input, (batch_size, seq_len, hidden_size).
+            This is the *encoder output* shape, not the raw feature shape.
+        features_attention_mask: Optional attention mask of shape (batch_size, seq_len)
+        device: Device to build any new mask on.
+
+    Returns:
+        Tuple of (output_shape, output_attention_mask):
+            - output_shape: (batch_size, output_seq_len, output_hidden_size), with
+              output_seq_len == seq_len when stack_factor is 1 and
+              ceil(seq_len / stack_factor) otherwise
+            - output_attention_mask: Same as input when stack_factor is 1;
+              otherwise a prefix mask subsampled by stack_factor (real audio
+              occupies a prefix of the frames, so ceil(valid_len / stack_factor)
+              is exact)
+    """
+    batch_size, seq_len, _ = input_shape
+    k = stack_factor
+    output_seq_len = math.ceil(seq_len / k) if k > 1 else seq_len
+    output_shape = (batch_size, output_seq_len, output_hidden_size)
+
+    if k <= 1:
+        return output_shape, features_attention_mask
+
+    output_attention_mask = None
+    if features_attention_mask is not None:
+        output_attention_mask = _stack_attention_mask(
+            features_attention_mask, k, output_seq_len, device=device
+        )
+
+    return output_shape, output_attention_mask
+
+
 class MELTMLPAdapter(nn.Module):
     """2-layer MLP projector with normalization for stable LLM injection."""
 
@@ -74,13 +172,7 @@ class MELTMLPAdapter(nn.Module):
         if mid is None:
             mid = out
 
-        stack_factor = (
-            getattr(adapter_cfg, "stack_factor", None) if adapter_cfg is not None else None
-        )
-        # 1 = no stacking, the pre-stack_factor behavior. Guards a None from a
-        # config that sets the key to `null` the same way `mid`/`mlp_hidden_size`
-        # does above.
-        self.stack_factor = stack_factor if stack_factor else 1
+        self.stack_factor = _resolve_stack_factor(adapter_cfg)
 
         self.fc1 = nn.Linear(audio_hidden_size * self.stack_factor, mid, bias=True)
         self.act = nn.GELU()
@@ -91,21 +183,8 @@ class MELTMLPAdapter(nn.Module):
         self.output_hidden_size = out
 
     def _stack_frames(self, audio_features: torch.Tensor) -> torch.Tensor:
-        """Concatenate ``stack_factor`` consecutive frames along the feature axis.
-
-        Pads the frame count up to a multiple of ``stack_factor`` with zeros at the
-        end before reshaping -- the same frame count ``_get_output_features_shape``
-        predicts, since both derive the padded length from ``seq_len`` alone rather
-        than from where real audio ends within the batch.
-        """
-        if self.stack_factor <= 1:
-            return audio_features
-        batch_size, seq_len, hidden_size = audio_features.shape
-        pad = (-seq_len) % self.stack_factor
-        if pad:
-            audio_features = F.pad(audio_features, (0, 0, 0, pad))
-        stacked_len = (seq_len + pad) // self.stack_factor
-        return audio_features.reshape(batch_size, stacked_len, hidden_size * self.stack_factor)
+        """Concatenate ``stack_factor`` consecutive frames along the feature axis."""
+        return _stack_audio_frames(audio_features, self.stack_factor)
 
     def _get_output_features_shape(
         self,
@@ -113,45 +192,14 @@ class MELTMLPAdapter(nn.Module):
         features_attention_mask: torch.Tensor | None = None,
         device: torch.device | None = None,
     ) -> tuple[tuple[int, int, int], torch.Tensor | None]:
+        """Compute the expected output shape after passing through this adapter.
+
+        See ``_stacked_output_features_shape`` for the exact contract.
         """
-        Compute the expected output shape after passing through this adapter.
-
-        Args:
-            input_shape: Shape of the adapter's input, (batch_size, seq_len, hidden_size).
-                This is the *encoder output* shape, not the raw feature shape.
-            features_attention_mask: Optional attention mask of shape (batch_size, seq_len)
-            device: Device to build any new mask on.
-
-        Returns:
-            Tuple of (output_shape, output_attention_mask):
-                - output_shape: (batch_size, output_seq_len, output_hidden_size), with
-                  output_seq_len == seq_len when stack_factor is 1 and
-                  ceil(seq_len / stack_factor) otherwise
-                - output_attention_mask: Same as input when stack_factor is 1;
-                  otherwise a prefix mask subsampled by stack_factor (real audio
-                  occupies a prefix of the frames, so ceil(valid_len / stack_factor)
-                  is exact)
-        """
-        batch_size, seq_len, _ = input_shape
-        k = self.stack_factor
-        output_seq_len = math.ceil(seq_len / k) if k > 1 else seq_len
-        output_shape = (batch_size, output_seq_len, self.output_hidden_size)
-
-        if k <= 1:
-            return output_shape, features_attention_mask
-
-        output_attention_mask = None
-        if features_attention_mask is not None:
-            mask_device = device if device is not None else features_attention_mask.device
-            non_padded_lengths = features_attention_mask.to(torch.long).sum(dim=-1)
-            out_lengths = torch.div(non_padded_lengths + k - 1, k, rounding_mode="floor")
-            out_lengths = out_lengths.clamp(min=0, max=output_seq_len).to(mask_device)
-            positions = torch.arange(output_seq_len, device=mask_device)
-            output_attention_mask = (positions.unsqueeze(0) < out_lengths.unsqueeze(-1)).to(
-                features_attention_mask.dtype
-            )
-
-        return output_shape, output_attention_mask
+        return _stacked_output_features_shape(
+            self.stack_factor, self.output_hidden_size, input_shape, features_attention_mask,
+            device=device,
+        )
 
     def forward(
         self, audio_features: torch.Tensor, attention_mask: torch.Tensor | None = None
@@ -196,7 +244,14 @@ class MELTMoEAdapter(nn.Module):
     forward pass and stashed on ``self.aux_loss`` (a scalar tensor, or ``None`` if the
     adapter saw no valid/unmasked tokens) for ``MELTAudioAdapter`` to read back and
     thread up into the training loss -- without it, routers tend to collapse onto a
-    couple of always-on experts.
+    couple of always-on experts. The router's mean entropy over valid frames is
+    stashed the same way, on ``self.router_entropy``, for the trainer to log
+    (`03-audio-stack.md` §0.1).
+
+    Reaches the crossing's common frame rate the same way ``MELTMLPAdapter`` does:
+    concatenating ``stack_factor`` consecutive encoder frames along the feature axis
+    before the router, so the router and every expert see ``stack_factor`` x encoder
+    width. ``stack_factor`` 1 (the default) is exactly the pre-stacking adapter.
     """
 
     def __init__(self, config: MELTConfig):
@@ -207,15 +262,17 @@ class MELTMoEAdapter(nn.Module):
 
         self.num_experts = adapter_cfg.num_experts
         self.num_experts_per_tok = adapter_cfg.num_experts_per_tok
+        self.stack_factor = _resolve_stack_factor(adapter_cfg)
 
-        self.router = nn.Linear(audio_hidden_size, self.num_experts, bias=False)
+        router_in = audio_hidden_size * self.stack_factor
+        self.router = nn.Linear(router_in, self.num_experts, bias=False)
         self.experts = nn.ModuleList(
-            MELTMoESwiGLUExpert(audio_hidden_size, adapter_cfg.moe_intermediate_size, out)
+            MELTMoESwiGLUExpert(router_in, adapter_cfg.moe_intermediate_size, out)
             for _ in range(self.num_experts)
         )
         self.shared_expert = (
             MELTMoESwiGLUExpert(
-                audio_hidden_size, adapter_cfg.shared_expert_intermediate_size, out
+                router_in, adapter_cfg.shared_expert_intermediate_size, out
             )
             if adapter_cfg.use_shared_expert
             else None
@@ -225,10 +282,16 @@ class MELTMoEAdapter(nn.Module):
         self.gain = nn.Parameter(torch.tensor([0.1]))
         self.output_hidden_size = out
 
-        # Populated by forward(); MELTAudioAdapter reads this back to thread the
-        # load-balancing loss up into the training loss. None outside of a forward
-        # call, and also None if every frame in the batch was padding.
+        # Populated by forward(); MELTAudioAdapter reads aux_loss back to thread the
+        # load-balancing loss up into the training loss, and the trainer reads both
+        # back to log them. None outside of a forward call, and also None if every
+        # frame in the batch was padding.
         self.aux_loss: torch.Tensor | None = None
+        self.router_entropy: torch.Tensor | None = None
+
+    def _stack_frames(self, audio_features: torch.Tensor) -> torch.Tensor:
+        """Concatenate ``stack_factor`` consecutive frames along the feature axis."""
+        return _stack_audio_frames(audio_features, self.stack_factor)
 
     def _get_output_features_shape(
         self,
@@ -236,14 +299,21 @@ class MELTMoEAdapter(nn.Module):
         features_attention_mask: torch.Tensor | None = None,
         device: torch.device | None = None,
     ) -> tuple[tuple[int, int, int], torch.Tensor | None]:
-        """Same contract as MELTMLPAdapter: routing preserves sequence length."""
-        batch_size, seq_len, _ = input_shape
-        output_shape = (batch_size, seq_len, self.output_hidden_size)
-        return output_shape, features_attention_mask
+        """Same contract as MELTMLPAdapter: see ``_stacked_output_features_shape``."""
+        return _stacked_output_features_shape(
+            self.stack_factor, self.output_hidden_size, input_shape, features_attention_mask,
+            device=device,
+        )
 
     def forward(
         self, audio_features: torch.Tensor, attention_mask: torch.Tensor | None = None
     ) -> torch.Tensor:
+        audio_features = self._stack_frames(audio_features)
+        if self.stack_factor > 1 and attention_mask is not None:
+            attention_mask = _stack_attention_mask(
+                attention_mask, self.stack_factor, audio_features.shape[1]
+            )
+
         batch_size, seq_len, hidden_size = audio_features.shape
         flat_hidden = audio_features.reshape(-1, hidden_size)  # (N, D), N = batch_size * seq_len
 
@@ -279,6 +349,7 @@ class MELTMoEAdapter(nn.Module):
         hidden_states = self.post_norm(hidden_states) * self.gain
 
         self.aux_loss = self._load_balancing_loss(routing_weights, topk_indices, attention_mask)
+        self.router_entropy = self._router_entropy(routing_weights, attention_mask)
 
         return hidden_states
 
@@ -294,6 +365,11 @@ class MELTMoEAdapter(nn.Module):
         valid tokens that route to expert ``i`` in any of their top-k slots and ``P_i``
         is the mean full-softmax probability mass valid tokens place on expert ``i``.
         Padded frames are excluded so they can't skew the balance statistics.
+        ``attention_mask`` here is the POST-stacking mask (``forward`` re-derives it
+        with ``_stack_attention_mask`` before calling this), so a frame this routes
+        over is a stacked group of ``stack_factor`` raw encoder frames, and the count
+        excluded is stacked positions beyond ``ceil(valid_len / stack_factor)`` --
+        never the ``stack_factor`` x as many raw frames underneath them.
         """
         if attention_mask is not None:
             valid = attention_mask.reshape(-1).to(torch.bool)
@@ -307,6 +383,30 @@ class MELTMoEAdapter(nn.Module):
         router_prob_per_expert = routing_weights.mean(dim=0)
 
         return self.num_experts * (tokens_per_expert * router_prob_per_expert).sum()
+
+    def _router_entropy(
+        self,
+        routing_weights: torch.Tensor,
+        attention_mask: torch.Tensor | None,
+    ) -> torch.Tensor | None:
+        """Mean Shannon entropy (nats) of the router's full softmax distribution.
+
+        Averaged over valid (post-stacking, non-padded) frames only, the same
+        exclusion ``_load_balancing_loss`` applies and for the same reason: a
+        padded frame's routing is meaningless noise that would pull the reading
+        toward the uniform distribution's maximum entropy. ``None`` under the
+        same "no valid frames" condition as ``_load_balancing_loss``, and low
+        entropy signals a router that has collapsed onto a few experts.
+        """
+        if attention_mask is not None:
+            valid = attention_mask.reshape(-1).to(torch.bool)
+            if not valid.any():
+                return None
+            routing_weights = routing_weights[valid]
+
+        eps = torch.finfo(routing_weights.dtype).tiny
+        per_token_entropy = -(routing_weights * routing_weights.clamp_min(eps).log()).sum(dim=-1)
+        return per_token_entropy.mean()
 
 
 class MELTQFormerAdapter(nn.Module):

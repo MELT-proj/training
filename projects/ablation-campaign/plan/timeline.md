@@ -270,7 +270,7 @@ Settled.
       factor instead of a per-sample coin flip. Prerequisite for the
       screen's prompt runs; additive only, no change to `random`'s current
       behaviour. No GPU.
-- [ ] **MoE adapter crossing-ready** (added 2026-09-23; blocks the week-3
+- [x] **MoE adapter crossing-ready** (added 2026-09-23; blocks the week-3
       crossing render). Verified on `main`: `MELTMoEAdapter` has no
       `stack_factor`, so it runs at 50 Hz against the crossing's common
       10 Hz, and its load-balancing loss is folded into the training loss

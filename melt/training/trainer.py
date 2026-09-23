@@ -365,6 +365,19 @@ class MELTTrainer(Seq2SeqTrainer):
         # see _reduced_batch_cuts_stats for why.
         self._batch_cuts_history: list[int] = []
 
+        # Sum of a MoE adapter's load-balancing aux loss and router entropy
+        # (`melt.modeling.modeling_melt.MELTMoEAdapter`) across training_step
+        # calls since the last log() call, plus a step count -- averaged and
+        # reduced across ranks in _reduced_router_stats. Kept as device tensors
+        # rather than a Python history like _batch_cuts_history: the value is
+        # read off the adapter after every micro-step, so summing in place
+        # avoids a CUDA sync (`.item()`) on the hot path, paying one only at
+        # log() time. None for every other adapter type; lazily allocated on
+        # the first step that has a value, because the device isn't known
+        # until then.
+        self._router_stats_sum: torch.Tensor | None = None
+        self._router_stats_count: torch.Tensor | None = None
+
         # Which named eval set is currently running; set by evaluation_loop and
         # used to key the logged sample table.
         self._eval_metric_key_prefix: str = "eval"
@@ -1394,12 +1407,49 @@ class MELTTrainer(Seq2SeqTrainer):
             self._preallocation_done = True
 
         try:
-            return super().training_step(model, inputs, num_items_in_batch)
+            loss = super().training_step(model, inputs, num_items_in_batch)
         except torch.OutOfMemoryError:
             self._log_oom_batch_info(inputs)
             if self._memory_profiling:
                 self._dump_memory_snapshot()
             raise
+
+        self._accumulate_router_stats()
+        return loss
+
+    def _get_moe_adapter(self):
+        """Return the concrete MoE adapter module (`MELTMoEAdapter`), or None.
+
+        None for every other adapter type (`mlp`/`qformer`/`conformer`), and for
+        a model with no `audio_stack` at all. Mirrors create_optimizer's
+        `self.model` / `audio_stack` / `adapter` traversal above -- `self.model`
+        is the unwrapped module on every distributed strategy this trainer
+        supports (see `unsharded_for_generation`'s docstring), so this needs no
+        DDP/FSDP-specific unwrapping.
+        """
+        audio_stack = getattr(self.model, "audio_stack", None)
+        wrapper = getattr(audio_stack, "adapter", None) if audio_stack is not None else None
+        return getattr(wrapper, "adapter", None) if wrapper is not None else None
+
+    def _accumulate_router_stats(self) -> None:
+        """Add this step's MoE aux loss and router entropy into the running sums.
+
+        A no-op for every non-MoE adapter, and for a MoE step where every frame
+        in the batch was padding (`MELTMoEAdapter.aux_loss`/`.router_entropy`
+        are both None then, same condition as each other).
+        """
+        moe_adapter = self._get_moe_adapter()
+        aux_loss = getattr(moe_adapter, "aux_loss", None)
+        entropy = getattr(moe_adapter, "router_entropy", None)
+        if aux_loss is None or entropy is None:
+            return
+
+        if self._router_stats_sum is None:
+            self._router_stats_sum = torch.zeros(2, device=aux_loss.device)
+            self._router_stats_count = torch.zeros((), device=aux_loss.device)
+        self._router_stats_sum[0] += aux_loss.detach()
+        self._router_stats_sum[1] += entropy.detach()
+        self._router_stats_count += 1
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         """Merge cumulative per-task/language training hours into *logs*.
@@ -1432,6 +1482,10 @@ class MELTTrainer(Seq2SeqTrainer):
         cuts_stats = self._reduced_batch_cuts_stats()
         if cuts_stats and "loss" in logs:
             logs.update(cuts_stats)
+
+        router_stats = self._reduced_router_stats()
+        if router_stats and "loss" in logs:
+            logs.update(router_stats)
 
         super().log(logs, start_time)
 
@@ -1468,6 +1522,41 @@ class MELTTrainer(Seq2SeqTrainer):
             f"{prefix}/mean": sum(merged) / len(merged),
             f"{prefix}/max": float(max(merged)),
         }
+
+    def _reduced_router_stats(self, prefix: str = "train_router") -> dict[str, float]:
+        """Return mean MoE aux loss and router entropy since the last log() call, reduced across ranks.
+
+        Unlike `_duration_tracker`/`_reduced_batch_cuts_stats`, whether this has
+        anything to report is decided by the *architecture* (does this run use
+        a MoE adapter), not by what data a rank happened to draw -- every rank
+        runs the same model, so `_router_stats_sum` is either a tensor on every
+        rank or None on every rank. The early return below is therefore safe
+        without the "run the collective unconditionally" discipline those two
+        need: it can never fire on some ranks and not others.
+
+        The running sums are device tensors accumulated in `_accumulate_router_stats`
+        on every training_step; this is the first point either crosses to the
+        CPU (`.item()`), and the only cross-rank reduction they ever do.
+        """
+        if self._router_stats_sum is None:
+            return {}
+
+        sum_tensor = self._router_stats_sum
+        count_tensor = self._router_stats_count
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            torch.distributed.all_reduce(sum_tensor, op=torch.distributed.ReduceOp.SUM)
+            torch.distributed.all_reduce(count_tensor, op=torch.distributed.ReduceOp.SUM)
+
+        count = count_tensor.item()
+        stats: dict[str, float] = {}
+        if count > 0:
+            aux_loss_mean, entropy_mean = (sum_tensor / count).tolist()
+            stats[f"{prefix}/aux_loss"] = aux_loss_mean
+            stats[f"{prefix}/entropy"] = entropy_mean
+
+        sum_tensor.zero_()
+        count_tensor.zero_()
+        return stats
 
     def _log_oom_batch_info(self, inputs: dict) -> None:
         """Log tensor shapes, model info, and GPU memory state on OOM to identify the offending batch.
