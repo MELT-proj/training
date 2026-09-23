@@ -305,6 +305,69 @@ the rest join later at the same recipe. Both boxes stay unticked until the
 code is on `main`; the timeline now records the branch, the commit and the
 ahead/behind counts so nobody re-derives this.
 
+## 2026-09-23 — screen-launch session — noise-floor replicates and FLEURS-24 dev evals scheduled
+
+Context: PI decision after the grid landed — proceed with both open follow-ons
+from the outcome list: a real noise floor for this screen's regime, and
+FLEURS-24 zero-shot CER on the twelve final checkpoints.
+
+Finding / proposal:
+1. **Aside, for the record:** while inspecting the melt-eval sibling repo on
+   nyx I ran a raw `git` command to diff against `origin/main` and it ended
+   up overwriting the working tree instead of just showing the diff. Caught
+   it, stashed the accidental changes under a unique tag, verified the stash
+   matched what I'd introduced (byte-for-byte against `origin/main`), and
+   dropped it. Repo is back on its original branch (`claude/text-prior-tool`
+   @ `5b72eb9`), clean, nothing lost.
+2. **Noise floor: two seed-43 replicate arms added to `campaign.yaml` and
+   submitted**, at the best corner per encoder from the WSD grid (PI
+   authorized adding these directly, given step 0b's own floor does not
+   transfer to this regime — agent-protocol.md §3, different data and a
+   different error rate on both encoder families).
+   `MA-700-screen-w2vb-lr1e3-b300-seed43` (job 46396669, clone of the best
+   w2v-BERT arm, mean WER 0.743) and
+   `MA-700-screen-whisper-lr2e3-b1200-seed43` (job 46396670, clone of the
+   best Whisper arm, mean WER 0.119). Same settings as their seed-42
+   originals in every respect but the seed. Not part of the grid item
+   (already ticked); these are 2 of the 7 "screen follow-ups at the best
+   corner" in timeline.md, added and submitted with explicit authorization
+   — the other five (stacking sweep k=2/k=10, two prompt runs) are still not
+   mine to add.
+3. **FLEURS-24: MN5's melt-eval checkout was one commit behind `origin/main`**
+   (on `claude/mn5-melt-eval-container`, had the `agent-client-protocol`
+   dependency fix but not the second commit fixing the stale `.sif` default
+   and the non-indexed shar path). Fast-forwarded it from nyx's checkout by
+   pushing the equivalent already-merged branch directly to MN5's `eval`
+   remote (melt-eval has no `sync_repo.sh` of its own yet;
+   `receive.denyCurrentBranch updateInstead` was already configured there).
+   Tree is at `2632ee6`, content-identical to `origin/main`.
+4. **Reused the already-frozen, already-correct FLEURS-24 dev set** found on
+   MN5 at `~/eval/smoke-frozen-sets/fleurs24-asr-dev-indexed` (2,600 samples,
+   24 languages, built against `shar-indexed` — not the sibling
+   non-indexed-tree freeze from the same smoke test, which would raise at
+   generation time per the PR #20 fix). No new freeze pass needed.
+5. **Submitted one container-mode eval job per checkpoint, all twelve**,
+   against `infra/run_eval_container_mn5.sbatch`: `--qos=acc_ehpc` (not the
+   site default `acc_debug`, which allows only one job at a time — would have
+   serialized all twelve), 1 node/1 GPU each, `batch_size=4`/`bfloat16`
+   (mirroring `submit_campaign_mn5_capped.sh`'s own note that larger batches
+   showed instability, rather than trusting the provider's batch_size=8
+   default untested at this shape). Jobs 46396800-46396811, one per
+   `screen-fleurs24-dev/<arm-name>/` log dir under
+   `/gpfs/scratch/epor48/eval-logs/`. All PENDING at submission.
+6. **Not done yet**: reading the transition step per WSD arm (§1's
+   definition) remains open and untouched this session.
+
+Action needed: next session — (a) check the two seed-43 arms land healthy at
+their expected world_size (4 for the w2v-BERT one, 8 for the Whisper one) and
+compare their WER to their seed-42 originals for the actual measured noise
+floor at this regime; (b) check the twelve FLEURS-24 jobs complete (1h wall
+each) and pull per-language CER into `01` §3 as measured; (c) only then is
+the best-corner-per-encoder call actually backed by a same-regime noise floor
+plus a 24-language zero-shot signal, not just the raw grid WER.
+
+---
+
 ## 2026-09-22 — screen-launch session — all twelve WSD arms in: 5 landed, 2 running, 5 just submitted
 
 Context: the WSD canary (`MA-700-screen-whisper-lr1e3-b1200`, job 46258536)
