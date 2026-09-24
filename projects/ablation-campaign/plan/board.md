@@ -127,6 +127,21 @@ replicate pair is one noise estimate. Against it, the six seed-42 Whisper scores
 span 0.021 (0.1286-0.1498); rows within ~0.005 of each other are not separable.
 The w2v-BERT replicate (job 46396669) was still training at 8.5 h.
 
+Finding 9: **Whisper stacking sweep submitted (PI, 2026-09-24).** Corner
+`lr1e3-b1200` chosen by the PI from the scores above (score 0.1321, within noise
+of the best row 0.1286, 28 GPU-h, the cheapest row of the top group); the
+replicate says the score moves ~0.0045 with the seed, so rows closer than that
+are not separable. Two rows added to `campaign.yaml`, identical to
+`MA-700-screen-whisper-lr1e3-b1200` except `stack_factor`: `...-k2` (25 Hz) and
+`...-k10` (5 Hz), submitted through `campaign.py run` (2 nodes, 14 h cap, in
+`arms.tsv`). k=2 has 2.5x the decoder positions of k=5 at the same
+`batch_duration 150`; peak memory at k=5 was 19.1 GB, so an OOM at k=2 is possible
+and is caught by `memory_preallocation` before step 1 (fallback, same 1200 s
+effective batch: `batch_duration 75`, `grad_accum 2`). The w2v-BERT sweep waits
+for its replicate. MN5's checkout is now on branch
+`worktree-bridge-cse_018bRbBYG2SKA8Zo6NTanRjp`; the ledger was reconciled per
+`infrastructure.md` §3.
+
 Action needed: PI/orchestrator: decide the corner (nothing here calls it) and
 update the README's 200-per-language wording to the 600 in-domain sets. Whoever
 picks this up after the replicates finish: `bash
