@@ -867,7 +867,7 @@ saved top-level checkpoints, JSON logs, 1 GPU, batch 4, bf16). In-domain: up to
 200 utterances from each held-out corpus per language (600), FLEURS dev: 200
 per language, 26 languages (nl 171). CER clipped at 1.0, group medians, lower
 is better; score = (1.0·ID + 1.5·OOD-train + 0.6·OOD-related) / 3.1. Per-language
-values: `selection-metric/results/screen-wsd-grid-2026-09-24.txt`. The
+values: `selection-metric/scores/screen-wsd-grid-2026-09-24.txt`. The
 seed-43 replicates are not included (still training).
 
 | run | ID | OOD-train | OOD-related | OOD-latin | OOD-script | score |

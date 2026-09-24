@@ -1,0 +1,111 @@
+== w2vb-lr1e3-b1200
+  ID           median 0.6748   en=0.842 de=0.641 es=0.653 fr=0.691 it=0.675
+  OOD-train    median 0.9925   en=0.898 de=1.000* es=0.992 fr=1.000* it=0.583
+  OOD-related  median 1.0000   pt=1.000* ro=1.000* nl=1.000* da=1.000* sv=1.000*
+  OOD-latin    median 1.0000   cs=1.000* sk=1.000* pl=1.000* hr=1.000* sl=1.000* hu=1.000* fi=1.000* et=1.000* lt=1.000* lv=1.000* ga=1.000* mt=1.000*
+  OOD-script   median 1.0000   bg=1.000* el=1.000* ru=1.000* uk=1.000*
+  score 0.8915   (* = clipped at 1)
+
+== w2vb-lr1e3-b300
+  ID           median 0.5466   en=0.817 de=0.540 es=0.451 fr=0.639 it=0.547
+  OOD-train    median 0.8353   en=1.000* de=0.835 es=0.653 fr=0.950 it=0.443
+  OOD-related  median 1.0000   pt=1.000* ro=1.000* nl=1.000* da=1.000* sv=1.000*
+  OOD-latin    median 1.0000   cs=1.000* sk=1.000* pl=1.000* hr=1.000* sl=1.000* hu=1.000* fi=1.000* et=1.000* lt=1.000* lv=1.000* ga=1.000* mt=1.000*
+  OOD-script   median 1.0000   bg=1.000* el=1.000* ru=1.000* uk=1.000*
+  score 0.7740   (* = clipped at 1)
+
+== w2vb-lr1e3-b600
+  ID           median 0.6453   en=0.768 de=0.645 es=0.543 fr=0.708 it=0.525
+  OOD-train    median 0.8794   en=0.980 de=0.879 es=0.827 fr=1.000* it=0.473
+  OOD-related  median 1.0000   pt=1.000* ro=1.000* nl=1.000* da=1.000* sv=1.000*
+  OOD-latin    median 1.0000   cs=1.000* sk=1.000* pl=1.000* hr=1.000* sl=1.000* hu=1.000* fi=1.000* et=1.000* lt=1.000* lv=1.000* ga=1.000* mt=1.000*
+  OOD-script   median 1.0000   bg=1.000* el=1.000* ru=1.000* uk=1.000*
+  score 0.8272   (* = clipped at 1)
+
+== w2vb-lr2e3-b1200
+  ID           median 0.6674   en=0.683 de=0.714 es=0.516 fr=0.667 it=0.639
+  OOD-train    median 0.8998   en=0.855 de=0.900 es=0.939 fr=1.000* it=0.594
+  OOD-related  median 1.0000   pt=1.000* ro=1.000* nl=1.000* da=1.000* sv=1.000*
+  OOD-latin    median 1.0000   cs=1.000* sk=1.000* pl=1.000* hr=1.000* sl=1.000* hu=1.000* fi=1.000* et=1.000* lt=1.000* lv=1.000* ga=1.000* mt=1.000*
+  OOD-script   median 1.0000   bg=1.000* el=1.000* ru=1.000* uk=1.000*
+  score 0.8442   (* = clipped at 1)
+
+== w2vb-lr2e3-b300
+  ID           median 0.6115   en=0.669 de=0.548 es=0.443 fr=0.631 it=0.612
+  OOD-train    median 0.6698   en=0.973 de=0.670 es=0.602 fr=1.000* it=0.514
+  OOD-related  median 1.0000   pt=1.000* ro=1.000* nl=1.000* da=1.000* sv=1.000*
+  OOD-latin    median 1.0000   cs=1.000* sk=1.000* pl=1.000* hr=1.000* sl=1.000* hu=1.000* fi=1.000* et=1.000* lt=1.000* lv=1.000* ga=1.000* mt=1.000*
+  OOD-script   median 1.0000   bg=1.000* el=1.000* ru=1.000* uk=1.000*
+  score 0.7149   (* = clipped at 1)
+
+== w2vb-lr2e3-b600
+  ID           median 0.6337   en=0.811 de=0.634 es=0.545 fr=0.723 it=0.604
+  OOD-train    median 0.8047   en=0.805 de=0.730 es=0.812 fr=1.000* it=0.574
+  OOD-related  median 1.0000   pt=1.000* ro=1.000* nl=1.000* da=1.000* sv=1.000*
+  OOD-latin    median 1.0000   cs=1.000* sk=1.000* pl=1.000* hr=1.000* sl=1.000* hu=1.000* fi=1.000* et=1.000* lt=1.000* lv=1.000* ga=1.000* mt=1.000*
+  OOD-script   median 1.0000   bg=1.000* el=1.000* ru=1.000* uk=1.000*
+  score 0.7873   (* = clipped at 1)
+
+== whisper-lr1e3-b1200
+  ID           median 0.0617   en=0.053 de=0.082 es=0.039 fr=0.062 it=0.072
+  OOD-train    median 0.0466   en=0.047 de=0.048 es=0.031 fr=0.050 it=0.029
+  OOD-related  median 0.4630   pt=0.229 ro=0.463 nl=0.413 da=0.589 sv=0.555
+  OOD-latin    median 0.8608   cs=0.917 sk=0.730 pl=0.943 hr=0.841 sl=0.880 hu=1.000* fi=0.793 et=0.508 lt=0.790 lv=0.715 ga=1.000* mt=0.896
+  OOD-script   median 1.0000   bg=1.000* el=1.000* ru=1.000* uk=1.000*
+  score 0.1321   (* = clipped at 1)
+
+== whisper-lr1e3-b300
+  ID           median 0.0610   en=0.052 de=0.075 es=0.040 fr=0.061 it=0.074
+  OOD-train    median 0.0493   en=0.049 de=0.050 es=0.029 fr=0.102 it=0.029
+  OOD-related  median 0.4396   pt=0.227 ro=0.440 nl=0.417 da=0.637 sv=0.603
+  OOD-latin    median 0.9070   cs=0.981 sk=0.718 pl=1.000* hr=0.918 sl=1.000* hu=1.000* fi=0.617 et=0.496 lt=0.861 lv=0.563 ga=1.000* mt=0.896
+  OOD-script   median 1.0000   bg=1.000* el=1.000* ru=1.000* uk=1.000*
+  score 0.1286   (* = clipped at 1)
+
+== whisper-lr1e3-b600
+  ID           median 0.0642   en=0.059 de=0.064 es=0.039 fr=0.080 it=0.085
+  OOD-train    median 0.0459   en=0.086 de=0.046 es=0.029 fr=0.048 it=0.029
+  OOD-related  median 0.4830   pt=0.226 ro=0.483 nl=0.419 da=0.619 sv=0.556
+  OOD-latin    median 0.8790   cs=0.926 sk=0.807 pl=1.000* hr=0.838 sl=1.000* hu=1.000* fi=0.718 et=0.510 lt=0.920 lv=0.563 ga=1.000* mt=0.824
+  OOD-script   median 1.0000   bg=1.000* el=1.000* ru=1.000* uk=1.000*
+  score 0.1364   (* = clipped at 1)
+
+== whisper-lr2e3-b1200
+  ID           median 0.0626   en=0.050 de=0.073 es=0.039 fr=0.063 it=0.079
+  OOD-train    median 0.0450   en=0.084 de=0.045 es=0.030 fr=0.048 it=0.027
+  OOD-related  median 0.5129   pt=0.219 ro=0.560 nl=0.437 da=0.538 sv=0.513
+  OOD-latin    median 0.7769   cs=0.810 sk=0.687 pl=0.834 hr=0.705 sl=1.000* hu=1.000* fi=0.584 et=0.556 lt=0.744 lv=0.709 ga=1.000* mt=0.815
+  OOD-script   median 1.0000   bg=1.000* el=1.000* ru=1.000* uk=1.000*
+  score 0.1413   (* = clipped at 1)
+
+== whisper-lr2e3-b300
+  ID           median 0.0631   en=0.050 de=0.065 es=0.041 fr=0.063 it=0.075
+  OOD-train    median 0.0464   en=0.046 de=0.054 es=0.030 fr=0.052 it=0.030
+  OOD-related  median 0.4780   pt=0.234 ro=0.478 nl=0.428 da=0.603 sv=0.562
+  OOD-latin    median 0.9285   cs=0.932 sk=0.862 pl=1.000* hr=0.929 sl=1.000* hu=1.000* fi=0.738 et=0.508 lt=0.928 lv=0.677 ga=1.000* mt=0.888
+  OOD-script   median 1.0000   bg=1.000* el=1.000* ru=1.000* uk=1.000*
+  score 0.1354   (* = clipped at 1)
+
+== whisper-lr2e3-b600
+  ID           median 0.0617   en=0.052 de=0.074 es=0.039 fr=0.062 it=0.072
+  OOD-train    median 0.0486   en=0.050 de=0.053 es=0.030 fr=0.049 it=0.034
+  OOD-related  median 0.5497   pt=0.227 ro=0.550 nl=0.444 da=0.685 sv=0.584
+  OOD-latin    median 0.8822   cs=0.914 sk=0.850 pl=0.978 hr=0.805 sl=1.000* hu=1.000* fi=0.663 et=0.605 lt=0.818 lv=0.636 ga=1.000* mt=1.000*
+  OOD-script   median 1.0000   bg=1.000* el=1.000* ru=1.000* uk=1.000*
+  score 0.1498   (* = clipped at 1)
+
+checkpoint               ID  OOD-train  OOD-related  OOD-latin  OOD-script   score
+whisper-lr1e3-b300   0.0610     0.0493       0.4396     0.9070      1.0000  0.1286
+whisper-lr1e3-b1200  0.0617     0.0466       0.4630     0.8608      1.0000  0.1321
+whisper-lr2e3-b300   0.0631     0.0464       0.4780     0.9285      1.0000  0.1354
+whisper-lr1e3-b600   0.0642     0.0459       0.4830     0.8790      1.0000  0.1364
+whisper-lr2e3-b1200  0.0626     0.0450       0.5129     0.7769      1.0000  0.1413
+whisper-lr2e3-b600   0.0617     0.0486       0.5497     0.8822      1.0000  0.1498
+w2vb-lr2e3-b300      0.6115     0.6698       1.0000     1.0000      1.0000  0.7149
+w2vb-lr1e3-b300      0.5466     0.8353       1.0000     1.0000      1.0000  0.7740
+w2vb-lr2e3-b600      0.6337     0.8047       1.0000     1.0000      1.0000  0.7873
+w2vb-lr1e3-b600      0.6453     0.8794       1.0000     1.0000      1.0000  0.8272
+w2vb-lr2e3-b1200     0.6674     0.8998       1.0000     1.0000      1.0000  0.8442
+w2vb-lr1e3-b1200     0.6748     0.9925       1.0000     1.0000      1.0000  0.8915
+
+score = (1*ID + 1.5*OOD-train + 0.6*OOD-related) / 3.1; lower is better

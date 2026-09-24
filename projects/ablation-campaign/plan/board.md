@@ -53,7 +53,7 @@ Eval jobs: 46443574-46443585 (first two checkpoints), 46475389-46475451 (the
 other ten); ledger `eval-jobs.tsv` next to the sets.
 
 Finding 4: **scores** (`selection-metric/score.py`, output kept in
-`selection-metric/results/screen-wsd-grid-2026-09-24.txt` with per-language
+`selection-metric/scores/screen-wsd-grid-2026-09-24.txt` with per-language
 CER; CER clipped at 1.0; lower is better; rows in score order as the script
 prints them, not a ranking decision):
 
