@@ -179,3 +179,86 @@ def test_main_exits_nonzero_on_a_missing_language(tmp_path, capsys):
     (ckpt / "selection-id-fr" / "log.json").unlink()
     assert score.main([str(ckpt)]) == 1
     assert "selection-id-fr" in capsys.readouterr().err
+
+
+# --- runaway generations (report only) -------------------------------------
+
+
+def _sample(lang: str, errors: int, chars: int) -> dict:
+    return {
+        "metadata": {"lang": lang},
+        "scores": {"asr_scorer": {"value": {"cer_errors": errors, "ref_chars": chars}}},
+    }
+
+
+def test_runaway_counts_share_and_cer_without():
+    samples = [_sample("de", 5, 100), _sample("de", 900, 60), _sample("de", 5, 100), _sample("en", 3, 50)]
+    stats = score.runaway_stats(samples)
+    assert stats["de"] == {
+        "samples": 3, "runaways": 1, "errors": 910, "runaway_errors": 900,
+        "ref_chars": 260, "runaway_ref_chars": 60,
+    }
+    assert stats["en"]["runaways"] == 0
+
+
+def test_a_sample_at_exactly_one_is_not_a_runaway():
+    assert score.runaway_stats([_sample("de", 60, 60)])["de"]["runaways"] == 0
+    assert score.runaway_stats([_sample("de", 61, 60)])["de"]["runaways"] == 1
+
+
+def test_runaway_stats_is_none_without_per_sample_scores():
+    assert score.runaway_stats(None) is None
+    assert score.runaway_stats([]) is None
+    assert score.runaway_stats([{"metadata": {"lang": "de"}, "scores": {"s": {"value": 0.5}}}]) is None
+
+
+def _ckpt_with_samples(root: Path, name: str, id_de_samples, fleurs_samples) -> Path:
+    ckpt = _write_checkpoint(root, name)
+    for set_name, samples in ((score.ID_SET_TEMPLATE.format(lang="de"), id_de_samples), (score.FLEURS_SET, fleurs_samples)):
+        path = ckpt / set_name / "log.json"
+        log = json.loads(path.read_text())
+        log["samples"] = samples
+        path.write_text(json.dumps(log))
+    for lang in score.TRAIN_LANGS:
+        if lang == "de":
+            continue
+        path = ckpt / score.ID_SET_TEMPLATE.format(lang=lang) / "log.json"
+        log = json.loads(path.read_text())
+        log["samples"] = [_sample(lang, 1, 100)]
+        path.write_text(json.dumps(log))
+    return ckpt
+
+
+def test_runaway_report_sums_id_sets_and_leaves_the_score_alone(tmp_path):
+    plain = _score(_write_checkpoint(tmp_path, "plain"))
+    ckpt = _ckpt_with_samples(
+        tmp_path, "looping",
+        id_de_samples=[_sample("de", 900, 60), _sample("de", 5, 100)],
+        fleurs_samples=[_sample("pt", 400, 100), _sample("pt", 2, 100), _sample("ro", 1, 100)],
+    )
+    summaries = score.load_summaries(ckpt)
+    report = score.runaway_report(summaries)
+    assert (report["ID"]["runaways"], report["ID"]["samples"]) == (1, 6)
+    assert set(report["ID"]["languages"]) == {"de"}
+    n, total, share, cer_without = report["ID"]["languages"]["de"]
+    assert (n, total) == (1, 2)
+    assert share == pytest.approx(900 / 905)
+    assert cer_without == pytest.approx(5 / 100)
+    assert (report["FLEURS"]["runaways"], report["FLEURS"]["samples"]) == (1, 3)
+    assert score.score_checkpoint({n: s["cer"] for n, s in summaries.items()})["score"] == pytest.approx(plain["score"])
+
+
+def test_runaway_report_is_none_when_any_log_lacks_samples(tmp_path):
+    ckpt = _write_checkpoint(tmp_path, "a")  # fixture logs carry no samples
+    assert score.runaway_report(score.load_summaries(ckpt)) is None
+
+
+def test_main_prints_runaways_and_marks_missing_samples_na(tmp_path, capsys):
+    with_samples = _ckpt_with_samples(
+        tmp_path, "with", [_sample("de", 900, 60)], [_sample("pt", 2, 100)]
+    )
+    without = _write_checkpoint(tmp_path, "without")
+    assert score.main([str(with_samples), str(without)]) == 0
+    out = capsys.readouterr().out
+    assert "runaway-ID" in out and "n/a" in out
+    assert "de=1/1 (100% of errors" in out

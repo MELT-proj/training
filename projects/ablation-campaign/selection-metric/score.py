@@ -17,6 +17,13 @@ Per-language CER is taken as melt-eval reports it, ``cer_<lang>`` under
 ``results.scores[0].metrics`` (corpus-level, grouped by language), not
 re-derived from samples.
 
+Report-only, never in the score: **runaway generations**, the samples whose
+per-sample errors exceed their reference length (per-sample CER above 1, e.g. a
+decoder that loops until the token cap). Decoding is deliberately unguarded, to
+match training, so these are counted and shown next to the score instead. They
+need the per-sample ``samples`` in the JSON log; a log without them shows
+``n/a`` rather than zero.
+
 Usage::
 
     python score.py CKPT_DIR [CKPT_DIR ...]
@@ -58,6 +65,10 @@ FLEURS_SET = "selection-fleurs26-dev200"
 ID_SET_TEMPLATE = "selection-id-{lang}"
 
 SCORER_METRIC = "corpus_cer"  # present only when the log was scored with task_filter=asr
+
+
+#: A sample is a runaway when its character errors exceed its reference characters.
+RUNAWAY_MIN_RATIO = 1.0
 
 
 class ScoringError(RuntimeError):
@@ -109,14 +120,51 @@ def read_log_summary(path: Path) -> dict:
         for name, metric in metrics.items()
         if name.startswith("cer_")
     }
-    return {"set": Path(str(frozen).rstrip("/")).name, "cer": cer, "path": path}
+    return {
+        "set": Path(str(frozen).rstrip("/")).name,
+        "cer": cer,
+        "runaway": runaway_stats(log.get("samples")),
+        "path": path,
+    }
 
 
-def load_checkpoint(directory: Path) -> dict[str, dict[str, float]]:
+def runaway_stats(samples: list | None) -> dict[str, dict[str, int]] | None:
+    """Per-language runaway counts from a log's per-sample scores.
+
+    Returns:
+        ``{lang: {"samples", "runaways", "errors", "runaway_errors", "ref_chars",
+        "runaway_ref_chars"}}``, or ``None`` when the log carries no samples or a
+        sample lacks the per-sample error counts (reported as ``n/a``, never 0).
+    """
+    if not samples:
+        return None
+    stats: dict[str, dict[str, int]] = {}
+    for sample in samples:
+        scores = sample.get("scores") or {}
+        value = next(iter(scores.values()), {}).get("value") if scores else None
+        if not isinstance(value, dict) or "cer_errors" not in value or "ref_chars" not in value:
+            return None
+        lang = (sample.get("metadata") or {}).get("lang", "")
+        entry = stats.setdefault(
+            lang,
+            {"samples": 0, "runaways": 0, "errors": 0, "runaway_errors": 0, "ref_chars": 0, "runaway_ref_chars": 0},
+        )
+        errors, chars = int(value["cer_errors"]), int(value["ref_chars"])
+        entry["samples"] += 1
+        entry["errors"] += errors
+        entry["ref_chars"] += chars
+        if errors > RUNAWAY_MIN_RATIO * chars:
+            entry["runaways"] += 1
+            entry["runaway_errors"] += errors
+            entry["runaway_ref_chars"] += chars
+    return stats
+
+
+def load_summaries(directory: Path) -> dict[str, dict]:
     """Read every JSON log under *directory*, keyed by set name.
 
     Returns:
-        ``{set_name: {lang: cer}}`` for the sets the metric uses.
+        ``{set_name: read_log_summary(...)}`` for the sets the metric uses.
 
     Raises:
         ScoringError: On no logs, a set with two logs, or a needed set with none.
@@ -141,7 +189,12 @@ def load_checkpoint(directory: Path) -> dict[str, dict[str, float]]:
     missing = sorted(needed - set(by_set))
     if missing:
         raise ScoringError(f"{directory}: no log for set(s): {', '.join(missing)}")
-    return {name: summary["cer"] for name, summary in by_set.items()}
+    return by_set
+
+
+def load_checkpoint(directory: Path) -> dict[str, dict[str, float]]:
+    """Per-language CER of each set the metric uses: ``{set_name: {lang: cer}}``."""
+    return {name: summary["cer"] for name, summary in load_summaries(directory).items()}
 
 
 # ---------------------------------------------------------------------------
@@ -188,6 +241,46 @@ def score_checkpoint(sets: dict[str, dict[str, float]]) -> dict:
     return {"languages": languages, "medians": medians, "score": score}
 
 
+def runaway_report(summaries: dict[str, dict]) -> dict | None:
+    """Runaway counts for the ID sets and for FLEURS, or ``None`` if any log lacks samples.
+
+    Returns:
+        ``{"ID": {...}, "FLEURS": {...}}``, each with ``samples``, ``runaways`` and
+        ``languages``: ``{lang: (runaways, samples, share_of_errors, cer_without)}``
+        for the languages with at least one runaway.
+    """
+    report: dict[str, dict] = {}
+    for label, names in (
+        ("ID", [ID_SET_TEMPLATE.format(lang=lang) for lang in TRAIN_LANGS]),
+        ("FLEURS", [FLEURS_SET]),
+    ):
+        per_lang: dict[str, dict[str, int]] = {}
+        for name in names:
+            stats = summaries[name]["runaway"]
+            if stats is None:
+                return None
+            for lang, entry in stats.items():
+                into = per_lang.setdefault(lang, dict.fromkeys(entry, 0))
+                for key, value in entry.items():
+                    into[key] += value
+        languages = {}
+        for lang, e in sorted(per_lang.items()):
+            if e["runaways"]:
+                rest = e["ref_chars"] - e["runaway_ref_chars"]
+                languages[lang] = (
+                    e["runaways"],
+                    e["samples"],
+                    e["runaway_errors"] / e["errors"] if e["errors"] else 0.0,
+                    (e["errors"] - e["runaway_errors"]) / rest if rest else 0.0,
+                )
+        report[label] = {
+            "samples": sum(e["samples"] for e in per_lang.values()),
+            "runaways": sum(e["runaways"] for e in per_lang.values()),
+            "languages": languages,
+        }
+    return report
+
+
 # ---------------------------------------------------------------------------
 # Output
 # ---------------------------------------------------------------------------
@@ -202,20 +295,38 @@ def format_checkpoint(name: str, result: dict) -> str:
         )
         lines.append(f"  {group:<12} median {result['medians'][group]:.4f}   {cells}")
     lines.append(f"  score {result['score']:.4f}   (* = clipped at {CER_CLIP:g})")
+    runaway = result.get("runaway")
+    if runaway is None:
+        lines.append("  runaway generations (per-sample CER > 1): n/a (log has no per-sample scores)")
+    else:
+        lines.append("  runaway generations (per-sample CER > 1, report only, not in the score):")
+        for label, r in runaway.items():
+            detail = "  ".join(
+                f"{lang}={n}/{total} ({100 * share:.0f}% of errors, CER without {cer:.3f})"
+                for lang, (n, total, share, cer) in r["languages"].items()
+            )
+            lines.append(f"    {label:<7} {r['runaways']}/{r['samples']}   {detail}".rstrip())
     return "\n".join(lines)
 
 
 def format_table(results: dict[str, dict]) -> str:
     """Table across checkpoints, sorted by score (lower first)."""
-    header = ["checkpoint", *GROUPS, "score"]
+    header = ["checkpoint", *GROUPS, "score", "runaway-ID", "runaway-FLEURS"]
+
+    def runaway_cells(r: dict) -> list[str]:
+        report = r.get("runaway")
+        if report is None:
+            return ["n/a", "n/a"]
+        return [f"{report[k]['runaways']}/{report[k]['samples']}" for k in ("ID", "FLEURS")]
+
     rows = [
-        [name, *(f"{r['medians'][g]:.4f}" for g in GROUPS), f"{r['score']:.4f}"]
+        [name, *(f"{r['medians'][g]:.4f}" for g in GROUPS), f"{r['score']:.4f}", *runaway_cells(r)]
         for name, r in sorted(results.items(), key=lambda kv: kv[1]["score"])
     ]
     widths = [max(len(row[i]) for row in [header, *rows]) for i in range(len(header))]
     fmt = lambda row: "  ".join(cell.ljust(w) if i == 0 else cell.rjust(w) for i, (cell, w) in enumerate(zip(row, widths)))
     weights = " + ".join(f"{w:g}*{g}" for g, (_, _, w) in GROUPS.items() if w is not None)
-    return "\n".join([fmt(header), *(fmt(row) for row in rows), "", f"score = ({weights}) / {sum(w for *_, w in GROUPS.values() if w is not None):g}; lower is better"])
+    return "\n".join([fmt(header), *(fmt(row) for row in rows), "", f"score = ({weights}) / {sum(w for *_, w in GROUPS.values() if w is not None):g}; lower is better", "runaway-* = samples with per-sample CER > 1 (report only, not in the score)"])
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -230,7 +341,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"ERROR: two checkpoint directories are named {name!r}; the table needs unique names", file=sys.stderr)
             return 1
         try:
-            results[name] = score_checkpoint(load_checkpoint(directory))
+            summaries = load_summaries(directory)
+            results[name] = score_checkpoint({n: s["cer"] for n, s in summaries.items()})
+            results[name]["runaway"] = runaway_report(summaries)
         except ScoringError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 1

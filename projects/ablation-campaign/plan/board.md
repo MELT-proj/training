@@ -57,20 +57,20 @@ Finding 4: **scores** (`selection-metric/score.py`, output kept in
 CER; CER clipped at 1.0; lower is better; rows in score order as the script
 prints them, not a ranking decision):
 
-| row | ID | OOD-train | OOD-related | OOD-latin | OOD-script | score |
-|---|---|---|---|---|---|---|
-| whisper-lr1e3-b300 | 0.0610 | 0.0493 | 0.4396 | 0.9070 | 1.0000 | 0.1286 |
-| whisper-lr1e3-b1200 | 0.0617 | 0.0466 | 0.4630 | 0.8608 | 1.0000 | 0.1321 |
-| whisper-lr2e3-b300 | 0.0631 | 0.0464 | 0.4780 | 0.9285 | 1.0000 | 0.1354 |
-| whisper-lr1e3-b600 | 0.0642 | 0.0459 | 0.4830 | 0.8790 | 1.0000 | 0.1364 |
-| whisper-lr2e3-b1200 | 0.0626 | 0.0450 | 0.5129 | 0.7769 | 1.0000 | 0.1413 |
-| whisper-lr2e3-b600 | 0.0617 | 0.0486 | 0.5497 | 0.8822 | 1.0000 | 0.1498 |
-| w2vb-lr2e3-b300 | 0.6115 | 0.6698 | 1.0000 | 1.0000 | 1.0000 | 0.7149 |
-| w2vb-lr1e3-b300 | 0.5466 | 0.8353 | 1.0000 | 1.0000 | 1.0000 | 0.7740 |
-| w2vb-lr2e3-b600 | 0.6337 | 0.8047 | 1.0000 | 1.0000 | 1.0000 | 0.7873 |
-| w2vb-lr1e3-b600 | 0.6453 | 0.8794 | 1.0000 | 1.0000 | 1.0000 | 0.8272 |
-| w2vb-lr2e3-b1200 | 0.6674 | 0.8998 | 1.0000 | 1.0000 | 1.0000 | 0.8442 |
-| w2vb-lr1e3-b1200 | 0.6748 | 0.9925 | 1.0000 | 1.0000 | 1.0000 | 0.8915 |
+| row | ID | OOD-train | OOD-related | OOD-latin | OOD-script | score | runaway ID | runaway FLEURS |
+|---|---|---|---|---|---|---|---|---|
+| whisper-lr1e3-b300 | 0.0610 | 0.0493 | 0.4396 | 0.9070 | 1.0000 | 0.1286 | 10/3000 | 536/5171 |
+| whisper-lr1e3-b1200 | 0.0617 | 0.0466 | 0.4630 | 0.8608 | 1.0000 | 0.1321 | 8/3000 | 527/5171 |
+| whisper-lr2e3-b300 | 0.0631 | 0.0464 | 0.4780 | 0.9285 | 1.0000 | 0.1354 | 8/3000 | 579/5171 |
+| whisper-lr1e3-b600 | 0.0642 | 0.0459 | 0.4830 | 0.8790 | 1.0000 | 0.1364 | 12/3000 | 586/5171 |
+| whisper-lr2e3-b1200 | 0.0626 | 0.0450 | 0.5129 | 0.7769 | 1.0000 | 0.1413 | 11/3000 | 504/5171 |
+| whisper-lr2e3-b600 | 0.0617 | 0.0486 | 0.5497 | 0.8822 | 1.0000 | 0.1498 | 7/3000 | 618/5171 |
+| w2vb-lr2e3-b300 | 0.6115 | 0.6698 | 1.0000 | 1.0000 | 1.0000 | 0.7149 | 149/3000 | 1407/5171 |
+| w2vb-lr1e3-b300 | 0.5466 | 0.8353 | 1.0000 | 1.0000 | 1.0000 | 0.7740 | 157/3000 | 1419/5171 |
+| w2vb-lr2e3-b600 | 0.6337 | 0.8047 | 1.0000 | 1.0000 | 1.0000 | 0.7873 | 200/3000 | 1358/5171 |
+| w2vb-lr1e3-b600 | 0.6453 | 0.8794 | 1.0000 | 1.0000 | 1.0000 | 0.8272 | 174/3000 | 1445/5171 |
+| w2vb-lr2e3-b1200 | 0.6674 | 0.8998 | 1.0000 | 1.0000 | 1.0000 | 0.8442 | 176/3000 | 1450/5171 |
+| w2vb-lr1e3-b1200 | 0.6748 | 0.9925 | 1.0000 | 1.0000 | 1.0000 | 0.8915 | 210/3000 | 1599/5171 |
 
 Reading, for whoever makes the call: on Whisper the ID medians span 0.003 and
 OOD-train 0.004 across all six rows, inside the 0.002-0.010 eval noise the grid
@@ -98,6 +98,25 @@ for any future one.
 Finding 6: **the two seed-43 replicates are not scored.** Both training jobs
 (46396669, 46396670) were still RUNNING after 2 h 25 min; their directories hold
 checkpoints only, with no top-level weights or `processor_config.json`.
+
+Finding 7: **the cv22 `de` number, and a runaway-generation statistic.**
+`whisper-lr1e3-b1200`'s cv22 `de` CER (0.139) is one 4.0 s clip whose output
+loops for 964 characters (910 errors, 67% of cv22-de errors); without it 0.046,
+like the other Whisper checkpoints (0.044-0.055), whose worst clips are other
+cuts. voxpopuli `de` (0.120) has one such loop too, plus five `de` samples that
+fail on every Whisper checkpoint, four of them voxpopuli, two from the
+2018-09-12 "widetrim" plenary where the hypothesis is fluent German unrelated to
+the reference (a likely reference/audio misalignment in the source data; audio
+not listened to). Samples failing (CER > 0.6) on all Whisper checkpoints: 6% of
+`de` errors, 11% of `it`, 8% of `es`, 6% of `en`, 1% of `fr`. PI decision:
+decoding stays **unguarded** (no `no_repeat_ngram_size`), to match training, and
+loops are counted instead. `score.py` now reports **runaway generations**
+(per-sample CER > 1, from the per-sample scores in the JSON log) per set and
+language, with each language's share of errors and its CER without them. Report
+only, not in the score (scores above are unchanged). The FLEURS count is mostly
+zero-shot failure on unseen languages (Whisper 504-618 of 5,171: bg 58/200, el
+50/200, ga 36/200 in `whisper-lr1e3-b1200`), not loops; in-domain it is 7-12 of
+3,000 for Whisper and 149-210 for w2v-BERT.
 
 Action needed: PI/orchestrator: decide the corner (nothing here calls it) and
 update the README's 200-per-language wording to the 600 in-domain sets. Whoever
