@@ -868,7 +868,7 @@ saved top-level checkpoints, JSON logs, 1 GPU, batch 4, bf16). In-domain: up to
 per language, 26 languages (nl 171). CER clipped at 1.0, group medians, lower
 is better; score = (1.0·ID + 1.5·OOD-train + 0.6·OOD-related) / 3.1. Per-language
 values: `selection-metric/scores/screen-wsd-grid-2026-09-24.txt`. The
-seed-43 replicates are not included (still training). Runaway columns count samples with per-sample CER > 1 (decoding is unguarded, as in training); report only, not in the score.
+Seed-43 replicates: Whisper included; the w2v-BERT one is still training. Runaway columns count samples with per-sample CER > 1 (decoding is unguarded, as in training); report only, not in the score.
 
 | run | ID | OOD-train | OOD-related | OOD-latin | OOD-script | score | runaway ID | runaway FLEURS |
 |---|---|---|---|---|---|---|---|---|
@@ -878,6 +878,7 @@ seed-43 replicates are not included (still training). Runaway columns count samp
 | whisper-lr1e3-b600 | 0.0642 | 0.0459 | 0.4830 | 0.8790 | 1.0000 | 0.1364 | 12/3000 | 586/5171 |
 | whisper-lr2e3-b1200 | 0.0626 | 0.0450 | 0.5129 | 0.7769 | 1.0000 | 0.1413 | 11/3000 | 504/5171 |
 | whisper-lr2e3-b600 | 0.0617 | 0.0486 | 0.5497 | 0.8822 | 1.0000 | 0.1498 | 7/3000 | 618/5171 |
+| whisper-lr2e3-b1200-s43 (seed-43 replicate) | 0.0614 | 0.0460 | 0.4893 | 0.8913 | 1.0000 | 0.1368 | 10/3000 | 494/5171 |
 | w2vb-lr2e3-b300 | 0.6115 | 0.6698 | 1.0000 | 1.0000 | 1.0000 | 0.7149 | 149/3000 | 1407/5171 |
 | w2vb-lr1e3-b300 | 0.5466 | 0.8353 | 1.0000 | 1.0000 | 1.0000 | 0.7740 | 157/3000 | 1419/5171 |
 | w2vb-lr2e3-b600 | 0.6337 | 0.8047 | 1.0000 | 1.0000 | 1.0000 | 0.7873 | 200/3000 | 1358/5171 |

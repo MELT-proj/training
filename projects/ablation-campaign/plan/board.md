@@ -65,6 +65,7 @@ prints them, not a ranking decision):
 | whisper-lr1e3-b600 | 0.0642 | 0.0459 | 0.4830 | 0.8790 | 1.0000 | 0.1364 | 12/3000 | 586/5171 |
 | whisper-lr2e3-b1200 | 0.0626 | 0.0450 | 0.5129 | 0.7769 | 1.0000 | 0.1413 | 11/3000 | 504/5171 |
 | whisper-lr2e3-b600 | 0.0617 | 0.0486 | 0.5497 | 0.8822 | 1.0000 | 0.1498 | 7/3000 | 618/5171 |
+| whisper-lr2e3-b1200-s43 (seed-43 replicate) | 0.0614 | 0.0460 | 0.4893 | 0.8913 | 1.0000 | 0.1368 | 10/3000 | 494/5171 |
 | w2vb-lr2e3-b300 | 0.6115 | 0.6698 | 1.0000 | 1.0000 | 1.0000 | 0.7149 | 149/3000 | 1407/5171 |
 | w2vb-lr1e3-b300 | 0.5466 | 0.8353 | 1.0000 | 1.0000 | 1.0000 | 0.7740 | 157/3000 | 1419/5171 |
 | w2vb-lr2e3-b600 | 0.6337 | 0.8047 | 1.0000 | 1.0000 | 1.0000 | 0.7873 | 200/3000 | 1358/5171 |
@@ -117,6 +118,14 @@ only, not in the score (scores above are unchanged). The FLEURS count is mostly
 zero-shot failure on unseen languages (Whisper 504-618 of 5,171: bg 58/200, el
 50/200, ga 36/200 in `whisper-lr1e3-b1200`), not loops; in-domain it is 7-12 of
 3,000 for Whisper and 149-210 for w2v-BERT.
+
+Finding 8: **Whisper seed-43 replicate** (`whisper-lr2e3-b1200-s43`, eval jobs
+46499491-46499496, 0.815 GPU-h): score 0.1368 against 0.1413 for seed 42, a
+0.0045 shift from the seed at this corner; ID 0.0614 vs 0.0626, OOD-train 0.0460
+vs 0.0450, OOD-related 0.489 vs 0.513 (that 0.024 is the whole score shift). One
+replicate pair is one noise estimate. Against it, the six seed-42 Whisper scores
+span 0.021 (0.1286-0.1498); rows within ~0.005 of each other are not separable.
+The w2v-BERT replicate (job 46396669) was still training at 8.5 h.
 
 Action needed: PI/orchestrator: decide the corner (nothing here calls it) and
 update the README's 200-per-language wording to the 600 in-domain sets. Whoever
