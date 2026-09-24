@@ -632,6 +632,32 @@ arms:
     seed: 42
     time: "14:00:00"
 
+  - id: MA-700-screen-whisper-lr1e3-b1200-k2
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    encoder: openai/whisper-large-v3
+    stack_factor: 2       # stacking sweep (01 §3): 25 Hz
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 1e-3
+    batch_duration: 150
+    grad_accum_steps: 1
+    seed: 42
+    time: "14:00:00"
+
+  - id: MA-700-screen-whisper-lr1e3-b1200-k10
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    encoder: openai/whisper-large-v3
+    stack_factor: 10       # stacking sweep (01 §3): 5 Hz
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 1e-3
+    batch_duration: 150
+    grad_accum_steps: 1
+    seed: 42
+    time: "14:00:00"
+
   - id: MA-700-screen-whisper-lr1e3-b600
     stage: MA
     config: ABL-MA-700-asr.yaml
