@@ -15,6 +15,96 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-24 — Claude (worker session, selection-metric) — sets frozen, `score.py` written, twelve screen checkpoints scored; the seed-43 replicates have not landed
+
+Context: the selection metric (`selection-metric/README.md`) implemented end to
+end: frozen sets, scoring script, and the twelve `MA-700-screen-*` WSD grid
+checkpoints scored. No corner is called here; that is the PI's and the
+orchestrator's.
+
+Finding 1: **sets.** Frozen on nyx first, then on MN5 (indexed tree), seed 0,
+in `~/eval/frozen-sets/selection-metric/` on MN5 (`freeze_selection_sets.sh`
+there records how). `selection-id-{en,de,es,fr,it}`: `max_samples` 200 **per
+source** (cv22_sidon, mls_sidon, voxpopuli), so **600 utterances per language,
+not 200 pooled** (PI decision 2026-09-24; the README still says 200 pooled and
+needs updating). `selection-fleurs26-dev200`: 200 per language, 26 languages,
+5,171 samples, 15.9 h; only **nl** is short (171, all kept). The in-domain sets
+were selected identically on nyx and MN5. Specs are on melt-eval branch
+`selection-metric-sets` (no melt-eval code change was needed; PI dropped the
+pooled-sampling idea). Sets moved aside, not deleted: `_superseded-*` dirs.
+
+Finding 2: **MN5's indexed FLEURS tree carries duplicated shards** (the
+2026-08-11 duplication, never cleaned there). 78 leaves, 26 locales (af_za to
+fr_fr), all splits; every extra shard is a copy of shard 0 (af_za train and
+validation have two extra). Only `shar-indexed`; plain `shar` is clean. So a
+freeze on MN5 draws from a doubled pool. Handled by freezing FLEURS on nyx and
+rewriting only the locator directory prefix (shard-0 `cuts` md5-identical on all
+26 leaves; one sample per language loaded on MN5 and length-checked). The PI
+was given `~/fleurs_dedupe.sh` (dry run by default) to move the extras aside.
+Consequence: `fleurs24-asr-dev`, frozen on MN5 from the doubled tree, may hold
+repeated utterances in 10 languages, and would break if shard 1 is moved.
+
+Finding 3: **cost** (1 GPU, batch 4, bf16, `task_filter=asr`, one job per set;
+GPU-h = CPUTimeRAW / 3600 / 40). Whisper 0.82-0.91 GPU-h per checkpoint (FLEURS
+job 35-39 min, five in-domain jobs 2.5-3.5 min each); w2v-BERT 1.44-1.64 GPU-h
+(FLEURS job 61-70 min, in-domain 5-6 min each). FLEURS scales linearly with
+samples (5,171 vs 2,600: 2.0x, not the 2.4x assumed). All 72 jobs: 14.3 GPU-h.
+Eval jobs: 46443574-46443585 (first two checkpoints), 46475389-46475451 (the
+other ten); ledger `eval-jobs.tsv` next to the sets.
+
+Finding 4: **scores** (`selection-metric/score.py`, output kept in
+`selection-metric/results/screen-wsd-grid-2026-09-24.txt` with per-language
+CER; CER clipped at 1.0; lower is better; rows in score order as the script
+prints them, not a ranking decision):
+
+| row | ID | OOD-train | OOD-related | OOD-latin | OOD-script | score |
+|---|---|---|---|---|---|---|
+| whisper-lr1e3-b300 | 0.0610 | 0.0493 | 0.4396 | 0.9070 | 1.0000 | 0.1286 |
+| whisper-lr1e3-b1200 | 0.0617 | 0.0466 | 0.4630 | 0.8608 | 1.0000 | 0.1321 |
+| whisper-lr2e3-b300 | 0.0631 | 0.0464 | 0.4780 | 0.9285 | 1.0000 | 0.1354 |
+| whisper-lr1e3-b600 | 0.0642 | 0.0459 | 0.4830 | 0.8790 | 1.0000 | 0.1364 |
+| whisper-lr2e3-b1200 | 0.0626 | 0.0450 | 0.5129 | 0.7769 | 1.0000 | 0.1413 |
+| whisper-lr2e3-b600 | 0.0617 | 0.0486 | 0.5497 | 0.8822 | 1.0000 | 0.1498 |
+| w2vb-lr2e3-b300 | 0.6115 | 0.6698 | 1.0000 | 1.0000 | 1.0000 | 0.7149 |
+| w2vb-lr1e3-b300 | 0.5466 | 0.8353 | 1.0000 | 1.0000 | 1.0000 | 0.7740 |
+| w2vb-lr2e3-b600 | 0.6337 | 0.8047 | 1.0000 | 1.0000 | 1.0000 | 0.7873 |
+| w2vb-lr1e3-b600 | 0.6453 | 0.8794 | 1.0000 | 1.0000 | 1.0000 | 0.8272 |
+| w2vb-lr2e3-b1200 | 0.6674 | 0.8998 | 1.0000 | 1.0000 | 1.0000 | 0.8442 |
+| w2vb-lr1e3-b1200 | 0.6748 | 0.9925 | 1.0000 | 1.0000 | 1.0000 | 0.8915 |
+
+Reading, for whoever makes the call: on Whisper the ID medians span 0.003 and
+OOD-train 0.004 across all six rows, inside the 0.002-0.010 eval noise the grid
+already measured; the score spread (0.129-0.150) comes almost entirely from
+OOD-related (0.44-0.55, five languages). Sensitive to five languages at 200
+utterances each, and to the seed: the replicates are the check. On w2v-BERT
+every OOD group except OOD-train clips to 1.0, so the score separates rows only
+through ID and OOD-train, and none is aligned.
+
+Finding 5: **things checked along the way.** (a) The eval prompt is audio-only
+with the Llama-3 frame (`prompt_template: '{audio_token}'` from each run's
+`training_config.yaml`), **no instruction and no language**; the processor
+adds `<|audio_bos|>`/`<|audio_eos|>` itself, verified on the eval image, so
+there is no train/eval mismatch. (b) Whisper's in-domain CER (0.061) is worse
+than its FLEURS CER on the same five languages (0.047); per corpus (200 each)
+it is cv22 0.084/0.139/0.047/0.058/0.038 and voxpopuli 0.054/0.120/0.050/0.066/0.110
+for en/de/es/fr/it, against mls 0.025-0.059. The gap is set difficulty, mostly de
+and it. w2v-BERT has the expected order (ID 0.675 below OOD-train 0.99). The PI
+finds `de` suspicious; baseline providers requested in
+[eval#21](https://github.com/MELT-proj/eval/issues/21). (c) The eval container
+runs the `.sif`'s baked-in `melteval`, not the bound checkout, unless
+`PYTHONPATH` points at the checkout: harmless here (no eval-side change), a trap
+for any future one.
+
+Finding 6: **the two seed-43 replicates are not scored.** Both training jobs
+(46396669, 46396670) were still RUNNING after 2 h 25 min; their directories hold
+checkpoints only, with no top-level weights or `processor_config.json`.
+
+Action needed: PI/orchestrator: decide the corner (nothing here calls it) and
+update the README's 200-per-language wording to the 600 in-domain sets. Whoever
+picks this up after the replicates finish: `bash
+~/eval/frozen-sets/selection-metric/submit_selection_eval.sh <row> <exp_name>`
+on MN5, then `score.py`.
+
 ## 2026-09-23 — Bridge Agent — PI: per-language expert usage deferred to an issue; MoE adapter crossing-ready item ticked
 
 Context: follow-up to the entry directly below (PR #141, per-language expert
