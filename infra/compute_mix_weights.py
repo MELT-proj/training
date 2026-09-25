@@ -226,14 +226,28 @@ def shar_manifest_files(shar_path: Path) -> list[Path]:
     return [by_shard[k] for k in sorted(by_shard)]
 
 
-def shard_seconds(shard: str) -> float:
+_SKIP_GLOBALS = {"__builtins__": {}, "len": len, "any": any, "all": all, "str": str}
+
+
+def compile_skip(expr: str | None):
+    """Compile a --skip-cut expression, or return None when there is none."""
+    return compile(expr, "<--skip-cut>", "eval") if expr else None
+
+
+def shard_seconds(shard: str, skip_expr: str | None = None) -> tuple[float, float, int]:
     """Sum top-level cut durations in one JSONL manifest, gzipped or plain.
+
+    Returns ``(kept_seconds, skipped_seconds, skipped_cuts)``. A cut is skipped
+    when ``skip_expr`` (a Python expression over the parsed cut dict, named
+    ``cut``) is truthy; it then contributes nothing to the hours.
 
     Only the top-level ``duration`` is counted. A regex over the raw text would
     be faster but would also pick up ``duration`` inside each supervision and
     silently double-count.
     """
-    total = 0.0
+    code = compile_skip(skip_expr)
+    kept = skipped = 0.0
+    n_skipped = 0
     opener = gzip.open if str(shard).endswith(".gz") else open
     with opener(shard, "rt", encoding="utf-8") as fh:
         for line in fh:
@@ -241,10 +255,24 @@ def shard_seconds(shard: str) -> float:
             if not line:
                 continue
             try:
-                total += float(json.loads(line)["duration"])
+                cut = json.loads(line)
+                dur = float(cut["duration"])
             except (json.JSONDecodeError, KeyError, TypeError, ValueError):
                 continue
-    return total
+            if code is not None:
+                try:
+                    hit = eval(code, _SKIP_GLOBALS, {"cut": cut})
+                except Exception as exc:
+                    # Fail loudly: guessing here would silently change the hours.
+                    raise RuntimeError(
+                        f"--skip-cut raised {exc!r} on cut {cut.get('id')} in {shard}; "
+                        "use .get() for optional keys") from exc
+                if hit:
+                    skipped += dur
+                    n_skipped += 1
+                    continue
+            kept += dur
+    return kept, skipped, n_skipped
 
 
 def write_cache(cache: dict, path: Path) -> None:
@@ -270,7 +298,18 @@ def measure_shard(task: tuple[str, str]) -> tuple[str, float]:
     one worker reading the largest corpus alone while the rest idle.
     """
     source, shard = task
-    return source, shard_seconds(shard)
+    return source, shard_seconds(shard)[0]
+
+
+def measure_shard_skipping(
+    task: tuple[str, str, str | None],
+) -> tuple[str, float, float, int]:
+    """Like measure_shard, with a --skip-cut expression.
+
+    Returns (source_path, kept seconds, skipped seconds, skipped cuts).
+    """
+    source, shard, skip_expr = task
+    return (source, *shard_seconds(shard, skip_expr))
 
 
 # ---------------------------------------------------------------------------
@@ -481,6 +520,16 @@ def main() -> None:
     p.add_argument("--cache", type=Path, default=Path("infra/.mix_weights_hours.json"),
                    help="Where measured per-source hours are cached.")
     p.add_argument("--no-cache", action="store_true")
+    p.add_argument("--skip-cut", default=None, metavar="EXPR",
+                   help="Python expression over the parsed cut dict `cut`; cuts for "
+                        "which it is true are left out of the measured hours (e.g. "
+                        "\"not (cut.get('supervisions') and (cut['supervisions'][0]"
+                        ".get('text') or '').strip())\" drops cuts with no transcript). "
+                        "Only len/any/all/str are available. It changes the "
+                        "hours, not the emitted config: the loader must drop the same "
+                        "cuts. Cache entries record the expression and are re-measured "
+                        "when it differs; use a separate --cache so the plain hours "
+                        "cache is not overwritten.")
     p.add_argument("--emit-yaml", type=Path, default=None,
                    help="Write a flat shar_path -> p_cl mapping to this file.")
     p.add_argument("--emit-nemo", type=Path, default=None,
@@ -500,17 +549,19 @@ def main() -> None:
     if args.cache.exists() and not args.no_cache:
         cache = json.loads(args.cache.read_text())
 
+    compile_skip(args.skip_cut)  # fail on a syntax error before any I/O
     todo = [s["path"] for s in sources
             if s["path"] not in cache
-            or cache[s["path"]].get("sample") != args.sample_shards]
+            or cache[s["path"]].get("sample") != args.sample_shards
+            or cache[s["path"]].get("skip") != args.skip_cut]
     if todo:
-        tasks: list[tuple[str, str]] = []
+        tasks: list[tuple[str, str, str | None]] = []
         n_shards: dict[str, int] = {}
         n_read: dict[str, int] = {}
         for src in todo:
             chosen, total = plan_source(src, args.sample_shards)
             n_shards[src], n_read[src] = total, len(chosen)
-            tasks.extend((src, sh) for sh in chosen)
+            tasks.extend((src, sh, args.skip_cut) for sh in chosen)
 
         print(f"Measuring {len(todo)} sources / {len(tasks)} shards with "
               f"{args.jobs} workers "
@@ -522,15 +573,19 @@ def main() -> None:
         for src in todo:
             if n_read[src] == 0:
                 cache[src] = {"hours": 0.0, "shards": n_shards[src],
-                              "sample": args.sample_shards}
+                              "sample": args.sample_shards, "skip": args.skip_cut}
 
         seconds: dict[str, float] = defaultdict(float)
+        skipped_s: dict[str, float] = defaultdict(float)
+        skipped_n: dict[str, int] = defaultdict(int)
         done = 0
         with ProcessPoolExecutor(max_workers=args.jobs) as pool:
             # pool.map preserves input order, and tasks are grouped by source,
             # so a source is finished as soon as its last shard comes back.
-            for src, secs in pool.map(measure_shard, tasks, chunksize=4):
+            for src, secs, skip_secs, skip_cuts in pool.map(measure_shard_skipping, tasks, chunksize=4):
                 seconds[src] += secs
+                skipped_s[src] += skip_secs
+                skipped_n[src] += skip_cuts
                 remaining[src] -= 1
                 done += 1
                 if remaining[src]:
@@ -540,9 +595,17 @@ def main() -> None:
                     # Shards within a source are near-uniform: scale by the ratio.
                     total *= n_shards[src] / n_read[src]
                 cache[src] = {"hours": total / 3600.0, "shards": n_shards[src],
-                              "sample": args.sample_shards}
+                              "sample": args.sample_shards, "skip": args.skip_cut}
+                note = ""
+                if args.skip_cut:
+                    scale = (n_shards[src] / n_read[src]
+                             if args.sample_shards and n_read[src] else 1.0)
+                    cache[src]["skipped_hours"] = skipped_s[src] * scale / 3600.0
+                    cache[src]["skipped_cuts"] = round(skipped_n[src] * scale)
+                    note = (f"  skipped {cache[src]['skipped_hours']:.2f} h / "
+                            f"{cache[src]['skipped_cuts']} cuts")
                 print(f"  [{done}/{len(tasks)} shards] {total / 3600.0:10.1f} h "
-                      f"{n_shards[src]:6d} shards  {src}", flush=True)
+                      f"{n_shards[src]:6d} shards  {src}{note}", flush=True)
                 if not args.no_cache:
                     write_cache(cache, args.cache)
         if not args.no_cache:

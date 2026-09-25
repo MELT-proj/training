@@ -17,9 +17,17 @@
 #         --config       projects/ablation-campaign/fondue-ma-dryrun-template.yaml \
 #         --datasets-root /mnt/scratch-nyx/giuseppe/melt/melt-data/shar \
 #         --alpha 0.5 --beta 0.5 \
-#         --cache        infra/.mix_weights_hours.json \
+#         --cache        infra/.mix_weights_hours_notext.json \
+#         --skip-cut     "$(cat skip_expr)" \
 #         --emit-config  projects/ablation-campaign/Fondue-MA-dryrun.yaml \
 #         --exp-name     Fondue-MA-dryrun
+#
+#   where skip_expr drops cuts with no transcript anywhere (supervision text,
+#   custom.pnc_text and custom.metadata.sentence all empty):
+#     not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))
+#   That is 7,442 cuts / 24.85 h, all VoxPopuli (hr 17.0 h, ro 2.3 h, hu 1.5 h);
+#   the loader skips the same cuts (get_text_from_cut returns None), so they
+#   are now out of the weights and the step count too.
 #
 #   Hours were measured on nyx. The run reads ${LOCAL_DATASETS_DIR} on MN5
 #   (/gpfs/projects/epor48/melt-data/shar-indexed); all sources below exist
@@ -527,7 +535,7 @@ data:
     # MUST sit after input_cfg: the tool only looks for this key below the
     # block it replaces, so the draft's placement (above it) would have left
     # 240355.0 untouched.
-    total_hours: 242102.5
+    total_hours: 242077.6
     force_estimate: false
 
     # Batch settings ---------------------------------------------------------
@@ -643,10 +651,10 @@ trainer:
   # and trains with no warmup, which is what `plan_arm.py --warmup-ratio`
   # produces today); warmup is therefore set as `warmup_steps`,
   # round(0.03 x steps) (PI, 2026-09-25).
-  # num_decay_steps = round(0.2 x 242,103 steps) = 48421.
+  # num_decay_steps = round(0.2 x 242,078 steps) = 48416.
   lr_scheduler_type: warmup_stable_decay
-  lr_scheduler_kwargs: {"num_decay_steps": 48421, "min_lr_ratio": 0.1, "decay_type": "cosine"}
-  warmup_steps: 7263
+  lr_scheduler_kwargs: {"num_decay_steps": 48416, "min_lr_ratio": 0.1, "decay_type": "cosine"}
+  warmup_steps: 7262
 
   num_train_epochs: 1                  # campaign convention; steps are derived, never pinned
   max_steps: -1

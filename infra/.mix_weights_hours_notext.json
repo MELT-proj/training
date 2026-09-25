@@ -1,0 +1,1018 @@
+{
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/cv22_sidon/en/train": {
+    "hours": 1798.3717753124897,
+    "shards": 46,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/mls_sidon/english/train": {
+    "hours": 39215.79444430554,
+    "shards": 2373,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/voxpopuli/en/train": {
+    "hours": 522.5999435243099,
+    "shards": 10,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0031554861111111106,
+    "skipped_cuts": 16
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/English/asr_only": {
+    "hours": 102456.95249024298,
+    "shards": 10208,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/fleurs/en_us/train": {
+    "hours": 7.4908055555555535,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/librispeech/clean/train.100": {
+    "hours": 100.59087965277776,
+    "shards": 15,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/librispeech/clean/train.360": {
+    "hours": 363.6056084201387,
+    "shards": 53,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/librispeech/other/train.500": {
+    "hours": 496.85791032986106,
+    "shards": 75,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/peoples_speech/clean/train": {
+    "hours": 5894.745798333341,
+    "shards": 376,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/peoples_speech/clean_sa/train": {
+    "hours": 991.7246991666669,
+    "shards": 65,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/cv22_sidon/es/train": {
+    "hours": 508.7080277604148,
+    "shards": 15,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/mls_sidon/spanish/train": {
+    "hours": 917.684176111111,
+    "shards": 45,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/voxpopuli/es/train": {
+    "hours": 151.9254521875004,
+    "shards": 3,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.00037220486111111113,
+    "skipped_cuts": 2
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Spanish/asr_only": {
+    "hours": 779.5999222048615,
+    "shards": 240,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Spanish/ast": {
+    "hours": 25833.30787805558,
+    "shards": 1984,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/fleurs/es_419/train": {
+    "hours": 8.805533333333324,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/cv22_sidon/fr/train": {
+    "hours": 850.835608611107,
+    "shards": 24,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/mls_sidon/french/train": {
+    "hours": 1076.5805241493058,
+    "shards": 56,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/voxpopuli/fr/train": {
+    "hours": 205.69446204861245,
+    "shards": 4,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0046106423611111105,
+    "skipped_cuts": 27
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/French/asr_only": {
+    "hours": 715.5285056944442,
+    "shards": 144,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/French/ast": {
+    "hours": 11511.742416232653,
+    "shards": 1192,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/fleurs/fr_fr/train": {
+    "hours": 10.322949999999999,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/cv22_sidon/de/train": {
+    "hours": 962.7109915277736,
+    "shards": 25,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/mls_sidon/german/train": {
+    "hours": 1966.508539739583,
+    "shards": 101,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/voxpopuli/de/train": {
+    "hours": 264.6066313715284,
+    "shards": 6,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0007555034722222223,
+    "skipped_cuts": 4
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/German/asr_only": {
+    "hours": 496.209949878472,
+    "shards": 104,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/German/ast": {
+    "hours": 7429.145293107637,
+    "shards": 840,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/fleurs/de_de/train": {
+    "hours": 9.000683333333312,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/cv22_sidon/it/train": {
+    "hours": 254.65237387152723,
+    "shards": 7,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/mls_sidon/italian/train": {
+    "hours": 247.3779047569443,
+    "shards": 13,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/voxpopuli/it/train": {
+    "hours": 78.05939598958338,
+    "shards": 2,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.00036109375,
+    "skipped_cuts": 2
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Italian/asr_only": {
+    "hours": 120.24149314236102,
+    "shards": 24,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Italian/ast": {
+    "hours": 6024.731587100696,
+    "shards": 312,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/fleurs/it_it/train": {
+    "hours": 8.998150000000033,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/cv22_sidon/ru/train": {
+    "hours": 38.12280338541676,
+    "shards": 6,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Russian/asr_only": {
+    "hours": 1732.5181367013881,
+    "shards": 472,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Russian/ast": {
+    "hours": 18394.202270104164,
+    "shards": 2000,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/fleurs/ru_ru/train": {
+    "hours": 8.050333333333333,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/cv22_sidon/nl/train": {
+    "hours": 54.14969333333301,
+    "shards": 5,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/mls_sidon/dutch/train": {
+    "hours": 1554.244049184028,
+    "shards": 98,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/voxpopuli/nl/train": {
+    "hours": 45.936208819444325,
+    "shards": 6,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.4150738541666667,
+    "skipped_cuts": 191
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Dutch/asr_only": {
+    "hours": 37.75119065972222,
+    "shards": 24,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Dutch/ast": {
+    "hours": 1328.1435804687503,
+    "shards": 224,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/fleurs/nl_nl/train": {
+    "hours": 7.661016666666648,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/cv22_sidon/pt/train": {
+    "hours": 26.316779999998673,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/mls_sidon/portuguese/train": {
+    "hours": 160.9632150000001,
+    "shards": 8,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Portuguese/asr_only": {
+    "hours": 262.1668350694444,
+    "shards": 184,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Portuguese/ast": {
+    "hours": 1641.2386143923613,
+    "shards": 185,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/fleurs/pt_br/train": {
+    "hours": 10.178849999999994,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/cv22_sidon/pl/train": {
+    "hours": 35.52073527777784,
+    "shards": 5,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/mls_sidon/polish/train": {
+    "hours": 103.64918678819436,
+    "shards": 6,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/voxpopuli/pl/train": {
+    "hours": 96.87955043402779,
+    "shards": 9,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.8030880555555556,
+    "skipped_cuts": 193
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Polish/asr_only": {
+    "hours": 21.086555208333326,
+    "shards": 14,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Polish/ast": {
+    "hours": 663.5699512847226,
+    "shards": 72,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/fleurs/pl_pl/train": {
+    "hours": 9.179883333333331,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/cv22_sidon/hu/train": {
+    "hours": 56.63108175347226,
+    "shards": 8,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/voxpopuli/hu/train": {
+    "hours": 52.63043737847216,
+    "shards": 5,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 1.4562275694444444,
+    "skipped_cuts": 357
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Hungarian/asr_only": {
+    "hours": 8.487464513888892,
+    "shards": 2,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Hungarian/ast": {
+    "hours": 145.3256752256944,
+    "shards": 16,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/fleurs/hu_hu/train": {
+    "hours": 9.286433333333347,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/cv22_sidon/fi/train": {
+    "hours": 2.5669466666666647,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/voxpopuli/fi/train": {
+    "hours": 21.397863107638905,
+    "shards": 2,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 1.2422316319444442,
+    "skipped_cuts": 374
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Finnish/asr_only": {
+    "hours": 3.7779281770833344,
+    "shards": 2,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Finnish/ast": {
+    "hours": 155.92601050347218,
+    "shards": 16,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/fleurs/fi_fi/train": {
+    "hours": 8.811511111111107,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/cv22_sidon/cs/train": {
+    "hours": 28.8034076736111,
+    "shards": 5,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/voxpopuli/cs/train": {
+    "hours": 52.87299772569448,
+    "shards": 5,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.7602625173611111,
+    "skipped_cuts": 199
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Czech/asr_only": {
+    "hours": 3.8408444965277755,
+    "shards": 2,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Czech/ast": {
+    "hours": 65.59617630208336,
+    "shards": 16,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/fleurs/cs_cz/train": {
+    "hours": 8.442650000000015,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/cv22_sidon/ro/train": {
+    "hours": 5.741543333333279,
+    "shards": 2,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/voxpopuli/ro/train": {
+    "hours": 74.1164783680555,
+    "shards": 7,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 2.3010990451388884,
+    "skipped_cuts": 689
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Romanian/asr_only": {
+    "hours": 5.7877115972222235,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Romanian/ast": {
+    "hours": 32.546221892361075,
+    "shards": 6,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/fleurs/ro_ro/train": {
+    "hours": 10.123649999999987,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/cv22_sidon/sv-SE/train": {
+    "hours": 9.105133333333368,
+    "shards": 2,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Swedish/asr_only": {
+    "hours": 1.910311059027784,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Swedish/ast": {
+    "hours": 90.89373607638885,
+    "shards": 16,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/fleurs/sv_se/train": {
+    "hours": 8.360805555555578,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/voxpopuli/hr/train": {
+    "hours": 17.84511439236111,
+    "shards": 3,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 16.996939427083326,
+    "skipped_cuts": 5184
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Croatian/asr_only": {
+    "hours": 0.2418444270833333,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Croatian/ast": {
+    "hours": 9.186072170138896,
+    "shards": 2,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/fleurs/hr_hr/train": {
+    "hours": 11.776900000000017,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/cv22_sidon/sk/train": {
+    "hours": 8.931359999999984,
+    "shards": 2,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/voxpopuli/sk/train": {
+    "hours": 29.415318611111054,
+    "shards": 3,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.6682561631944446,
+    "skipped_cuts": 158
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Slovak/asr_only": {
+    "hours": 0.47907779513888876,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Slovak/ast": {
+    "hours": 8.87965538194446,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/fleurs/sk_sk/train": {
+    "hours": 5.867949999999997,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/cv22_sidon/bg/train": {
+    "hours": 7.1628799999999595,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Bulgarian/asr_only": {
+    "hours": 1.8174944270833326,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Bulgarian/ast": {
+    "hours": 16.733527586805547,
+    "shards": 4,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/fleurs/bg_bg/train": {
+    "hours": 9.503766666666671,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/cv22_sidon/lv/train": {
+    "hours": 23.301630000000024,
+    "shards": 3,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Latvian/asr_only": {
+    "hours": 0.10477777777777779,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Latvian/ast": {
+    "hours": 0.5771944097222224,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/fleurs/lv_lv/train": {
+    "hours": 6.529600000000002,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/cv22_sidon/da/train": {
+    "hours": 4.196070000000007,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Danish/asr_only": {
+    "hours": 0.5740555729166671,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Danish/ast": {
+    "hours": 16.68076343750002,
+    "shards": 4,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/fleurs/da_dk/train": {
+    "hours": 7.504633333333337,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/cv22_sidon/lt/train": {
+    "hours": 11.746323333333308,
+    "shards": 2,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/voxpopuli/lt/train": {
+    "hours": 1.3289478819444442,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0105215625,
+    "skipped_cuts": 3
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Lithuanian/asr_only": {
+    "hours": 0.6184610937499999,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Lithuanian/ast": {
+    "hours": 4.9241501041666735,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/fleurs/lt_lt/train": {
+    "hours": 9.752433333333327,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/cv22_sidon/el/train": {
+    "hours": 2.170579999999999,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Greek/asr_only": {
+    "hours": 0.9902777951388884,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Greek/ast": {
+    "hours": 13.768007777777797,
+    "shards": 2,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/fleurs/el_gr/train": {
+    "hours": 10.042644444444424,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/cv22_sidon/et/train": {
+    "hours": 6.380725590277795,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/voxpopuli/et/train": {
+    "hours": 2.110583489583335,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.17071211805555558,
+    "skipped_cuts": 39
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Estonian/asr_only": {
+    "hours": 0.5045666666666668,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Estonian/ast": {
+    "hours": 7.870494375000003,
+    "shards": 2,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/fleurs/et_ee/train": {
+    "hours": 7.297749999999987,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/cv22_sidon/sl/train": {
+    "hours": 1.4977933333333315,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/voxpopuli/sl/train": {
+    "hours": 6.049251232638873,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.016959843750000002,
+    "skipped_cuts": 4
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/fleurs/sl_si/train": {
+    "hours": 7.764633333333327,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/cv22_sidon/ga-IE/train": {
+    "hours": 0.6034433333333338,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/fleurs/ga_ie/train": {
+    "hours": 12.11973333333331,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/cv22_sidon/mt/train": {
+    "hours": 2.3751066666666687,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/fleurs/mt_mt/train": {
+    "hours": 9.909083333333337,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/cv22_sidon/uk/train": {
+    "hours": 31.70010539930573,
+    "shards": 6,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Ukrainian/asr_only": {
+    "hours": 10.163845260416673,
+    "shards": 4,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/yodas-granary/Ukrainian/ast": {
+    "hours": 596.0832547569445,
+    "shards": 64,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/fleurs/uk_ua/train": {
+    "hours": 9.034933333333324,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/cv22_sidon/ca/train": {
+    "hours": 1739.852443749988,
+    "shards": 48,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  },
+  "/mnt/scratch-nyx/giuseppe/melt/melt-data/shar/fleurs/ca_es/train": {
+    "hours": 7.424816666666666,
+    "shards": 1,
+    "sample": null,
+    "skip": "not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))",
+    "skipped_hours": 0.0,
+    "skipped_cuts": 0
+  }
+}
