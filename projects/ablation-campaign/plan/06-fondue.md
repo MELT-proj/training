@@ -32,7 +32,8 @@ doubling:
 
 | stage, one epoch over the pool | GPU-h | wall on 32 GPUs |
 |---|---|---|
-| MA over 247K h ASR, adapter only (~1,000 audio-s per wall-s on 8 GPUs) | ~3,800 | ~5 days |
+| MA over 247K h ASR, adapter only (~1,000 audio-s per wall-s on 8 GPUs) | ~2,000 (arithmetic corrected 2026-09-25; was 3,800) | ~2.6 days |
+| MA over the 235K h dry-run pool, frozen Whisper-large-v3 + Qwen3.5-2B, stack 5, `batch_duration 30 x accum 4`, 8 x 4, **measured 6.15 s/step**, 0.896 audio-h per step (Fondue-MA-dryrun, job 46618634) | ~12,100 for the derived 220,492 steps (84% of the pool); ~14,400 for the whole pool — **extrapolated** | 15.7 to 18.7 days |
 | IFT over ~330K h, Llama-3.2-1B (5.73 s/step at 3,840 s effective) | ~6,000 | ~8 days |
 | IFT, Qwen3.5-2B with gradient checkpointing, 8 nodes x 4 GPUs, DDP, `batch_duration 30`/`grad_accum 20` (effective batch 19,200 audio-s/step) | **measured** 32.3 s/step at 8 nodes (see below) -> ~17,800 | ~23.1 days |
 
@@ -245,6 +246,13 @@ a fourth axis rather than three points on one parameter.
       (week 3) still owed: dataloader build time, bucket bins on the full
       distribution, exposure audit, host-RAM trace over the first hour, and
       confirming the ~40 unverified corpus paths the draft flags.
+- [x] Fondue MA dry run at full scale (week 3, 2026-09-25, job 46618634; numbers on the board and in the §2
+      table). Settled by it: bucket bins are measured on the mixture-weighted pool; `total_cuts` must be set;
+      People's Speech (6,886 h) is out until its tars are rebuilt without pax headers (lhotse's indexed reader
+      cannot read them); VoxPopuli's textless cuts are dropped from the weights (`compute_mix_weights.py
+      --skip-cut`); warmup is an integer `warmup_steps` (transformers 5 has no `warmup_ratio`). Open: the
+      weights act on cuts, not hours (hours share = weight x mean cut duration); `batch_duration 30` fills 84% of
+      its budget and uses 12 of 64 GB.
 - [x] Raclette config drafted (week 2, `raclette-draft.yaml`: mixture,
       three LR points and their reasoning). Final (week 5, once batch/
       topology are set) and run (week 6) still owed.

@@ -202,6 +202,7 @@ not where this section says, ask the PI and the answer gets added here.
 | MMS-1b encoder | matches w2v-BERT step time with `flash_attention_2`; 1.54× slower with sdpa |
 | in-training generative eval | ~3 min per 5-set round at 200 utterances per set on 8 GPUs; `max_samples` is per named set |
 | first step of any run | 9–20 min (dataloader build, `eval_on_start`); read steady-state s/it from the second-to-last tqdm line |
+| MA, frozen Whisper-large-v3 + Qwen3.5-2B, stack 5, DDP, 8 x 4, `batch_duration 30` x accum 4, 125-source mux over 235K h | **measured 2026-09-25** (Fondue-MA-dryrun): 4.6 min job start to step 1 with `eval_on_start false`, 6.15 s/step at 0.896 audio-h/step, 37.1 GPU-h for 600 steps, worst-node host RSS 41-44 GB flat |
 | MN5 → internal transfer | ~15–20 MB/s over `mn5transfer` |
 | melt-eval on MN5, one arm, FLEURS-24 ASR dev (26 langs, 2,600 samples, batch 16, 1 GPU) | 8m03s wall (7m15s generation+scoring), 0.134 GPU-h — measured 2026-09-22, [eval#20](https://github.com/MELT-proj/eval/pull/20) |
 
@@ -235,6 +236,21 @@ not where this section says, ask the PI and the answer gets added here.
   the fix is meaningless.
 - **Bucket bins are a property of `max_duration`**; re-measure on nyx
   whenever it changes, or a wide top bucket pads a batch far past its budget.
+- **A config needs `train_ds.total_cuts`** even though `config.py` calls it optional: without it the trainer logs
+  "None cuts" and dies at `Num examples = {None:,}`. `compute_mix_weights.py` never writes it (2026-09-25).
+- **People's Speech cannot be read through lhotse's indexed reader** (`UnicodeDecodeError` at the first batch,
+  `IndexedTarReader`): member names over 100 characters make tars with pax extended headers and
+  `read_tar_member_at` does not skip them. Reproduced offline on both trees; the other corpora read fine.
+  Path existence and `.idx` alignment checks do not catch it; probe with `IndexedTarReader` (2026-09-25).
+- **`warmup_ratio` does nothing under transformers 5.16.1** (`trainer_args_dict` drops it with a warning); set an
+  integer `warmup_steps`. `plan_arm.py --warmup-ratio` also forces `warmup_steps 0`, so every arm submitted with
+  it trained with no warmup (2026-09-25).
+- **`compute_mix_weights.py` reads only flat `type: lhotse_shar` entries** and only updates `train_ds.total_hours`
+  when that key is below `input_cfg`. `--skip-cut EXPR` leaves cuts out of the hours (use a separate `--cache`).
+- **The two-tier weights are applied per cut, not per hour**: a language's share of audio hours is its weight times
+  its mean cut duration relative to the mix (it: 6.2% weight, 14.3 s mean, 9.2% of hours). Measured on the dry run.
+- **`batch_duration` is not filled**: with cuts of ~10 s and a 30 s budget a micro-batch holds 1.7 cuts and a step
+  sees 84% of `batch_duration x accum x world_size`; step estimates use the nominal number.
 - Two nodes plus indexed Shar can exhaust `ulimit -n`; the launcher raises
   it, but check on a new site.
 

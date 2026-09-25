@@ -326,7 +326,7 @@ assumed one (`03-audio-stack.md` §0).*
       in-domain five alone.
 
 ### Track B — preparation
-- [ ] **Fondue dry run at full scale on MN5**: config resolves, dataloader
+- [x] **Fondue dry run at full scale on MN5**: config resolves, dataloader
       builds, bucket bins re-measured on the full distribution, startup time,
       exposure audit output, host-RAM trace. Write findings to `06-fondue.md`.
 - [ ] **Ladder tier configs** (`05-language-ladder.md` §2): the config builder

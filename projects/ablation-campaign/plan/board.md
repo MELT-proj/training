@@ -15,6 +15,59 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-25 — Claude (worker, fondue-dry-run) — Fondue MA dry run done: 6.15 s/step, ~12,100 GPU-h extrapolated, host RAM flat at 41-44 GB; five config/data defects found on the way
+
+Context: timeline week 3 Track B. Job 46618634 (third submission; 46616756 and 46617832 died at startup and at
+the first batch), `acc_debug`, 8 nodes x 4 GPUs, `MELT_GPUS_PER_NODE=4`, world_size 32 confirmed in
+`[run_train] starting`. Config `Fondue-MA-dryrun.yaml`: Whisper-large-v3 (frozen) + MLP stack 5 +
+Qwen3.5-2B (frozen, chatml), 235,191.1 h, 27 languages, 125 sources, `batch_duration 30 x grad_accum 4 x 32`,
+`--trainer.max_steps 600`. Everything below is measured on that job unless it says extrapolated.
+
+Finding:
+1. **Startup is short.** Config resolved; model load 21:26:00 to dataloader/trainer built 21:28:36 (2.6 min for
+   a 125-source mux); first step 53 s later (includes the memory-preallocation passes), so about 4.6 min
+   from job start to step 1, against the 9-20 min in infrastructure §4. Completed in 1:09:37, 37.1 GPU-h
+   (`CPUTimeRAW / 3600 / 40`); the 600 steps took 1:02:25, then a 200-sample-per-set eval and a checkpoint save.
+2. **Steady state 6.15 s/step** (steps 100-600 by tqdm elapsed: 11:04 to 1:02:19; the 599/600 line reads
+   6.02 s/it, which is an average from step 1). Step 1 alone was 53 s.
+3. **A step holds 0.896 audio-h, not the nominal 1.067 h**: 537.5 h seen over 600 steps (`train_hours/total`),
+   84% fill. `batch_duration 30` averages 1.7 cuts per micro-batch (max 4); the dynamic sampler warns 32 times that
+   it "exceeded the max_duration constraint with only 1 cut" (cuts above 30 s). The step estimate divides by the
+   nominal budget, so a derived one-epoch run stops after 220,492 steps having seen about 197,600 h (84%).
+4. **Extrapolated cost** (6.15 s/step, 8 x 4, not measured beyond 600 steps): the derived 220,492 steps is
+   377 h wall = 15.7 days = ~12,100 GPU-h; reading the whole 235,191 h pool needs ~262,500 steps = 449 h = 18.7 days
+   = ~14,400 GPU-h. That is 5-6x the earlier Whisper + Llama-1B extrapolation (~2,200 GPU-h) and inside the
+   range of `06-fondue.md` §2's IFT rows. Per micro-batch it is ~1.5 s, the same as the measured Qwen IFT step
+   (32 s at accum 20), so the frozen decoder's forward/backward plus Whisper's 30 s padding dominate.
+5. **GPU memory is not the constraint**: `gpu_peak_gb` 12.0 at most (preallocation at 60 s: 14.1 GB) of 64. The
+   min-duration preallocation pass (60 cuts x 30 s) warned OOM and continued. `batch_duration 30` was set for a
+   different encoder and no stack; a larger batch with a smaller `grad_accum` is the obvious speed test.
+6. **Host RAM is flat.** `sstat` MaxRSS on the worst node: 4.6 GB at start, 40.6 GB at 7 min, 43.7 GB at 68 min
+   (about +3 GB in an hour, tapering). Per-rank `rss_anon` 3.4-4.0 GB, stable; a dataloader worker 8.0 GB during
+   the eval. The lhotse open-shard LRU (cap 256) did not bite with 125 sources.
+7. **Exposure audit** (`train_hours/{task}/{lang}` in `trainer_state.json`, 27 languages, all present): after 537 h,
+   en 30.4%, es 15.7%, ru 9.0%, fr 8.5%, it 10.4%, de 7.0%; mt 1.75 h, ga 2.34 h, sl 1.59 h. **The two-tier
+   weights act on cuts, not hours.** The hours share is `p x mean cut duration`, so expected shares differ from
+   `p_l`: it 6.2% weight, 14.3 s mean cut, 9.2% of hours (seen 10.4%); ca 3.2% weight, 5.8 s mean, 1.9% of hours
+   (seen 2.2%); en 28.9% weight, 32.7% of hours. Observed/expected 0.82-1.22 on the 15 languages tabulated, which
+   is sampling noise at 537 h. `compute_mix_weights.py` measures `n(.)` in hours but the mux draws cuts.
+8. **Health:** loss 3.39 (step 2), 2.66 (300), 0.33 (600) with LR still warming (warmup 6,615 steps, LR 1.8e-4 at
+   600); final-eval WER after 600 steps: es 0.10, en 0.12, de 0.16, pt 0.17, ru 0.16, fr 0.18, nl 0.18, it 0.20,
+   pl 0.21, ca 0.25 ... ga 1.06, mt 0.98 (200 utterances each; a plumbing check, not a result).
+9. **Defects found getting here** (all now in the config or in infrastructure §5): `total_cuts` missing kills the
+   trainer ("None cuts"); People's Speech is unreadable through lhotse's indexed reader (pax extended headers,
+   dropped from the dry run, 6,886 h); the draft could not be rendered as written (groups, `total_hours` position,
+   filters under `data:`); `warmup_ratio` does nothing under transformers 5.16.1; VoxPopuli has 24.85 h with no
+   transcript (skipped by the loader, now out of the weights via `--skip-cut`).
+10. Benign traceback at exit (DeepSpeed Triton autotune cache), as in earlier logs. `checkpoint-600` (9.7 GB with
+    optimizer state) and the two failed attempts' directories (`.attempt1-...`, `.attempt2-...`) are left in
+    `/gpfs/scratch/epor48/outputs/`; nothing deleted.
+
+Action needed: PI. (a) Fondue's cost is now a measured-rate number, ~12-14K GPU-h for MA alone at this
+config: decide whether to spend a second acc_debug job on a larger `batch_duration` before the freeze.
+(b) People's Speech needs a tar fix before it can be in Fondue. (c) Whether the weights should be corrected by
+mean cut duration so they act on hours. (d) The dry-run checkpoint may be deleted when the PI says so.
+
 ## 2026-09-25 — Claude (worker, fondue-dry-run) — dry run attempt 2: People's Speech cannot be read through lhotse's indexed reader
 
 Context: Fondue MA dry run on MN5, 8 x 4 `acc_debug`, Qwen3.5-2B decoder. Attempt 1
