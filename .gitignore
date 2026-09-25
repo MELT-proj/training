@@ -222,3 +222,4 @@ infra/.bucket_info/
 # under infra/.
 *_bucket_info.json
 *_bucket_info.csv
+infra/.mix_weights_hours_notext.json
