@@ -20,6 +20,17 @@
     ID      157/3000   de=18/600 (26% of errors, CER without 0.414)  en=44/600 (47% of errors, CER without 0.487)  es=24/600 (30% of errors, CER without 0.331)  fr=38/600 (38% of errors, CER without 0.443)  it=33/600 (40% of errors, CER without 0.357)
     FLEURS  1419/5171   bg=83/200 (72% of errors, CER without 0.926)  cs=55/200 (70% of errors, CER without 0.755)  da=30/200 (58% of errors, CER without 0.699)  de=19/200 (53% of errors, CER without 0.450)  el=92/200 (79% of errors, CER without 0.911)  en=15/200 (50% of errors, CER without 0.560)  es=11/200 (40% of errors, CER without 0.423)  et=52/200 (72% of errors, CER without 0.683)  fi=57/200 (72% of errors, CER without 0.682)  fr=18/200 (50% of errors, CER without 0.546)  ga=47/200 (68% of errors, CER without 0.735)  hr=66/200 (77% of errors, CER without 0.719)  hu=88/200 (84% of errors, CER without 0.789)  it=7/200 (31% of errors, CER without 0.320)  lt=68/200 (77% of errors, CER without 0.743)  lv=71/200 (78% of errors, CER without 0.730)  mt=60/200 (73% of errors, CER without 0.683)  nl=32/171 (61% of errors, CER without 0.667)  pl=52/200 (64% of errors, CER without 0.770)  pt=62/200 (77% of errors, CER without 0.715)  ro=73/200 (80% of errors, CER without 0.631)  ru=100/200 (78% of errors, CER without 0.934)  sk=46/200 (66% of errors, CER without 0.706)  sl=60/200 (73% of errors, CER without 0.711)  sv=51/200 (69% of errors, CER without 0.721)  uk=104/200 (78% of errors, CER without 0.934)
 
+== w2vb-lr1e3-b300-s43
+  ID           median 0.6940   en=0.694 de=0.748 es=0.522 fr=0.751 it=0.635
+  OOD-train    median 0.8090   en=1.000* de=0.750 es=0.809 fr=1.000* it=0.588
+  OOD-related  median 1.0000   pt=1.000* ro=1.000* nl=1.000* da=1.000* sv=1.000*
+  OOD-latin    median 1.0000   cs=1.000* sk=1.000* pl=1.000* hr=1.000* sl=1.000* hu=1.000* fi=1.000* et=1.000* lt=1.000* lv=1.000* ga=1.000* mt=1.000*
+  OOD-script   median 1.0000   bg=1.000* el=1.000* ru=1.000* uk=1.000*
+  score 0.8089   (* = clipped at 1)
+  runaway generations (per-sample CER > 1, report only, not in the score):
+    ID      204/3000   de=50/600 (49% of errors, CER without 0.433)  en=32/600 (32% of errors, CER without 0.503)  es=26/600 (38% of errors, CER without 0.350)  fr=47/600 (44% of errors, CER without 0.469)  it=49/600 (50% of errors, CER without 0.364)
+    FLEURS  1503/5171   bg=76/200 (72% of errors, CER without 0.924)  cs=56/200 (71% of errors, CER without 0.739)  da=29/200 (56% of errors, CER without 0.704)  de=14/200 (40% of errors, CER without 0.487)  el=101/200 (84% of errors, CER without 0.911)  en=16/200 (53% of errors, CER without 0.564)  es=19/200 (52% of errors, CER without 0.440)  et=71/200 (78% of errors, CER without 0.688)  fi=59/200 (74% of errors, CER without 0.703)  fr=23/200 (53% of errors, CER without 0.568)  ga=64/200 (77% of errors, CER without 0.742)  hr=66/200 (78% of errors, CER without 0.707)  hu=102/200 (88% of errors, CER without 0.785)  it=12/200 (47% of errors, CER without 0.335)  lt=61/200 (75% of errors, CER without 0.737)  lv=68/200 (79% of errors, CER without 0.700)  mt=61/200 (76% of errors, CER without 0.684)  nl=42/171 (71% of errors, CER without 0.661)  pl=62/200 (73% of errors, CER without 0.781)  pt=48/200 (67% of errors, CER without 0.710)  ro=79/200 (83% of errors, CER without 0.639)  ru=110/200 (82% of errors, CER without 0.928)  sk=57/200 (67% of errors, CER without 0.737)  sl=59/200 (74% of errors, CER without 0.690)  sv=50/200 (71% of errors, CER without 0.722)  uk=98/200 (78% of errors, CER without 0.929)
+
 == w2vb-lr1e3-b600
   ID           median 0.6453   en=0.768 de=0.645 es=0.543 fr=0.708 it=0.525
   OOD-train    median 0.8794   en=0.980 de=0.879 es=0.827 fr=1.000* it=0.473
@@ -74,6 +85,28 @@
   runaway generations (per-sample CER > 1, report only, not in the score):
     ID      8/3000   de=2/600 (22% of errors, CER without 0.064)  en=1/600 (3% of errors, CER without 0.052)  es=1/600 (1% of errors, CER without 0.038)  fr=1/600 (1% of errors, CER without 0.061)  it=3/600 (5% of errors, CER without 0.068)
     FLEURS  527/5171   bg=58/200 (40% of errors, CER without 0.927)  cs=19/200 (42% of errors, CER without 0.589)  da=3/200 (12% of errors, CER without 0.525)  el=50/200 (48% of errors, CER without 0.915)  et=10/200 (37% of errors, CER without 0.339)  fi=27/200 (59% of errors, CER without 0.378)  ga=36/200 (58% of errors, CER without 0.632)  hr=15/200 (41% of errors, CER without 0.540)  hu=30/200 (58% of errors, CER without 0.541)  lt=18/200 (45% of errors, CER without 0.485)  lv=17/200 (42% of errors, CER without 0.463)  mt=18/200 (41% of errors, CER without 0.585)  nl=1/171 (7% of errors, CER without 0.384)  pl=19/200 (39% of errors, CER without 0.652)  ro=1/200 (2% of errors, CER without 0.458)  ru=80/200 (60% of errors, CER without 0.937)  sk=16/200 (34% of errors, CER without 0.529)  sl=25/200 (49% of errors, CER without 0.522)  sv=4/200 (14% of errors, CER without 0.492)  uk=80/200 (61% of errors, CER without 0.937)
+
+== whisper-lr1e3-b1200-k10
+  ID           median 0.0767   en=0.058 de=0.082 es=0.046 fr=0.082 it=0.077
+  OOD-train    median 0.0527   en=0.053 de=0.056 es=0.033 fr=0.056 it=0.032
+  OOD-related  median 0.6042   pt=0.241 ro=0.608 nl=0.428 da=0.604 sv=0.624
+  OOD-latin    median 0.9086   cs=1.000* sk=0.899 pl=0.944 hr=0.872 sl=0.996 hu=0.918 fi=0.781 et=0.666 lt=0.974 lv=0.732 ga=1.000* mt=0.858
+  OOD-script   median 1.0000   bg=1.000* el=1.000* ru=1.000* uk=1.000*
+  score 0.1672   (* = clipped at 1)
+  runaway generations (per-sample CER > 1, report only, not in the score):
+    ID      10/3000   de=1/600 (6% of errors, CER without 0.077)  en=1/600 (2% of errors, CER without 0.057)  es=2/600 (2% of errors, CER without 0.045)  fr=2/600 (12% of errors, CER without 0.072)  it=4/600 (5% of errors, CER without 0.073)
+    FLEURS  533/5171   bg=69/200 (54% of errors, CER without 0.936)  cs=29/200 (48% of errors, CER without 0.630)  da=3/200 (9% of errors, CER without 0.554)  el=37/200 (32% of errors, CER without 0.915)  et=15/200 (43% of errors, CER without 0.418)  fi=21/200 (48% of errors, CER without 0.463)  ga=41/200 (60% of errors, CER without 0.678)  hr=16/200 (37% of errors, CER without 0.608)  hu=23/200 (42% of errors, CER without 0.619)  lt=23/200 (50% of errors, CER without 0.562)  lv=13/200 (34% of errors, CER without 0.524)  mt=17/200 (37% of errors, CER without 0.598)  nl=1/171 (5% of errors, CER without 0.412)  pl=20/200 (35% of errors, CER without 0.685)  ro=6/200 (24% of errors, CER without 0.473)  ru=66/200 (50% of errors, CER without 0.934)  sk=17/200 (40% of errors, CER without 0.609)  sl=23/200 (46% of errors, CER without 0.620)  sv=5/200 (21% of errors, CER without 0.507)  uk=88/200 (56% of errors, CER without 0.941)
+
+== whisper-lr1e3-b1200-k2
+  ID           median 0.0584   en=0.046 de=0.058 es=0.037 fr=0.058 it=0.080
+  OOD-train    median 0.0417   en=0.043 de=0.042 es=0.024 fr=0.046 it=0.028
+  OOD-related  median 0.4545   pt=0.218 ro=0.455 nl=0.360 da=0.538 sv=0.512
+  OOD-latin    median 0.7195   cs=0.743 sk=0.696 pl=0.822 hr=0.610 sl=0.758 hu=0.918 fi=0.605 et=0.399 lt=0.647 lv=0.641 ga=0.980 mt=0.826
+  OOD-script   median 1.0000   bg=1.000* el=1.000* ru=1.000* uk=1.000*
+  score 0.1270   (* = clipped at 1)
+  runaway generations (per-sample CER > 1, report only, not in the score):
+    ID      12/3000   en=1/600 (3% of errors, CER without 0.045)  es=2/600 (3% of errors, CER without 0.036)  fr=2/600 (1% of errors, CER without 0.058)  it=7/600 (14% of errors, CER without 0.069)
+    FLEURS  425/5171   bg=60/200 (41% of errors, CER without 0.924)  cs=17/200 (34% of errors, CER without 0.538)  da=1/200 (5% of errors, CER without 0.514)  el=38/200 (36% of errors, CER without 0.914)  et=4/200 (18% of errors, CER without 0.333)  fi=16/200 (46% of errors, CER without 0.363)  ga=24/200 (43% of errors, CER without 0.654)  hr=6/200 (21% of errors, CER without 0.500)  hu=32/200 (59% of errors, CER without 0.458)  lt=11/200 (28% of errors, CER without 0.496)  lv=10/200 (35% of errors, CER without 0.444)  mt=12/200 (33% of errors, CER without 0.589)  pl=15/200 (27% of errors, CER without 0.646)  ro=1/200 (4% of errors, CER without 0.442)  ru=71/200 (51% of errors, CER without 0.926)  sk=12/200 (36% of errors, CER without 0.485)  sl=15/200 (39% of errors, CER without 0.510)  sv=2/200 (12% of errors, CER without 0.455)  uk=78/200 (56% of errors, CER without 0.934)
 
 == whisper-lr1e3-b300
   ID           median 0.0610   en=0.052 de=0.075 es=0.040 fr=0.061 it=0.074
@@ -142,6 +175,7 @@
     FLEURS  618/5171   bg=81/200 (54% of errors, CER without 0.928)  cs=21/200 (38% of errors, CER without 0.638)  da=9/200 (27% of errors, CER without 0.526)  el=69/200 (56% of errors, CER without 0.915)  et=12/200 (42% of errors, CER without 0.382)  fi=17/200 (45% of errors, CER without 0.408)  ga=41/200 (62% of errors, CER without 0.632)  hr=18/200 (36% of errors, CER without 0.564)  hu=39/200 (61% of errors, CER without 0.555)  lt=16/200 (43% of errors, CER without 0.521)  lv=11/200 (35% of errors, CER without 0.447)  mt=25/200 (53% of errors, CER without 0.577)  nl=2/171 (13% of errors, CER without 0.390)  pl=20/200 (39% of errors, CER without 0.670)  ro=7/200 (24% of errors, CER without 0.441)  ru=78/200 (58% of errors, CER without 0.929)  sk=17/200 (42% of errors, CER without 0.560)  sl=33/200 (57% of errors, CER without 0.548)  sv=4/200 (17% of errors, CER without 0.498)  uk=98/200 (69% of errors, CER without 0.942)
 
 checkpoint                   ID  OOD-train  OOD-related  OOD-latin  OOD-script   score  runaway-ID  runaway-FLEURS
+whisper-lr1e3-b1200-k2   0.0584     0.0417       0.4545     0.7195      1.0000  0.1270     12/3000        425/5171
 whisper-lr1e3-b300       0.0610     0.0493       0.4396     0.9070      1.0000  0.1286     10/3000        536/5171
 whisper-lr1e3-b1200      0.0617     0.0466       0.4630     0.8608      1.0000  0.1321      8/3000        527/5171
 whisper-lr2e3-b300       0.0631     0.0464       0.4780     0.9285      1.0000  0.1354      8/3000        579/5171
@@ -149,9 +183,11 @@ whisper-lr1e3-b600       0.0642     0.0459       0.4830     0.8790      1.0000  
 whisper-lr2e3-b1200-s43  0.0614     0.0460       0.4893     0.8913      1.0000  0.1368     10/3000        494/5171
 whisper-lr2e3-b1200      0.0626     0.0450       0.5129     0.7769      1.0000  0.1413     11/3000        504/5171
 whisper-lr2e3-b600       0.0617     0.0486       0.5497     0.8822      1.0000  0.1498      7/3000        618/5171
+whisper-lr1e3-b1200-k10  0.0767     0.0527       0.6042     0.9086      1.0000  0.1672     10/3000        533/5171
 w2vb-lr2e3-b300          0.6115     0.6698       1.0000     1.0000      1.0000  0.7149    149/3000       1407/5171
 w2vb-lr1e3-b300          0.5466     0.8353       1.0000     1.0000      1.0000  0.7740    157/3000       1419/5171
 w2vb-lr2e3-b600          0.6337     0.8047       1.0000     1.0000      1.0000  0.7873    200/3000       1358/5171
+w2vb-lr1e3-b300-s43      0.6940     0.8090       1.0000     1.0000      1.0000  0.8089    204/3000       1503/5171
 w2vb-lr1e3-b600          0.6453     0.8794       1.0000     1.0000      1.0000  0.8272    174/3000       1445/5171
 w2vb-lr2e3-b1200         0.6674     0.8998       1.0000     1.0000      1.0000  0.8442    176/3000       1450/5171
 w2vb-lr1e3-b1200         0.6748     0.9925       1.0000     1.0000      1.0000  0.8915    210/3000       1599/5171

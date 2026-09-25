@@ -59,16 +59,19 @@ prints them, not a ranking decision):
 
 | row | ID | OOD-train | OOD-related | OOD-latin | OOD-script | score | runaway ID | runaway FLEURS |
 |---|---|---|---|---|---|---|---|---|
+| whisper-lr1e3-b1200-k2 (k=2, 25 Hz) | 0.0584 | 0.0417 | 0.4545 | 0.7195 | 1.0000 | 0.1270 | 12/3000 | 425/5171 |
 | whisper-lr1e3-b300 | 0.0610 | 0.0493 | 0.4396 | 0.9070 | 1.0000 | 0.1286 | 10/3000 | 536/5171 |
 | whisper-lr1e3-b1200 | 0.0617 | 0.0466 | 0.4630 | 0.8608 | 1.0000 | 0.1321 | 8/3000 | 527/5171 |
 | whisper-lr2e3-b300 | 0.0631 | 0.0464 | 0.4780 | 0.9285 | 1.0000 | 0.1354 | 8/3000 | 579/5171 |
 | whisper-lr1e3-b600 | 0.0642 | 0.0459 | 0.4830 | 0.8790 | 1.0000 | 0.1364 | 12/3000 | 586/5171 |
+| whisper-lr2e3-b1200-s43 (seed-43 replicate) | 0.0614 | 0.0460 | 0.4893 | 0.8913 | 1.0000 | 0.1368 | 10/3000 | 494/5171 |
 | whisper-lr2e3-b1200 | 0.0626 | 0.0450 | 0.5129 | 0.7769 | 1.0000 | 0.1413 | 11/3000 | 504/5171 |
 | whisper-lr2e3-b600 | 0.0617 | 0.0486 | 0.5497 | 0.8822 | 1.0000 | 0.1498 | 7/3000 | 618/5171 |
-| whisper-lr2e3-b1200-s43 (seed-43 replicate) | 0.0614 | 0.0460 | 0.4893 | 0.8913 | 1.0000 | 0.1368 | 10/3000 | 494/5171 |
+| whisper-lr1e3-b1200-k10 (k=10, 5 Hz) | 0.0767 | 0.0527 | 0.6042 | 0.9086 | 1.0000 | 0.1672 | 10/3000 | 533/5171 |
 | w2vb-lr2e3-b300 | 0.6115 | 0.6698 | 1.0000 | 1.0000 | 1.0000 | 0.7149 | 149/3000 | 1407/5171 |
 | w2vb-lr1e3-b300 | 0.5466 | 0.8353 | 1.0000 | 1.0000 | 1.0000 | 0.7740 | 157/3000 | 1419/5171 |
 | w2vb-lr2e3-b600 | 0.6337 | 0.8047 | 1.0000 | 1.0000 | 1.0000 | 0.7873 | 200/3000 | 1358/5171 |
+| w2vb-lr1e3-b300-s43 (seed-43 replicate) | 0.6940 | 0.8090 | 1.0000 | 1.0000 | 1.0000 | 0.8089 | 204/3000 | 1503/5171 |
 | w2vb-lr1e3-b600 | 0.6453 | 0.8794 | 1.0000 | 1.0000 | 1.0000 | 0.8272 | 174/3000 | 1445/5171 |
 | w2vb-lr2e3-b1200 | 0.6674 | 0.8998 | 1.0000 | 1.0000 | 1.0000 | 0.8442 | 176/3000 | 1450/5171 |
 | w2vb-lr1e3-b1200 | 0.6748 | 0.9925 | 1.0000 | 1.0000 | 1.0000 | 0.8915 | 210/3000 | 1599/5171 |
@@ -141,6 +144,26 @@ effective batch: `batch_duration 75`, `grad_accum 2`). The w2v-BERT sweep waits
 for its replicate. MN5's checkout is now on branch
 `worktree-bridge-cse_018bRbBYG2SKA8Zo6NTanRjp`; the ledger was reconciled per
 `infrastructure.md` §3.
+
+Finding 10: **w2v-BERT replicate and the Whisper stacking sweep, scored
+(2026-09-25).** All 24 eval jobs COMPLETED (Whisper k=2 0.796 GPU-h, k=10 0.856,
+w2v-BERT replicate 1.588). (a) `w2vb-lr1e3-b300-s43`: score 0.8089 against 0.7740
+for seed 42, a 0.035 shift; ID 0.694 vs 0.547 (0.147), OOD-train 0.809 vs 0.835.
+The seed alone moves w2v-BERT's ID median by 0.15, so the six-row spread
+(0.715-0.892) is only about 5x that score shift and no w2v-BERT row separates
+from its neighbours; the b300 advantage is not established. (b) Whisper at
+`lr1e3-b1200`: k=2 **0.1270** (ID 0.0584, OOD-train 0.0417, OOD-related 0.4545),
+k=5 0.1321 (0.0617, 0.0466, 0.4630), k=10 **0.1672** (0.0767, 0.0527, 0.6042).
+k=10 is clearly worse, far outside the 0.0045 Whisper seed shift; k=2 vs k=5 is a
+0.0051 gap, the size of that shift, so the score alone does not separate them.
+k=2 is nevertheless below k=5 on ID (by 0.0033) and OOD-train (by 0.0049), where
+the replicate moved 0.001; that noise was measured at the `lr2e3-b1200` corner
+from one pair. Training cost at 8 ranks: 32 GPU-h each for k=2 and k=10 against
+28 for k=5 (both ended with the same elapsed time to the second, and their
+weights were written 16 ms apart on different nodes; the weights differ, the
+losses differ, and the resolved configs carry `stack_factor` 2 and 10: an oddity
+I did not explain). Eval jobs 46565783-46565788 (replicate), 46565834-46565845
+(sweep). No k is called here.
 
 Action needed: PI/orchestrator: decide the corner (nothing here calls it) and
 update the README's 200-per-language wording to the 600 in-domain sets. Whoever
