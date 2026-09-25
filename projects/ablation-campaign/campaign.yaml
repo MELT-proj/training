@@ -772,7 +772,9 @@ arms:
 
   # Fondue MA full-scale dry run (timeline week 3, Track B). NOT a Fondue arm and
   # not a result: every architecture/LR/batch value in Fondue-MA-dryrun.yaml is
-  # a provisional (06-fondue.md §3 rows are open). One 8 x 4 acc_debug job that
+  # a provisional (06-fondue.md §3 rows are open); the decoder is Qwen3.5-2B (PI,
+  # 2026-09-25: the expected backbone winner), batch_duration 30 x grad_accum 4, both
+  # baked into the config so this row carries no axes. One 8 x 4 acc_debug job that
   # measures config resolution, dataloader build, first-step time, steady s/step,
   # the exposure audit and host RAM at the real pool (242,078 h) and topology.
   # `time:` is the acc_debug ceiling. Submit with the run-only overrides after `--`:

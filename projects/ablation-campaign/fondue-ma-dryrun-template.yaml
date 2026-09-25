@@ -76,10 +76,12 @@ model:
     max_audio_seq_len: 3000              # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: audio stack, frame rate); derived as plan_arm.py does, ENCODER_WINDOW_FRAMES["openai/whisper-large-v3"]
 
   decoder:
-    name: meta-llama/Llama-3.2-1B-Instruct   # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: backbone)
+    # PI, 2026-09-25: the backbone runs are expected to pick Qwen3.5-2B (Instruct) for
+    # Raclette and Fondue, so the dry run uses it. Still not a decision.
+    name: Qwen/Qwen3.5-2B                # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: backbone)
     attn_implementation: flash_attention_2
-    eos_token: <|eot_id|>                # Llama-3 profile, as ABL-MA-700-asr.yaml / plan_arm.py DECODER_PROFILES
-    pad_token: <|finetune_right_pad_id|>
+    eos_token: <|endoftext|>             # plan_arm.py DECODER_PROFILES["Qwen/Qwen3.5-2B"]
+    pad_token: <|text_pad|>
     audio_token: <|audio|>
     audio_bos_token: <|audio_bos|>
     audio_eos_token: <|audio_eos|>
@@ -99,10 +101,10 @@ data:
   sample_rate: 16000
   # The draft pinned this to false ("every arm"). ABL-MA-700-asr.yaml, the
   # base every screen arm ran, has it true for an instruct decoder, with the
-  # llama3 template and an audio-only user turn; that is what is used here so
+  # decoder's own template and an audio-only user turn; that is what is used here so
   # the dry run exercises the same input path as the screen.
   apply_chat_template: true            # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: backbone); follows the decoder, not the draft
-  chat_template_config: llama3         # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: backbone)
+  chat_template_config: chatml         # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: backbone); must match the decoder
   prompt_template_selection: custom
   prompt_template: "{audio_token}"
   strict_text_field: true              # settled campaign-wide (silent-text-field-fallback)
@@ -552,12 +554,13 @@ data:
     # Batch settings ---------------------------------------------------------
     batch_size: null
     # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: effective batch and LR).
-    # batch_duration x grad_accum x world_size = 112.5 x 1 x 32 = 3,600 audio-s
-    # = one audio hour per optimizer step (quadratic_duration unset, so a
-    # batch is real seconds and steps-per-epoch = total_hours). Whisper
-    # padded every cut to 30 s and still peaked at 11.5 GB of 64 at bd 75 x 2
-    # (campaign.yaml), so 112.5 fits the 64 GB H100 with the screen's 150 x 1.
-    batch_duration: 112.5
+    # batch_duration x grad_accum x world_size = 30 x 4 x 32 = 3,840 audio-s = 1.07
+    # audio-h per optimizer step (quadratic_duration unset, so a batch is real
+    # seconds). batch_duration 30 is what a frozen Qwen3.5-2B decoder under DDP
+    # needed in every earlier arm (campaign.yaml MA-700-qwen35-2b-ins); the
+    # accumulation of 4 brings the step to about an audio hour, and 3,840 s is
+    # also the Llama IFT arms' effective batch.
+    batch_duration: 30
     lhotse_sampler_type: dynamic_bucketing
     num_buckets: 30
     # Re-measured 2026-09-25 on the full pool at max_duration 60 (90,052,889 cuts,
@@ -657,7 +660,7 @@ trainer:
   per_device_eval_batch_size: 4
   # Topology: 8 nodes x 4 GPUs = world_size 32 (MELT_GPUS_PER_NODE=4).
   # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: topology; effective batch and LR)
-  gradient_accumulation_steps: 1
+  gradient_accumulation_steps: 4
 
   # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: effective batch and LR).
   # warmup-stable-decay as plan_arm.py composes it: last 20% of steps decay to
@@ -666,10 +669,10 @@ trainer:
   # and trains with no warmup, which is what `plan_arm.py --warmup-ratio`
   # produces today); warmup is therefore set as `warmup_steps`,
   # round(0.03 x steps) (PI, 2026-09-25).
-  # num_decay_steps = round(0.2 x 242,078 steps) = 48416.
+  # num_decay_steps = round(0.2 x 226,948 steps) = 45390.
   lr_scheduler_type: warmup_stable_decay
-  lr_scheduler_kwargs: {"num_decay_steps": 48416, "min_lr_ratio": 0.1, "decay_type": "cosine"}
-  warmup_steps: 7262
+  lr_scheduler_kwargs: {"num_decay_steps": 45390, "min_lr_ratio": 0.1, "decay_type": "cosine"}
+  warmup_steps: 6808
 
   num_train_epochs: 1                  # campaign convention; steps are derived, never pinned
   max_steps: -1
@@ -680,7 +683,9 @@ trainer:
 
   eval_strategy: steps
   # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: checkpoint and eval cadence).
-  # ~6 h of wall clock at the extrapolated ~1.0 s/step is ~20,000 steps. The
+  # ~6 h of wall clock is ~20,000 steps only if a step takes ~1 s; s/step is
+  # unmeasured for Whisper + a frozen Qwen3.5-2B at 32 ranks (the dry run measures
+  # it), so 20,000 is a placeholder. The
   # dry-run job pushes both past max_steps from the command line.
   eval_steps: 20000
   batch_eval_metrics: true
