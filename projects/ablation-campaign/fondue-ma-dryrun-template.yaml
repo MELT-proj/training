@@ -17,9 +17,18 @@
 #         --config       projects/ablation-campaign/fondue-ma-dryrun-template.yaml \
 #         --datasets-root /mnt/scratch-nyx/giuseppe/melt/melt-data/shar \
 #         --alpha 0.5 --beta 0.5 \
-#         --cache        infra/.mix_weights_hours.json \
+#         --cache        infra/.mix_weights_hours_notext.json \
+#         --skip-cut     "$(cat skip_expr)" \
 #         --emit-config  projects/ablation-campaign/Fondue-MA-dryrun.yaml \
 #         --exp-name     Fondue-MA-dryrun
+#
+#   where skip_expr drops cuts with no transcript anywhere (supervision text,
+#   custom.pnc_text and custom.metadata.sentence all empty):
+#     not any(str(v or '').strip() for v in ((cut.get('supervisions') or [{}])[0].get('text'), (cut.get('custom') or {}).get('pnc_text'), ((cut.get('custom') or {}).get('metadata') or {}).get('sentence')))
+#   That is 7,442 cuts / 24.85 h, all VoxPopuli (hr 17.0 h, ro 2.3 h, hu 1.5 h);
+#   the loader skips the same cuts (get_text_from_cut returns None), so they are
+#   out of the weights and the step count too. total_hours and total_cuts are not
+#   both written by the tool: total_cuts is set by hand (see train_ds).
 #
 #   Hours were measured on nyx. The run reads ${LOCAL_DATASETS_DIR} on MN5
 #   (/gpfs/projects/epor48/melt-data/shar-indexed); all sources below exist
@@ -39,9 +48,10 @@
 # rate (words added or dropped, plus substitutions that are not near-spellings;
 # projects/ablation-campaign/pnc_edit_rate.py) is below 1%. Measured on the
 # first 3,000 cuts (two shards) of each leaf, all cuts for FLEURS:
-#   RAW (>= 1%): mls_sidon/dutch 4.53, peoples_speech/clean_sa 2.40,
-#     peoples_speech/clean 1.99, fleurs/ga_ie 1.46 (Qwen output, never merged),
-#     mls_sidon/polish 1.43  -> these use the supervision text (no text_field).
+#   RAW (>= 1%): mls_sidon/dutch 4.53, fleurs/ga_ie 1.46 (Qwen output, never
+#     merged), mls_sidon/polish 1.43  -> these use the supervision text (no
+#     text_field). People's Speech (2.40, 1.99) would be raw too but is out of the
+#     dry run, see its note below.
 #   pnc_text (< 1%): mls_sidon/italian 0.96, voxpopuli/de 0.77,
 #     mls_sidon/german 0.77, mls_sidon/portuguese 0.74, librispeech other 0.54,
 #     mls_sidon/french 0.51, librispeech clean 0.47, mls_sidon/spanish 0.46,
@@ -138,12 +148,10 @@ data:
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/other/train.500
         tags: { task: asr, lang: en, text_field: custom.pnc_text }
-      - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/peoples_speech/clean/train
-        tags: { task: asr, lang: en }
-      - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/peoples_speech/clean_sa/train
-        tags: { task: asr, lang: en }
+      # People's Speech (clean, clean_sa; 6,886 h) is OUT of the dry run (PI,
+      # 2026-09-25): its tars carry pax extended headers that lhotse 2.0.0a3's
+      # indexed reader cannot read (UnicodeDecodeError at the first batch, job
+      # 46617832). Needs its own fix before it can be in Fondue.
       # --- es ---
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/es/train
@@ -548,11 +556,11 @@ data:
     # MUST sit after input_cfg: the tool only looks for this key below the
     # block it replaces, so the draft's placement (above it) would have left
     # 240355.0 untouched.
-    total_hours: 242077.6
+    total_hours: 235191.1
     # Not updated by compute_mix_weights.py, and NOT optional in practice: without it
     # the trainer logs "None cuts" and dies at `Num examples = {None:,}` (dry-run job
-    # 46616756). 90,052,889 cuts within [0.5, 60] s, from estimate_bucket_bins.py.
-    total_cuts: 90052889
+    # 46616756). 88,294,525 cuts within [0.5, 60] s (estimate_bucket_bins.py, minus People's Speech).
+    total_cuts: 88294525
     force_estimate: false
 
     # Batch settings ---------------------------------------------------------
@@ -567,14 +575,14 @@ data:
     batch_duration: 30
     lhotse_sampler_type: dynamic_bucketing
     num_buckets: 30
-    # Re-measured 2026-09-25 on the full pool at max_duration 60 (90,052,889 cuts,
-    # 241,995 h; infra/estimate_bucket_bins.py pooled these at
-    # [2.44, 3.66, ..., 39.22]). These are the same 30 equal-duration buckets but
+    # Re-measured 2026-09-25 on the pool without People's Speech at max_duration 60 (88,294,525 cuts,
+    # 235,1xx h; infra/estimate_bucket_bins.py pooled these, with PS, at
+    # [2.44, ..., 39.22]; without PS the pooled bins are [2.4, ..., 39.24]). These are the same 30 equal-duration buckets but
     # weighted by the mixture's sampling weights (p_cl per cut), because batches
     # are drawn from the mixture, not from the natural pool; the two agree
     # everywhere within about 1 s below 20 s and differ up to 3 s above it. Bins
     # are a property of max_duration and of the mixture: re-measure if either moves.
-    bucket_duration_bins: [2.86, 4.0, 5.0, 5.88, 6.78, 7.82, 9.0, 10.2, 11.06, 11.9, 12.69, 13.44, 14.12, 14.59, 14.84, 15.04, 15.74, 16.48, 17.3, 18.14, 19.01, 19.92, 22.14, 25.12, 28.26, 33.16, 36.14, 37.78, 38.96]
+    bucket_duration_bins: [2.8, 4.0, 4.9, 5.72, 6.58, 7.52, 8.62, 9.86, 10.72, 11.51, 12.26, 13.0, 13.68, 14.35, 15.0, 15.63, 16.3, 17.04, 17.81, 18.6, 19.43, 20.46, 23.16, 26.04, 29.08, 34.04, 36.42, 37.92, 39.02]
     shuffle: false
     drop_last: false
     min_duration: 0.5
@@ -673,10 +681,10 @@ trainer:
   # and trains with no warmup, which is what `plan_arm.py --warmup-ratio`
   # produces today); warmup is therefore set as `warmup_steps`,
   # round(0.03 x steps) (PI, 2026-09-25).
-  # num_decay_steps = round(0.2 x 226,948 steps) = 45390.
+  # num_decay_steps = round(0.2 x 220,492 steps) = 44098.
   lr_scheduler_type: warmup_stable_decay
-  lr_scheduler_kwargs: {"num_decay_steps": 45390, "min_lr_ratio": 0.1, "decay_type": "cosine"}
-  warmup_steps: 6808
+  lr_scheduler_kwargs: {"num_decay_steps": 44098, "min_lr_ratio": 0.1, "decay_type": "cosine"}
+  warmup_steps: 6615
 
   num_train_epochs: 1                  # campaign convention; steps are derived, never pinned
   max_steps: -1
