@@ -47,8 +47,8 @@
 #     mls_sidon/french 0.51, librispeech clean 0.47, mls_sidon/spanish 0.46,
 #     mls_sidon/english 0.41, voxpopuli fr/it/es/en 0.28-0.39, and the 24 FLEURS
 #     locales with a pnc_text (0.17 fr_fr ... 0.85 uk_ua).
-#   fleurs/ca_es: Qwen output measured at 0.32% (trusted) but NOT yet merged into
-#     the shar, so it is raw here until it is; then text_field custom.pnc_text.
+#   fleurs/ca_es: Qwen output measured at 0.32% (would be trusted) but it stays
+#     raw: 7.4 h of 1,747 h of ca, not worth rewriting a shared manifest (PI, 2026-09-25).
 #   Not measured: cv22 (no pnc_text) and Granary (text as is). VoxPopuli's other
 #   eleven languages use the supervision text (PI, 2026-09-25).
 #
@@ -1287,10 +1287,14 @@ data:
     batch_duration: 112.5
     lhotse_sampler_type: dynamic_bucketing
     num_buckets: 30
-    # STALE for this mix: copied from ABL-MA-700-asr.yaml (measured on the 700 h
-    # five-language mix). Re-measured on the full distribution in the dry-run's
-    # second phase (infra/estimate_bucket_bins.py at max_duration 60).
-    bucket_duration_bins: [3.74, 4.32, 4.7, 5.04, 5.33, 5.59, 5.86, 6.1, 6.34, 6.58, 6.84, 7.1, 7.39, 7.72, 8.1, 8.54, 9.14, 10.0, 10.85, 11.87, 12.88, 13.84, 14.76, 15.62, 16.52, 17.37, 18.23, 19.1, 19.97]
+    # Re-measured 2026-09-25 on the full pool at max_duration 60 (90,052,889 cuts,
+    # 241,995 h; infra/estimate_bucket_bins.py pooled these at
+    # [2.44, 3.66, ..., 39.22]). These are the same 30 equal-duration buckets but
+    # weighted by the mixture's sampling weights (p_cl per cut), because batches
+    # are drawn from the mixture, not from the natural pool; the two agree
+    # everywhere within about 1 s below 20 s and differ up to 3 s above it. Bins
+    # are a property of max_duration and of the mixture: re-measure if either moves.
+    bucket_duration_bins: [2.86, 4.0, 5.0, 5.88, 6.78, 7.82, 9.0, 10.2, 11.06, 11.9, 12.69, 13.44, 14.12, 14.59, 14.84, 15.04, 15.74, 16.48, 17.3, 18.14, 19.01, 19.92, 22.14, 25.12, 28.26, 33.16, 36.14, 37.78, 38.96]
     shuffle: false
     drop_last: false
     min_duration: 0.5

@@ -769,3 +769,20 @@ arms:
     grad_accum_steps: 1
     seed: 43
     time: "14:00:00"
+
+  # Fondue MA full-scale dry run (timeline week 3, Track B). NOT a Fondue arm and
+  # not a result: every architecture/LR/batch value in Fondue-MA-dryrun.yaml is
+  # a provisional (06-fondue.md §3 rows are open). One 8 x 4 acc_debug job that
+  # measures config resolution, dataloader build, first-step time, steady s/step,
+  # the exposure audit and host RAM at the real pool (242,078 h) and topology.
+  # `time:` is the acc_debug ceiling. Submit with the run-only overrides after `--`:
+  #   campaign.py run Fondue-MA-dryrun -- --trainer.max_steps 3000 \
+  #     --trainer.eval_on_start false --trainer.eval_steps 100000 --trainer.save_steps 100000
+  # (eval_steps/save_steps past max_steps; never `eval_strategy no`, agent-protocol §3).
+  - id: Fondue-MA-dryrun
+    stage: MA
+    config: Fondue-MA-dryrun.yaml
+    nodes: 8
+    qos: acc_debug
+    seed: 42
+    time: "02:00:00"
