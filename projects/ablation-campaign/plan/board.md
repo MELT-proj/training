@@ -15,6 +15,34 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-25 — Claude (worker, fondue-dry-run) — truecase pass on FLEURS ca and ga: ca usable, ga marginal; nothing merged into the shar
+
+Context: PI asked for the truecase pass on the two FLEURS train leaves that have
+no `pnc_text` (`fleurs/ga_ie/train` 2,845 cuts, `fleurs/ca_es/train` 2,300).
+
+Finding:
+1. **No prompt existed for ca or ga**, and `run_pnc.py` silently skips languages
+   without one. I wrote `ca.yaml` and `ga.yaml` in the style of the other 25
+   (same rules, four examples, mid-sentence rule) in a copy of the prompts dir on
+   artemis scratch (`pnc_prompts_ca_ga/`); the preprocessing repo is untouched.
+   The Irish one has not been read by a native speaker.
+2. Jobs 333476 (ga) and 333477 (ca), `h100`/`gpu-h100`, 1 GPU, Qwen3.5-9B, 12.5 min
+   each. Sidecars (`{cut_id, pnc_text}`) in
+   `/mnt/scratch-artemis/giuseppe/pnc_out/fleurs/{ga_ie,ca_es}/train/`. The first
+   attempt (333474/5) failed: `melt-data/hf_cache` holds only the 9B tokenizer
+   files, the complete checkpoint is under `.cache/huggingface`.
+3. **Word edits** (normalised, vs the original): ca 0.73% (12.8% of cuts have any
+   change), ga 2.65% (32%). ca is in the range of the other FLEURS locales
+   (0.3-1.8%); ga is not. ga errors seen: a sentence split at the wrong place,
+   `chéaduair` -> `dtús`, `ó` `an` for `ón`. All cuts returned, none empty.
+4. **Same sentence, different output.** FLEURS ids repeat (ga 1,125 ids, ca 809,
+   identical raw text) and sampling at temperature 0.7 gave different `pnc_text`
+   for 648 (ga) and 174 (ca) of them. `merge_pnc.py` copes with repeated ids
+   (FIFO queue), so it is a consistency issue, not a merge bug.
+
+Action needed: PI decides ca/ga (ca: merge; ga: merge, rerun greedy, or keep raw).
+Merging rewrites manifests and needs a reindex, on nyx and MN5: not done.
+
 ## 2026-09-25 — Claude (worker, fondue-dry-run) — PI decisions folded into the dry-run config; VoxPopuli "missing pnc_text" is empty transcripts, nothing to fill
 
 Context: PI's review of the phase-1 entry below.
