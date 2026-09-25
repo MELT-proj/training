@@ -114,6 +114,7 @@ Checkpoint cadence bounds a failure's cost; keep two checkpoints.
 | FLEURS in the training pool | FLEURS **train** in or out; FLEURS **test + validation** stay the benchmark either way | see §3.1 | **IN (PI, 2026-09-25)**: the tail keeps its only data. Transcript-level audit on nyx, 27 locales: 0 normalised sentences shared between FLEURS train and test+validation |
 | checkpoint and eval cadence | checkpoints every ~6 h of wall clock; in-training generative eval on a FLEURS-24 dev subset of 100 utterances per language, matching the frozen set | eval cost | open — the **subset itself** is drafted: the frozen `fleurs24-asr-dev` set (melt-eval PR #10, 24 EU languages, 100/lang, plus ru/uk once PR #12/13 redeploy). The **cadence** (eval_steps/save_steps) stays open, gated on the batch/topology rows above. |
 | filters | `max_duration 60`, `max_tokens 400`, as the campaign | settled |
+| PNC trust rule | train on `custom.pnc_text` only for a leaf whose content-edit rate (added/dropped words plus non-spelling substitutions, `pnc_edit_rate.py`) is below 1%; otherwise the original transcript | measured 2026-09-25 on 44 leaves | **settled (PI, 2026-09-25)**: raw for MLS nl and pl, both People's Speech leaves and FLEURS ga; VoxPopuli outside de/en/es/fr/it is raw |
 
 ### 3.1 FLEURS in the training pool — the numbers behind the row
 

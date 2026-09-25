@@ -15,6 +15,29 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-25 — Claude (worker, fondue-dry-run) — PNC trust rule set at 1% content edits; ca merge blocked by the permission classifier
+
+Context: follow-up to the truecase entry below.
+
+Finding:
+1. **Rule (PI):** a leaf trains on `pnc_text` only if its content-edit rate (words
+   added or dropped + substitutions below 0.7 character similarity, spelling
+   repair and digits excluded) is under 1%. I read 20 cuts from each leaf above
+   2% word edits: MLS nl and pl are 25% cuts-with-a-defect, both People's Speech
+   leaves 30-50% (dropped and added words), MLS pt/it/es/de mostly orthography.
+   The content rate reproduces that ranking; 1% sits in the gap between 1.43
+   (pl) and 0.96 (it). `pnc_edit_rate.py` is committed; rates are in the
+   render header. RAW now: MLS nl, MLS pl, People's Speech x2, FLEURS ga.
+2. **Render:** `Fondue-MA-dryrun.yaml` re-rendered, same 242,077.6 h and steps.
+3. **ca not merged.** Backed up the nyx `fleurs/ca_es/train` manifest and idx to
+   `/mnt/scratch-nyx/giuseppe/melt/pnc_backfill/backup_pre_ca_pnc/` and staged the
+   sidecar for `merge_pnc.py` (dry run: 2,300 of 2,300 cuts apply). The real merge
+   rewrites a manifest in the shared shar tree and was refused by the permission
+   classifier; I did not work around it. Until it is merged (and reindexed on nyx
+   and MN5) ca FLEURS trains on the original text.
+
+Action needed: PI runs or authorises the merge (command in the chat report).
+
 ## 2026-09-25 — Claude (worker, fondue-dry-run) — truecase pass on FLEURS ca and ga: ca usable, ga marginal; nothing merged into the shar
 
 Context: PI asked for the truecase pass on the two FLEURS train leaves that have
