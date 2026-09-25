@@ -28,17 +28,16 @@
 #   the next render.
 #
 # alpha=0.5, beta=0.5 as drafted (fondue-ma-draft.yaml header; arXiv:2509.14128
-# 3.3.1). Language set is EU-24 + ru + uk; ca stays out (06 §3, language-set
-# row, ca open). FLEURS train is OUT, the current default -- but that row
-# (06 §3 FLEURS in the training pool) was re-opened on 2026-09-20 and needs
-# the PI's call; with FLEURS out, ga has 0.6 h and mt 2.4 h of training audio.
+# 3.3.1). Language set is EU-24 + ru + uk + ca (PI, 2026-09-25: ca in). FLEURS train is IN
+# (PI, 2026-09-25) so the tail keeps its data; FLEURS test + validation stay
+# the benchmark and are not in validation_ds. Granary `ast` stays in MA as ASR
+# (PI, 2026-09-25), though how much MA vs IFT each language needs is still open.
 #
 # Sources beyond the draft's stanzas: the draft listed only the Granary
 # `asr_only` leaves, but data/hours_by_language.csv's asr_train_hours (which
 # the draft's total_hours and 06 §1 quote) also counts the Granary `ast`
 # leaves as ASR (es 25.8K of its 28.2K h, ru 18.4K of 20.2K h). They are
-# included here as `task: asr` sources; whether MA should train on them is
-# a decision for the PI, see the dry-run report.
+# included here as `task: asr` sources (PI, 2026-09-25: keep).
 
 # =============================================================================
 # Run Configuration
@@ -106,25 +105,25 @@ data:
     # them to a further power. Both levels already sum to 1, so the
     # normalisation itself is a no-op.
     #
-    # 99 corpora, 26 language entries, 240,123.4 h total.
+    # 127 corpora, 27 language entries, 242,102.5 h total.
     input_cfg:
-      # en: 151,841.2 h across 9 corpora
+      # en: 151,848.7 h across 10 corpora
       - type: group
-        weight: 0.30628177
+        weight: 0.29324114
         tags:
           task: asr
           lang: en
         input_cfg:
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/English/asr_only
-            weight: 0.43078085
+            weight: 0.42919993
             tags:
               task: asr
               lang: en
               region_code: en
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/english/train
-            weight: 0.26651164
+            weight: 0.26553357
             tags:
               task: asr
               lang: en
@@ -132,7 +131,7 @@ data:
               region_code: en
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/peoples_speech/clean/train
-            weight: 0.10332805
+            weight: 0.10294884
             tags:
               task: asr
               lang: en
@@ -140,7 +139,7 @@ data:
               region_code: en
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/en/train
-            weight: 0.05707230
+            weight: 0.05686286
             tags:
               task: asr
               lang: en
@@ -148,7 +147,7 @@ data:
               region_code: en
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/peoples_speech/clean_sa/train
-            weight: 0.04238198
+            weight: 0.04222644
             tags:
               task: asr
               lang: en
@@ -156,7 +155,7 @@ data:
               region_code: en
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/en/train
-            weight: 0.03076604
+            weight: 0.03065314
             tags:
               task: asr
               lang: en
@@ -164,7 +163,7 @@ data:
               region_code: en
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/other/train.500
-            weight: 0.02999865
+            weight: 0.02988856
             tags:
               task: asr
               lang: en
@@ -172,7 +171,7 @@ data:
               region_code: en
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/train.360
-            weight: 0.02566262
+            weight: 0.02556844
             tags:
               task: asr
               lang: en
@@ -180,29 +179,37 @@ data:
               region_code: en
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/train.100
-            weight: 0.01349786
+            weight: 0.01344833
             tags:
               task: asr
               lang: en
               text_field: custom.pnc_text
               region_code: en
-      # es: 28,191.2 h across 5 corpora
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/en_us/train
+            weight: 0.00366989
+            tags:
+              task: asr
+              lang: en
+              text_field: custom.pnc_text
+              region_code: en
+      # es: 28,200.0 h across 6 corpora
       - type: group
-        weight: 0.13197244
+        weight: 0.12637003
         tags:
           task: asr
           lang: es
         input_cfg:
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Spanish/ast
-            weight: 0.63322786
+            weight: 0.62591041
             tags:
               task: asr
               lang: es
               region_code: es
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/spanish/train
-            weight: 0.11934841
+            weight: 0.11796924
             tags:
               task: asr
               lang: es
@@ -210,14 +217,14 @@ data:
               region_code: es
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Spanish/asr_only
-            weight: 0.11000335
+            weight: 0.10873217
             tags:
               task: asr
               lang: es
               region_code: es
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/es/train
-            weight: 0.08885959
+            weight: 0.08783275
             tags:
               task: asr
               lang: es
@@ -225,58 +232,74 @@ data:
               region_code: es
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/es/train
-            weight: 0.04856080
+            weight: 0.04799964
             tags:
               task: asr
               lang: es
               text_field: custom.pnc_text
               region_code: es
-      # ru: 20,164.8 h across 3 corpora
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/es_419/train
+            weight: 0.01155580
+            tags:
+              task: asr
+              lang: es
+              text_field: custom.pnc_text
+              region_code: es
+      # ru: 20,172.9 h across 4 corpora
       - type: group
-        weight: 0.11161529
+        weight: 0.10688171
         tags:
           task: asr
           lang: ru
         input_cfg:
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Russian/ast
-            weight: 0.73941183
+            weight: 0.72814835
             tags:
               task: asr
               lang: ru
               region_code: ru
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Russian/asr_only
-            weight: 0.22692629
+            weight: 0.22346951
             tags:
               task: asr
               lang: ru
               region_code: ru
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ru/train
-            weight: 0.03366188
+            weight: 0.03314910
             tags:
               task: asr
               lang: ru
               text_field: custom.metadata.sentence
               region_code: ru
-      # fr: 14,360.4 h across 5 corpora
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/ru_ru/train
+            weight: 0.01523303
+            tags:
+              task: asr
+              lang: ru
+              text_field: custom.pnc_text
+              region_code: ru
+      # fr: 14,370.7 h across 6 corpora
       - type: group
-        weight: 0.09419098
+        weight: 0.09021077
         tags:
           task: asr
           lang: fr
         input_cfg:
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/French/ast
-            weight: 0.51003219
+            weight: 0.50235957
             tags:
               task: asr
               lang: fr
               region_code: fr
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/french/train
-            weight: 0.15597332
+            weight: 0.15362695
             tags:
               task: asr
               lang: fr
@@ -284,7 +307,7 @@ data:
               region_code: fr
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/fr/train
-            weight: 0.13865958
+            weight: 0.13657367
             tags:
               task: asr
               lang: fr
@@ -292,36 +315,44 @@ data:
               region_code: fr
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/French/asr_only
-            weight: 0.12715707
+            weight: 0.12524420
             tags:
               task: asr
               lang: fr
               region_code: fr
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/fr/train
-            weight: 0.06817784
+            weight: 0.06715221
             tags:
               task: asr
               lang: fr
               text_field: custom.pnc_text
               region_code: fr
-      # de: 11,119.2 h across 5 corpora
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/fr_fr/train
+            weight: 0.01504340
+            tags:
+              task: asr
+              lang: fr
+              text_field: custom.pnc_text
+              region_code: fr
+      # de: 11,128.2 h across 6 corpora
       - type: group
-        weight: 0.08288247
+        weight: 0.07938372
         tags:
           task: asr
           lang: de
         input_cfg:
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/German/ast
-            weight: 0.43073000
+            weight: 0.42436767
             tags:
               task: asr
               lang: de
               region_code: de
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/german/train
-            weight: 0.22160707
+            weight: 0.21833371
             tags:
               task: asr
               lang: de
@@ -329,7 +360,7 @@ data:
               region_code: de
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/de/train
-            weight: 0.15505424
+            weight: 0.15276393
             tags:
               task: asr
               lang: de
@@ -337,36 +368,44 @@ data:
               region_code: de
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/German/asr_only
-            weight: 0.11131878
+            weight: 0.10967448
             tags:
               task: asr
               lang: de
               region_code: de
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/de/train
-            weight: 0.08128992
+            weight: 0.08008918
             tags:
               task: asr
               lang: de
               text_field: custom.pnc_text
               region_code: de
-      # it: 6,725.1 h across 5 corpora
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/de_de/train
+            weight: 0.01477102
+            tags:
+              task: asr
+              lang: de
+              text_field: custom.pnc_text
+              region_code: de
+      # it: 6,734.1 h across 6 corpora
       - type: group
-        weight: 0.06445765
+        weight: 0.06175297
         tags:
           task: asr
           lang: it
         input_cfg:
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Italian/ast
-            weight: 0.60120553
+            weight: 0.58755409
             tags:
               task: asr
               lang: it
               region_code: it
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/it/train
-            weight: 0.12360271
+            weight: 0.12079609
             tags:
               task: asr
               lang: it
@@ -374,7 +413,7 @@ data:
               region_code: it
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/italian/train
-            weight: 0.12182448
+            weight: 0.11905824
             tags:
               task: asr
               lang: it
@@ -382,29 +421,37 @@ data:
               region_code: it
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Italian/asr_only
-            weight: 0.08493394
+            weight: 0.08300537
             tags:
               task: asr
               lang: it
               region_code: it
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/it/train
-            weight: 0.06843334
+            weight: 0.06687944
             tags:
               task: asr
               lang: it
               text_field: custom.pnc_text
               region_code: it
-      # nl: 3,020.6 h across 5 corpora
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/it_it/train
+            weight: 0.02270678
+            tags:
+              task: asr
+              lang: it
+              text_field: custom.pnc_text
+              region_code: it
+      # nl: 3,028.3 h across 6 corpora
       - type: group
-        weight: 0.04319920
+        weight: 0.04141129
         tags:
           task: asr
           lang: nl
         input_cfg:
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/dutch/train
-            weight: 0.40990292
+            weight: 0.39843661
             tags:
               task: asr
               lang: nl
@@ -412,14 +459,14 @@ data:
               region_code: nl
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Dutch/ast
-            weight: 0.37891685
+            weight: 0.36831732
             tags:
               task: asr
               lang: nl
               region_code: nl
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/nl/train
-            weight: 0.07651021
+            weight: 0.07436997
             tags:
               task: asr
               lang: nl
@@ -427,42 +474,50 @@ data:
               region_code: nl
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/nl/train
-            weight: 0.07078680
+            weight: 0.06880666
             tags:
               task: asr
               lang: nl
               region_code: nl
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Dutch/asr_only
-            weight: 0.06388321
+            weight: 0.06209619
             tags:
               task: asr
               lang: nl
               region_code: nl
-      # pt: 2,090.7 h across 4 corpora
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/nl_nl/train
+            weight: 0.02797324
+            tags:
+              task: asr
+              lang: nl
+              text_field: custom.pnc_text
+              region_code: nl
+      # pt: 2,100.9 h across 5 corpora
       - type: group
-        weight: 0.03593938
+        weight: 0.03449199
         tags:
           task: asr
           lang: pt
         input_cfg:
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Portuguese/ast
-            weight: 0.54363555
+            weight: 0.52131665
             tags:
               task: asr
               lang: pt
               region_code: pt
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Portuguese/asr_only
-            weight: 0.21727555
+            weight: 0.20835533
             tags:
               task: asr
               lang: pt
               region_code: pt
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/portuguese/train
-            weight: 0.17024929
+            weight: 0.16325972
             tags:
               task: asr
               lang: pt
@@ -470,29 +525,59 @@ data:
               region_code: pt
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/pt/train
-            weight: 0.06883960
+            weight: 0.06601340
             tags:
               task: asr
               lang: pt
               text_field: custom.metadata.sentence
               region_code: pt
-      # pl: 921.5 h across 5 corpora
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/pt_br/train
+            weight: 0.04105491
+            tags:
+              task: asr
+              lang: pt
+              text_field: custom.pnc_text
+              region_code: pt
+      # ca: 1,747.3 h across 2 corpora
       - type: group
-        weight: 0.02386031
+        weight: 0.03145576
+        tags:
+          task: asr
+          lang: ca
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ca/train
+            weight: 0.93867972
+            tags:
+              task: asr
+              lang: ca
+              text_field: custom.metadata.sentence
+              region_code: ca
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/ca_es/train
+            weight: 0.06132028
+            tags:
+              task: asr
+              lang: ca
+              region_code: ca
+      # pl: 930.7 h across 6 corpora
+      - type: group
+        weight: 0.02295734
         tags:
           task: asr
           lang: pl
         input_cfg:
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Polish/ast
-            weight: 0.45692886
+            weight: 0.43362448
             tags:
               task: asr
               lang: pl
               region_code: pl
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/polish/train
-            weight: 0.18058771
+            weight: 0.17137733
             tags:
               task: asr
               lang: pl
@@ -500,14 +585,14 @@ data:
               region_code: pl
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/pl/train
-            weight: 0.17531292
+            weight: 0.16637157
             tags:
               task: asr
               lang: pl
               region_code: pl
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/pl/train
-            weight: 0.10571733
+            weight: 0.10032552
             tags:
               task: asr
               lang: pl
@@ -515,28 +600,36 @@ data:
               region_code: pl
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Polish/asr_only
-            weight: 0.08145318
+            weight: 0.07729889
             tags:
               task: asr
               lang: pl
               region_code: pl
-      # uk: 637.9 h across 3 corpora
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/pl_pl/train
+            weight: 0.05100221
+            tags:
+              task: asr
+              lang: pl
+              text_field: custom.pnc_text
+              region_code: pl
+      # uk: 647.0 h across 4 corpora
       - type: group
-        weight: 0.01985266
+        weight: 0.01914104
         tags:
           task: asr
           lang: uk
         input_cfg:
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Ukrainian/ast
-            weight: 0.73465183
+            weight: 0.67371668
             tags:
               task: asr
               lang: uk
               region_code: uk
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/uk/train
-            weight: 0.16941757
+            weight: 0.15536536
             tags:
               task: asr
               lang: uk
@@ -544,28 +637,36 @@ data:
               region_code: uk
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Ukrainian/asr_only
-            weight: 0.09593059
+            weight: 0.08797370
             tags:
               task: asr
               lang: uk
               region_code: uk
-      # hu: 264.5 h across 4 corpora
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/uk_ua/train
+            weight: 0.08294426
+            tags:
+              task: asr
+              lang: uk
+              text_field: custom.pnc_text
+              region_code: uk
+      # hu: 273.8 h across 5 corpora
       - type: group
-        weight: 0.01278393
+        weight: 0.01245231
         tags:
           task: asr
           lang: hu
         input_cfg:
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Hungarian/ast
-            weight: 0.40388115
+            weight: 0.36646654
             tags:
               task: asr
               lang: hu
               region_code: hu
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/hu/train
-            weight: 0.25212148
+            weight: 0.22876553
             tags:
               task: asr
               lang: hu
@@ -573,172 +674,248 @@ data:
               region_code: hu
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/hu/train
-            weight: 0.24639252
+            weight: 0.22356729
             tags:
               task: asr
               lang: hu
               region_code: hu
           - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/hu_hu/train
+            weight: 0.09263767
+            tags:
+              task: asr
+              lang: hu
+              text_field: custom.pnc_text
+              region_code: hu
+          - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Hungarian/asr_only
-            weight: 0.09760485
+            weight: 0.08856296
             tags:
               task: asr
               lang: hu
               region_code: hu
-      # fi: 184.9 h across 4 corpora
+      # fi: 193.7 h across 5 corpora
       - type: group
-        weight: 0.01068828
+        weight: 0.01047392
         tags:
           task: asr
           lang: fi
         input_cfg:
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Finnish/ast
-            weight: 0.60059649
+            weight: 0.52556023
             tags:
               task: asr
               lang: fi
               region_code: fi
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/fi/train
-            weight: 0.22885617
+            weight: 0.20026374
             tags:
               task: asr
               lang: fi
               region_code: fi
           - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/fi_fi/train
+            weight: 0.12493623
+            tags:
+              task: asr
+              lang: fi
+              text_field: custom.pnc_text
+              region_code: fi
+          - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Finnish/asr_only
-            weight: 0.09348681
+            weight: 0.08180692
             tags:
               task: asr
               lang: fi
               region_code: fi
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/fi/train
-            weight: 0.07706052
+            weight: 0.06743287
             tags:
               task: asr
               lang: fi
               text_field: custom.metadata.sentence
               region_code: fi
-      # cs: 151.9 h across 4 corpora
+      # cs: 160.3 h across 5 corpora
       - type: group
-        weight: 0.00968651
+        weight: 0.00952814
         tags:
           task: asr
           lang: cs
         input_cfg:
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Czech/ast
-            weight: 0.35601728
+            weight: 0.31569551
             tags:
               task: asr
               lang: cs
               region_code: cs
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/cs/train
-            weight: 0.32192071
+            weight: 0.28546064
             tags:
               task: asr
               lang: cs
               region_code: cs
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/cs/train
-            weight: 0.23591402
+            weight: 0.20919489
             tags:
               task: asr
               lang: cs
               text_field: custom.metadata.sentence
               region_code: cs
           - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/cs_cz/train
+            weight: 0.11325791
+            tags:
+              task: asr
+              lang: cs
+              text_field: custom.pnc_text
+              region_code: cs
+          - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Czech/asr_only
-            weight: 0.08614800
+            weight: 0.07639105
             tags:
               task: asr
               lang: cs
               region_code: cs
-      # ro: 120.5 h across 4 corpora
+      # ro: 130.6 h across 5 corpora
       - type: group
-        weight: 0.00862794
+        weight: 0.00860040
         tags:
           task: asr
           lang: ro
         input_cfg:
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/ro/train
-            weight: 0.45414897
+            weight: 0.38972741
             tags:
               task: asr
               lang: ro
               region_code: ro
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Romanian/ast
-            weight: 0.29638211
+            weight: 0.25433997
             tags:
               task: asr
               lang: ro
               region_code: ro
           - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/ro_ro/train
+            weight: 0.14185116
+            tags:
+              task: asr
+              lang: ro
+              text_field: custom.pnc_text
+              region_code: ro
+          - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Romanian/asr_only
-            weight: 0.12498421
+            weight: 0.10725505
             tags:
               task: asr
               lang: ro
               region_code: ro
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ro/train
-            weight: 0.12448471
+            weight: 0.10682641
             tags:
               task: asr
               lang: ro
               text_field: custom.metadata.sentence
               region_code: ro
-      # sv: 101.9 h across 3 corpora
+      # sv: 110.3 h across 4 corpora
       - type: group
-        weight: 0.00793474
+        weight: 0.00790220
         tags:
           task: asr
           lang: sv
         input_cfg:
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Swedish/ast
-            weight: 0.68424065
+            weight: 0.56664820
             tags:
               task: asr
               lang: sv
               region_code: sv
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/sv-SE/train
-            weight: 0.21656340
+            weight: 0.17934517
             tags:
               task: asr
               lang: sv
               text_field: custom.metadata.sentence
               region_code: sv
           - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/sv_se/train
+            weight: 0.17185833
+            tags:
+              task: asr
+              lang: sv
+              text_field: custom.pnc_text
+              region_code: sv
+          - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Swedish/asr_only
-            weight: 0.09919595
+            weight: 0.08214830
             tags:
               task: asr
               lang: sv
               region_code: sv
-      # sk: 48.4 h across 4 corpora
+      # hr: 56.0 h across 4 corpora
       - type: group
-        weight: 0.00546677
+        weight: 0.00563372
+        tags:
+          task: asr
+          lang: hr
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/hr/train
+            weight: 0.45910183
+            tags:
+              task: asr
+              lang: hr
+              region_code: hr
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/hr_hr/train
+            weight: 0.26691480
+            tags:
+              task: asr
+              lang: hr
+              text_field: custom.pnc_text
+              region_code: hr
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Croatian/ast
+            weight: 0.23573392
+            tags:
+              task: asr
+              lang: hr
+              region_code: hr
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Croatian/asr_only
+            weight: 0.03824945
+            tags:
+              task: asr
+              lang: hr
+              region_code: hr
+      # sk: 54.2 h across 5 corpora
+      - type: group
+        weight: 0.00554224
         tags:
           task: asr
           lang: sk
         input_cfg:
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/sk/train
-            weight: 0.45159828
+            weight: 0.37650494
             tags:
               task: asr
               lang: sk
               region_code: sk
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/sk/train
-            weight: 0.24606303
+            weight: 0.20514680
             tags:
               task: asr
               lang: sk
@@ -746,63 +923,51 @@ data:
               region_code: sk
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Slovak/ast
-            weight: 0.24534975
+            weight: 0.20455213
             tags:
               task: asr
               lang: sk
+              region_code: sk
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/sk_sk/train
+            weight: 0.16628350
+            tags:
+              task: asr
+              lang: sk
+              text_field: custom.pnc_text
               region_code: sk
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Slovak/asr_only
-            weight: 0.05698894
+            weight: 0.04751262
             tags:
               task: asr
               lang: sk
               region_code: sk
-      # hr: 44.3 h across 3 corpora
+      # bg: 35.2 h across 4 corpora
       - type: group
-        weight: 0.00522975
-        tags:
-          task: asr
-          lang: hr
-        input_cfg:
-          - type: lhotse_shar
-            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/hr/train
-            weight: 0.62625985
-            tags:
-              task: asr
-              lang: hr
-              region_code: hr
-          - type: lhotse_shar
-            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Croatian/ast
-            weight: 0.32156415
-            tags:
-              task: asr
-              lang: hr
-              region_code: hr
-          - type: lhotse_shar
-            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Croatian/asr_only
-            weight: 0.05217600
-            tags:
-              task: asr
-              lang: hr
-              region_code: hr
-      # bg: 25.7 h across 3 corpora
-      - type: group
-        weight: 0.00398575
+        weight: 0.00446580
         tags:
           task: asr
           lang: bg
         input_cfg:
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Bulgarian/ast
-            weight: 0.50407650
+            weight: 0.36530363
             tags:
               task: asr
               lang: bg
               region_code: bg
           - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/bg_bg/train
+            weight: 0.27530121
+            tags:
+              task: asr
+              lang: bg
+              text_field: custom.pnc_text
+              region_code: bg
+          - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/bg/train
-            weight: 0.32979688
+            weight: 0.23900340
             tags:
               task: asr
               lang: bg
@@ -810,57 +975,73 @@ data:
               region_code: bg
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Bulgarian/asr_only
-            weight: 0.16612663
+            weight: 0.12039176
             tags:
               task: asr
               lang: bg
               region_code: bg
-      # lv: 24.0 h across 3 corpora
+      # lv: 30.5 h across 4 corpora
       - type: group
-        weight: 0.00384932
+        weight: 0.00415684
         tags:
           task: asr
           lang: lv
         input_cfg:
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/lv/train
-            weight: 0.81669772
+            weight: 0.57018978
             tags:
               task: asr
               lang: lv
               text_field: custom.metadata.sentence
               region_code: lv
           - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/lv_lv/train
+            weight: 0.30183498
+            tags:
+              task: asr
+              lang: lv
+              text_field: custom.pnc_text
+              region_code: lv
+          - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Latvian/ast
-            weight: 0.12853732
+            weight: 0.08974026
             tags:
               task: asr
               lang: lv
               region_code: lv
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Latvian/asr_only
-            weight: 0.05476496
+            weight: 0.03823498
             tags:
               task: asr
               lang: lv
               region_code: lv
-      # da: 21.5 h across 3 corpora
+      # da: 29.0 h across 4 corpora
       - type: group
-        weight: 0.00364040
+        weight: 0.00404935
         tags:
           task: asr
           lang: da
         input_cfg:
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Danish/ast
-            weight: 0.59274723
+            weight: 0.42412351
             tags:
               task: asr
               lang: da
               region_code: da
           - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/da_dk/train
+            weight: 0.28447829
+            tags:
+              task: asr
+              lang: da
+              text_field: custom.pnc_text
+              region_code: da
+          - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/da/train
-            weight: 0.29729180
+            weight: 0.21271874
             tags:
               task: asr
               lang: da
@@ -868,100 +1049,80 @@ data:
               region_code: da
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Danish/asr_only
-            weight: 0.10996096
+            weight: 0.07867946
             tags:
               task: asr
               lang: da
               region_code: da
-      # lt: 18.6 h across 4 corpora
+      # lt: 28.4 h across 5 corpora
       - type: group
-        weight: 0.00339246
+        weight: 0.00400896
         tags:
           task: asr
           lang: lt
         input_cfg:
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/lt/train
-            weight: 0.45154688
+            weight: 0.31991889
             tags:
               task: asr
               lang: lt
               text_field: custom.metadata.sentence
               region_code: lt
           - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/lt_lt/train
+            weight: 0.29150459
+            tags:
+              task: asr
+              lang: lt
+              text_field: custom.pnc_text
+              region_code: lt
+          - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Lithuanian/ast
-            weight: 0.29235970
+            weight: 0.20713551
             tags:
               task: asr
               lang: lt
               region_code: lt
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/lt/train
-            weight: 0.15248189
+            weight: 0.10803272
             tags:
               task: asr
               lang: lt
               region_code: lt
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Lithuanian/asr_only
-            weight: 0.10361152
+            weight: 0.07340829
             tags:
               task: asr
               lang: lt
               region_code: lt
-      # et: 17.0 h across 4 corpora
+      # el: 27.0 h across 4 corpora
       - type: group
-        weight: 0.00324432
-        tags:
-          task: asr
-          lang: et
-        input_cfg:
-          - type: lhotse_shar
-            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Estonian/ast
-            weight: 0.37147449
-            tags:
-              task: asr
-              lang: et
-              region_code: et
-          - type: lhotse_shar
-            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/et/train
-            weight: 0.33447451
-            tags:
-              task: asr
-              lang: et
-              text_field: custom.metadata.sentence
-              region_code: et
-          - type: lhotse_shar
-            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/et/train
-            weight: 0.19999483
-            tags:
-              task: asr
-              lang: et
-              region_code: et
-          - type: lhotse_shar
-            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Estonian/asr_only
-            weight: 0.09405617
-            tags:
-              task: asr
-              lang: et
-              region_code: et
-      # el: 16.9 h across 3 corpora
-      - type: group
-        weight: 0.00323400
+        weight: 0.00390816
         tags:
           task: asr
           lang: el
         input_cfg:
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Greek/ast
-            weight: 0.60051160
+            weight: 0.39693456
             tags:
               task: asr
               lang: el
               region_code: el
           - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/el_gr/train
+            weight: 0.33900601
+            tags:
+              task: asr
+              lang: el
+              text_field: custom.pnc_text
+              region_code: el
+          - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/el/train
-            weight: 0.23843705
+            weight: 0.15760546
             tags:
               task: asr
               lang: el
@@ -969,68 +1130,135 @@ data:
               region_code: el
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Greek/asr_only
-            weight: 0.16105135
+            weight: 0.10645397
             tags:
               task: asr
               lang: el
               region_code: el
-      # sl: 7.6 h across 2 corpora
+      # et: 24.3 h across 5 corpora
       - type: group
-        weight: 0.00216173
+        weight: 0.00371222
+        tags:
+          task: asr
+          lang: et
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Estonian/ast
+            weight: 0.27360514
+            tags:
+              task: asr
+              lang: et
+              region_code: et
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/et_ee/train
+            weight: 0.26346185
+            tags:
+              task: asr
+              lang: et
+              text_field: custom.pnc_text
+              region_code: et
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/et/train
+            weight: 0.24635324
+            tags:
+              task: asr
+              lang: et
+              text_field: custom.metadata.sentence
+              region_code: et
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/et/train
+            weight: 0.14730382
+            tags:
+              task: asr
+              lang: et
+              region_code: et
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Estonian/asr_only
+            weight: 0.06927595
+            tags:
+              task: asr
+              lang: et
+              region_code: et
+      # sl: 15.3 h across 3 corpora
+      - type: group
+        weight: 0.00294626
         tags:
           task: asr
           lang: sl
         input_cfg:
           - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/sl_si/train
+            weight: 0.43046054
+            tags:
+              task: asr
+              lang: sl
+              text_field: custom.pnc_text
+              region_code: sl
+          - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/sl/train
-            weight: 0.66804822
+            weight: 0.38047982
             tags:
               task: asr
               lang: sl
               region_code: sl
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/sl/train
-            weight: 0.33195178
+            weight: 0.18905964
             tags:
               task: asr
               lang: sl
               text_field: custom.metadata.sentence
               region_code: sl
-      # mt: 2.4 h across 1 corpora
+      # ga: 12.7 h across 2 corpora
       - type: group
-        weight: 0.00121134
-        tags:
-          task: asr
-          lang: mt
-        input_cfg:
-          - type: lhotse_shar
-            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/mt/train
-            weight: 1.00000000
-            tags:
-              task: asr
-              lang: mt
-              text_field: custom.metadata.sentence
-              region_code: mt
-      # ga: 0.6 h across 1 corpora
-      - type: group
-        weight: 0.00061058
+        weight: 0.00268421
         tags:
           task: asr
           lang: ga
         input_cfg:
           - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/ga_ie/train
+            weight: 0.81756986
+            tags:
+              task: asr
+              lang: ga
+              region_code: ga
+          - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ga-IE/train
-            weight: 1.00000000
+            weight: 0.18243014
             tags:
               task: asr
               lang: ga
               text_field: custom.metadata.sentence
               region_code: ga
+      # mt: 12.3 h across 2 corpora
+      - type: group
+        weight: 0.00263750
+        tags:
+          task: asr
+          lang: mt
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/mt_mt/train
+            weight: 0.67132959
+            tags:
+              task: asr
+              lang: mt
+              text_field: custom.pnc_text
+              region_code: mt
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/mt/train
+            weight: 0.32867041
+            tags:
+              task: asr
+              lang: mt
+              text_field: custom.metadata.sentence
+              region_code: mt
     # Rewritten by compute_mix_weights.py from what it measures on disk. It
     # MUST sit after input_cfg: the tool only looks for this key below the
     # block it replaces, so the draft's placement (above it) would have left
     # 240355.0 untouched.
-    total_hours: 240123.4
+    total_hours: 242102.5
     force_estimate: false
 
     # Batch settings ---------------------------------------------------------
@@ -1104,6 +1332,7 @@ data:
       - { type: lhotse_shar, name: asr_ga, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ga-IE/validation", tags: { task: asr, lang: ga, text_field: custom.metadata.sentence } }
       - { type: lhotse_shar, name: asr_mt, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/mt/validation", tags: { task: asr, lang: mt, text_field: custom.metadata.sentence } }
       - { type: lhotse_shar, name: asr_uk, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/uk/validation", tags: { task: asr, lang: uk, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_ca, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ca/validation", tags: { task: asr, lang: ca, text_field: custom.metadata.sentence } }
     batch_size: null
     batch_duration: 300.0
     lhotse_sampler_type: dynamic_bucketing
@@ -1140,15 +1369,15 @@ trainer:
 
   # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: effective batch and LR).
   # warmup-stable-decay as plan_arm.py composes it: last 20% of steps decay to
-  # 0.1x peak (cosine), warmup 3% of steps. transformers 5.16.1 has NO
+  # 0.1x peak (cosine), warmup 3% of steps, stated as an integer count. transformers 5.16.1 has NO
   # `warmup_ratio` argument (trainer_args_dict logs "dropping ... warmup_ratio"
   # and trains with no warmup, which is what `plan_arm.py --warmup-ratio`
-  # produces today); a float below 1 in `warmup_steps` is the tf5 spelling of
-  # the ratio (checked in melt_cuda126.sif: get_warmup_steps(1000) == 30).
-  # num_decay_steps = round(0.2 x 240,124 steps) = 48025.
+  # produces today); warmup is therefore set as `warmup_steps`,
+  # round(0.03 x steps) (PI, 2026-09-25).
+  # num_decay_steps = round(0.2 x 242,103 steps) = 48421.
   lr_scheduler_type: warmup_stable_decay
-  lr_scheduler_kwargs: {"num_decay_steps": 48025, "min_lr_ratio": 0.1, "decay_type": "cosine"}
-  warmup_steps: 0.03
+  lr_scheduler_kwargs: {"num_decay_steps": 48421, "min_lr_ratio": 0.1, "decay_type": "cosine"}
+  warmup_steps: 7263
 
   num_train_epochs: 1                  # campaign convention; steps are derived, never pinned
   max_steps: -1

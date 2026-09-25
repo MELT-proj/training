@@ -112,6 +112,8 @@ data:
   strict_text_field: true      # settled campaign-wide (silent-text-field-fallback).
 
   train_ds:
+    max_duration: 60     # settled (06 §3 filters)
+    max_tokens: 400
     # total_hours is a placeholder pending the real measurement; the two-tier
     # weights below are proportions and do not depend on this number, but the
     # steps-per-epoch estimate does. ~240,355 h is the sum of asr_train_hours
@@ -288,8 +290,8 @@ data:
     # -----------------------------------------------------------------------
 
   # Duration filtering -- settled, matches every ABL-*.yaml in this campaign.
-  max_duration: 60
-  max_tokens: 400
+  # max_duration / max_tokens moved under train_ds (2026-09-25): the dataloader reads
+  # them off data.train_ds, not off data (trainer.py passes config.data.train_ds).
 
   validation_ds:
     # In-domain held-out dev/validation splits, same mechanism the ablation

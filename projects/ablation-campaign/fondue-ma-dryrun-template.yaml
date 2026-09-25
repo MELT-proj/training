@@ -28,17 +28,16 @@
 #   the next render.
 #
 # alpha=0.5, beta=0.5 as drafted (fondue-ma-draft.yaml header; arXiv:2509.14128
-# 3.3.1). Language set is EU-24 + ru + uk; ca stays out (06 §3, language-set
-# row, ca open). FLEURS train is OUT, the current default -- but that row
-# (06 §3 FLEURS in the training pool) was re-opened on 2026-09-20 and needs
-# the PI's call; with FLEURS out, ga has 0.6 h and mt 2.4 h of training audio.
+# 3.3.1). Language set is EU-24 + ru + uk + ca (PI, 2026-09-25: ca in). FLEURS train is IN
+# (PI, 2026-09-25) so the tail keeps its data; FLEURS test + validation stay
+# the benchmark and are not in validation_ds. Granary `ast` stays in MA as ASR
+# (PI, 2026-09-25), though how much MA vs IFT each language needs is still open.
 #
 # Sources beyond the draft's stanzas: the draft listed only the Granary
 # `asr_only` leaves, but data/hours_by_language.csv's asr_train_hours (which
 # the draft's total_hours and 06 §1 quote) also counts the Granary `ast`
 # leaves as ASR (es 25.8K of its 28.2K h, ru 18.4K of 20.2K h). They are
-# included here as `task: asr` sources; whether MA should train on them is
-# a decision for the PI, see the dry-run report.
+# included here as `task: asr` sources (PI, 2026-09-25: keep).
 
 # =============================================================================
 # Run Configuration
@@ -107,6 +106,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/English/asr_only
         tags: { task: asr, lang: en }
       - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/en_us/train
+        tags: { task: asr, lang: en, text_field: custom.pnc_text }
+      - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/train.100
         tags: { task: asr, lang: en, text_field: custom.pnc_text }
       - type: lhotse_shar
@@ -138,6 +140,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Spanish/ast
         tags: { task: asr, lang: es }
         # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/es_419/train
+        tags: { task: asr, lang: es, text_field: custom.pnc_text }
       # --- fr ---
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/fr/train
@@ -155,6 +160,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/French/ast
         tags: { task: asr, lang: fr }
         # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/fr_fr/train
+        tags: { task: asr, lang: fr, text_field: custom.pnc_text }
       # --- de ---
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/de/train
@@ -172,6 +180,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/German/ast
         tags: { task: asr, lang: de }
         # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/de_de/train
+        tags: { task: asr, lang: de, text_field: custom.pnc_text }
       # --- it ---
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/it/train
@@ -189,6 +200,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Italian/ast
         tags: { task: asr, lang: it }
         # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/it_it/train
+        tags: { task: asr, lang: it, text_field: custom.pnc_text }
       # --- ru ---
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ru/train
@@ -200,6 +214,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Russian/ast
         tags: { task: asr, lang: ru }
         # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/ru_ru/train
+        tags: { task: asr, lang: ru, text_field: custom.pnc_text }
       # --- nl ---
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/nl/train
@@ -217,6 +234,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Dutch/ast
         tags: { task: asr, lang: nl }
         # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/nl_nl/train
+        tags: { task: asr, lang: nl, text_field: custom.pnc_text }
       # --- pt ---
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/pt/train
@@ -231,6 +251,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Portuguese/ast
         tags: { task: asr, lang: pt }
         # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/pt_br/train
+        tags: { task: asr, lang: pt, text_field: custom.pnc_text }
       # --- pl ---
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/pl/train
@@ -248,6 +271,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Polish/ast
         tags: { task: asr, lang: pl }
         # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/pl_pl/train
+        tags: { task: asr, lang: pl, text_field: custom.pnc_text }
       # --- hu ---
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/hu/train
@@ -262,6 +288,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Hungarian/ast
         tags: { task: asr, lang: hu }
         # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/hu_hu/train
+        tags: { task: asr, lang: hu, text_field: custom.pnc_text }
       # --- fi ---
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/fi/train
@@ -276,6 +305,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Finnish/ast
         tags: { task: asr, lang: fi }
         # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/fi_fi/train
+        tags: { task: asr, lang: fi, text_field: custom.pnc_text }
       # --- cs ---
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/cs/train
@@ -290,6 +322,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Czech/ast
         tags: { task: asr, lang: cs }
         # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/cs_cz/train
+        tags: { task: asr, lang: cs, text_field: custom.pnc_text }
       # --- ro ---
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ro/train
@@ -304,6 +339,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Romanian/ast
         tags: { task: asr, lang: ro }
         # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/ro_ro/train
+        tags: { task: asr, lang: ro, text_field: custom.pnc_text }
       # --- sv ---
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/sv-SE/train
@@ -315,6 +353,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Swedish/ast
         tags: { task: asr, lang: sv }
         # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/sv_se/train
+        tags: { task: asr, lang: sv, text_field: custom.pnc_text }
       # --- hr ---
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/hr/train
@@ -326,6 +367,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Croatian/ast
         tags: { task: asr, lang: hr }
         # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/hr_hr/train
+        tags: { task: asr, lang: hr, text_field: custom.pnc_text }
       # --- sk ---
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/sk/train
@@ -340,6 +384,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Slovak/ast
         tags: { task: asr, lang: sk }
         # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/sk_sk/train
+        tags: { task: asr, lang: sk, text_field: custom.pnc_text }
       # --- bg ---
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/bg/train
@@ -351,6 +398,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Bulgarian/ast
         tags: { task: asr, lang: bg }
         # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/bg_bg/train
+        tags: { task: asr, lang: bg, text_field: custom.pnc_text }
       # --- lv ---
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/lv/train
@@ -362,6 +412,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Latvian/ast
         tags: { task: asr, lang: lv }
         # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/lv_lv/train
+        tags: { task: asr, lang: lv, text_field: custom.pnc_text }
       # --- da ---
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/da/train
@@ -373,6 +426,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Danish/ast
         tags: { task: asr, lang: da }
         # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/da_dk/train
+        tags: { task: asr, lang: da, text_field: custom.pnc_text }
       # --- lt ---
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/lt/train
@@ -387,6 +443,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Lithuanian/ast
         tags: { task: asr, lang: lt }
         # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/lt_lt/train
+        tags: { task: asr, lang: lt, text_field: custom.pnc_text }
       # --- el ---
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/el/train
@@ -398,6 +457,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Greek/ast
         tags: { task: asr, lang: el }
         # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/el_gr/train
+        tags: { task: asr, lang: el, text_field: custom.pnc_text }
       # --- et ---
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/et/train
@@ -412,6 +474,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Estonian/ast
         tags: { task: asr, lang: et }
         # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/et_ee/train
+        tags: { task: asr, lang: et, text_field: custom.pnc_text }
       # --- sl ---
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/sl/train
@@ -419,14 +484,23 @@ data:
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/sl/train
         tags: { task: asr, lang: sl }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/sl_si/train
+        tags: { task: asr, lang: sl, text_field: custom.pnc_text }
       # --- ga ---
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ga-IE/train
         tags: { task: asr, lang: ga, text_field: custom.metadata.sentence }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/ga_ie/train
+        tags: { task: asr, lang: ga }
       # --- mt ---
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/mt/train
         tags: { task: asr, lang: mt, text_field: custom.metadata.sentence }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/mt_mt/train
+        tags: { task: asr, lang: mt, text_field: custom.pnc_text }
       # --- uk ---
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/uk/train
@@ -438,12 +512,22 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Ukrainian/ast
         tags: { task: asr, lang: uk }
         # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/uk_ua/train
+        tags: { task: asr, lang: uk, text_field: custom.pnc_text }
+      # --- ca ---
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ca/train
+        tags: { task: asr, lang: ca, text_field: custom.metadata.sentence }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/ca_es/train
+        tags: { task: asr, lang: ca }
 
     # Rewritten by compute_mix_weights.py from what it measures on disk. It
     # MUST sit after input_cfg: the tool only looks for this key below the
     # block it replaces, so the draft's placement (above it) would have left
     # 240355.0 untouched.
-    total_hours: 240123.4
+    total_hours: 242102.5
     force_estimate: false
 
     # Batch settings ---------------------------------------------------------
@@ -517,6 +601,7 @@ data:
       - { type: lhotse_shar, name: asr_ga, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ga-IE/validation", tags: { task: asr, lang: ga, text_field: custom.metadata.sentence } }
       - { type: lhotse_shar, name: asr_mt, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/mt/validation", tags: { task: asr, lang: mt, text_field: custom.metadata.sentence } }
       - { type: lhotse_shar, name: asr_uk, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/uk/validation", tags: { task: asr, lang: uk, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_ca, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ca/validation", tags: { task: asr, lang: ca, text_field: custom.metadata.sentence } }
     batch_size: null
     batch_duration: 300.0
     lhotse_sampler_type: dynamic_bucketing
@@ -553,15 +638,15 @@ trainer:
 
   # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: effective batch and LR).
   # warmup-stable-decay as plan_arm.py composes it: last 20% of steps decay to
-  # 0.1x peak (cosine), warmup 3% of steps. transformers 5.16.1 has NO
+  # 0.1x peak (cosine), warmup 3% of steps, stated as an integer count. transformers 5.16.1 has NO
   # `warmup_ratio` argument (trainer_args_dict logs "dropping ... warmup_ratio"
   # and trains with no warmup, which is what `plan_arm.py --warmup-ratio`
-  # produces today); a float below 1 in `warmup_steps` is the tf5 spelling of
-  # the ratio (checked in melt_cuda126.sif: get_warmup_steps(1000) == 30).
-  # num_decay_steps = round(0.2 x 240,124 steps) = 48025.
+  # produces today); warmup is therefore set as `warmup_steps`,
+  # round(0.03 x steps) (PI, 2026-09-25).
+  # num_decay_steps = round(0.2 x 242,103 steps) = 48421.
   lr_scheduler_type: warmup_stable_decay
-  lr_scheduler_kwargs: {"num_decay_steps": 48025, "min_lr_ratio": 0.1, "decay_type": "cosine"}
-  warmup_steps: 0.03
+  lr_scheduler_kwargs: {"num_decay_steps": 48421, "min_lr_ratio": 0.1, "decay_type": "cosine"}
+  warmup_steps: 7263
 
   num_train_epochs: 1                  # campaign convention; steps are derived, never pinned
   max_steps: -1

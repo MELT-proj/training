@@ -15,6 +15,35 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-25 — Claude (worker, fondue-dry-run) — PI decisions folded into the dry-run config; VoxPopuli "missing pnc_text" is empty transcripts, nothing to fill
+
+Context: PI's review of the phase-1 entry below.
+
+Finding:
+1. **Decisions (PI):** FLEURS train in; ca in; Granary `ast` stays in MA as ASR
+   (MA-vs-IFT hours per language still open, `04-regime.md`); warmup as an integer
+   `warmup_steps`; VoxPopuli `pnc_text` for de/en/es/fr/it only. Recorded in
+   `06-fondue.md` §3 (language set, FLEURS rows). Render now: **242,102.5 h**, 27
+   languages, 166 sources; per-language hours reproduce `hours_by_language.csv`
+   exactly. 242,103 steps at 3,600 s, warmup 7,263, decay 48,421.
+2. **FLEURS audit:** 0 of the FLEURS train sentences (normalised text) occur in
+   test or validation, all 27 locales. ga and ca FLEURS carry no `custom` block
+   (no `pnc_text`, no `num_tokens`), so they use the supervision text.
+3. **`max_duration`/`max_tokens`:** `trainer.py` hands `config.data.train_ds` to the
+   dataloader, which reads both off it (`dataloader.py` ~l.960-980), and
+   `config.py` defaults have them under `train_ds`. Moved in both Fondue drafts.
+4. **VoxPopuli gaps are not fillable.** Files are byte-identical on nyx and MN5
+   (68 manifests, same sizes), so MN5 is not stale. Full scan on nyx: every cut
+   without `pnc_text` also has an empty supervision text (hr 5,184 cuts = 47%,
+   17.0 h of 34.8 h; ro 2.3 h; hu 1.5 h; fi 1.2 h; 24.9 h in all; 49 cuts in
+   de/en/es/fr/it). They are transcript-less audio, and the loader already skips a
+   cut with no text anywhere, so nothing crashes. The truecase script restores
+   punctuation on existing text with a Qwen3.5 model; it cannot supply a
+   transcript, so no artemis job would help. The tail VP text is already cased and
+   punctuated. Cost: hr's weight and the step estimate count ~25 h that is never trained on.
+
+Action needed: none. Phase 2 waits for the PI's go.
+
 ## 2026-09-25 — Claude (worker, fondue-dry-run) — Fondue MA dry-run config rendered at full pool; the draft has four defects and §2's cost is ~2x too high
 
 Context: timeline week 3 Track B, Fondue dry run, phase 1 (config only, no MN5,
