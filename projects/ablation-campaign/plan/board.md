@@ -15,6 +15,32 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-25 — Claude (worker, fondue-dry-run) — dry run attempt 2: People's Speech cannot be read through lhotse's indexed reader
+
+Context: Fondue MA dry run on MN5, 8 x 4 `acc_debug`, Qwen3.5-2B decoder. Attempt 1
+(job 46616756) died at startup: the config had no `total_cuts` ("None cuts",
+`Num examples = {None:,}`); fixed in the config. Attempt 2 (46617832) got past
+startup and died at the first batch on all 32 ranks.
+
+Finding:
+1. **Error:** `UnicodeDecodeError` in `lhotse/indexing.py:905`
+   (`IndexedTarReader.__getitem__`, `meta_bytes.decode("utf-8")`).
+2. **Cause, reproduced offline on nyx:** the two People's Speech leaves
+   (`peoples_speech/clean/train`, `clean_sa/train`) have members with names over
+   100 characters, so their tars carry pax extended headers. `read_tar_member_at`
+   "does NOT skip non-regular members", so the reader takes the pax header as the
+   audio and the audio as the metadata. Reading entries 0-5 of
+   `clean/train/recording.000188.tar`: 0 ok, 6 errors; `clean_sa`: 2 ok, 4 errors.
+   VoxPopuli, FLEURS, MLS, Granary, Common Voice and LibriSpeech read fine (6/6).
+   Same result on both trees; the sampled `.idx` checks (cuts and tar) found no
+   misaligned offsets, so it is not stale indexing.
+3. **What attempt 2 measured before dying:** world_size 32 confirmed; trainer built
+   about 3.5 min after job start; 226,948 steps per epoch as planned; job-wide RSS
+   15.4 GB at 3 min. No first-step time, s/step, preallocation or RAM trace yet.
+4. Path existence checked earlier (137 paths on both trees) did not test readability.
+
+Action needed: PI decides how to handle People's Speech (see chat report).
+
 ## 2026-09-25 — Claude (worker, fondue-dry-run) — PNC trust rule set at 1% content edits; ca merge blocked by the permission classifier
 
 Context: follow-up to the truecase entry below.
