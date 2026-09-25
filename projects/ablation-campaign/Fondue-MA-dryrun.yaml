@@ -1,0 +1,1194 @@
+# Fondue -- stage 1 (modality alignment), FULL-SCALE DRY-RUN config, 2026-09-25.
+#
+# THIS IS NOT THE FONDUE CONFIG AND NOTHING IN IT IS FROZEN. It exists to
+# measure startup, dataloader build, throughput and host RAM at the real
+# pool size and topology (timeline.md week 3, Track B). Every field that
+# 06-fondue.md §3 still lists as open carries an inline
+#   # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: ...)
+# tag. Do not copy a provisional value into a campaign row.
+#
+# How it was made:
+#   projects/ablation-campaign/fondue-ma-dryrun-template.yaml is the flat
+#   template (one `type: lhotse_shar` per source; compute_mix_weights.py's
+#   loader does NOT read `type: group`, so fondue-ma-draft.yaml cannot be its
+#   input as drafted). This file is the render:
+#
+#     python3 infra/compute_mix_weights.py \
+#         --config       projects/ablation-campaign/fondue-ma-dryrun-template.yaml \
+#         --datasets-root /mnt/scratch-nyx/giuseppe/melt/melt-data/shar \
+#         --alpha 0.5 --beta 0.5 \
+#         --cache        infra/.mix_weights_hours.json \
+#         --emit-config  projects/ablation-campaign/Fondue-MA-dryrun.yaml \
+#         --exp-name     Fondue-MA-dryrun
+#
+#   Hours were measured on nyx. The run reads ${LOCAL_DATASETS_DIR} on MN5
+#   (/gpfs/projects/epor48/melt-data/shar-indexed); all sources below exist
+#   on both trees with identical cut-manifest shard counts. Edit the
+#   template, not this file: hand edits inside train_ds.input_cfg are lost on
+#   the next render.
+#
+# alpha=0.5, beta=0.5 as drafted (fondue-ma-draft.yaml header; arXiv:2509.14128
+# 3.3.1). Language set is EU-24 + ru + uk; ca stays out (06 §3, language-set
+# row, ca open). FLEURS train is OUT, the current default -- but that row
+# (06 §3 FLEURS in the training pool) was re-opened on 2026-09-20 and needs
+# the PI's call; with FLEURS out, ga has 0.6 h and mt 2.4 h of training audio.
+#
+# Sources beyond the draft's stanzas: the draft listed only the Granary
+# `asr_only` leaves, but data/hours_by_language.csv's asr_train_hours (which
+# the draft's total_hours and 06 §1 quote) also counts the Granary `ast`
+# leaves as ASR (es 25.8K of its 28.2K h, ru 18.4K of 20.2K h). They are
+# included here as `task: asr` sources; whether MA should train on them is
+# a decision for the PI, see the dry-run report.
+
+# =============================================================================
+# Run Configuration
+# =============================================================================
+run:
+  exp_name: Fondue-MA-dryrun
+  dry_run: false
+  memory_preallocation: true    # campaign convention: on whenever what is trainable changes
+
+# =============================================================================
+# Model Configuration
+# =============================================================================
+model:
+  encoder:
+    name: openai/whisper-large-v3        # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: audio stack, frame rate)
+    freeze: true
+    max_audio_seq_len: 3000              # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: audio stack, frame rate); derived as plan_arm.py does, ENCODER_WINDOW_FRAMES["openai/whisper-large-v3"]
+
+  decoder:
+    name: meta-llama/Llama-3.2-1B-Instruct   # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: backbone)
+    attn_implementation: flash_attention_2
+    eos_token: <|eot_id|>                # Llama-3 profile, as ABL-MA-700-asr.yaml / plan_arm.py DECODER_PROFILES
+    pad_token: <|finetune_right_pad_id|>
+    audio_token: <|audio|>
+    audio_bos_token: <|audio_bos|>
+    audio_eos_token: <|audio_eos|>
+    freeze: true                         # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: regime); the MA convention
+
+  adapter:
+    freeze: false
+    _type: mlp                           # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: audio stack, frame rate)
+    stack_factor: 5                      # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: audio stack, frame rate); whisper 50 Hz -> 10 Hz
+
+  ckpt: null
+
+# =============================================================================
+# Data Configuration
+# =============================================================================
+data:
+  sample_rate: 16000
+  # The draft pinned this to false ("every arm"). ABL-MA-700-asr.yaml, the
+  # base every screen arm ran, has it true for an instruct decoder, with the
+  # llama3 template and an audio-only user turn; that is what is used here so
+  # the dry run exercises the same input path as the screen.
+  apply_chat_template: true            # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: backbone); follows the decoder, not the draft
+  chat_template_config: llama3         # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: backbone)
+  prompt_template_selection: custom
+  prompt_template: "{audio_token}"
+  strict_text_field: true              # settled campaign-wide (silent-text-field-fallback)
+
+  train_ds:
+    # One `type: lhotse_shar` per source, flat, so compute_mix_weights.py can
+    # read it; the render nests them into type: group per language.
+    # Generated by infra/compute_mix_weights.py — do not hand-edit.
+    # Two-tier language/corpus balancing, Section 3.3.1 of arXiv:2509.14128,
+    # with alpha=0.5 (corpus within language) and beta=0.5 (across languages).
+    #
+    # Group weight   = p_l, the language entry's share of the mix.
+    # Child weight   = p_c, the corpus's share within its language entry.
+    # The two levels are muxed separately, so the sampling probability of a
+    # corpus is the product p_l * p_c. Do not pre-multiply them.
+    #
+    # Do NOT set `reweight_temperature` alongside this file (NeMo only).
+    # alpha/beta are already baked into the weights below; NeMo would raise
+    # them to a further power. Both levels already sum to 1, so the
+    # normalisation itself is a no-op.
+    #
+    # 99 corpora, 26 language entries, 240,123.4 h total.
+    input_cfg:
+      # en: 151,841.2 h across 9 corpora
+      - type: group
+        weight: 0.30628177
+        tags:
+          task: asr
+          lang: en
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/English/asr_only
+            weight: 0.43078085
+            tags:
+              task: asr
+              lang: en
+              region_code: en
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/english/train
+            weight: 0.26651164
+            tags:
+              task: asr
+              lang: en
+              text_field: custom.pnc_text
+              region_code: en
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/peoples_speech/clean/train
+            weight: 0.10332805
+            tags:
+              task: asr
+              lang: en
+              text_field: custom.pnc_text
+              region_code: en
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/en/train
+            weight: 0.05707230
+            tags:
+              task: asr
+              lang: en
+              text_field: custom.metadata.sentence
+              region_code: en
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/peoples_speech/clean_sa/train
+            weight: 0.04238198
+            tags:
+              task: asr
+              lang: en
+              text_field: custom.pnc_text
+              region_code: en
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/en/train
+            weight: 0.03076604
+            tags:
+              task: asr
+              lang: en
+              text_field: custom.pnc_text
+              region_code: en
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/other/train.500
+            weight: 0.02999865
+            tags:
+              task: asr
+              lang: en
+              text_field: custom.pnc_text
+              region_code: en
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/train.360
+            weight: 0.02566262
+            tags:
+              task: asr
+              lang: en
+              text_field: custom.pnc_text
+              region_code: en
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/train.100
+            weight: 0.01349786
+            tags:
+              task: asr
+              lang: en
+              text_field: custom.pnc_text
+              region_code: en
+      # es: 28,191.2 h across 5 corpora
+      - type: group
+        weight: 0.13197244
+        tags:
+          task: asr
+          lang: es
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Spanish/ast
+            weight: 0.63322786
+            tags:
+              task: asr
+              lang: es
+              region_code: es
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/spanish/train
+            weight: 0.11934841
+            tags:
+              task: asr
+              lang: es
+              text_field: custom.pnc_text
+              region_code: es
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Spanish/asr_only
+            weight: 0.11000335
+            tags:
+              task: asr
+              lang: es
+              region_code: es
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/es/train
+            weight: 0.08885959
+            tags:
+              task: asr
+              lang: es
+              text_field: custom.metadata.sentence
+              region_code: es
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/es/train
+            weight: 0.04856080
+            tags:
+              task: asr
+              lang: es
+              text_field: custom.pnc_text
+              region_code: es
+      # ru: 20,164.8 h across 3 corpora
+      - type: group
+        weight: 0.11161529
+        tags:
+          task: asr
+          lang: ru
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Russian/ast
+            weight: 0.73941183
+            tags:
+              task: asr
+              lang: ru
+              region_code: ru
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Russian/asr_only
+            weight: 0.22692629
+            tags:
+              task: asr
+              lang: ru
+              region_code: ru
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ru/train
+            weight: 0.03366188
+            tags:
+              task: asr
+              lang: ru
+              text_field: custom.metadata.sentence
+              region_code: ru
+      # fr: 14,360.4 h across 5 corpora
+      - type: group
+        weight: 0.09419098
+        tags:
+          task: asr
+          lang: fr
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/French/ast
+            weight: 0.51003219
+            tags:
+              task: asr
+              lang: fr
+              region_code: fr
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/french/train
+            weight: 0.15597332
+            tags:
+              task: asr
+              lang: fr
+              text_field: custom.pnc_text
+              region_code: fr
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/fr/train
+            weight: 0.13865958
+            tags:
+              task: asr
+              lang: fr
+              text_field: custom.metadata.sentence
+              region_code: fr
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/French/asr_only
+            weight: 0.12715707
+            tags:
+              task: asr
+              lang: fr
+              region_code: fr
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/fr/train
+            weight: 0.06817784
+            tags:
+              task: asr
+              lang: fr
+              text_field: custom.pnc_text
+              region_code: fr
+      # de: 11,119.2 h across 5 corpora
+      - type: group
+        weight: 0.08288247
+        tags:
+          task: asr
+          lang: de
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/German/ast
+            weight: 0.43073000
+            tags:
+              task: asr
+              lang: de
+              region_code: de
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/german/train
+            weight: 0.22160707
+            tags:
+              task: asr
+              lang: de
+              text_field: custom.pnc_text
+              region_code: de
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/de/train
+            weight: 0.15505424
+            tags:
+              task: asr
+              lang: de
+              text_field: custom.metadata.sentence
+              region_code: de
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/German/asr_only
+            weight: 0.11131878
+            tags:
+              task: asr
+              lang: de
+              region_code: de
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/de/train
+            weight: 0.08128992
+            tags:
+              task: asr
+              lang: de
+              text_field: custom.pnc_text
+              region_code: de
+      # it: 6,725.1 h across 5 corpora
+      - type: group
+        weight: 0.06445765
+        tags:
+          task: asr
+          lang: it
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Italian/ast
+            weight: 0.60120553
+            tags:
+              task: asr
+              lang: it
+              region_code: it
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/it/train
+            weight: 0.12360271
+            tags:
+              task: asr
+              lang: it
+              text_field: custom.metadata.sentence
+              region_code: it
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/italian/train
+            weight: 0.12182448
+            tags:
+              task: asr
+              lang: it
+              text_field: custom.pnc_text
+              region_code: it
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Italian/asr_only
+            weight: 0.08493394
+            tags:
+              task: asr
+              lang: it
+              region_code: it
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/it/train
+            weight: 0.06843334
+            tags:
+              task: asr
+              lang: it
+              text_field: custom.pnc_text
+              region_code: it
+      # nl: 3,020.6 h across 5 corpora
+      - type: group
+        weight: 0.04319920
+        tags:
+          task: asr
+          lang: nl
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/dutch/train
+            weight: 0.40990292
+            tags:
+              task: asr
+              lang: nl
+              text_field: custom.pnc_text
+              region_code: nl
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Dutch/ast
+            weight: 0.37891685
+            tags:
+              task: asr
+              lang: nl
+              region_code: nl
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/nl/train
+            weight: 0.07651021
+            tags:
+              task: asr
+              lang: nl
+              text_field: custom.metadata.sentence
+              region_code: nl
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/nl/train
+            weight: 0.07078680
+            tags:
+              task: asr
+              lang: nl
+              region_code: nl
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Dutch/asr_only
+            weight: 0.06388321
+            tags:
+              task: asr
+              lang: nl
+              region_code: nl
+      # pt: 2,090.7 h across 4 corpora
+      - type: group
+        weight: 0.03593938
+        tags:
+          task: asr
+          lang: pt
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Portuguese/ast
+            weight: 0.54363555
+            tags:
+              task: asr
+              lang: pt
+              region_code: pt
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Portuguese/asr_only
+            weight: 0.21727555
+            tags:
+              task: asr
+              lang: pt
+              region_code: pt
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/portuguese/train
+            weight: 0.17024929
+            tags:
+              task: asr
+              lang: pt
+              text_field: custom.pnc_text
+              region_code: pt
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/pt/train
+            weight: 0.06883960
+            tags:
+              task: asr
+              lang: pt
+              text_field: custom.metadata.sentence
+              region_code: pt
+      # pl: 921.5 h across 5 corpora
+      - type: group
+        weight: 0.02386031
+        tags:
+          task: asr
+          lang: pl
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Polish/ast
+            weight: 0.45692886
+            tags:
+              task: asr
+              lang: pl
+              region_code: pl
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/polish/train
+            weight: 0.18058771
+            tags:
+              task: asr
+              lang: pl
+              text_field: custom.pnc_text
+              region_code: pl
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/pl/train
+            weight: 0.17531292
+            tags:
+              task: asr
+              lang: pl
+              region_code: pl
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/pl/train
+            weight: 0.10571733
+            tags:
+              task: asr
+              lang: pl
+              text_field: custom.metadata.sentence
+              region_code: pl
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Polish/asr_only
+            weight: 0.08145318
+            tags:
+              task: asr
+              lang: pl
+              region_code: pl
+      # uk: 637.9 h across 3 corpora
+      - type: group
+        weight: 0.01985266
+        tags:
+          task: asr
+          lang: uk
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Ukrainian/ast
+            weight: 0.73465183
+            tags:
+              task: asr
+              lang: uk
+              region_code: uk
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/uk/train
+            weight: 0.16941757
+            tags:
+              task: asr
+              lang: uk
+              text_field: custom.metadata.sentence
+              region_code: uk
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Ukrainian/asr_only
+            weight: 0.09593059
+            tags:
+              task: asr
+              lang: uk
+              region_code: uk
+      # hu: 264.5 h across 4 corpora
+      - type: group
+        weight: 0.01278393
+        tags:
+          task: asr
+          lang: hu
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Hungarian/ast
+            weight: 0.40388115
+            tags:
+              task: asr
+              lang: hu
+              region_code: hu
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/hu/train
+            weight: 0.25212148
+            tags:
+              task: asr
+              lang: hu
+              text_field: custom.metadata.sentence
+              region_code: hu
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/hu/train
+            weight: 0.24639252
+            tags:
+              task: asr
+              lang: hu
+              region_code: hu
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Hungarian/asr_only
+            weight: 0.09760485
+            tags:
+              task: asr
+              lang: hu
+              region_code: hu
+      # fi: 184.9 h across 4 corpora
+      - type: group
+        weight: 0.01068828
+        tags:
+          task: asr
+          lang: fi
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Finnish/ast
+            weight: 0.60059649
+            tags:
+              task: asr
+              lang: fi
+              region_code: fi
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/fi/train
+            weight: 0.22885617
+            tags:
+              task: asr
+              lang: fi
+              region_code: fi
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Finnish/asr_only
+            weight: 0.09348681
+            tags:
+              task: asr
+              lang: fi
+              region_code: fi
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/fi/train
+            weight: 0.07706052
+            tags:
+              task: asr
+              lang: fi
+              text_field: custom.metadata.sentence
+              region_code: fi
+      # cs: 151.9 h across 4 corpora
+      - type: group
+        weight: 0.00968651
+        tags:
+          task: asr
+          lang: cs
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Czech/ast
+            weight: 0.35601728
+            tags:
+              task: asr
+              lang: cs
+              region_code: cs
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/cs/train
+            weight: 0.32192071
+            tags:
+              task: asr
+              lang: cs
+              region_code: cs
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/cs/train
+            weight: 0.23591402
+            tags:
+              task: asr
+              lang: cs
+              text_field: custom.metadata.sentence
+              region_code: cs
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Czech/asr_only
+            weight: 0.08614800
+            tags:
+              task: asr
+              lang: cs
+              region_code: cs
+      # ro: 120.5 h across 4 corpora
+      - type: group
+        weight: 0.00862794
+        tags:
+          task: asr
+          lang: ro
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/ro/train
+            weight: 0.45414897
+            tags:
+              task: asr
+              lang: ro
+              region_code: ro
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Romanian/ast
+            weight: 0.29638211
+            tags:
+              task: asr
+              lang: ro
+              region_code: ro
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Romanian/asr_only
+            weight: 0.12498421
+            tags:
+              task: asr
+              lang: ro
+              region_code: ro
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ro/train
+            weight: 0.12448471
+            tags:
+              task: asr
+              lang: ro
+              text_field: custom.metadata.sentence
+              region_code: ro
+      # sv: 101.9 h across 3 corpora
+      - type: group
+        weight: 0.00793474
+        tags:
+          task: asr
+          lang: sv
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Swedish/ast
+            weight: 0.68424065
+            tags:
+              task: asr
+              lang: sv
+              region_code: sv
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/sv-SE/train
+            weight: 0.21656340
+            tags:
+              task: asr
+              lang: sv
+              text_field: custom.metadata.sentence
+              region_code: sv
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Swedish/asr_only
+            weight: 0.09919595
+            tags:
+              task: asr
+              lang: sv
+              region_code: sv
+      # sk: 48.4 h across 4 corpora
+      - type: group
+        weight: 0.00546677
+        tags:
+          task: asr
+          lang: sk
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/sk/train
+            weight: 0.45159828
+            tags:
+              task: asr
+              lang: sk
+              region_code: sk
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/sk/train
+            weight: 0.24606303
+            tags:
+              task: asr
+              lang: sk
+              text_field: custom.metadata.sentence
+              region_code: sk
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Slovak/ast
+            weight: 0.24534975
+            tags:
+              task: asr
+              lang: sk
+              region_code: sk
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Slovak/asr_only
+            weight: 0.05698894
+            tags:
+              task: asr
+              lang: sk
+              region_code: sk
+      # hr: 44.3 h across 3 corpora
+      - type: group
+        weight: 0.00522975
+        tags:
+          task: asr
+          lang: hr
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/hr/train
+            weight: 0.62625985
+            tags:
+              task: asr
+              lang: hr
+              region_code: hr
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Croatian/ast
+            weight: 0.32156415
+            tags:
+              task: asr
+              lang: hr
+              region_code: hr
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Croatian/asr_only
+            weight: 0.05217600
+            tags:
+              task: asr
+              lang: hr
+              region_code: hr
+      # bg: 25.7 h across 3 corpora
+      - type: group
+        weight: 0.00398575
+        tags:
+          task: asr
+          lang: bg
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Bulgarian/ast
+            weight: 0.50407650
+            tags:
+              task: asr
+              lang: bg
+              region_code: bg
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/bg/train
+            weight: 0.32979688
+            tags:
+              task: asr
+              lang: bg
+              text_field: custom.metadata.sentence
+              region_code: bg
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Bulgarian/asr_only
+            weight: 0.16612663
+            tags:
+              task: asr
+              lang: bg
+              region_code: bg
+      # lv: 24.0 h across 3 corpora
+      - type: group
+        weight: 0.00384932
+        tags:
+          task: asr
+          lang: lv
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/lv/train
+            weight: 0.81669772
+            tags:
+              task: asr
+              lang: lv
+              text_field: custom.metadata.sentence
+              region_code: lv
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Latvian/ast
+            weight: 0.12853732
+            tags:
+              task: asr
+              lang: lv
+              region_code: lv
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Latvian/asr_only
+            weight: 0.05476496
+            tags:
+              task: asr
+              lang: lv
+              region_code: lv
+      # da: 21.5 h across 3 corpora
+      - type: group
+        weight: 0.00364040
+        tags:
+          task: asr
+          lang: da
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Danish/ast
+            weight: 0.59274723
+            tags:
+              task: asr
+              lang: da
+              region_code: da
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/da/train
+            weight: 0.29729180
+            tags:
+              task: asr
+              lang: da
+              text_field: custom.metadata.sentence
+              region_code: da
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Danish/asr_only
+            weight: 0.10996096
+            tags:
+              task: asr
+              lang: da
+              region_code: da
+      # lt: 18.6 h across 4 corpora
+      - type: group
+        weight: 0.00339246
+        tags:
+          task: asr
+          lang: lt
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/lt/train
+            weight: 0.45154688
+            tags:
+              task: asr
+              lang: lt
+              text_field: custom.metadata.sentence
+              region_code: lt
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Lithuanian/ast
+            weight: 0.29235970
+            tags:
+              task: asr
+              lang: lt
+              region_code: lt
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/lt/train
+            weight: 0.15248189
+            tags:
+              task: asr
+              lang: lt
+              region_code: lt
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Lithuanian/asr_only
+            weight: 0.10361152
+            tags:
+              task: asr
+              lang: lt
+              region_code: lt
+      # et: 17.0 h across 4 corpora
+      - type: group
+        weight: 0.00324432
+        tags:
+          task: asr
+          lang: et
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Estonian/ast
+            weight: 0.37147449
+            tags:
+              task: asr
+              lang: et
+              region_code: et
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/et/train
+            weight: 0.33447451
+            tags:
+              task: asr
+              lang: et
+              text_field: custom.metadata.sentence
+              region_code: et
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/et/train
+            weight: 0.19999483
+            tags:
+              task: asr
+              lang: et
+              region_code: et
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Estonian/asr_only
+            weight: 0.09405617
+            tags:
+              task: asr
+              lang: et
+              region_code: et
+      # el: 16.9 h across 3 corpora
+      - type: group
+        weight: 0.00323400
+        tags:
+          task: asr
+          lang: el
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Greek/ast
+            weight: 0.60051160
+            tags:
+              task: asr
+              lang: el
+              region_code: el
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/el/train
+            weight: 0.23843705
+            tags:
+              task: asr
+              lang: el
+              text_field: custom.metadata.sentence
+              region_code: el
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Greek/asr_only
+            weight: 0.16105135
+            tags:
+              task: asr
+              lang: el
+              region_code: el
+      # sl: 7.6 h across 2 corpora
+      - type: group
+        weight: 0.00216173
+        tags:
+          task: asr
+          lang: sl
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/sl/train
+            weight: 0.66804822
+            tags:
+              task: asr
+              lang: sl
+              region_code: sl
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/sl/train
+            weight: 0.33195178
+            tags:
+              task: asr
+              lang: sl
+              text_field: custom.metadata.sentence
+              region_code: sl
+      # mt: 2.4 h across 1 corpora
+      - type: group
+        weight: 0.00121134
+        tags:
+          task: asr
+          lang: mt
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/mt/train
+            weight: 1.00000000
+            tags:
+              task: asr
+              lang: mt
+              text_field: custom.metadata.sentence
+              region_code: mt
+      # ga: 0.6 h across 1 corpora
+      - type: group
+        weight: 0.00061058
+        tags:
+          task: asr
+          lang: ga
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ga-IE/train
+            weight: 1.00000000
+            tags:
+              task: asr
+              lang: ga
+              text_field: custom.metadata.sentence
+              region_code: ga
+    # Rewritten by compute_mix_weights.py from what it measures on disk. It
+    # MUST sit after input_cfg: the tool only looks for this key below the
+    # block it replaces, so the draft's placement (above it) would have left
+    # 240355.0 untouched.
+    total_hours: 240123.4
+    force_estimate: false
+
+    # Batch settings ---------------------------------------------------------
+    batch_size: null
+    # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: effective batch and LR).
+    # batch_duration x grad_accum x world_size = 112.5 x 1 x 32 = 3,600 audio-s
+    # = one audio hour per optimizer step (quadratic_duration unset, so a
+    # batch is real seconds and steps-per-epoch = total_hours). Whisper
+    # padded every cut to 30 s and still peaked at 11.5 GB of 64 at bd 75 x 2
+    # (campaign.yaml), so 112.5 fits the 64 GB H100 with the screen's 150 x 1.
+    batch_duration: 112.5
+    lhotse_sampler_type: dynamic_bucketing
+    num_buckets: 30
+    # STALE for this mix: copied from ABL-MA-700-asr.yaml (measured on the 700 h
+    # five-language mix). Re-measured on the full distribution in the dry-run's
+    # second phase (infra/estimate_bucket_bins.py at max_duration 60).
+    bucket_duration_bins: [3.74, 4.32, 4.7, 5.04, 5.33, 5.59, 5.86, 6.1, 6.34, 6.58, 6.84, 7.1, 7.39, 7.72, 8.1, 8.54, 9.14, 10.0, 10.85, 11.87, 12.88, 13.84, 14.76, 15.62, 16.52, 17.37, 18.23, 19.1, 19.97]
+    shuffle: false
+    drop_last: false
+    min_duration: 0.5
+    max_duration: 60.0                   # settled (06 §3 filters)
+    max_tokens: 400                      # settled (06 §3 filters)
+    num_workers: 1
+    pin_memory: true
+    prefetch_factor: 1
+    sample_rate: 16000
+    lang_field: lang
+
+  validation_ds:
+    strict_text_field: true
+    # 200 per named set, as every ABL config. In-domain dev only; FLEURS
+    # test/dev stays out of the trainer's loop (06 §3 FLEURS row is open).
+    max_samples: 200
+    force_estimate: false
+    input_cfg:
+      - { type: lhotse_shar, name: asr_en, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/en/validation", tags: { task: asr, lang: en, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_en, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/english/dev", tags: { task: asr, lang: en, text_field: custom.pnc_text } }
+      - { type: lhotse_shar, name: asr_en, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/en/validation", tags: { task: asr, lang: en, text_field: custom.pnc_text } }
+      - { type: lhotse_shar, name: asr_es, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/es/validation", tags: { task: asr, lang: es, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_es, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/spanish/dev", tags: { task: asr, lang: es, text_field: custom.pnc_text } }
+      - { type: lhotse_shar, name: asr_es, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/es/validation", tags: { task: asr, lang: es, text_field: custom.pnc_text } }
+      - { type: lhotse_shar, name: asr_fr, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/fr/validation", tags: { task: asr, lang: fr, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_fr, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/french/dev", tags: { task: asr, lang: fr, text_field: custom.pnc_text } }
+      - { type: lhotse_shar, name: asr_fr, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/fr/validation", tags: { task: asr, lang: fr, text_field: custom.pnc_text } }
+      - { type: lhotse_shar, name: asr_de, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/de/validation", tags: { task: asr, lang: de, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_de, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/german/dev", tags: { task: asr, lang: de, text_field: custom.pnc_text } }
+      - { type: lhotse_shar, name: asr_de, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/de/validation", tags: { task: asr, lang: de, text_field: custom.pnc_text } }
+      - { type: lhotse_shar, name: asr_it, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/it/validation", tags: { task: asr, lang: it, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_it, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/italian/dev", tags: { task: asr, lang: it, text_field: custom.pnc_text } }
+      - { type: lhotse_shar, name: asr_it, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/it/validation", tags: { task: asr, lang: it, text_field: custom.pnc_text } }
+      - { type: lhotse_shar, name: asr_ru, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ru/validation", tags: { task: asr, lang: ru, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_nl, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/nl/validation", tags: { task: asr, lang: nl, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_nl, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/dutch/dev", tags: { task: asr, lang: nl, text_field: custom.pnc_text } }
+      - { type: lhotse_shar, name: asr_pt, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/pt/validation", tags: { task: asr, lang: pt, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_pt, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/portuguese/dev", tags: { task: asr, lang: pt, text_field: custom.pnc_text } }
+      - { type: lhotse_shar, name: asr_pl, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/pl/validation", tags: { task: asr, lang: pl, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_pl, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/polish/dev", tags: { task: asr, lang: pl, text_field: custom.pnc_text } }
+      - { type: lhotse_shar, name: asr_hu, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/hu/validation", tags: { task: asr, lang: hu, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_fi, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/fi/validation", tags: { task: asr, lang: fi, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_cs, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/cs/validation", tags: { task: asr, lang: cs, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_ro, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ro/validation", tags: { task: asr, lang: ro, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_sv, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/sv-SE/validation", tags: { task: asr, lang: sv, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_sk, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/sk/validation", tags: { task: asr, lang: sk, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_bg, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/bg/validation", tags: { task: asr, lang: bg, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_lv, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/lv/validation", tags: { task: asr, lang: lv, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_da, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/da/validation", tags: { task: asr, lang: da, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_lt, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/lt/validation", tags: { task: asr, lang: lt, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_el, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/el/validation", tags: { task: asr, lang: el, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_et, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/et/validation", tags: { task: asr, lang: et, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_sl, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/sl/validation", tags: { task: asr, lang: sl, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_ga, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ga-IE/validation", tags: { task: asr, lang: ga, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_mt, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/mt/validation", tags: { task: asr, lang: mt, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_uk, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/uk/validation", tags: { task: asr, lang: uk, text_field: custom.metadata.sentence } }
+    batch_size: null
+    batch_duration: 300.0
+    lhotse_sampler_type: dynamic_bucketing
+    num_buckets: 30
+    bucket_duration_bins: [3.74, 4.32, 4.7, 5.04, 5.33, 5.59, 5.86, 6.1, 6.34, 6.58, 6.84, 7.1, 7.39, 7.72, 8.1, 8.54, 9.14, 10.0, 10.85, 11.87, 12.88, 13.84, 14.76, 15.62, 16.52, 17.37, 18.23, 19.1, 19.97]
+    shuffle: false
+    drop_last: false
+    min_duration: 0.5
+    max_duration: 60.0
+    num_workers: 1
+    pin_memory: true
+    prefetch_factor: 1
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+# =============================================================================
+# Trainer Configuration
+# =============================================================================
+trainer:
+  output_dir: ${oc.env:OUTPUT_DIR}/iwslt_replica_v1
+  overwrite_output_dir: true
+  seed: 42
+  do_train: true
+  do_eval: true
+  eval_on_start: true
+  average_tokens_across_devices: true
+
+  per_device_train_batch_size: -1      # handled by Lhotse
+  per_device_eval_batch_size: 4
+  # Topology: 8 nodes x 4 GPUs = world_size 32 (MELT_GPUS_PER_NODE=4).
+  # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: topology; effective batch and LR)
+  gradient_accumulation_steps: 1
+
+  # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: effective batch and LR).
+  # warmup-stable-decay as plan_arm.py composes it: last 20% of steps decay to
+  # 0.1x peak (cosine), warmup 3% of steps. transformers 5.16.1 has NO
+  # `warmup_ratio` argument (trainer_args_dict logs "dropping ... warmup_ratio"
+  # and trains with no warmup, which is what `plan_arm.py --warmup-ratio`
+  # produces today); a float below 1 in `warmup_steps` is the tf5 spelling of
+  # the ratio (checked in melt_cuda126.sif: get_warmup_steps(1000) == 30).
+  # num_decay_steps = round(0.2 x 240,124 steps) = 48025.
+  lr_scheduler_type: warmup_stable_decay
+  lr_scheduler_kwargs: {"num_decay_steps": 48025, "min_lr_ratio": 0.1, "decay_type": "cosine"}
+  warmup_steps: 0.03
+
+  num_train_epochs: 1                  # campaign convention; steps are derived, never pinned
+  max_steps: -1
+
+  logging_strategy: steps
+  logging_steps: 2
+  report_to: wandb
+
+  eval_strategy: steps
+  # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: checkpoint and eval cadence).
+  # ~6 h of wall clock at the extrapolated ~1.0 s/step is ~20,000 steps. The
+  # dry-run job pushes both past max_steps from the command line.
+  eval_steps: 20000
+  batch_eval_metrics: true
+
+  predict_with_generate: true
+  generation_max_length: 256
+  generation_num_beams: 1
+
+  save_strategy: steps
+  save_steps: 20000                    # DRY-RUN PROVISIONAL -- see eval_steps
+  save_total_limit: 2                  # 06 §2: keep two checkpoints
+
+  bf16: true
+  group_by_length: false
+  dataloader_num_workers: 4
+  remove_unused_columns: false
+  ddp_find_unused_parameters: false
+
+  max_grad_norm: 1.0
+
+evaluation:
+  compute_metrics: true
+  enable_whisper_normalization: true
+  log_num_samples: 10
+
+optimization:
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+
+  # encoder_lr / decoder_lr: unused, both frozen at this stage.
+  adapter_lr: 1e-3                     # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: effective batch and LR); the screen's whisper/w2v-BERT MLP value
+  min_lr_scale: 0.1

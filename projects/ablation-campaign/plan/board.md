@@ -15,6 +15,51 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-25 — Claude (worker, fondue-dry-run) — Fondue MA dry-run config rendered at full pool; the draft has four defects and §2's cost is ~2x too high
+
+Context: timeline week 3 Track B, Fondue dry run, phase 1 (config only, no MN5,
+no GPU). Branch `claude/fondue-dry-run`: `Fondue-MA-dryrun.yaml` (render) and
+`fondue-ma-dryrun-template.yaml` (flat template it is rendered from).
+
+Finding:
+1. **The draft cannot be rendered as written.** `compute_mix_weights.py` reads
+   flat `type: lhotse_shar` entries and raises `KeyError: 'shar_path'` on the
+   draft's `type: group`. It also only rewrites `train_ds.total_hours` when the
+   key sits *below* `input_cfg`; the draft has it above, so 240355.0 would have
+   survived the render. And the draft puts `max_duration`/`max_tokens` directly
+   under `data:`, where the dataloader does not read them (they belong in
+   `train_ds`, as in `ABL-MA-700-asr.yaml`): the filters would silently not apply.
+2. **The draft's pool omits Granary `ast`.** `asr_train_hours` counts the `ast`
+   leaves as ASR (73,991 h of the 240,123 h; es 25.8K of 28.2K, ru 18.4K of
+   20.2K), but the draft's stanzas list only `asr_only`. The render includes them
+   as `task: asr`; without them the pool is 166,132 h and es/ru/fr/de/it shrink
+   10-100x. PI call: does MA train on `ast` audio as ASR?
+3. **Measured pool with FLEURS out: 240,123.4 h**, 26 languages, 99 sources,
+   all present on nyx and on MN5's indexed tree with identical manifest shard
+   counts and `.idx` sidecars (checked on the 137 paths incl. validation).
+   Sampled in one nominal pass (alpha=beta=0.5), English is seen 0.48x and
+   Maltese 122x, Irish 243x. The draft's "mt ~53x" was computed with FLEURS in.
+4. **`warmup_ratio` does nothing under transformers 5.16.1.** `TrainingArguments`
+   has no such field; `trainer_args_dict` drops it with a warning, and
+   `plan_arm.py` also forces `warmup_steps 0`, so every screen arm submitted with
+   `warmup_ratio 0.03` trained with no warmup. `warmup_steps: 0.03` (a float
+   below 1) is the tf5 spelling; `get_warmup_steps(1000) == 30` in
+   `melt_cuda126.sif`. The dry-run render uses it. `plan_arm.py` is not changed.
+5. **VoxPopuli `pnc_text` is missing on some cuts** (first shard: hr 47%, fi 4%,
+   ro 3%, hu 2%, cs 1%, the five usable languages 0.01-0.05%). The render uses
+   `custom.pnc_text` for de/en/es/fr/it only; the eleven tail languages fall back
+   to the supervision text. hr's VoxPopuli is half textless regardless.
+6. **`apply_chat_template: false` in the draft is stale** for an instruct
+   decoder: the screen base runs true / llama3 / audio-only turn. Followed the base.
+7. **06 §2's MA cost is ~2x its own rate.** ~1,000 audio-s per wall-s on 8 GPUs
+   over 247K h is ~1,980 GPU-h and 2.6 days on 32 GPUs, not ~3,800 / ~5 days.
+   Whisper's measured screen cost (32 GPU-h for 3,500 h, elapsed) extrapolates
+   to ~2,200 GPU-h and ~69 h wall for 240K h. Not edited in §2 yet: the dry run
+   measures it.
+
+Action needed: PI approves or amends the config (ast in or out; FLEURS row;
+provisional list in the chat report). Phase 2 (bucket bins, MN5 job) waits.
+
 ## 2026-09-23 — Bridge Agent — PI: per-language expert usage deferred to an issue; MoE adapter crossing-ready item ticked
 
 Context: follow-up to the entry directly below (PR #141, per-language expert

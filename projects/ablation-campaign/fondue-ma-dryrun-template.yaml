@@ -1,0 +1,607 @@
+# Fondue -- stage 1 (modality alignment), FULL-SCALE DRY-RUN config, 2026-09-25.
+#
+# THIS IS NOT THE FONDUE CONFIG AND NOTHING IN IT IS FROZEN. It exists to
+# measure startup, dataloader build, throughput and host RAM at the real
+# pool size and topology (timeline.md week 3, Track B). Every field that
+# 06-fondue.md §3 still lists as open carries an inline
+#   # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: ...)
+# tag. Do not copy a provisional value into a campaign row.
+#
+# How it was made:
+#   projects/ablation-campaign/fondue-ma-dryrun-template.yaml is the flat
+#   template (one `type: lhotse_shar` per source; compute_mix_weights.py's
+#   loader does NOT read `type: group`, so fondue-ma-draft.yaml cannot be its
+#   input as drafted). This file is the render:
+#
+#     python3 infra/compute_mix_weights.py \
+#         --config       projects/ablation-campaign/fondue-ma-dryrun-template.yaml \
+#         --datasets-root /mnt/scratch-nyx/giuseppe/melt/melt-data/shar \
+#         --alpha 0.5 --beta 0.5 \
+#         --cache        infra/.mix_weights_hours.json \
+#         --emit-config  projects/ablation-campaign/Fondue-MA-dryrun.yaml \
+#         --exp-name     Fondue-MA-dryrun
+#
+#   Hours were measured on nyx. The run reads ${LOCAL_DATASETS_DIR} on MN5
+#   (/gpfs/projects/epor48/melt-data/shar-indexed); all sources below exist
+#   on both trees with identical cut-manifest shard counts. Edit the
+#   template, not this file: hand edits inside train_ds.input_cfg are lost on
+#   the next render.
+#
+# alpha=0.5, beta=0.5 as drafted (fondue-ma-draft.yaml header; arXiv:2509.14128
+# 3.3.1). Language set is EU-24 + ru + uk; ca stays out (06 §3, language-set
+# row, ca open). FLEURS train is OUT, the current default -- but that row
+# (06 §3 FLEURS in the training pool) was re-opened on 2026-09-20 and needs
+# the PI's call; with FLEURS out, ga has 0.6 h and mt 2.4 h of training audio.
+#
+# Sources beyond the draft's stanzas: the draft listed only the Granary
+# `asr_only` leaves, but data/hours_by_language.csv's asr_train_hours (which
+# the draft's total_hours and 06 §1 quote) also counts the Granary `ast`
+# leaves as ASR (es 25.8K of its 28.2K h, ru 18.4K of 20.2K h). They are
+# included here as `task: asr` sources; whether MA should train on them is
+# a decision for the PI, see the dry-run report.
+
+# =============================================================================
+# Run Configuration
+# =============================================================================
+run:
+  exp_name: Fondue-MA-dryrun    # placeholder; a real run's EXP_NAME is composed by plan_arm.py
+  dry_run: false
+  memory_preallocation: true    # campaign convention: on whenever what is trainable changes
+
+# =============================================================================
+# Model Configuration
+# =============================================================================
+model:
+  encoder:
+    name: openai/whisper-large-v3        # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: audio stack, frame rate)
+    freeze: true
+    max_audio_seq_len: 3000              # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: audio stack, frame rate); derived as plan_arm.py does, ENCODER_WINDOW_FRAMES["openai/whisper-large-v3"]
+
+  decoder:
+    name: meta-llama/Llama-3.2-1B-Instruct   # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: backbone)
+    attn_implementation: flash_attention_2
+    eos_token: <|eot_id|>                # Llama-3 profile, as ABL-MA-700-asr.yaml / plan_arm.py DECODER_PROFILES
+    pad_token: <|finetune_right_pad_id|>
+    audio_token: <|audio|>
+    audio_bos_token: <|audio_bos|>
+    audio_eos_token: <|audio_eos|>
+    freeze: true                         # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: regime); the MA convention
+
+  adapter:
+    freeze: false
+    _type: mlp                           # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: audio stack, frame rate)
+    stack_factor: 5                      # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: audio stack, frame rate); whisper 50 Hz -> 10 Hz
+
+  ckpt: null
+
+# =============================================================================
+# Data Configuration
+# =============================================================================
+data:
+  sample_rate: 16000
+  # The draft pinned this to false ("every arm"). ABL-MA-700-asr.yaml, the
+  # base every screen arm ran, has it true for an instruct decoder, with the
+  # llama3 template and an audio-only user turn; that is what is used here so
+  # the dry run exercises the same input path as the screen.
+  apply_chat_template: true            # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: backbone); follows the decoder, not the draft
+  chat_template_config: llama3         # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: backbone)
+  prompt_template_selection: custom
+  prompt_template: "{audio_token}"
+  strict_text_field: true              # settled campaign-wide (silent-text-field-fallback)
+
+  train_ds:
+    # One `type: lhotse_shar` per source, flat, so compute_mix_weights.py can
+    # read it; the render nests them into type: group per language.
+    input_cfg:
+      # --- en ---
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/en/train
+        tags: { task: asr, lang: en, text_field: custom.metadata.sentence }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/english/train
+        tags: { task: asr, lang: en, text_field: custom.pnc_text }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/en/train
+        tags: { task: asr, lang: en, text_field: custom.pnc_text }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/English/asr_only
+        tags: { task: asr, lang: en }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/train.100
+        tags: { task: asr, lang: en, text_field: custom.pnc_text }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/train.360
+        tags: { task: asr, lang: en, text_field: custom.pnc_text }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/other/train.500
+        tags: { task: asr, lang: en, text_field: custom.pnc_text }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/peoples_speech/clean/train
+        tags: { task: asr, lang: en, text_field: custom.pnc_text }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/peoples_speech/clean_sa/train
+        tags: { task: asr, lang: en, text_field: custom.pnc_text }
+      # --- es ---
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/es/train
+        tags: { task: asr, lang: es, text_field: custom.metadata.sentence }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/spanish/train
+        tags: { task: asr, lang: es, text_field: custom.pnc_text }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/es/train
+        tags: { task: asr, lang: es, text_field: custom.pnc_text }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Spanish/asr_only
+        tags: { task: asr, lang: es }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Spanish/ast
+        tags: { task: asr, lang: es }
+        # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      # --- fr ---
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/fr/train
+        tags: { task: asr, lang: fr, text_field: custom.metadata.sentence }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/french/train
+        tags: { task: asr, lang: fr, text_field: custom.pnc_text }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/fr/train
+        tags: { task: asr, lang: fr, text_field: custom.pnc_text }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/French/asr_only
+        tags: { task: asr, lang: fr }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/French/ast
+        tags: { task: asr, lang: fr }
+        # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      # --- de ---
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/de/train
+        tags: { task: asr, lang: de, text_field: custom.metadata.sentence }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/german/train
+        tags: { task: asr, lang: de, text_field: custom.pnc_text }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/de/train
+        tags: { task: asr, lang: de, text_field: custom.pnc_text }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/German/asr_only
+        tags: { task: asr, lang: de }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/German/ast
+        tags: { task: asr, lang: de }
+        # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      # --- it ---
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/it/train
+        tags: { task: asr, lang: it, text_field: custom.metadata.sentence }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/italian/train
+        tags: { task: asr, lang: it, text_field: custom.pnc_text }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/it/train
+        tags: { task: asr, lang: it, text_field: custom.pnc_text }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Italian/asr_only
+        tags: { task: asr, lang: it }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Italian/ast
+        tags: { task: asr, lang: it }
+        # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      # --- ru ---
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ru/train
+        tags: { task: asr, lang: ru, text_field: custom.metadata.sentence }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Russian/asr_only
+        tags: { task: asr, lang: ru }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Russian/ast
+        tags: { task: asr, lang: ru }
+        # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      # --- nl ---
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/nl/train
+        tags: { task: asr, lang: nl, text_field: custom.metadata.sentence }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/dutch/train
+        tags: { task: asr, lang: nl, text_field: custom.pnc_text }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/nl/train
+        tags: { task: asr, lang: nl }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Dutch/asr_only
+        tags: { task: asr, lang: nl }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Dutch/ast
+        tags: { task: asr, lang: nl }
+        # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      # --- pt ---
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/pt/train
+        tags: { task: asr, lang: pt, text_field: custom.metadata.sentence }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/portuguese/train
+        tags: { task: asr, lang: pt, text_field: custom.pnc_text }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Portuguese/asr_only
+        tags: { task: asr, lang: pt }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Portuguese/ast
+        tags: { task: asr, lang: pt }
+        # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      # --- pl ---
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/pl/train
+        tags: { task: asr, lang: pl, text_field: custom.metadata.sentence }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/polish/train
+        tags: { task: asr, lang: pl, text_field: custom.pnc_text }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/pl/train
+        tags: { task: asr, lang: pl }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Polish/asr_only
+        tags: { task: asr, lang: pl }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Polish/ast
+        tags: { task: asr, lang: pl }
+        # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      # --- hu ---
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/hu/train
+        tags: { task: asr, lang: hu, text_field: custom.metadata.sentence }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/hu/train
+        tags: { task: asr, lang: hu }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Hungarian/asr_only
+        tags: { task: asr, lang: hu }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Hungarian/ast
+        tags: { task: asr, lang: hu }
+        # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      # --- fi ---
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/fi/train
+        tags: { task: asr, lang: fi, text_field: custom.metadata.sentence }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/fi/train
+        tags: { task: asr, lang: fi }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Finnish/asr_only
+        tags: { task: asr, lang: fi }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Finnish/ast
+        tags: { task: asr, lang: fi }
+        # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      # --- cs ---
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/cs/train
+        tags: { task: asr, lang: cs, text_field: custom.metadata.sentence }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/cs/train
+        tags: { task: asr, lang: cs }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Czech/asr_only
+        tags: { task: asr, lang: cs }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Czech/ast
+        tags: { task: asr, lang: cs }
+        # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      # --- ro ---
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ro/train
+        tags: { task: asr, lang: ro, text_field: custom.metadata.sentence }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/ro/train
+        tags: { task: asr, lang: ro }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Romanian/asr_only
+        tags: { task: asr, lang: ro }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Romanian/ast
+        tags: { task: asr, lang: ro }
+        # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      # --- sv ---
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/sv-SE/train
+        tags: { task: asr, lang: sv, text_field: custom.metadata.sentence }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Swedish/asr_only
+        tags: { task: asr, lang: sv }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Swedish/ast
+        tags: { task: asr, lang: sv }
+        # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      # --- hr ---
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/hr/train
+        tags: { task: asr, lang: hr }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Croatian/asr_only
+        tags: { task: asr, lang: hr }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Croatian/ast
+        tags: { task: asr, lang: hr }
+        # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      # --- sk ---
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/sk/train
+        tags: { task: asr, lang: sk, text_field: custom.metadata.sentence }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/sk/train
+        tags: { task: asr, lang: sk }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Slovak/asr_only
+        tags: { task: asr, lang: sk }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Slovak/ast
+        tags: { task: asr, lang: sk }
+        # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      # --- bg ---
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/bg/train
+        tags: { task: asr, lang: bg, text_field: custom.metadata.sentence }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Bulgarian/asr_only
+        tags: { task: asr, lang: bg }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Bulgarian/ast
+        tags: { task: asr, lang: bg }
+        # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      # --- lv ---
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/lv/train
+        tags: { task: asr, lang: lv, text_field: custom.metadata.sentence }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Latvian/asr_only
+        tags: { task: asr, lang: lv }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Latvian/ast
+        tags: { task: asr, lang: lv }
+        # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      # --- da ---
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/da/train
+        tags: { task: asr, lang: da, text_field: custom.metadata.sentence }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Danish/asr_only
+        tags: { task: asr, lang: da }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Danish/ast
+        tags: { task: asr, lang: da }
+        # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      # --- lt ---
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/lt/train
+        tags: { task: asr, lang: lt, text_field: custom.metadata.sentence }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/lt/train
+        tags: { task: asr, lang: lt }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Lithuanian/asr_only
+        tags: { task: asr, lang: lt }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Lithuanian/ast
+        tags: { task: asr, lang: lt }
+        # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      # --- el ---
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/el/train
+        tags: { task: asr, lang: el, text_field: custom.metadata.sentence }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Greek/asr_only
+        tags: { task: asr, lang: el }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Greek/ast
+        tags: { task: asr, lang: el }
+        # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      # --- et ---
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/et/train
+        tags: { task: asr, lang: et, text_field: custom.metadata.sentence }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/et/train
+        tags: { task: asr, lang: et }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Estonian/asr_only
+        tags: { task: asr, lang: et }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Estonian/ast
+        tags: { task: asr, lang: et }
+        # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+      # --- sl ---
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/sl/train
+        tags: { task: asr, lang: sl, text_field: custom.metadata.sentence }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/sl/train
+        tags: { task: asr, lang: sl }
+      # --- ga ---
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ga-IE/train
+        tags: { task: asr, lang: ga, text_field: custom.metadata.sentence }
+      # --- mt ---
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/mt/train
+        tags: { task: asr, lang: mt, text_field: custom.metadata.sentence }
+      # --- uk ---
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/uk/train
+        tags: { task: asr, lang: uk, text_field: custom.metadata.sentence }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Ukrainian/asr_only
+        tags: { task: asr, lang: uk }
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Ukrainian/ast
+        tags: { task: asr, lang: uk }
+        # Granary `ast` leaf used as ASR: same audio+transcript, translation_en ignored. Counted in asr_train_hours; the draft omitted it (see header, finding 1)
+
+    # Rewritten by compute_mix_weights.py from what it measures on disk. It
+    # MUST sit after input_cfg: the tool only looks for this key below the
+    # block it replaces, so the draft's placement (above it) would have left
+    # 240355.0 untouched.
+    total_hours: 240123.4
+    force_estimate: false
+
+    # Batch settings ---------------------------------------------------------
+    batch_size: null
+    # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: effective batch and LR).
+    # batch_duration x grad_accum x world_size = 112.5 x 1 x 32 = 3,600 audio-s
+    # = one audio hour per optimizer step (quadratic_duration unset, so a
+    # batch is real seconds and steps-per-epoch = total_hours). Whisper
+    # padded every cut to 30 s and still peaked at 11.5 GB of 64 at bd 75 x 2
+    # (campaign.yaml), so 112.5 fits the 64 GB H100 with the screen's 150 x 1.
+    batch_duration: 112.5
+    lhotse_sampler_type: dynamic_bucketing
+    num_buckets: 30
+    # STALE for this mix: copied from ABL-MA-700-asr.yaml (measured on the 700 h
+    # five-language mix). Re-measured on the full distribution in the dry-run's
+    # second phase (infra/estimate_bucket_bins.py at max_duration 60).
+    bucket_duration_bins: [3.74, 4.32, 4.7, 5.04, 5.33, 5.59, 5.86, 6.1, 6.34, 6.58, 6.84, 7.1, 7.39, 7.72, 8.1, 8.54, 9.14, 10.0, 10.85, 11.87, 12.88, 13.84, 14.76, 15.62, 16.52, 17.37, 18.23, 19.1, 19.97]
+    shuffle: false
+    drop_last: false
+    min_duration: 0.5
+    max_duration: 60.0                   # settled (06 §3 filters)
+    max_tokens: 400                      # settled (06 §3 filters)
+    num_workers: 1
+    pin_memory: true
+    prefetch_factor: 1
+    sample_rate: 16000
+    lang_field: lang
+
+  validation_ds:
+    strict_text_field: true
+    # 200 per named set, as every ABL config. In-domain dev only; FLEURS
+    # test/dev stays out of the trainer's loop (06 §3 FLEURS row is open).
+    max_samples: 200
+    force_estimate: false
+    input_cfg:
+      - { type: lhotse_shar, name: asr_en, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/en/validation", tags: { task: asr, lang: en, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_en, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/english/dev", tags: { task: asr, lang: en, text_field: custom.pnc_text } }
+      - { type: lhotse_shar, name: asr_en, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/en/validation", tags: { task: asr, lang: en, text_field: custom.pnc_text } }
+      - { type: lhotse_shar, name: asr_es, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/es/validation", tags: { task: asr, lang: es, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_es, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/spanish/dev", tags: { task: asr, lang: es, text_field: custom.pnc_text } }
+      - { type: lhotse_shar, name: asr_es, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/es/validation", tags: { task: asr, lang: es, text_field: custom.pnc_text } }
+      - { type: lhotse_shar, name: asr_fr, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/fr/validation", tags: { task: asr, lang: fr, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_fr, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/french/dev", tags: { task: asr, lang: fr, text_field: custom.pnc_text } }
+      - { type: lhotse_shar, name: asr_fr, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/fr/validation", tags: { task: asr, lang: fr, text_field: custom.pnc_text } }
+      - { type: lhotse_shar, name: asr_de, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/de/validation", tags: { task: asr, lang: de, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_de, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/german/dev", tags: { task: asr, lang: de, text_field: custom.pnc_text } }
+      - { type: lhotse_shar, name: asr_de, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/de/validation", tags: { task: asr, lang: de, text_field: custom.pnc_text } }
+      - { type: lhotse_shar, name: asr_it, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/it/validation", tags: { task: asr, lang: it, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_it, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/italian/dev", tags: { task: asr, lang: it, text_field: custom.pnc_text } }
+      - { type: lhotse_shar, name: asr_it, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/it/validation", tags: { task: asr, lang: it, text_field: custom.pnc_text } }
+      - { type: lhotse_shar, name: asr_ru, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ru/validation", tags: { task: asr, lang: ru, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_nl, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/nl/validation", tags: { task: asr, lang: nl, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_nl, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/dutch/dev", tags: { task: asr, lang: nl, text_field: custom.pnc_text } }
+      - { type: lhotse_shar, name: asr_pt, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/pt/validation", tags: { task: asr, lang: pt, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_pt, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/portuguese/dev", tags: { task: asr, lang: pt, text_field: custom.pnc_text } }
+      - { type: lhotse_shar, name: asr_pl, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/pl/validation", tags: { task: asr, lang: pl, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_pl, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/polish/dev", tags: { task: asr, lang: pl, text_field: custom.pnc_text } }
+      - { type: lhotse_shar, name: asr_hu, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/hu/validation", tags: { task: asr, lang: hu, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_fi, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/fi/validation", tags: { task: asr, lang: fi, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_cs, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/cs/validation", tags: { task: asr, lang: cs, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_ro, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ro/validation", tags: { task: asr, lang: ro, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_sv, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/sv-SE/validation", tags: { task: asr, lang: sv, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_sk, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/sk/validation", tags: { task: asr, lang: sk, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_bg, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/bg/validation", tags: { task: asr, lang: bg, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_lv, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/lv/validation", tags: { task: asr, lang: lv, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_da, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/da/validation", tags: { task: asr, lang: da, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_lt, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/lt/validation", tags: { task: asr, lang: lt, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_el, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/el/validation", tags: { task: asr, lang: el, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_et, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/et/validation", tags: { task: asr, lang: et, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_sl, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/sl/validation", tags: { task: asr, lang: sl, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_ga, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ga-IE/validation", tags: { task: asr, lang: ga, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_mt, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/mt/validation", tags: { task: asr, lang: mt, text_field: custom.metadata.sentence } }
+      - { type: lhotse_shar, name: asr_uk, shar_path: "${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/uk/validation", tags: { task: asr, lang: uk, text_field: custom.metadata.sentence } }
+    batch_size: null
+    batch_duration: 300.0
+    lhotse_sampler_type: dynamic_bucketing
+    num_buckets: 30
+    bucket_duration_bins: [3.74, 4.32, 4.7, 5.04, 5.33, 5.59, 5.86, 6.1, 6.34, 6.58, 6.84, 7.1, 7.39, 7.72, 8.1, 8.54, 9.14, 10.0, 10.85, 11.87, 12.88, 13.84, 14.76, 15.62, 16.52, 17.37, 18.23, 19.1, 19.97]
+    shuffle: false
+    drop_last: false
+    min_duration: 0.5
+    max_duration: 60.0
+    num_workers: 1
+    pin_memory: true
+    prefetch_factor: 1
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+# =============================================================================
+# Trainer Configuration
+# =============================================================================
+trainer:
+  output_dir: ${oc.env:OUTPUT_DIR}/iwslt_replica_v1
+  overwrite_output_dir: true
+  seed: 42
+  do_train: true
+  do_eval: true
+  eval_on_start: true
+  average_tokens_across_devices: true
+
+  per_device_train_batch_size: -1      # handled by Lhotse
+  per_device_eval_batch_size: 4
+  # Topology: 8 nodes x 4 GPUs = world_size 32 (MELT_GPUS_PER_NODE=4).
+  # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: topology; effective batch and LR)
+  gradient_accumulation_steps: 1
+
+  # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: effective batch and LR).
+  # warmup-stable-decay as plan_arm.py composes it: last 20% of steps decay to
+  # 0.1x peak (cosine), warmup 3% of steps. transformers 5.16.1 has NO
+  # `warmup_ratio` argument (trainer_args_dict logs "dropping ... warmup_ratio"
+  # and trains with no warmup, which is what `plan_arm.py --warmup-ratio`
+  # produces today); a float below 1 in `warmup_steps` is the tf5 spelling of
+  # the ratio (checked in melt_cuda126.sif: get_warmup_steps(1000) == 30).
+  # num_decay_steps = round(0.2 x 240,124 steps) = 48025.
+  lr_scheduler_type: warmup_stable_decay
+  lr_scheduler_kwargs: {"num_decay_steps": 48025, "min_lr_ratio": 0.1, "decay_type": "cosine"}
+  warmup_steps: 0.03
+
+  num_train_epochs: 1                  # campaign convention; steps are derived, never pinned
+  max_steps: -1
+
+  logging_strategy: steps
+  logging_steps: 2
+  report_to: wandb
+
+  eval_strategy: steps
+  # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: checkpoint and eval cadence).
+  # ~6 h of wall clock at the extrapolated ~1.0 s/step is ~20,000 steps. The
+  # dry-run job pushes both past max_steps from the command line.
+  eval_steps: 20000
+  batch_eval_metrics: true
+
+  predict_with_generate: true
+  generation_max_length: 256
+  generation_num_beams: 1
+
+  save_strategy: steps
+  save_steps: 20000                    # DRY-RUN PROVISIONAL -- see eval_steps
+  save_total_limit: 2                  # 06 §2: keep two checkpoints
+
+  bf16: true
+  group_by_length: false
+  dataloader_num_workers: 4
+  remove_unused_columns: false
+  ddp_find_unused_parameters: false
+
+  max_grad_norm: 1.0
+
+evaluation:
+  compute_metrics: true
+  enable_whisper_normalization: true
+  log_num_samples: 10
+
+optimization:
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+
+  # encoder_lr / decoder_lr: unused, both frozen at this stage.
+  adapter_lr: 1e-3                     # DRY-RUN PROVISIONAL -- not a decision (06 §3 row: effective batch and LR); the screen's whisper/w2v-BERT MLP value
+  min_lr_scale: 0.1
