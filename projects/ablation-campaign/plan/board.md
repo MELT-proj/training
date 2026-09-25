@@ -165,6 +165,19 @@ losses differ, and the resolved configs carry `stack_factor` 2 and 10: an oddity
 I did not explain). Eval jobs 46565783-46565788 (replicate), 46565834-46565845
 (sweep). No k is called here.
 
+Finding 11: **w2v-BERT stacking sweep submitted (PI, 2026-09-25).** Corner
+`lr2e3-b300`, the best selection-metric score of the seven w2v-BERT rows
+(0.7149; the PI's choice of "best score" over the replicated `lr1e3-b300`,
+0.7740 and 0.8089 at seeds 42 and 43, so the choice rests on one seed and a gap
+about twice the w2v-BERT seed shift of 0.035). Recomputing with weights
+1 / 1.25 / 0.5 leaves every ordering unchanged. Two rows added to
+`campaign.yaml` and submitted through `campaign.py run` (1 node, 4 ranks, 16 h
+cap, in `arms.tsv`): `MA-700-screen-w2vb-lr2e3-b300-k2` (25 Hz) and `-k10`
+(5 Hz), identical to `MA-700-screen-w2vb-lr2e3-b300` except `stack_factor`.
+The k=5 replicate at the neighbouring corner took 10 h 10 min, so expect about
+40 GPU-h each. w2v-BERT is unaligned at k=5 at every grid point, so the sweep
+reads how the metric moves with k on an unaligned encoder, not on a working one.
+
 Action needed: PI/orchestrator: decide the corner (nothing here calls it) and
 update the README's 200-per-language wording to the 600 in-domain sets. Whoever
 picks this up after the replicates finish: `bash
