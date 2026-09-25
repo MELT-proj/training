@@ -1276,6 +1276,10 @@ data:
     # block it replaces, so the draft's placement (above it) would have left
     # 240355.0 untouched.
     total_hours: 242077.6
+    # Not updated by compute_mix_weights.py, and NOT optional in practice: without it
+    # the trainer logs "None cuts" and dies at `Num examples = {None:,}` (dry-run job
+    # 46616756). 90,052,889 cuts within [0.5, 60] s, from estimate_bucket_bins.py.
+    total_cuts: 90052889
     force_estimate: false
 
     # Batch settings ---------------------------------------------------------
