@@ -634,6 +634,149 @@ class TestAttnImplementationPropagation:
 
 
 # ============================================================================
+# Conformer adapter: the layers follow the adapter's own stride and kernel,
+# for any encoder (audio-stack crossing, 10 Hz via stride 5 / kernel 5)
+#
+# The adapter's length bookkeeping reads adapter_config, but the HF layer it wraps
+# reads whatever config it is handed. Handed the encoder's, the two disagreed (w2v-BERT
+# at stride 5 emitted 25 Hz while the bookkeeping said 10), and only w2v-BERT's config
+# has the attributes the layer needs at all. These use the real layer, unlike the
+# mocked shape tests above, because a mock cannot see either failure.
+# ============================================================================
+
+
+def _tiny_encoder_config(family: str, width: int = 64):
+    """A small in-memory encoder config of one family, so no Hub access."""
+    from transformers import HubertConfig, Wav2Vec2BertConfig, Wav2Vec2Config, WhisperConfig
+
+    if family == "w2v-bert":
+        return Wav2Vec2BertConfig(
+            hidden_size=width, output_hidden_size=width, num_hidden_layers=1,
+            num_attention_heads=2, intermediate_size=2 * width,
+            feature_projection_input_dim=16,
+        )
+    if family == "whisper":
+        return WhisperConfig(
+            d_model=width, encoder_layers=1, decoder_layers=1, encoder_attention_heads=2,
+            decoder_attention_heads=2, encoder_ffn_dim=2 * width, decoder_ffn_dim=2 * width,
+            vocab_size=64, num_mel_bins=16,
+        )
+    if family == "wav2vec2":
+        return Wav2Vec2Config(
+            hidden_size=width, num_hidden_layers=1, num_attention_heads=2,
+            intermediate_size=2 * width,
+        )
+    if family == "hubert":
+        return HubertConfig(
+            hidden_size=width, num_hidden_layers=1, num_attention_heads=2,
+            intermediate_size=2 * width,
+        )
+    raise ValueError(family)
+
+
+def _conformer_adapter(encoder_config, **adapter_kwargs):
+    config = _local_melt_config(audio_encoder_config=encoder_config)
+    config.adapter_config._type = "conformer"
+    for key, value in adapter_kwargs.items():
+        setattr(config.adapter_config, key, value)
+    return MELTConformerAdapter(config)
+
+
+def _run(adapter, seq_len=100, width=64):
+    """(frames emitted, frames the adapter predicts) for a batch with one padded row."""
+    x = torch.randn(2, seq_len, width)
+    mask = torch.ones(2, seq_len, dtype=torch.long)
+    mask[1, seq_len // 2:] = 0
+    with torch.no_grad():
+        out = adapter.eval()(x, attention_mask=mask)
+    predicted, _ = adapter._get_output_features_shape(tuple(x.shape), mask)
+    return out.shape[1], predicted[1]
+
+
+class TestConformerAdapterLayers:
+    def test_the_convs_follow_the_adapters_stride_and_kernel_not_the_encoders(self):
+        encoder = _tiny_encoder_config("w2v-bert")
+        assert (encoder.adapter_stride, encoder.adapter_kernel_size) == (2, 3)
+
+        adapter = _conformer_adapter(encoder, adapter_stride=5, adapter_kernel_size=5)
+
+        conv = adapter.layers[0].residual_conv
+        assert (conv.stride, conv.kernel_size) == ((5,), (5,))
+        emitted, predicted = _run(adapter)
+        assert emitted == predicted == 20, "100 frames at stride 5: 10 Hz from a 50 Hz encoder"
+
+    def test_the_encoders_own_config_is_left_alone(self):
+        """Its adapter_* keys are its own checkpoint's; this adapter must not rewrite them."""
+        encoder = _tiny_encoder_config("w2v-bert")
+
+        _conformer_adapter(encoder, adapter_stride=5, adapter_kernel_size=5)
+
+        assert (encoder.adapter_stride, encoder.adapter_kernel_size) == (2, 3)
+
+    @pytest.mark.parametrize("family", ["w2v-bert", "whisper", "wav2vec2", "hubert"])
+    def test_it_builds_and_runs_on_every_encoder_family(self, family):
+        """Only w2v-BERT's config carries `conformer_conv_dropout` and friends."""
+        adapter = _conformer_adapter(
+            _tiny_encoder_config(family), adapter_stride=5, adapter_kernel_size=5
+        )
+
+        emitted, predicted = _run(adapter)
+
+        assert emitted == predicted == 20
+
+    def test_the_layers_take_the_encoders_width(self):
+        for width in (48, 96):
+            adapter = _conformer_adapter(_tiny_encoder_config("whisper", width))
+            assert adapter.layers[0].residual_layer_norm.normalized_shape == (width,)
+
+    def test_the_default_layer_is_the_one_w2vbert_always_had(self):
+        """A default Wav2Vec2BertConfig is w2v-BERT 2.0's own (1024 wide, 16 heads, 4096
+        feed-forward, ReLU, 1e-5), so building from the width alone must reproduce it."""
+        from transformers import Wav2Vec2BertConfig
+        from transformers.models.wav2vec2_bert.modeling_wav2vec2_bert import Wav2Vec2BertAdapterLayer
+
+        encoder = Wav2Vec2BertConfig()
+        config = _local_melt_config(audio_encoder_config=encoder)
+        config.adapter_config._type = "conformer"
+
+        ours = MELTConformerAdapter(config).layers[0]
+        original = Wav2Vec2BertAdapterLayer(encoder)
+
+        assert {k: tuple(v.shape) for k, v in ours.state_dict().items()} == {
+            k: tuple(v.shape) for k, v in original.state_dict().items()
+        }
+
+    def test_the_layers_attention_is_sdpa_whatever_the_encoder_runs(self):
+        """Wav2Vec2BertSelfAttention has no flash path."""
+        encoder = _tiny_encoder_config("wav2vec2")
+        encoder._attn_implementation = "eager"
+
+        adapter = _conformer_adapter(encoder)
+
+        assert adapter.layers[0].config._attn_implementation == "sdpa"
+
+    @pytest.mark.parametrize("kernel, stride", [(3, 5), (5, 3), (2, 5)])
+    def test_a_kernel_and_stride_that_pad_differently_are_refused(self, kernel, stride):
+        """The layer pads by stride // 2, the length bookkeeping by kernel // 2. Where
+        those differ the adapter reports one length and emits another."""
+        with pytest.raises(ValueError, match="pad differently"):
+            _conformer_adapter(
+                _tiny_encoder_config("w2v-bert"), adapter_stride=stride, adapter_kernel_size=kernel
+            )
+
+    @pytest.mark.parametrize("stride", [1, 2, 4, 5, 10])
+    def test_a_kernel_equal_to_the_stride_always_agrees_with_the_layer(self, stride):
+        """The route the crossing takes: predicted length matches the emitted one."""
+        adapter = _conformer_adapter(
+            _tiny_encoder_config("w2v-bert"), adapter_stride=stride, adapter_kernel_size=stride
+        )
+
+        emitted, predicted = _run(adapter, seq_len=100)
+
+        assert emitted == predicted
+
+
+# ============================================================================
 # _inject_tensor tests (2D attention mask case – no real decoder needed)
 # ============================================================================
 
