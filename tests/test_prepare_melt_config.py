@@ -71,6 +71,53 @@ class TestEncoderAttnImplementation:
         assert config.audio_encoder_config._attn_implementation == "sdpa"
 
 
+@pytest.mark.hub
+class TestEncoderSpecAugment:
+    """`model.encoder.apply_spec_augment` reaches the encoder sub-config, or is left alone.
+
+    The wav2vec2 family time-masks whenever the encoder is in train mode, and a frozen
+    encoder still is. Checkpoints disagree on the default (mms-1b and mHuBERT-147 ship it
+    on, w2v-BERT and Whisper off), so the audio-stack crossing pins it in the base YAML.
+    Nothing read the key before, so the pin would have been a comment.
+    """
+
+    def _shipped(self):
+        from transformers import AutoConfig
+
+        return AutoConfig.from_pretrained(AUDIO_ENCODER).apply_spec_augment
+
+    @pytest.mark.parametrize("value", [False, True])
+    def test_the_yaml_value_reaches_the_encoder_sub_config(self, value):
+        config = prepare_melt_config(_cfg(apply_spec_augment=value), _processor())
+
+        assert config.audio_encoder_config.apply_spec_augment is value
+
+    def test_null_keeps_the_checkpoints_own_setting(self):
+        """The previous behaviour, so every arm that omits the key is unchanged."""
+        config = prepare_melt_config(_cfg(apply_spec_augment=None), _processor())
+
+        assert config.audio_encoder_config.apply_spec_augment is self._shipped()
+
+    def test_omitting_it_keeps_the_checkpoints_own_setting(self):
+        config = prepare_melt_config(_cfg(), _processor())
+
+        assert config.audio_encoder_config.apply_spec_augment is self._shipped()
+
+    def test_it_does_not_leak_into_the_decoder(self):
+        config = prepare_melt_config(_cfg(apply_spec_augment=False), _processor())
+
+        assert "apply_spec_augment" not in config.text_decoder_config.to_dict()
+
+    def test_it_composes_with_the_attention_backend(self):
+        """Both ride `encoder_kwargs`; setting one must not drop the other."""
+        config = prepare_melt_config(
+            _cfg(apply_spec_augment=False, attn_implementation="flash_attention_2"), _processor()
+        )
+
+        assert config.audio_encoder_config.apply_spec_augment is False
+        assert config.audio_encoder_config._attn_implementation == "flash_attention_2"
+
+
 # ============================================================================
 # _merge_chat_template_eos_token_id (issue #124)
 #
