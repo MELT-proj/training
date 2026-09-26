@@ -15,8 +15,9 @@ failure however much the model hallucinates.
 
 The training languages are en, de, es, fr, it. Everything out of domain (OOD) is
 scored on the FLEURS **dev** split. The FLEURS-24 set covers the 24 EU
-languages plus ru and uk. Every set is a fixed **200-utterance-per-language**
-subset (see below).
+languages plus ru and uk. Every set is a fixed subset drawn once with a fixed seed: **600
+utterances per language in-domain** (200 from each held-out corpus) and **200
+per language on FLEURS** (see below).
 
 | group | languages | source | weight |
 |---|---|---|---|
@@ -48,16 +49,18 @@ medians of the two reported-only groups.
 - **Every number comes from melt-eval, run on the saved checkpoint.** The
   in-training eval history is never used. The in-domain sets are frozen and
   recomputed the same way as FLEURS.
-- **Subsets, not full dev sets (PI, 2026-09-23).** While many checkpoints
-  need scoring (the screen now, the crossing next), every set is a
-  **200-per-language** subset drawn once with a fixed seed and frozen.
-  Every checkpoint is scored on the same utterances. If a language has
-  fewer than 200 dev utterances, it uses all of them and says so.
-- **In-domain:** one frozen melt-eval set per training language, drawn from
-  the **pooled** held-out splits of every corpus trained on that has one:
-  `cv22_sidon`, `mls_sidon`, `voxpopuli`. `yodas-granary` has no held-out
-  split. Utterances are drawn from the union, so corpora appear roughly in
-  proportion to their dev size. CER is corpus-level over the language's 200.
+- **Subsets, not full dev sets (PI, 2026-09-23; revised 2026-09-24).** While
+  many checkpoints need scoring (the screen now, the crossing next), every
+  set is a subset drawn once with a fixed seed (0) and frozen, capped at
+  **200 utterances per source** (`max_samples`). Every checkpoint is scored
+  on the same utterances. If a source has fewer than 200 dev utterances, it
+  uses all of them and says so (FLEURS nl has 171).
+- **In-domain:** one frozen melt-eval set per training language, with **200
+  utterances from each** held-out split of every corpus trained on that has
+  one: `cv22_sidon`, `mls_sidon`, `voxpopuli`, so **600 per language**.
+  `yodas-granary` has no held-out split. The three corpora are weighted
+  equally, not in proportion to their dev size (the earlier pooled draw was
+  dropped). CER is corpus-level over the language's 600.
 - **FLEURS:** a new frozen set of 200 per language from the FLEURS dev split,
   all 26 languages. The existing `fleurs24-asr-dev` has only 100 per language,
   so it is not this set.
@@ -76,6 +79,8 @@ medians of the two reported-only groups.
 - The in-domain and FLEURS sets differ in size, so their eval noise differs.
   A difference between checkpoints smaller than the measured eval noise is
   not a ranking.
-- 200 utterances per language is a sample. The grid measured eval-only noise
-  of 0.002-0.010 WER at 200 per set (board 2026-09-23), and per-language CER
-  moves at least that much. Full dev sets are deferred, not rejected.
+- The sets are samples: 600 utterances per language in-domain, 200 on FLEURS.
+  The grid measured eval-only noise of 0.002-0.010 WER at 200 per set (board
+  2026-09-23), and per-language CER moves at least that much. That figure was
+  measured at 200 and is not known for the 600-utterance in-domain sets.
+  Full dev sets are deferred, not rejected.
