@@ -788,3 +788,20 @@ arms:
     qos: acc_debug
     seed: 42
     time: "02:00:00"
+
+  # Fondue MA dry run, second point: same 3,840 s nominal step as Fondue-MA-dryrun
+  # (120 x 1 x 32) at a 4x larger micro-batch. The first run took ~1.5 s per micro-batch
+  # at batch_duration 30 (1.7 cuts) and peaked at 12 of 64 GB; this asks whether the
+  # time per micro-batch stays flat. Not a Fondue arm. Submit with:
+  #   campaign.py run Fondue-MA-dryrun-bd120 -- --trainer.max_steps 300 \
+  #     --trainer.eval_on_start false --trainer.eval_steps 100000 --trainer.save_steps 100000
+  # Fallback if it OOMs: batch_duration 60, grad_accum_steps 2 (same product).
+  - id: Fondue-MA-dryrun-bd120
+    stage: MA
+    config: Fondue-MA-dryrun.yaml
+    nodes: 8
+    qos: acc_debug
+    batch_duration: 120
+    grad_accum_steps: 1
+    seed: 42
+    time: "00:45:00"
