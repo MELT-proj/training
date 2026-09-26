@@ -15,6 +15,106 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-26 — Claude (worker session, crossing-prep) — the sixteen cells render at 10 Hz, but three could not be built and a fourth would have run at 25 Hz; frozen encoders train in train() mode; eval image v3 cannot score eight of the sixteen
+
+Context: week-3 Track B "Crossing prep", part 1 (renderable; code on nyx; no GPU; no
+machine touched). PR #143 is merged (b196a2f, and 713c6ed is an ancestor of `origin/main`);
+my first check ran against a local `main` that was 27 commits behind and looked like a
+failure, which it was not. Code is [PR #144](https://github.com/MELT-proj/training/pull/144).
+Nothing is submitted and `campaign.yaml` has no crossing rows (part 3, after the smokes).
+
+Finding / proposal:
+1. **Every cell was built on CPU from the real HF configs and the real adapter classes**
+   (300 frames out of 1500 encoder frames, i.e. 10.00 Hz, is the pass mark). Before the PR
+   13 of 16 built and one of those was wrong; after it, 16 of 16 build, all at 10.00 Hz, with
+   the adapter's predicted length equal to what it emits.
+2. **The Conformer's keys are read in two places that disagree.** The adapter reads
+   `adapter_stride` / `adapter_kernel_size` from `model.adapter` for its length and mask
+   bookkeeping, but its layers are `Wav2Vec2BertAdapterLayer(encoder_config)`, whose convs
+   read the *encoder* config's copies. A row that sets only `model.adapter.*` (which is all a
+   `plan_arm` override can reach) gave w2v-BERT at stride 5 a real output of **750 frames
+   (25 Hz) against a predicted 300**: every audio embedding after the first misplaced, with
+   no error. Fixed in the model: the layer's config is built from the adapter's own knobs.
+3. **Conformer x Whisper, MMS and mHuBERT could not be built at all** (`AttributeError:
+   conformer_conv_dropout` / `output_hidden_size`): only w2v-BERT's config carries what the
+   layer reads. Three of the sixteen cells were impossible whatever the rows said. The fix
+   uses w2v-BERT's own adapter recipe (64-wide heads, 4x feed-forward, ReLU) at the encoder's
+   width, which reproduces the documented 27.28M for w2v-BERT at kernel 3 / stride 2 exactly.
+   **That recipe for the other three encoders is my choice, not a decision**, and it makes the
+   Conformer's size vary: 35.67M (w2v-BERT), 55.08M (Whisper, MMS), 20.46M (mHuBERT) at the
+   crossing's stride 5 / kernel 5. Table in `03` §1.
+4. **Q-Former: native 10 Hz confirmed, and `stack_factor` is never applied to it.** Window
+   15 / `downsample_rate` 5 is 3 queries per window, 300 frames per 1500 measured, and
+   `MELTQFormerAdapter` does not read `stack_factor` (nor does the Conformer). `plan_arm`
+   now refuses a `stack_factor` on either, since its tag would state a rate the arm lacks.
+5. **`max_audio_seq_len` for MMS / mHuBERT counts SAMPLES**; the config's 1500 would slice
+   every cut into 94 ms pieces (`MELTAudioEncoder` refuses it, but at startup, after the
+   queue). Derived as **480000 = the same 30 s** w2v-BERT and Whisper attend over. The
+   hand-written MMS/mHuBERT probes used 960000 (60 s, never chunk); I did not, because that
+   would make these two the only encoders to see a cut over 30 s in one piece, and six of the
+   config's thirty duration buckets start at 28.9 s or above. One constant to flip
+   (`WAVEFORM_SAMPLES_PER_FRAME`, `plan_arm.py`).
+6. **Nothing read a SpecAugment key**, so `03` §3's "pin it in every arm" had nowhere to go.
+   MMS and mHuBERT-147 ship `apply_spec_augment: true` (read from their `config.json`),
+   w2v-BERT and Whisper false. `model.encoder.apply_spec_augment` now reaches the encoder
+   config (null keeps the checkpoint's own), `ABL-MA-700-asr.yaml` pins it false, and
+   `plan_arm` refuses an MMS/mHuBERT arm against a config that does not. Also derived: MMS
+   gets `flash_attention_2` (1.54x step time under sdpa, `infrastructure.md` §4, which at
+   ~52 h per arm is the difference between fitting `acc_ehpc`'s 72 h and not).
+7. **The pin is not enough: a frozen encoder still trains in `train()` mode.** HF's
+   `Trainer.training_step` calls `model.train()` (checked in the installed source) and MELT
+   never switches the encoder back, so layerdrop, dropout and SpecAugment fire on the
+   features the adapter trains on, while every evaluation sees clean ones. Measured on CPU
+   (`frozen_encoder_train_mode.py`, four cv22 English cuts of 4.1-7.1 s, five seeded
+   train-mode passes each, fp32) as the gap between the encoder's last hidden state in train
+   and eval mode:
+
+   | encoder | layerdrop | dropout | SpecAugment | cos(train, eval) | relative L2 |
+   |---|---|---|---|---|---|
+   | Whisper-large-v3 | 0 | 0 | off | 1.000 | **0.000** |
+   | w2v-BERT 2.0 | 0.1 | 0 | off | 0.914 | **0.358** |
+   | mHuBERT-147, as shipped | 0.1 | 0.1 | on | 0.800 | 0.670 |
+   | mHuBERT-147, spec-augment pinned off | 0.1 | 0.1 | off | 0.835 | **0.627** |
+   | MMS-1b, as shipped | 0.1 | 0.1 | on | 0.566 | 0.836 |
+   | MMS-1b, spec-augment pinned off | 0.1 | 0.1 | off | 0.640 | **0.758** |
+
+   Pinning SpecAugment off removes only 0.04-0.08 of a 0.63-0.84 gap. **Whisper trains and
+   evaluates on identical features; w2v-BERT on ones 36% off; mHuBERT and MMS on ones 63-76%
+   off.** The mechanism is verified and the size is measured; that it costs alignment is
+   **not measured**. But the screen's headline contrast (Whisper aligns, w2v-BERT does not)
+   was run under exactly this, and the crossing's three self-supervised encoders would carry
+   the largest gaps into a comparison that ranks encoders. This is a harness defect, not a
+   recipe decision, and nothing here reopens one. **Not changed in this PR.**
+8. **The MN5 eval image cannot score eight of the sixteen arms.** `melt_eval_cuda126_v3.sif`
+   was built from training `acadf22` (2026-09-22) and the eval launcher binds only the
+   melt-eval checkout, so evaluation runs the image's *baked-in* `melt`. That commit has PR
+   #126 (MLP stacking) and #138 (Q-Former) but **no MoE adapter at all** (#139, #141) and the
+   old Conformer (#144). MLP and Q-Former checkpoints load; the four MoE and four Conformer
+   arms would fail at load. Fine for part 2's MLP-on-MMS/mHuBERT eval; not for scoring the
+   crossing.
+9. **Tests.** Full unit suite in the container on nyx: 738 passed, 3 skipped, 0 failed. The
+   17 new Conformer tests use the real HF layer on in-memory configs, and 15 of them fail on
+   the old code. All 48 pre-existing campaign rows plan byte-for-byte identically (stdout and
+   stderr), and Whisper's name is pinned by a test on the screen row's real directory.
+
+Doubts: point 7's effect on alignment is a hypothesis, on four English cuts; the ordering
+held on a second run with one cut and one pass. The Conformer's width recipe (point 3) and the
+30 s window (point 5) are choices that a PI decision could change.
+
+Action needed:
+- **PI**: (a) frozen encoders in `train()` mode (point 7). Recommendation: put an encoder with
+  no trainable parameters into eval mode (one small PR: a `MELTAudioEncoder.train()` override
+  and a test), decide it **before** the smokes so they run on the code the crossing will, and
+  A/B it at w2v-BERT's best screen corner (`lr2e3-b300`, k=5, one epoch, about 38 GPU-h) read
+  against the screen's 0.7149. (b) How to submit the smokes without touching `arms.tsv`:
+  `campaign.py run` always records, so I propose rendering with `--dry-run` and submitting the
+  printed command by hand under `acc_debug`. (c) Flip or accept points 3, 5 and the MMS flash.
+  (d) Merge #144, or say to sync the branch to MN5 unmerged for the smokes.
+- **Orchestrator**: rebuild the eval image from `main` after #144 merges (point 8), promoted
+  under its own name and proved before `ln -sfn`; the crossing's MoE and Conformer arms cannot
+  be scored until then.
+- **Part 2 waits for the PI's go** (STOP 1).
+
 ## 2026-09-26 — Fondue Orchestrator — screen closed; crossing recipe decided; crossing prep delegated
 
 Context: the selection-metric worker reported (entry below) and PR #143 merged.

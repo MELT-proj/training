@@ -290,10 +290,11 @@ ENCODER_WINDOW_FRAMES: dict[str, int] = {
 # The derived window is the SAME 30 s the base config gives w2v-BERT and Whisper already
 # pins, so all four encoders of the crossing see one attention span. (The hand-written
 # MMS/mHuBERT probes used 60 s, i.e. never chunk; that would make these two the only
-# encoders to see a cut longer than 30 s in one piece, and the mixture has many: its
-# bucket bins run to 39 s.) One config frame is 20 ms, which in this family is 320
-# samples at 16 kHz: the product of its conv strides and the multiple MELTAudioEncoder
-# demands, so the result is valid by construction.
+# encoders to see a cut longer than 30 s in one piece, and the mixture has them: six of
+# the base config's thirty duration buckets start at 28.9 s or above.) One config frame
+# is 20 ms, which in this family is 320 samples at 16 kHz: the product of its conv
+# strides and the multiple MELTAudioEncoder demands, so the result is valid by
+# construction.
 WAVEFORM_ENCODERS = frozenset({"facebook/mms-1b", "utter-project/mHuBERT-147"})
 WAVEFORM_SAMPLES_PER_FRAME = 320
 
