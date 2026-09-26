@@ -63,7 +63,7 @@ import os
 import re
 import shlex
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import yaml
 
@@ -164,7 +164,14 @@ DECODER_PROFILES = {
 # Short tags for EXP_NAME. Unknown names fall back to a sanitised slug (see
 # _slug) rather than failing -- a new model should get *a* short tag, not
 # block the launcher.
-ENCODER_TAGS = {"facebook/w2v-bert-2.0": "w2vb"}
+ENCODER_TAGS = {
+    "facebook/w2v-bert-2.0": "w2vb",
+    # Whisper's tag is what _slug() already makes of its hub name. Pinned here so it
+    # cannot drift under arms that have run (MA-librispeech-w, the screen's Whisper rows).
+    "openai/whisper-large-v3": "whisperlarge",
+    "facebook/mms-1b": "mms1b",
+    "utter-project/mHuBERT-147": "mhubert147",
+}
 DECODER_TAGS = {
     "meta-llama/Llama-3.2-1B-Instruct": "llama1bIns",
     "meta-llama/Llama-3.2-1B": "llama1bBase",
@@ -274,6 +281,58 @@ ENCODER_WINDOW_FRAMES: dict[str, int] = {
     "openai/whisper-small": 3000,
 }
 
+# Raw-waveform encoders (the wav2vec2 family). For these `model.encoder.max_audio_seq_len`
+# counts SAMPLES, not frames (melt/modeling/encoder_specs.py): the ABL-*.yaml value of
+# 1500 is 30 s of w2v-BERT's 20 ms frames and would slice every cut into ~94 ms pieces.
+# MELTAudioEncoder refuses that at startup -- after the queue wait, which is how Whisper's
+# window cost a job once already -- so it is derived here too, not passed by hand.
+#
+# The derived window is the SAME 30 s the base config gives w2v-BERT and Whisper already
+# pins, so all four encoders of the crossing see one attention span. (The hand-written
+# MMS/mHuBERT probes used 60 s, i.e. never chunk; that would make these two the only
+# encoders to see a cut longer than 30 s in one piece, and the mixture has many: its
+# bucket bins run to 39 s.) One config frame is 20 ms, which in this family is 320
+# samples at 16 kHz: the product of its conv strides and the multiple MELTAudioEncoder
+# demands, so the result is valid by construction.
+WAVEFORM_ENCODERS = frozenset({"facebook/mms-1b", "utter-project/mHuBERT-147"})
+WAVEFORM_SAMPLES_PER_FRAME = 320
+
+# Encoders whose checkpoint ships `apply_spec_augment: true` (read from each
+# config.json, 2026-09-26). The wav2vec2 family masks time steps whenever the encoder
+# is in train mode, and a frozen encoder still is: HF's Trainer calls model.train() and
+# nothing here switches the encoder to eval. w2v-BERT and Whisper ship it false, so the
+# crossing pins it off in the base YAML (03-audio-stack.md §3); this table is what lets
+# plan() refuse a base config that forgot to.
+ENCODERS_SHIPPING_SPEC_AUGMENT = frozenset({"facebook/mms-1b", "utter-project/mHuBERT-147"})
+
+# Encoder attention backend, where the choice moves throughput. facebook/mms-1b steps
+# 1.54x slower under sdpa than under flash_attention_2 (infrastructure.md §4), which at
+# the crossing's ~52 h per arm is the difference between fitting acc_ehpc's 72 h wall
+# and not. w2v-BERT has no flash path at all, and neither Whisper nor mHuBERT-147 is
+# expensive enough to matter, so they keep the config's own sdpa.
+ENCODER_ATTN_IMPLEMENTATION: dict[str, str] = {"facebook/mms-1b": "flash_attention_2"}
+
+# The rate every crossing encoder hands its adapter (03-audio-stack.md §1): w2v-BERT's
+# 20 ms frames, Whisper's 1500 positions per 30 s window, and the wav2vec2 conv
+# frontend's 320-sample stride are all 50 Hz.
+ENCODER_OUTPUT_HZ = 50
+
+# Encoder knobs the base configs may leave to melt/training/config.py's DEFAULT_CONFIG.
+DEFAULT_ENCODER_ATTN = "sdpa"
+DEFAULT_MAX_AUDIO_SEQ_LEN = 1500
+
+# Adapter knobs the base configs leave to melt/training/config.py's DEFAULT_CONFIG,
+# restated for the same reason as DEFAULT_STACK_FACTOR below.
+DEFAULT_CONFORMER_STRIDE = 2
+DEFAULT_CONFORMER_KERNEL = 3
+DEFAULT_ADAPTER_LAYERS = 1
+DEFAULT_QFORMER_WINDOW = 15
+DEFAULT_QFORMER_DOWNSAMPLE = 5
+
+# Adapters whose output rate comes from `stack_factor`, and the ones that never read it.
+STACKING_ADAPTERS = ("mlp", "moe")
+STACK_FACTOR_IGNORING_ADAPTERS = ("conformer", "qformer")
+
 
 def _slug(name: str, maxlen: int) -> str:
     base = name.split("/")[-1]
@@ -348,6 +407,103 @@ def effective_duration_inflation(train_ds: dict) -> float:
     return 1.0 + mean_weighted_duration / q
 
 
+@dataclass
+class FrameRateRoute:
+    """How one arm's adapter reaches its declared rate (see ArmAxes.frame_rate_hz)."""
+
+    # The stack_factor to feed the existing stack_factor path, "" when none is derived.
+    stack_factor: str = ""
+    # Extra CLI overrides (the Conformer's stride and kernel) and the EXP_NAME tags that
+    # record the route and the rate. Empty when no rate is declared.
+    overrides: list[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
+
+
+def derive_frame_rate_route(
+    frame_rate_hz: str, adapter: str, stack_factor: str, cfg: dict
+) -> FrameRateRoute:
+    """Derive an adapter's route to a declared decoder frame rate, or refuse.
+
+    Also the one place that refuses a ``stack_factor`` on an adapter that never reads it,
+    whether or not a rate is declared: the tag it earns would state a frame rate that arm
+    does not have.
+    """
+    if stack_factor and int(stack_factor) != 1 and adapter in STACK_FACTOR_IGNORING_ADAPTERS:
+        die(
+            f"STACK_FACTOR={stack_factor} on the {adapter!r} adapter, which never reads it "
+            "(melt/modeling/modeling_melt.py): the arm would be tagged with a frame rate "
+            "it does not have. Declare FRAME_RATE_HZ instead, and the route is derived."
+        )
+    if not frame_rate_hz:
+        return FrameRateRoute()
+
+    try:
+        rate = float(frame_rate_hz)
+    except ValueError:
+        die(f"FRAME_RATE_HZ={frame_rate_hz!r} is not a number.")
+    if rate <= 0:
+        die(f"FRAME_RATE_HZ={frame_rate_hz!r} must be positive.")
+    rate_tag = "hz" + f"{rate:g}".replace(".", "p")
+
+    if adapter == "qformer":
+        # Nothing to derive: the rate is a property of the window, and the adapter reads
+        # both numbers straight from model.adapter (MELTQFormerAdapter).
+        window = int(get(cfg, "model.adapter.window_size", DEFAULT_QFORMER_WINDOW))
+        downsample = int(get(cfg, "model.adapter.downsample_rate", DEFAULT_QFORMER_DOWNSAMPLE))
+        queries = window // downsample
+        native = ENCODER_OUTPUT_HZ * queries / window
+        if abs(native - rate) > 1e-9:
+            die(
+                f"FRAME_RATE_HZ={frame_rate_hz} but the Q-Former's own rate is {native:g} Hz "
+                f"({queries} queries per {window}-frame window at {ENCODER_OUTPUT_HZ} Hz). "
+                "Its window and downsample_rate are not axes, so this arm cannot reach the "
+                "rate; change model.adapter.window_size/downsample_rate in the base config."
+            )
+        return FrameRateRoute(tags=[rate_tag])
+
+    factor = ENCODER_OUTPUT_HZ / rate
+    if abs(factor - round(factor)) > 1e-9:
+        die(
+            f"FRAME_RATE_HZ={frame_rate_hz} is not {ENCODER_OUTPUT_HZ} Hz divided by a whole "
+            "number, so no stride or stacking factor reaches it."
+        )
+    factor = round(factor)
+
+    if adapter in STACKING_ADAPTERS:
+        if stack_factor and int(stack_factor) != factor:
+            die(
+                f"STACK_FACTOR={stack_factor} contradicts FRAME_RATE_HZ={frame_rate_hz}, "
+                f"which needs stack_factor {factor}. Drop STACK_FACTOR and it is derived."
+            )
+        return FrameRateRoute(stack_factor=str(factor), tags=[rate_tag])
+
+    if adapter == "conformer":
+        layers = int(get(cfg, "model.adapter.num_adapter_layers", DEFAULT_ADAPTER_LAYERS))
+        if layers != 1:
+            die(
+                f"The Conformer reaches FRAME_RATE_HZ={frame_rate_hz} through ONE strided layer "
+                f"(stride {factor}); the config asks for {layers}, which would multiply the strides."
+            )
+        # Kernel equals stride: the convolution is then stacking plus a linear map, the
+        # route the MLP and MoE take, and its `// 2` padding agrees with the adapter's
+        # length bookkeeping (MELTConformerAdapter refuses a kernel/stride pair whose
+        # paddings differ).
+        cfg_stride = int(get(cfg, "model.adapter.adapter_stride", DEFAULT_CONFORMER_STRIDE))
+        cfg_kernel = int(get(cfg, "model.adapter.adapter_kernel_size", DEFAULT_CONFORMER_KERNEL))
+        overrides: list[str] = []
+        if factor != cfg_stride:
+            overrides += ["--model.adapter.adapter_stride", str(factor)]
+        if factor != cfg_kernel:
+            overrides += ["--model.adapter.adapter_kernel_size", str(factor)]
+        tags = [f"cs{factor}k{factor}"] if overrides else []
+        return FrameRateRoute(overrides=overrides, tags=[*tags, rate_tag])
+
+    die(
+        f"FRAME_RATE_HZ is set but adapter {adapter!r} has no route to a declared rate "
+        f"(known: {', '.join([*STACKING_ADAPTERS, 'conformer', 'qformer'])})."
+    )
+
+
 def derive_steps(
     train_ds: dict, batch_duration: float, gradient_accumulation_steps: int, world_size: int
 ) -> int:
@@ -396,16 +552,32 @@ class ArmAxes:
     world_size: int
     adapter: str = ""
     adapter_freeze: str = ""
-    # stack_factor: how many consecutive encoder frames the MLP adapter
-    # concatenates before fc1 (`melt/modeling/modeling_melt.py`'s
-    # MELTMLPAdapter); a no-op for the other adapter types, which downsample
-    # through their own knobs instead. Same inherit-or-override rule as every
+    # stack_factor: how many consecutive encoder frames the MLP and MoE adapters
+    # concatenate before their first projection (`melt/modeling/modeling_melt.py`'s
+    # MELTMLPAdapter, MELTMoEAdapter). The Conformer and Q-Former never read it, so
+    # plan() refuses it on those rather than tag an arm with a rate it does not have.
+    # Same inherit-or-override rule as every
     # other axis, but tagged into EXP_NAME only when overridden -- like
     # batch_duration/grad_accum_steps below, not like the always-present LR
     # tags -- since every arm composed before this axis existed has no value
     # for it to differ from, and tagging it unconditionally would rename (and
     # orphan the output directory of) all of them.
     stack_factor: str = ""
+    # frame_rate_hz: the decoder-side rate this arm is configured to, in Hz ("" = none
+    # declared, and nothing below applies). Each adapter reaches a rate by a different
+    # route, so a row states the RATE and plan() derives the route, instead of every row
+    # remembering its own adapter's knobs (the campaign rule learned twice, with
+    # Whisper's window and WSD; 03-audio-stack.md §1b fixes the crossing at 10 Hz):
+    #   mlp, moe   stack_factor = ENCODER_OUTPUT_HZ / rate
+    #   conformer  adapter_stride = adapter_kernel_size = ENCODER_OUTPUT_HZ / rate, one
+    #              layer (a strided conv whose kernel equals its stride is stacking plus
+    #              a linear map, the same route the MLP takes)
+    #   qformer    none: its rate is window_size / downsample_rate queries per window,
+    #              so plan() CHECKS it against the declared rate and refuses a mismatch
+    # An explicit stack_factor that disagrees with the derived one is refused. Tagged
+    # into EXP_NAME as `hz<rate>` whenever set, because the Q-Former's rate is not in
+    # any other tag and the name is where the rate has to be recoverable from.
+    frame_rate_hz: str = ""
     encoder: str = ""
     encoder_freeze: str = ""
     # lr_scheduler: "" inherits the base config's own lr_scheduler_type.
@@ -634,7 +806,12 @@ def plan(args: ArmAxes) -> ArmPlan:
     encoder_freeze = as_bool(args.encoder_freeze) if args.encoder_freeze else cfg_encoder_freeze
     decoder_freeze = as_bool(args.decoder_freeze) if args.decoder_freeze else cfg_decoder_freeze
     decoder_lora = as_bool(args.decoder_lora) if args.decoder_lora else cfg_decoder_lora
-    stack_factor_effective = int(args.stack_factor) if args.stack_factor else int(cfg_stack_factor)
+    # The frame-rate route may derive a stack_factor; from here on `stack_factor_request`
+    # is the one value the stack_factor logic below reads, whether a row typed it or the
+    # rate derived it.
+    route = derive_frame_rate_route(args.frame_rate_hz, adapter_effective, args.stack_factor, cfg)
+    stack_factor_request = route.stack_factor or args.stack_factor
+    stack_factor_effective = int(stack_factor_request) if stack_factor_request else int(cfg_stack_factor)
 
     overrides: list[str] = []
 
@@ -643,12 +820,50 @@ def plan(args: ArmAxes) -> ArmPlan:
     if args.encoder_freeze and encoder_freeze != cfg_encoder_freeze:
         overrides += ["--model.encoder.freeze", str(encoder_freeze).lower()]
 
+    # SpecAugment: the base config has to pin it off for an encoder that ships it on. The
+    # pin is identical across arms, so it lives in the base YAML (agent-protocol.md §3);
+    # this only refuses to render an arm that would otherwise train with time masking.
+    if (
+        encoder_effective in ENCODERS_SHIPPING_SPEC_AUGMENT
+        and get(cfg, "model.encoder.apply_spec_augment") is not False
+    ):
+        die(
+            f"{encoder_effective} ships apply_spec_augment: true, and {args.config} does not "
+            "pin it off, so this arm would train with time masking that w2v-BERT and Whisper "
+            "do not have (03-audio-stack.md §3). Add `apply_spec_augment: false` under "
+            "model.encoder in the base config."
+        )
+
+    # Attention backend where it moves throughput (see ENCODER_ATTN_IMPLEMENTATION).
+    cfg_encoder_attn = get(cfg, "model.encoder.attn_implementation", DEFAULT_ENCODER_ATTN)
+    required_attn = ENCODER_ATTN_IMPLEMENTATION.get(encoder_effective)
+    if required_attn is not None and required_attn != cfg_encoder_attn:
+        overrides += ["--model.encoder.attn_implementation", required_attn]
+
     # max_audio_seq_len: explicit value wins; otherwise derive the window a
     # fixed-window encoder demands. Only emitted when it differs from what the
     # config already declares, so arms that do not move the encoder produce a
     # byte-identical command to the one they produced before this axis existed.
     cfg_max_audio_seq_len = get(cfg, "model.encoder.max_audio_seq_len")
     required_window = ENCODER_WINDOW_FRAMES.get(encoder_effective)
+    window_reason = (
+        f"accepts exactly {required_window} frames and raises on anything else "
+        "(melt/modeling/encoder_specs.py)"
+    )
+    if required_window is None and encoder_effective in WAVEFORM_ENCODERS:
+        # A raw-waveform encoder counts SAMPLES. The config's own encoder is normally
+        # w2v-BERT, whose value is 20 ms frames; if it is itself a waveform encoder the
+        # value is already samples.
+        base_window = int(cfg_max_audio_seq_len or DEFAULT_MAX_AUDIO_SEQ_LEN)
+        required_window = (
+            base_window if cfg_encoder_name in WAVEFORM_ENCODERS
+            else base_window * WAVEFORM_SAMPLES_PER_FRAME
+        )
+        window_reason = (
+            f"is a raw-waveform encoder whose window is derived as {required_window} samples, "
+            "the same span every encoder of the crossing sees; an explicit value would run "
+            "under an arm name that does not record it"
+        )
     if args.max_audio_seq_len:
         try:
             max_audio_seq_len_effective = int(args.max_audio_seq_len)
@@ -657,8 +872,7 @@ def plan(args: ArmAxes) -> ArmPlan:
         if required_window is not None and max_audio_seq_len_effective != required_window:
             die(
                 f"MAX_AUDIO_SEQ_LEN={max_audio_seq_len_effective} contradicts "
-                f"{encoder_effective}, which accepts exactly {required_window} frames "
-                "and raises on anything else (melt/modeling/encoder_specs.py). Drop "
+                f"{encoder_effective}, which {window_reason}. Drop "
                 "the override and it is derived, or fix the value."
             )
     elif required_window is not None:
@@ -758,11 +972,12 @@ def plan(args: ArmAxes) -> ArmPlan:
     # See ArmAxes's comment on stack_factor for why this is only emitted (and
     # only tagged into EXP_NAME below) when it actually differs from the
     # config -- same rule as batch_duration/grad_accum_steps just below.
-    stack_factor_overridden = bool(args.stack_factor) and (
+    stack_factor_overridden = bool(stack_factor_request) and (
         stack_factor_effective != int(cfg_stack_factor)
     )
     if stack_factor_overridden:
         overrides += ["--model.adapter.stack_factor", str(stack_factor_effective)]
+    overrides += route.overrides
 
     # batch_duration/grad_accum_steps overrides -- see ArmAxes's comment on
     # why these two are coupled. Only emitted (and only tagged into EXP_NAME
@@ -914,7 +1129,9 @@ def plan(args: ArmAxes) -> ArmPlan:
     if args.warmup_ratio:
         extra_tags.append(lr_tag(args.warmup_ratio, "wu"))
 
-    # Same "only when overridden" rule, for the same reason (see ArmAxes).
+    # Same "only when overridden" rule, for the same reason (see ArmAxes). The route's own
+    # tags (the Conformer's stride/kernel, and the declared rate) follow it: the rate tag
+    # is what makes the decoder frame rate readable off the name for every adapter.
     stack_factor_tags = [f"sk{stack_factor_effective}"] if stack_factor_overridden else []
 
     composed_name = "-".join([
@@ -924,6 +1141,7 @@ def plan(args: ArmAxes) -> ArmPlan:
         f"{decoder_tag(decoder_effective)}{'F' if decoder_freeze else 'T'}" + ("-lora" if decoder_lora else ""),
         f"{adapter_effective}{'F' if adapter_freeze else 'T'}",
         *stack_factor_tags,
+        *route.tags,
         *extra_tags,
         lr_tag(encoder_lr_effective, "elr"),
         lr_tag(decoder_lr_effective, "dlr"),
@@ -963,6 +1181,7 @@ def main() -> None:
     p.add_argument("--adapter", required=True)
     p.add_argument("--adapter-freeze", required=True)
     p.add_argument("--stack-factor", required=True, help="empty string means: use the config's own value, no override")
+    p.add_argument("--frame-rate-hz", required=True, help="empty string means: no rate declared. Otherwise the adapter's route to it is derived (stack_factor, or the Conformer's stride/kernel) or checked (Q-Former), and `hz<rate>` is tagged into EXP_NAME")
     p.add_argument("--encoder", required=True)
     p.add_argument("--encoder-freeze", required=True)
     p.add_argument("--lr-scheduler", required=True, help="empty string means: use the config's own lr_scheduler_type")
@@ -990,6 +1209,7 @@ def main() -> None:
         adapter=args.adapter,
         adapter_freeze=args.adapter_freeze,
         stack_factor=args.stack_factor,
+        frame_rate_hz=args.frame_rate_hz,
         encoder=args.encoder,
         encoder_freeze=args.encoder_freeze,
         lr_scheduler=args.lr_scheduler,

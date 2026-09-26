@@ -13,7 +13,7 @@ The campaign varies three things. Each lives in exactly one place:
 | axis | varies how | belongs in |
 |---|---|---|
 | **Data**: mixture, hours, task | a rendered config, ~550 lines | one YAML per budget x task: `ABL-MA-700-asr.yaml`, `ABL-IFT-700.yaml` |
-| **Architecture**: adapter, encoder, decoder, freezing, decoder LoRA, MLP stack factor | 0-9 CLI overrides | `ADAPTER`, `ADAPTER_FREEZE`, `STACK_FACTOR`, `ENCODER`, `ENCODER_FREEZE`, `DECODER`, `DECODER_FREEZE`, `DECODER_LORA` env vars |
+| **Architecture**: adapter, encoder, decoder, freezing, decoder LoRA, MLP/MoE stack factor, decoder frame rate | 0-9 CLI overrides | `ADAPTER`, `ADAPTER_FREEZE`, `STACK_FACTOR`, `FRAME_RATE_HZ`, `ENCODER`, `ENCODER_FREEZE`, `DECODER`, `DECODER_FREEZE`, `DECODER_LORA` env vars |
 | **Optimisation**: encoder/decoder/adapter LR | 0-3 CLI overrides | `ENCODER_LR`, `DECODER_LR`, `ADAPTER_LR` env vars |
 | **Batch/accum** (exception, not a fourth axis): `batch_duration`, `gradient_accumulation_steps` | 0-2 CLI overrides, always paired | `BATCH_DURATION`, `GRAD_ACCUM_STEPS` env vars -- see "Two rules" below for why this pair, and only this pair, is allowed to leave the base YAML |
 | **Memory/perf** (also not a fourth axis): `trainer.gradient_checkpointing` | 0-1 CLI override, independent | `GRADIENT_CHECKPOINTING` env var -- trades recompute for activation memory without changing what a step trains on, so (unlike batch/accum) it needs no compensating override and is not tagged into `EXP_NAME` |
@@ -227,7 +227,7 @@ dies on a `world_size` mismatch.
 `EXP_NAME` is composed, never typed by hand, from:
 
 ```
-{STAGE}-{data tag}-{encoder}{F|T}-{decoder}{F|T}[-lora]-{adapter}{F|T}[-skN][-bdN][-gaN][-epN][-tt<value>]-{elr tag}-{dlr tag}-{lr tag}-s{seed}-{world_size}g
+{STAGE}-{data tag}-{encoder}{F|T}-{decoder}{F|T}[-lora]-{adapter}{F|T}[-skN][-csNkN][-hz<rate>][-bdN][-gaN][-epN][-tt<value>]-{elr tag}-{dlr tag}-{lr tag}-s{seed}-{world_size}g
 ```
 
 e.g. `MA-125asr-w2vbF-llama1bInsF-mlpT-elr6e6-dlr2e5-lr2e4-s42-8g`, or with
@@ -257,11 +257,50 @@ this."
 
 `STACK_FACTOR` (`--model.adapter.stack_factor`, default 1) is architecture-scoped
 like `ADAPTER`/`ADAPTER_FREEZE` above it in the axes table, not paired like
-`BATCH_DURATION`/`GRAD_ACCUM_STEPS` -- it only affects the MLP adapter
-(`melt/modeling/modeling_melt.py`'s `MELTMLPAdapter`), concatenating that many
-consecutive encoder frames along the feature axis before `fc1` and lowering
-the adapter's output frame rate by the same factor; the other adapter types
-ignore it. See `plan/01-interface-recipe.md` §4 for what it has to do and why.
+`BATCH_DURATION`/`GRAD_ACCUM_STEPS` -- it affects the MLP and MoE adapters
+(`melt/modeling/modeling_melt.py`'s `MELTMLPAdapter`, `MELTMoEAdapter`),
+concatenating that many consecutive encoder frames along the feature axis before
+the first projection (the MoE's router) and lowering the adapter's output frame
+rate by the same factor. The Conformer and Q-Former never read it, so `plan_arm.py`
+refuses it there rather than tag an arm with a rate it does not have. See
+`plan/01-interface-recipe.md` §4 for what it has to do and why.
+
+### One decoder frame rate for every adapter (`FRAME_RATE_HZ`)
+
+Each adapter reaches a decoder frame rate by a different route, and a row that had to
+remember its own adapter's knobs is the kind of per-row note this campaign keeps
+losing arms to. So a row states the **rate** (`frame_rate_hz: 10`) and `plan_arm.py`
+derives the route from it:
+
+| adapter | route to the rate | tags |
+|---|---|---|
+| `mlp`, `moe` | `stack_factor = 50 / rate` | `skN`, `hz<rate>` |
+| `conformer` | `adapter_stride = adapter_kernel_size = 50 / rate`, one layer | `csNkN`, `hz<rate>` |
+| `qformer` | none: `window_size` / `downsample_rate` queries per window is its rate, so the rate is *checked* and a mismatch refused | `hz<rate>` |
+
+50 Hz is what every encoder of the crossing hands its adapter. An explicit
+`stack_factor` that disagrees with the derived one is refused, and so is a multi-layer
+Conformer (its strides would multiply). The `hz<rate>` tag is what makes the rate
+readable off the name for every adapter; the Q-Former's is in no other tag.
+
+### Encoder-derived settings
+
+Some settings differ by encoder and are not the operator's to remember, so `plan_arm.py`
+derives or checks them from the encoder name (tables at the top of the file):
+
+- **`max_audio_seq_len`.** A raw-waveform encoder (`facebook/mms-1b`,
+  `utter-project/mHuBERT-147`) counts SAMPLES, not frames; the base config's 1500 is
+  30 s of w2v-BERT frames and would slice every cut into 94 ms pieces. It is derived as
+  the same 30 s window (480000 samples) so all four encoders see one attention span;
+  Whisper's fixed 3000 frames is derived as before. An explicit value that contradicts
+  the derived one is refused.
+- **SpecAugment.** MMS and mHuBERT-147 ship `apply_spec_augment: true`, w2v-BERT and
+  Whisper false, and a frozen encoder still time-masks in train mode. The base YAML pins
+  it off (`model.encoder.apply_spec_augment: false`, read by `prepare_melt_config`);
+  `plan_arm.py` refuses to render an MMS or mHuBERT arm against a config that does not.
+- **Attention backend.** MMS is given `flash_attention_2` (its steps take 1.54x as long
+  under sdpa, `plan/infrastructure.md` §4); the other encoders keep the config's own.
+- **Encoder tag.** `w2vb`, `whisperlarge`, `mms1b`, `mhubert147` (`ENCODER_TAGS`).
 
 ### Encoder/decoder LR fallback when a config omits the key
 

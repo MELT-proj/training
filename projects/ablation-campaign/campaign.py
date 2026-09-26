@@ -46,7 +46,7 @@ LEDGER_PATH = os.path.join(HERE, "arms.tsv")
 # quietly did nothing is exactly how an arm ends up not being the ablation it
 # claims to be.
 AXIS_FIELDS = {
-    "adapter", "adapter_freeze", "stack_factor", "encoder", "encoder_freeze",
+    "adapter", "adapter_freeze", "stack_factor", "frame_rate_hz", "encoder", "encoder_freeze",
     "max_audio_seq_len", "lr_scheduler", "warmup_ratio",
     "decoder", "decoder_freeze", "decoder_lora",
     "encoder_lr", "decoder_lr", "adapter_lr",

@@ -77,9 +77,22 @@ asserted rather than shown.
 | adapter | params (w2v-BERT → 2048-wide decoder) | output rate | state |
 |---|---|---|---|
 | MLP (2-layer, GELU, LayerNorm × gain) | 6.30M | 50 Hz, or 50/k with `stack_factor` k | baseline |
-| Conformer, 1 layer | 27.28M | 25 Hz (stride 2) | ready |
+| Conformer, 1 layer | 27.28M at stride 2 / kernel 3; 35.67M at the crossing's stride 5 / kernel 5 (measured) | 25 Hz (stride 2); 10 Hz at stride 5 / kernel 5 | ready; builds on every encoder |
 | MoE, 8 SwiGLU experts, top-2, load-balancing aux loss | 33.57M total, 8.39M active | 50 Hz, or 50/k with `stack_factor` k | ready |
-| Q-Former, window 15, 3 queries | not instantiable today | 10 Hz by design | broken; PI fixes in week 4 |
+| Q-Former, window 15, 3 queries | 35.70M (measured) | 10 Hz native; ignores `stack_factor` | ready (PR #138) |
+
+Adapter parameters at the crossing's 10 Hz, into a 2048-wide decoder (measured on
+CPU from the real adapter classes and the four encoders' own configs, 2026-09-26). The
+Conformer's layer is w2v-BERT 2.0's own adapter recipe at the encoder's width (64-wide
+heads, 4x feed-forward); w2v-BERT's is unchanged, the other three had no Conformer
+before.
+
+| adapter at 10 Hz | w2v-BERT (1024 wide) | Whisper, MMS (1280) | mHuBERT (768) |
+|---|---|---|---|
+| MLP, `stack_factor` 5 | 14.69M | 17.31M | 12.07M |
+| Conformer, stride 5 / kernel 5 | 35.67M | 55.08M | 20.46M |
+| MoE, `stack_factor` 5 (total) | 100.71M | 121.69M | 79.73M |
+| Q-Former, window 15 | 35.70M | 36.75M | 34.65M |
 
 ## 1b. The budget problem the five-language screen just exposed (2026-09-23)
 
