@@ -57,16 +57,9 @@ Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
 - **Two pre-existing test failures on `main`** (sdpa propagation into
   `Wav2Vec2BertConfig`; all of `test_processing_melt.py`), likely
   transformers version skew. Not blocking any week.
-- **The week-3 crossing render waits on PI decisions** (budget decided
-  2026-09-23: five epochs per arm, `03-audio-stack.md` §1b): the single
-  recipe for all sixteen arms (the screen's sweep corners differ by encoder),
-  how the Conformer reaches 10 Hz, and whether the MoE arms wait for
-  per-language expert usage logging. Then the crossing-prep item in week 3
-  Track B.
-- **PR #143 (selection metric, screen scored, sweep rows) is unmerged.**
-  `campaign.yaml` rows, `arms.tsv` rows and `score.py` are only on its
-  branch, and MN5's `~/training` is checked out on it. Merge it before
-  anything else is rendered or submitted on MN5.
+- **The week-3 crossing render waits on the crossing-prep item** (week 3
+  Track B). All its PI decisions were made on 2026-09-26 (`03-audio-stack.md`
+  §1b).
 - **FLEURS shard duplication on MN5's indexed tree** (78 leaves, af_za..fr_fr).
   The PI has a dry-run-by-default `~/fleurs_dedupe.sh`, not yet run.
   `fleurs24-asr-dev` on MN5 was frozen from the doubled tree; re-freeze it
@@ -225,7 +218,9 @@ Settled.
       in another language. Read the replicate gap against the grid's own
       eval-only noise (0.002-0.010 on Whisper, board 2026-09-23), since the
       replicates carry both. `01-interface-recipe.md` §3.
-- [ ] **Screen follow-ups at the best corner** (seven arms, ≈ 140 GPU-h).
+- [x] **Screen follow-ups at the best corner** (closed 2026-09-26: five of
+      seven ran; the two prompt runs moved to week 6, PI).
+      (seven arms, ≈ 140 GPU-h).
       Blocked on the grid above, because every one of them is defined
       relative to a corner the grid has to find: stacking sweep k=2 and
       k=10; the 2e-5 control; two prompt runs (verbatim, and verbatim+LID);
@@ -236,9 +231,9 @@ Settled.
       the screen". Still owed: k=2, k=10, and the two prompt runs.
       *State 2026-09-26:* k=2 and k=10 landed on both encoders (`01` §3).
       k=10 is clearly worse on both; k=2 is inside the noise of k=5 on both.
-      **Still owed: the two prompt runs** (verbatim, verbatim+LID). Neither is
-      in `campaign.yaml`, and their eval must score with and without the
-      language tag.
+      The two prompt runs (verbatim, verbatim+LID) are **moved to week 6**
+      (PI, 2026-09-26): they are orthogonal to the recipe and the audio stack,
+      and are swept on the winning combination instead.
 - [ ] If step 0 was ambiguous, re-run the deciding LibriSpeech pair with the
       second seed before the screen. *Superseded by step 0b (week 1).*
 
@@ -440,6 +435,14 @@ go into the paper as ablations, not into Fondue.
       big-run batch and topology. Choose LR on loss at matched steps and
       FLEURS-24 dev CER.
 - [ ] Seed replicates for the headline backbone pair.
+- [ ] **MA prompt sweep on the winning combination** (moved from week 2,
+      PI 2026-09-26): audio-only vs verbatim vs verbatim+LID, on the chosen
+      encoder × adapter × backbone, scored on the selection metric. The
+      question is whether naming the language improves multilingual ability.
+      The LID arm is scored both with and without the language tag at
+      inference; melt-eval does not support that yet, so build it in week 5.
+      Queue it Monday 10-19: for a prompt change to reach Fondue it has to
+      land before the 10-25 freeze. `01-interface-recipe.md` §3.
 - [ ] **MA:IFT ratio sweep under the winning regime** (`04-regime.md` §6):
       IFT from the 0/100/300/700 h MA points, plus the zero-IFT evaluation
       probe. Queue on Monday; feeds Fondue's "MA data budget and stage

@@ -132,6 +132,17 @@ budget in sampled hours. Cost extrapolated from the screen: ≈ 150 GPU-h per
 arm at 1200 s, ≈ 2,400 for sixteen; at 300 s roughly 200 GPU-h and ~50 h
 wall per arm, which is part of the corner call.
 
+**Recipe and rates, decided (PI, 2026-09-26).** One recipe for all sixteen
+arms: adapter LR 2e-3, effective batch 300 s (75 × 1 × 4 ranks), audio-only
+prompt, WSD, seed 42. Every arm runs at 10 Hz: the MLP and MoE with
+`stack_factor` 5 (the MoE stacks before the router), the Q-Former natively
+(window 15, 3 queries), and the Conformer with stride 5 and kernel 5, one
+layer. The recipe is w2v-BERT's best screen point (selection metric 0.7149).
+Whisper at the same point scores 0.1354 against its best 0.1286. MoE
+per-language expert usage is measured after training, by running each
+checkpoint over the per-language dev sets; the arms do not wait for it.
+Extrapolated cost: ≈ 3,000 GPU-h for sixteen, ~52 h wall per arm.
+
 ## 2. The crossing
 
 Four encoders × four adapters = 16 MA arms on the provisional backbone

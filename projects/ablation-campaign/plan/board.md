@@ -15,6 +15,38 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-26 — Fondue Orchestrator — screen closed; crossing recipe decided; crossing prep delegated
+
+Context: the selection-metric worker reported (entry below) and PR #143 merged.
+Organising the week-3 audio-stack crossing.
+
+Finding / decisions (PI, 2026-09-26):
+1. **Crossing recipe:** adapter LR 2e-3, 300 s effective batch, k=5, one recipe
+   for all sixteen arms. This is w2v-BERT's best selection-metric point
+   (0.7149). Whisper at the same point is 0.1354 against its best 0.1286, a
+   gap of 0.007 against a single-pair Whisper seed shift of 0.0045. The 300 s
+   batch is best or tied on both encoders. Extrapolated ≈ 3,000 GPU-h for
+   sixteen five-epoch arms and ~52 h wall per arm at 4 ranks.
+2. **10 Hz for every adapter:** the Conformer uses stride 5 with kernel 5.
+   A strided conv whose kernel equals its stride is stacking plus a linear
+   projection, the same route the MLP and MoE take.
+3. **MoE per-language expert usage is measured after training**, not logged
+   during it. The router is a function of the frozen encoder's output, so
+   running each checkpoint over the per-language dev sets gives it. The
+   crossing does not wait.
+4. **The MA prompt runs moved to week 6**, as a sweep on the winning
+   encoder × adapter × backbone. They are orthogonal to the stack. Queue them
+   Monday 10-19 if a prompt change is to reach Fondue before the 10-25 freeze.
+5. The screen's week-2 items are closed in the timeline. A "Crossing prep"
+   item (week 3 Track B) is on the critical path: plan_arm support for the
+   Conformer rate and for MMS/mHuBERT, offline loads, five acc_debug smokes,
+   eval on MMS/mHuBERT smoke checkpoints, then sixteen rows. The PI is
+   starting that session from the orchestrator's prompt.
+
+Action needed: crossing-prep session per the timeline item. Still open for the
+PI: run `~/fleurs_dedupe.sh` on MN5, then re-freeze `fleurs24-asr-dev` and
+check the selection-metric FLEURS set against the de-duplicated tree.
+
 ## 2026-09-24 — Claude (worker session, selection-metric) — sets frozen, `score.py` written, twelve screen checkpoints scored; the seed-43 replicates have not landed
 
 Context: the selection metric (`selection-metric/README.md`) implemented end to

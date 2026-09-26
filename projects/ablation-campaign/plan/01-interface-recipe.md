@@ -488,6 +488,10 @@ inside noise, and they would not draw a curve. The efficiency figure in
 so what it needs from this screen is *spread* on that axis and the point
 where accuracy starts to pay for it.
 
+*Moved 2026-09-26 (PI): the prompt runs below no longer belong to this
+screen. They are swept in week 6 on the winning encoder × adapter × backbone
+(`timeline.md`).*
+
 **Prompt level: verbatim with a language ID (PI, 2026-09-20).** MA is where
 the model learns what the audio *is*, and a frozen decoder cannot infer the
 target language from 10–50 Hz features as reliably as it can be told; the
