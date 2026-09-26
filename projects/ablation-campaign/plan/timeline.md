@@ -57,10 +57,20 @@ Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
 - **Two pre-existing test failures on `main`** (sdpa propagation into
   `Wav2Vec2BertConfig`; all of `test_processing_melt.py`), likely
   transformers version skew. Not blocking any week.
-- **The week-3 crossing render waits on three things** (budget decided
-  2026-09-23: five epochs per arm, `03-audio-stack.md` §1b): the LR/batch
-  corner (waits on the seed-43 replicates), the MoE crossing-ready item
-  (week 2 Track B), and an offline-load check of mHuBERT-147 on MN5.
+- **The week-3 crossing render waits on PI decisions** (budget decided
+  2026-09-23: five epochs per arm, `03-audio-stack.md` §1b): the single
+  recipe for all sixteen arms (the screen's sweep corners differ by encoder),
+  how the Conformer reaches 10 Hz, and whether the MoE arms wait for
+  per-language expert usage logging. Then the crossing-prep item in week 3
+  Track B.
+- **PR #143 (selection metric, screen scored, sweep rows) is unmerged.**
+  `campaign.yaml` rows, `arms.tsv` rows and `score.py` are only on its
+  branch, and MN5's `~/training` is checked out on it. Merge it before
+  anything else is rendered or submitted on MN5.
+- **FLEURS shard duplication on MN5's indexed tree** (78 leaves, af_za..fr_fr).
+  The PI has a dry-run-by-default `~/fleurs_dedupe.sh`, not yet run.
+  `fleurs24-asr-dev` on MN5 was frozen from the doubled tree; re-freeze it
+  after cleanup. Check the selection-metric FLEURS set as well.
 - **`optimization.min_lr_scale` is a dead config key** — set in every
   campaign and SFT config, read by no code, so every cosine run decayed to
   zero rather than to 10% of peak. Comparisons between arms are unaffected;
@@ -195,7 +205,14 @@ Settled.
       the best LR/batch corner per encoder — which also answers whether the
       recipe optimum is encoder-invariant, the assumption `03`'s crossing
       rests on.
-- [ ] **Read the screen** — distinct from running it, which is done. Needs
+- [x] **Read the screen** (done 2026-09-24, PR #143). All eighteen
+      checkpoints scored on the selection metric (`01` §3, "the WSD grid on
+      the selection metric"). Seed shift at one corner per encoder:
+      Whisper 0.0045, w2v-BERT 0.035. The PI picked sweep corners per
+      encoder (Whisper `lr1e3-b1200`, w2v-BERT `lr2e3-b300`). The
+      transition-step column was not formalised; the trajectories are on the
+      board (2026-09-23). Original wording below.
+      Needs
       three things none of which are derivable from the WER table: the
       seed-43 replicates (jobs 46396669/46396670, submitted 2026-09-23) to
       give a noise floor *at this error regime*; FLEURS-24 zero-shot CER on
@@ -217,6 +234,11 @@ Settled.
       *State 2026-09-23:* the 2e-5 control landed (`01` §5, it never needed
       the corner) and the two seeds are the seed-43 replicates under "Read
       the screen". Still owed: k=2, k=10, and the two prompt runs.
+      *State 2026-09-26:* k=2 and k=10 landed on both encoders (`01` §3).
+      k=10 is clearly worse on both; k=2 is inside the noise of k=5 on both.
+      **Still owed: the two prompt runs** (verbatim, verbatim+LID). Neither is
+      in `campaign.yaml`, and their eval must score with and without the
+      language tag.
 - [ ] If step 0 was ambiguous, re-run the deciding LibriSpeech pair with the
       second seed before the screen. *Superseded by step 0b (week 1).*
 
@@ -320,12 +342,22 @@ assumed one (`03-audio-stack.md` §0).*
       recipe for all sixteen, all at the same frame rate, **five epochs per
       arm** (PI, 2026-09-23; 17,500 sampled audio-h, `03` §1b). ≈ 150 GPU-h
       per arm at 1200 s, ≈ 2,400 for sixteen, all in the queue at once.
-      Render waits on the corner and the MoE item (Blocked / waiting).
-      *Outcome:* the audio stack — encoder, adapter, frame rate — read on
-      FLEURS-24 split into high- and low-resource halves, not on the
-      in-domain five alone.
+      Render waits on the PI decisions under Blocked / waiting and on the
+      crossing-prep item below.
+      *Outcome:* the audio stack — encoder, adapter, frame rate — ranked by
+      the selection metric (`selection-metric/README.md`, PI 2026-09-23),
+      which replaces the high/low-resource FLEURS split named here before.
 
 ### Track B — preparation
+- [ ] **Crossing prep** (added 2026-09-26; the crossing's critical path).
+      Make all sixteen encoder × adapter cells renderable and proven before
+      the rows go in: `plan_arm.py` support for the Conformer's route to
+      10 Hz and for the MMS/mHuBERT encoders (tags, input length, MMS
+      spec-augment pinned off); an offline load of MMS-1b and mHuBERT-147 on
+      MN5; a short `acc_debug` smoke per new encoder and per non-MLP adapter;
+      one selection-metric eval on a smoke checkpoint for each untested
+      encoder; then sixteen `campaign.yaml` rows at the PI's recipe.
+      Cold-agent prompt handed to the PI 2026-09-26.
 - [ ] **Fondue dry run at full scale on MN5**: config resolves, dataloader
       builds, bucket bins re-measured on the full distribution, startup time,
       exposure audit output, host-RAM trace. Write findings to `06-fondue.md`.
