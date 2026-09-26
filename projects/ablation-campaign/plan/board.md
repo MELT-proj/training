@@ -69,12 +69,14 @@ prints them, not a ranking decision):
 | whisper-lr2e3-b600 | 0.0617 | 0.0486 | 0.5497 | 0.8822 | 1.0000 | 0.1498 | 7/3000 | 618/5171 |
 | whisper-lr1e3-b1200-k10 (k=10, 5 Hz) | 0.0767 | 0.0527 | 0.6042 | 0.9086 | 1.0000 | 0.1672 | 10/3000 | 533/5171 |
 | w2vb-lr2e3-b300 | 0.6115 | 0.6698 | 1.0000 | 1.0000 | 1.0000 | 0.7149 | 149/3000 | 1407/5171 |
+| w2vb-lr2e3-b300-k2 (k=2, 25 Hz) | 0.5808 | 0.7085 | 1.0000 | 1.0000 | 1.0000 | 0.7237 | 150/3000 | 1335/5171 |
 | w2vb-lr1e3-b300 | 0.5466 | 0.8353 | 1.0000 | 1.0000 | 1.0000 | 0.7740 | 157/3000 | 1419/5171 |
 | w2vb-lr2e3-b600 | 0.6337 | 0.8047 | 1.0000 | 1.0000 | 1.0000 | 0.7873 | 200/3000 | 1358/5171 |
 | w2vb-lr1e3-b300-s43 (seed-43 replicate) | 0.6940 | 0.8090 | 1.0000 | 1.0000 | 1.0000 | 0.8089 | 204/3000 | 1503/5171 |
 | w2vb-lr1e3-b600 | 0.6453 | 0.8794 | 1.0000 | 1.0000 | 1.0000 | 0.8272 | 174/3000 | 1445/5171 |
 | w2vb-lr2e3-b1200 | 0.6674 | 0.8998 | 1.0000 | 1.0000 | 1.0000 | 0.8442 | 176/3000 | 1450/5171 |
 | w2vb-lr1e3-b1200 | 0.6748 | 0.9925 | 1.0000 | 1.0000 | 1.0000 | 0.8915 | 210/3000 | 1599/5171 |
+| w2vb-lr2e3-b300-k10 (k=10, 5 Hz) | 0.8139 | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 0.9400 | 269/3000 | 1821/5171 |
 
 Reading, for whoever makes the call: on Whisper the ID medians span 0.003 and
 OOD-train 0.004 across all six rows, inside the 0.002-0.010 eval noise the grid
@@ -177,6 +179,17 @@ cap, in `arms.tsv`): `MA-700-screen-w2vb-lr2e3-b300-k2` (25 Hz) and `-k10`
 The k=5 replicate at the neighbouring corner took 10 h 10 min, so expect about
 40 GPU-h each. w2v-BERT is unaligned at k=5 at every grid point, so the sweep
 reads how the metric moves with k on an unaligned encoder, not on a working one.
+
+Finding 12: **w2v-BERT stacking sweep, scored (2026-09-26).** At `lr2e3-b300`
+(eval jobs 46649555-46649566, 1.48 and 1.67 GPU-h; training 38 GPU-h each):
+k=2 **0.7237** (ID 0.5808, OOD-train 0.7085), k=5 0.7149 (0.6115, 0.6698), k=10
+**0.9400** (0.8139, 1.0000). k=10 is clearly worse, far outside the w2v-BERT
+seed shift of 0.035 (that shift was measured at `lr1e3-b300`). k=2 vs k=5 is a
+0.009 gap, inside it: not separable, and the two groups move in opposite
+directions (ID better at k=2, OOD-train worse). Same picture as Whisper, where
+k=10 was also clearly worse and k=2 vs k=5 was inside the noise. Everything is
+still unaligned on w2v-BERT, so this is the metric moving on failed models. No k
+is called here.
 
 Action needed: PI/orchestrator: decide the corner (nothing here calls it) and
 update the README's 200-per-language wording to the 600 in-domain sets. Whoever
