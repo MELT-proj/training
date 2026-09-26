@@ -203,6 +203,7 @@ not where this section says, ask the PI and the answer gets added here.
 | in-training generative eval | ~3 min per 5-set round at 200 utterances per set on 8 GPUs; `max_samples` is per named set |
 | first step of any run | 9–20 min (dataloader build, `eval_on_start`); read steady-state s/it from the second-to-last tqdm line |
 | MA, frozen Whisper-large-v3 + Qwen3.5-2B, stack 5, DDP, 8 x 4, `batch_duration 30` x accum 4, 125-source mux over 235K h | **measured 2026-09-25** (Fondue-MA-dryrun): 4.6 min job start to step 1 with `eval_on_start false`, 6.15 s/step at 0.896 audio-h/step, 37.1 GPU-h for 600 steps, worst-node host RSS 41-44 GB flat |
+| same, `batch_duration 120` x accum 1 (same 3,840 s step) | **measured 2026-09-26** (Fondue-MA-dryrun-bd120): 1.57 s/step, 0.962 audio-h/step, 31.9 GB peak, 10.1 GPU-h for 300 steps. Time per micro-batch is flat in micro-batch size, so prefer a large `batch_duration` and accum 1 |
 | MN5 → internal transfer | ~15–20 MB/s over `mn5transfer` |
 | melt-eval on MN5, one arm, FLEURS-24 ASR dev (26 langs, 2,600 samples, batch 16, 1 GPU) | 8m03s wall (7m15s generation+scoring), 0.134 GPU-h — measured 2026-09-22, [eval#20](https://github.com/MELT-proj/eval/pull/20) |
 

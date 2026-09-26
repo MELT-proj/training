@@ -796,6 +796,7 @@ arms:
   #   campaign.py run Fondue-MA-dryrun-bd120 -- --trainer.max_steps 300 \
   #     --trainer.eval_on_start false --trainer.eval_steps 100000 --trainer.save_steps 100000
   # Fallback if it OOMs: batch_duration 60, grad_accum_steps 2 (same product).
+  # Result (2026-09-26, job 46649405): 1.57 s/step vs 6.15 at 30 x 4, 31.9 GB peak; no fallback needed.
   - id: Fondue-MA-dryrun-bd120
     stage: MA
     config: Fondue-MA-dryrun.yaml

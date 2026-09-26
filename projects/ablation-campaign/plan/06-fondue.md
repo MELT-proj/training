@@ -34,6 +34,7 @@ doubling:
 |---|---|---|
 | MA over 247K h ASR, adapter only (~1,000 audio-s per wall-s on 8 GPUs) | ~2,000 (arithmetic corrected 2026-09-25; was 3,800) | ~2.6 days |
 | MA over the 235K h dry-run pool, frozen Whisper-large-v3 + Qwen3.5-2B, stack 5, `batch_duration 30 x accum 4`, 8 x 4, **measured 6.15 s/step**, 0.896 audio-h per step (Fondue-MA-dryrun, job 46618634) | ~12,100 for the derived 220,492 steps (84% of the pool); ~14,400 for the whole pool — **extrapolated** | 15.7 to 18.7 days |
+| same, `batch_duration 120 x accum 1` (same 3,840 s step), **measured 1.57 s/step**, 0.962 audio-h per step, 31.9 GB peak (Fondue-MA-dryrun-bd120, job 46649405) | ~3,100 for the derived 220,492 steps (90% of the pool); ~3,400 for the whole pool — **extrapolated** | 4.0 to 4.4 days |
 | IFT over ~330K h, Llama-3.2-1B (5.73 s/step at 3,840 s effective) | ~6,000 | ~8 days |
 | IFT, Qwen3.5-2B with gradient checkpointing, 8 nodes x 4 GPUs, DDP, `batch_duration 30`/`grad_accum 20` (effective batch 19,200 audio-s/step) | **measured** 32.3 s/step at 8 nodes (see below) -> ~17,800 | ~23.1 days |
 

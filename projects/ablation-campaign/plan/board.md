@@ -15,6 +15,38 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-26 — Claude (worker, fondue-dry-run) — batch_duration 120 x accum 1 is 3.9x faster at the same effective batch: ~3,100 GPU-h for the derived MA run, not ~12,100
+
+Context: PI asked to explore the dry run's grad_accum (it was 4, `batch_duration 30`, 3,840 s nominal). Second point:
+`Fondue-MA-dryrun-bd120`, job 46649405, same config and topology (8 x 4, world_size 32), `batch_duration 120 x
+grad_accum 1 x 32` = 3,840 s nominal, so no recipe change; `--trainer.max_steps 300`, `acc_debug`. Measured:
+
+| | bd 30 x ga 4 (job 46618634) | bd 120 x ga 1 (job 46649405) |
+|---|---|---|
+| steady s/step | 6.15 (steps 100-600) | **1.57** (steps 100-300, 314 s / 200) |
+| audio hours per step | 0.896 (84% of nominal) | **0.962** (90%) |
+| cuts per micro-batch, mean / max | 1.7 / 4 | 6.5 / 8 |
+| peak GPU memory (of 64 GB) | 12.0 | 31.9 (preallocation at 60 s: 23.4) |
+| worst-node host RSS | 43.7 GB at 68 min | 44.2 GB |
+| loss at step 300 | 2.66 | 2.52 |
+| cost of the job | 37.1 GPU-h (600 steps) | 10.1 GPU-h (300 steps, 18:55 wall) |
+
+Finding:
+1. **The hypothesis held**: time per micro-batch is roughly flat in micro-batch size (1.5 s at 1.7 cuts, 1.57 s at
+   6.5 cuts), so the cost was per launch, not per audio second. A micro-batch of four times the seconds costs about the
+   same, and accumulation only multiplies that fixed cost. The 599/300 tqdm line reads 1.36 s/it; 1.57 is the delta.
+2. **Extrapolated** (1.57 s/step, 0.962 audio-h/step, 32 GPUs): the derived 220,492 steps = 96 h = 4.0 days =
+   ~3,100 GPU-h, covering ~212,000 h (90% of the 235,191 h pool); the whole pool needs ~244,500 steps = 107 h =
+   4.4 days = ~3,400 GPU-h. That is 4x under the bd 30 figure, and two 3-day segments instead of six.
+3. **Memory** has room (31.9 of 64 GB). The min-duration preallocation pass warns OOM again (60 cuts x 30 s x 432
+   text tokens, unrealistic) and training continues. Not tried: `batch_duration` above 120 or accum 1 with more
+   workers; one dataloader worker per rank was not the bottleneck at 6.5 cuts per batch.
+4. Eleven tracebacks in the log, all DeepSpeed Triton autotune at exit (benign, as before). `checkpoint-300`
+   (9.7 GB) left in `/gpfs/scratch/epor48/outputs/`.
+
+Action needed: PI decides whether `batch_duration 120 x accum 1` becomes the Fondue MA micro-batch (it is
+a recipe-neutral change of shape), and whether to probe 200-240 before the freeze.
+
 ## 2026-09-25 — Claude (worker, fondue-dry-run) — Fondue MA dry run done: 6.15 s/step, ~12,100 GPU-h extrapolated, host RAM flat at 41-44 GB; five config/data defects found on the way
 
 Context: timeline week 3 Track B. Job 46618634 (third submission; 46616756 and 46617832 died at startup and at
