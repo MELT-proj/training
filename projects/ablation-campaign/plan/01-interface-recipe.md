@@ -859,6 +859,38 @@ the w2v-BERT arms here, ≈ 0.74–0.98, and the Whisper arms, ≈ 0.12–0.15).
 best-corner-per-encoder conclusion is drawn here for that reason; the
 numbers above are measured, not yet interpreted against the decision rule.
 
+### Five-language screen arms (§3): the WSD grid on the selection metric — measured
+
+Measured 2026-09-24 with the selection metric
+([`selection-metric/README.md`](../selection-metric/README.md); melt-eval on the
+saved top-level checkpoints, JSON logs, 1 GPU, batch 4, bf16). In-domain: up to
+200 utterances from each held-out corpus per language (600), FLEURS dev: 200
+per language, 26 languages (nl 171). CER clipped at 1.0, group medians, lower
+is better; score = (1.0·ID + 1.5·OOD-train + 0.6·OOD-related) / 3.1. Per-language
+values: `selection-metric/scores/screen-wsd-grid-2026-09-24.txt`. The
+Both seed-43 replicates and the stacking sweeps (k=2 and k=10; Whisper at `lr1e3-b1200`, w2v-BERT at `lr2e3-b300`; k=5 is the grid row) are included. Runaway columns count samples with per-sample CER > 1 (decoding is unguarded, as in training); report only, not in the score.
+
+| run | ID | OOD-train | OOD-related | OOD-latin | OOD-script | score | runaway ID | runaway FLEURS |
+|---|---|---|---|---|---|---|---|---|
+| whisper-lr1e3-b1200-k2 (k=2, 25 Hz) | 0.0584 | 0.0417 | 0.4545 | 0.7195 | 1.0000 | 0.1270 | 12/3000 | 425/5171 |
+| whisper-lr1e3-b300 | 0.0610 | 0.0493 | 0.4396 | 0.9070 | 1.0000 | 0.1286 | 10/3000 | 536/5171 |
+| whisper-lr1e3-b1200 | 0.0617 | 0.0466 | 0.4630 | 0.8608 | 1.0000 | 0.1321 | 8/3000 | 527/5171 |
+| whisper-lr2e3-b300 | 0.0631 | 0.0464 | 0.4780 | 0.9285 | 1.0000 | 0.1354 | 8/3000 | 579/5171 |
+| whisper-lr1e3-b600 | 0.0642 | 0.0459 | 0.4830 | 0.8790 | 1.0000 | 0.1364 | 12/3000 | 586/5171 |
+| whisper-lr2e3-b1200-s43 (seed-43 replicate) | 0.0614 | 0.0460 | 0.4893 | 0.8913 | 1.0000 | 0.1368 | 10/3000 | 494/5171 |
+| whisper-lr2e3-b1200 | 0.0626 | 0.0450 | 0.5129 | 0.7769 | 1.0000 | 0.1413 | 11/3000 | 504/5171 |
+| whisper-lr2e3-b600 | 0.0617 | 0.0486 | 0.5497 | 0.8822 | 1.0000 | 0.1498 | 7/3000 | 618/5171 |
+| whisper-lr1e3-b1200-k10 (k=10, 5 Hz) | 0.0767 | 0.0527 | 0.6042 | 0.9086 | 1.0000 | 0.1672 | 10/3000 | 533/5171 |
+| w2vb-lr2e3-b300 | 0.6115 | 0.6698 | 1.0000 | 1.0000 | 1.0000 | 0.7149 | 149/3000 | 1407/5171 |
+| w2vb-lr2e3-b300-k2 (k=2, 25 Hz) | 0.5808 | 0.7085 | 1.0000 | 1.0000 | 1.0000 | 0.7237 | 150/3000 | 1335/5171 |
+| w2vb-lr1e3-b300 | 0.5466 | 0.8353 | 1.0000 | 1.0000 | 1.0000 | 0.7740 | 157/3000 | 1419/5171 |
+| w2vb-lr2e3-b600 | 0.6337 | 0.8047 | 1.0000 | 1.0000 | 1.0000 | 0.7873 | 200/3000 | 1358/5171 |
+| w2vb-lr1e3-b300-s43 (seed-43 replicate) | 0.6940 | 0.8090 | 1.0000 | 1.0000 | 1.0000 | 0.8089 | 204/3000 | 1503/5171 |
+| w2vb-lr1e3-b600 | 0.6453 | 0.8794 | 1.0000 | 1.0000 | 1.0000 | 0.8272 | 174/3000 | 1445/5171 |
+| w2vb-lr2e3-b1200 | 0.6674 | 0.8998 | 1.0000 | 1.0000 | 1.0000 | 0.8442 | 176/3000 | 1450/5171 |
+| w2vb-lr1e3-b1200 | 0.6748 | 0.9925 | 1.0000 | 1.0000 | 1.0000 | 0.8915 | 210/3000 | 1599/5171 |
+| w2vb-lr2e3-b300-k10 (k=10, 5 Hz) | 0.8139 | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 0.9400 | 269/3000 | 1821/5171 |
+
 ### The screen's 2e-5 control (§3): the August recipe's own adapter LR, at the new recipe
 
 Not a grid arm. 2e-5 is `ABL-MA-700-asr.yaml`'s own `optimization.adapter_lr`

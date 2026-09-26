@@ -15,6 +15,188 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-24 — Claude (worker session, selection-metric) — sets frozen, `score.py` written, twelve screen checkpoints scored; the seed-43 replicates have not landed
+
+Context: the selection metric (`selection-metric/README.md`) implemented end to
+end: frozen sets, scoring script, and the twelve `MA-700-screen-*` WSD grid
+checkpoints scored. No corner is called here; that is the PI's and the
+orchestrator's.
+
+Finding 1: **sets.** Frozen on nyx first, then on MN5 (indexed tree), seed 0,
+in `~/eval/frozen-sets/selection-metric/` on MN5 (`freeze_selection_sets.sh`
+there records how). `selection-id-{en,de,es,fr,it}`: `max_samples` 200 **per
+source** (cv22_sidon, mls_sidon, voxpopuli), so **600 utterances per language,
+not 200 pooled** (PI decision 2026-09-24; the README still says 200 pooled and
+needs updating). `selection-fleurs26-dev200`: 200 per language, 26 languages,
+5,171 samples, 15.9 h; only **nl** is short (171, all kept). The in-domain sets
+were selected identically on nyx and MN5. Specs are on melt-eval branch
+`selection-metric-sets` (no melt-eval code change was needed; PI dropped the
+pooled-sampling idea). Sets moved aside, not deleted: `_superseded-*` dirs.
+
+Finding 2: **MN5's indexed FLEURS tree carries duplicated shards** (the
+2026-08-11 duplication, never cleaned there). 78 leaves, 26 locales (af_za to
+fr_fr), all splits; every extra shard is a copy of shard 0 (af_za train and
+validation have two extra). Only `shar-indexed`; plain `shar` is clean. So a
+freeze on MN5 draws from a doubled pool. Handled by freezing FLEURS on nyx and
+rewriting only the locator directory prefix (shard-0 `cuts` md5-identical on all
+26 leaves; one sample per language loaded on MN5 and length-checked). The PI
+was given `~/fleurs_dedupe.sh` (dry run by default) to move the extras aside.
+Consequence: `fleurs24-asr-dev`, frozen on MN5 from the doubled tree, may hold
+repeated utterances in 10 languages, and would break if shard 1 is moved.
+
+Finding 3: **cost** (1 GPU, batch 4, bf16, `task_filter=asr`, one job per set;
+GPU-h = CPUTimeRAW / 3600 / 40). Whisper 0.82-0.91 GPU-h per checkpoint (FLEURS
+job 35-39 min, five in-domain jobs 2.5-3.5 min each); w2v-BERT 1.44-1.64 GPU-h
+(FLEURS job 61-70 min, in-domain 5-6 min each). FLEURS scales linearly with
+samples (5,171 vs 2,600: 2.0x, not the 2.4x assumed). All 72 jobs: 14.3 GPU-h.
+Eval jobs: 46443574-46443585 (first two checkpoints), 46475389-46475451 (the
+other ten); ledger `eval-jobs.tsv` next to the sets.
+
+Finding 4: **scores** (`selection-metric/score.py`, output kept in
+`selection-metric/scores/screen-wsd-grid-2026-09-24.txt` with per-language
+CER; CER clipped at 1.0; lower is better; rows in score order as the script
+prints them, not a ranking decision):
+
+| row | ID | OOD-train | OOD-related | OOD-latin | OOD-script | score | runaway ID | runaway FLEURS |
+|---|---|---|---|---|---|---|---|---|
+| whisper-lr1e3-b1200-k2 (k=2, 25 Hz) | 0.0584 | 0.0417 | 0.4545 | 0.7195 | 1.0000 | 0.1270 | 12/3000 | 425/5171 |
+| whisper-lr1e3-b300 | 0.0610 | 0.0493 | 0.4396 | 0.9070 | 1.0000 | 0.1286 | 10/3000 | 536/5171 |
+| whisper-lr1e3-b1200 | 0.0617 | 0.0466 | 0.4630 | 0.8608 | 1.0000 | 0.1321 | 8/3000 | 527/5171 |
+| whisper-lr2e3-b300 | 0.0631 | 0.0464 | 0.4780 | 0.9285 | 1.0000 | 0.1354 | 8/3000 | 579/5171 |
+| whisper-lr1e3-b600 | 0.0642 | 0.0459 | 0.4830 | 0.8790 | 1.0000 | 0.1364 | 12/3000 | 586/5171 |
+| whisper-lr2e3-b1200-s43 (seed-43 replicate) | 0.0614 | 0.0460 | 0.4893 | 0.8913 | 1.0000 | 0.1368 | 10/3000 | 494/5171 |
+| whisper-lr2e3-b1200 | 0.0626 | 0.0450 | 0.5129 | 0.7769 | 1.0000 | 0.1413 | 11/3000 | 504/5171 |
+| whisper-lr2e3-b600 | 0.0617 | 0.0486 | 0.5497 | 0.8822 | 1.0000 | 0.1498 | 7/3000 | 618/5171 |
+| whisper-lr1e3-b1200-k10 (k=10, 5 Hz) | 0.0767 | 0.0527 | 0.6042 | 0.9086 | 1.0000 | 0.1672 | 10/3000 | 533/5171 |
+| w2vb-lr2e3-b300 | 0.6115 | 0.6698 | 1.0000 | 1.0000 | 1.0000 | 0.7149 | 149/3000 | 1407/5171 |
+| w2vb-lr2e3-b300-k2 (k=2, 25 Hz) | 0.5808 | 0.7085 | 1.0000 | 1.0000 | 1.0000 | 0.7237 | 150/3000 | 1335/5171 |
+| w2vb-lr1e3-b300 | 0.5466 | 0.8353 | 1.0000 | 1.0000 | 1.0000 | 0.7740 | 157/3000 | 1419/5171 |
+| w2vb-lr2e3-b600 | 0.6337 | 0.8047 | 1.0000 | 1.0000 | 1.0000 | 0.7873 | 200/3000 | 1358/5171 |
+| w2vb-lr1e3-b300-s43 (seed-43 replicate) | 0.6940 | 0.8090 | 1.0000 | 1.0000 | 1.0000 | 0.8089 | 204/3000 | 1503/5171 |
+| w2vb-lr1e3-b600 | 0.6453 | 0.8794 | 1.0000 | 1.0000 | 1.0000 | 0.8272 | 174/3000 | 1445/5171 |
+| w2vb-lr2e3-b1200 | 0.6674 | 0.8998 | 1.0000 | 1.0000 | 1.0000 | 0.8442 | 176/3000 | 1450/5171 |
+| w2vb-lr1e3-b1200 | 0.6748 | 0.9925 | 1.0000 | 1.0000 | 1.0000 | 0.8915 | 210/3000 | 1599/5171 |
+| w2vb-lr2e3-b300-k10 (k=10, 5 Hz) | 0.8139 | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 0.9400 | 269/3000 | 1821/5171 |
+
+Reading, for whoever makes the call: on Whisper the ID medians span 0.003 and
+OOD-train 0.004 across all six rows, inside the 0.002-0.010 eval noise the grid
+already measured; the score spread (0.129-0.150) comes almost entirely from
+OOD-related (0.44-0.55, five languages). Sensitive to five languages at 200
+utterances each, and to the seed: the replicates are the check. On w2v-BERT
+every OOD group except OOD-train clips to 1.0, so the score separates rows only
+through ID and OOD-train, and none is aligned.
+
+Finding 5: **things checked along the way.** (a) The eval prompt is audio-only
+with the Llama-3 frame (`prompt_template: '{audio_token}'` from each run's
+`training_config.yaml`), **no instruction and no language**; the processor
+adds `<|audio_bos|>`/`<|audio_eos|>` itself, verified on the eval image, so
+there is no train/eval mismatch. (b) Whisper's in-domain CER (0.061) is worse
+than its FLEURS CER on the same five languages (0.047); per corpus (200 each)
+it is cv22 0.084/0.139/0.047/0.058/0.038 and voxpopuli 0.054/0.120/0.050/0.066/0.110
+for en/de/es/fr/it, against mls 0.025-0.059. The gap is set difficulty, mostly de
+and it. w2v-BERT has the expected order (ID 0.675 below OOD-train 0.99). The PI
+finds `de` suspicious; baseline providers requested in
+[eval#21](https://github.com/MELT-proj/eval/issues/21). (c) The eval container
+runs the `.sif`'s baked-in `melteval`, not the bound checkout, unless
+`PYTHONPATH` points at the checkout: harmless here (no eval-side change), a trap
+for any future one.
+
+Finding 6: **the two seed-43 replicates are not scored.** Both training jobs
+(46396669, 46396670) were still RUNNING after 2 h 25 min; their directories hold
+checkpoints only, with no top-level weights or `processor_config.json`.
+
+Finding 7: **the cv22 `de` number, and a runaway-generation statistic.**
+`whisper-lr1e3-b1200`'s cv22 `de` CER (0.139) is one 4.0 s clip whose output
+loops for 964 characters (910 errors, 67% of cv22-de errors); without it 0.046,
+like the other Whisper checkpoints (0.044-0.055), whose worst clips are other
+cuts. voxpopuli `de` (0.120) has one such loop too, plus five `de` samples that
+fail on every Whisper checkpoint, four of them voxpopuli, two from the
+2018-09-12 "widetrim" plenary where the hypothesis is fluent German unrelated to
+the reference (a likely reference/audio misalignment in the source data; audio
+not listened to). Samples failing (CER > 0.6) on all Whisper checkpoints: 6% of
+`de` errors, 11% of `it`, 8% of `es`, 6% of `en`, 1% of `fr`. PI decision:
+decoding stays **unguarded** (no `no_repeat_ngram_size`), to match training, and
+loops are counted instead. `score.py` now reports **runaway generations**
+(per-sample CER > 1, from the per-sample scores in the JSON log) per set and
+language, with each language's share of errors and its CER without them. Report
+only, not in the score (scores above are unchanged). The FLEURS count is mostly
+zero-shot failure on unseen languages (Whisper 504-618 of 5,171: bg 58/200, el
+50/200, ga 36/200 in `whisper-lr1e3-b1200`), not loops; in-domain it is 7-12 of
+3,000 for Whisper and 149-210 for w2v-BERT.
+
+Finding 8: **Whisper seed-43 replicate** (`whisper-lr2e3-b1200-s43`, eval jobs
+46499491-46499496, 0.815 GPU-h): score 0.1368 against 0.1413 for seed 42, a
+0.0045 shift from the seed at this corner; ID 0.0614 vs 0.0626, OOD-train 0.0460
+vs 0.0450, OOD-related 0.489 vs 0.513 (that 0.024 is the whole score shift). One
+replicate pair is one noise estimate. Against it, the six seed-42 Whisper scores
+span 0.021 (0.1286-0.1498); rows within ~0.005 of each other are not separable.
+The w2v-BERT replicate (job 46396669) was still training at 8.5 h.
+
+Finding 9: **Whisper stacking sweep submitted (PI, 2026-09-24).** Corner
+`lr1e3-b1200` chosen by the PI from the scores above (score 0.1321, within noise
+of the best row 0.1286, 28 GPU-h, the cheapest row of the top group); the
+replicate says the score moves ~0.0045 with the seed, so rows closer than that
+are not separable. Two rows added to `campaign.yaml`, identical to
+`MA-700-screen-whisper-lr1e3-b1200` except `stack_factor`: `...-k2` (25 Hz) and
+`...-k10` (5 Hz), submitted through `campaign.py run` (2 nodes, 14 h cap, in
+`arms.tsv`). k=2 has 2.5x the decoder positions of k=5 at the same
+`batch_duration 150`; peak memory at k=5 was 19.1 GB, so an OOM at k=2 is possible
+and is caught by `memory_preallocation` before step 1 (fallback, same 1200 s
+effective batch: `batch_duration 75`, `grad_accum 2`). The w2v-BERT sweep waits
+for its replicate. MN5's checkout is now on branch
+`worktree-bridge-cse_018bRbBYG2SKA8Zo6NTanRjp`; the ledger was reconciled per
+`infrastructure.md` §3.
+
+Finding 10: **w2v-BERT replicate and the Whisper stacking sweep, scored
+(2026-09-25).** All 24 eval jobs COMPLETED (Whisper k=2 0.796 GPU-h, k=10 0.856,
+w2v-BERT replicate 1.588). (a) `w2vb-lr1e3-b300-s43`: score 0.8089 against 0.7740
+for seed 42, a 0.035 shift; ID 0.694 vs 0.547 (0.147), OOD-train 0.809 vs 0.835.
+The seed alone moves w2v-BERT's ID median by 0.15, so the six-row spread
+(0.715-0.892) is only about 5x that score shift and no w2v-BERT row separates
+from its neighbours; the b300 advantage is not established. (b) Whisper at
+`lr1e3-b1200`: k=2 **0.1270** (ID 0.0584, OOD-train 0.0417, OOD-related 0.4545),
+k=5 0.1321 (0.0617, 0.0466, 0.4630), k=10 **0.1672** (0.0767, 0.0527, 0.6042).
+k=10 is clearly worse, far outside the 0.0045 Whisper seed shift; k=2 vs k=5 is a
+0.0051 gap, the size of that shift, so the score alone does not separate them.
+k=2 is nevertheless below k=5 on ID (by 0.0033) and OOD-train (by 0.0049), where
+the replicate moved 0.001; that noise was measured at the `lr2e3-b1200` corner
+from one pair. Training cost at 8 ranks: 32 GPU-h each for k=2 and k=10 against
+28 for k=5 (both ended with the same elapsed time to the second, and their
+weights were written 16 ms apart on different nodes; the weights differ, the
+losses differ, and the resolved configs carry `stack_factor` 2 and 10: an oddity
+I did not explain). Eval jobs 46565783-46565788 (replicate), 46565834-46565845
+(sweep). No k is called here.
+
+Finding 11: **w2v-BERT stacking sweep submitted (PI, 2026-09-25).** Corner
+`lr2e3-b300`, the best selection-metric score of the seven w2v-BERT rows
+(0.7149; the PI's choice of "best score" over the replicated `lr1e3-b300`,
+0.7740 and 0.8089 at seeds 42 and 43, so the choice rests on one seed and a gap
+about twice the w2v-BERT seed shift of 0.035). Recomputing with weights
+1 / 1.25 / 0.5 leaves every ordering unchanged. Two rows added to
+`campaign.yaml` and submitted through `campaign.py run` (1 node, 4 ranks, 16 h
+cap, in `arms.tsv`): `MA-700-screen-w2vb-lr2e3-b300-k2` (25 Hz) and `-k10`
+(5 Hz), identical to `MA-700-screen-w2vb-lr2e3-b300` except `stack_factor`.
+The k=5 replicate at the neighbouring corner took 10 h 10 min, so expect about
+40 GPU-h each. w2v-BERT is unaligned at k=5 at every grid point, so the sweep
+reads how the metric moves with k on an unaligned encoder, not on a working one.
+
+Finding 12: **w2v-BERT stacking sweep, scored (2026-09-26).** At `lr2e3-b300`
+(eval jobs 46649555-46649566, 1.48 and 1.67 GPU-h; training 38 GPU-h each):
+k=2 **0.7237** (ID 0.5808, OOD-train 0.7085), k=5 0.7149 (0.6115, 0.6698), k=10
+**0.9400** (0.8139, 1.0000). k=10 is clearly worse, far outside the w2v-BERT
+seed shift of 0.035 (that shift was measured at `lr1e3-b300`). k=2 vs k=5 is a
+0.009 gap, inside it: not separable, and the two groups move in opposite
+directions (ID better at k=2, OOD-train worse). Same picture as Whisper, where
+k=10 was also clearly worse and k=2 vs k=5 was inside the noise. Everything is
+still unaligned on w2v-BERT, so this is the metric moving on failed models. No k
+is called here.
+
+Action needed: PI/orchestrator: decide the corner (nothing here calls it) and
+update the README's 200-per-language wording to the 600 in-domain sets. Whoever
+picks this up after the replicates finish: `bash
+~/eval/frozen-sets/selection-metric/submit_selection_eval.sh <row> <exp_name>`
+on MN5, then `score.py`.
+
 ## 2026-09-23 — Bridge Agent — PI: per-language expert usage deferred to an issue; MoE adapter crossing-ready item ticked
 
 Context: follow-up to the entry directly below (PR #141, per-language expert
