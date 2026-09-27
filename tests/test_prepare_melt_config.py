@@ -108,6 +108,15 @@ class TestEncoderSpecAugment:
 
         assert "apply_spec_augment" not in config.text_decoder_config.to_dict()
 
+    def test_it_composes_with_eval_when_frozen(self):
+        """Different mechanism (a plain MELTConfig field, not encoder_kwargs), same call."""
+        config = prepare_melt_config(
+            _cfg(apply_spec_augment=False, eval_when_frozen=True), _processor()
+        )
+
+        assert config.audio_encoder_config.apply_spec_augment is False
+        assert config.eval_when_frozen is True
+
     def test_it_composes_with_the_attention_backend(self):
         """Both ride `encoder_kwargs`; setting one must not drop the other."""
         config = prepare_melt_config(
@@ -116,6 +125,34 @@ class TestEncoderSpecAugment:
 
         assert config.audio_encoder_config.apply_spec_augment is False
         assert config.audio_encoder_config._attn_implementation == "flash_attention_2"
+
+
+@pytest.mark.hub
+class TestEvalWhenFrozen:
+    """`model.encoder.eval_when_frozen` reaches `MELTConfig`, not the encoder sub-config.
+
+    Unlike `attn_implementation`/`apply_spec_augment`, this is not a knob transformers'
+    encoder itself understands -- it is MELT's own policy for whether
+    `MELTAudioEncoder.train()` forces eval mode on a fully-frozen encoder. So it does not
+    ride `encoder_kwargs`, and does not land on `audio_encoder_config`.
+    """
+
+    @pytest.mark.parametrize("value", [False, True])
+    def test_the_yaml_value_reaches_the_top_level_config(self, value):
+        config = prepare_melt_config(_cfg(eval_when_frozen=value), _processor())
+
+        assert config.eval_when_frozen is value
+
+    def test_omitting_it_defaults_false(self):
+        """The historical behaviour, so every arm that omits the key is unchanged."""
+        config = prepare_melt_config(_cfg(), _processor())
+
+        assert config.eval_when_frozen is False
+
+    def test_it_does_not_land_on_the_encoder_sub_config(self):
+        config = prepare_melt_config(_cfg(eval_when_frozen=True), _processor())
+
+        assert "eval_when_frozen" not in config.audio_encoder_config.to_dict()
 
 
 # ============================================================================

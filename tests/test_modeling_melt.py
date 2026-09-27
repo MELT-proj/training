@@ -9,6 +9,7 @@ import torch
 
 from melt.modeling import (
     MELTAudioAdapter,
+    MELTAudioStack,
     MELTConfig,
     MELTConformerAdapter,
     MELTForCausalLM,
@@ -62,6 +63,83 @@ def test_freeze_audio_stack():
 
     # Text decoder should still be trainable
     assert any(p.requires_grad for p in model.text_decoder.parameters())
+
+
+# ============================================================================
+# MELTAudioEncoder.train(): stays in eval mode while frozen, opt-in
+#
+# HF's Trainer calls .train() on the WHOLE model, which recurses down through
+# MELTAudioStack into MELTAudioEncoder via nn.Module's own default .train() -- so these
+# tests call .train() on the STACK (and, once, on the full model), not on the encoder
+# directly, to exercise that same recursive path rather than assume it works.
+# ============================================================================
+
+
+class TestEvalWhenFrozen:
+    def _stack(self, eval_when_frozen=False):
+        config = _local_melt_config(eval_when_frozen=eval_when_frozen)
+        return MELTAudioStack(config, load_pretrained=False)
+
+    def test_default_false_keeps_the_historical_behaviour(self):
+        """A frozen encoder still enters train mode -- the bug this axis exists to fix."""
+        stack = self._stack(eval_when_frozen=False)
+        stack.encoder.freeze()
+
+        stack.train()
+
+        assert stack.encoder.training is True
+
+    def test_true_keeps_a_fully_frozen_encoder_in_eval(self):
+        stack = self._stack(eval_when_frozen=True)
+        stack.encoder.freeze()
+
+        stack.train()
+
+        assert stack.encoder.training is False
+        # nn.Module.train() is recursive; every submodule of the encoder followed too.
+        assert all(not m.training for m in stack.encoder.modules())
+
+    def test_true_does_nothing_to_a_trainable_encoder(self):
+        """The gate is freeze state, not the flag alone -- a trainable encoder must train."""
+        stack = self._stack(eval_when_frozen=True)
+        assert any(p.requires_grad for p in stack.encoder.parameters())  # never frozen
+
+        stack.train()
+
+        assert stack.encoder.training is True
+
+    def test_true_with_a_partially_frozen_encoder_still_trains(self):
+        """A NO gate, not a mixed one (docstring): MELT never constructs this state today,
+        but the check must not accidentally trigger on it if something ever does."""
+        stack = self._stack(eval_when_frozen=True)
+        next(stack.encoder.parameters()).requires_grad = False  # one parameter, not all
+
+        stack.train()
+
+        assert stack.encoder.training is True
+
+    def test_explicit_eval_is_unaffected_either_way(self):
+        for eval_when_frozen in (False, True):
+            for frozen in (False, True):
+                stack = self._stack(eval_when_frozen=eval_when_frozen)
+                if frozen:
+                    stack.encoder.freeze()
+
+                stack.eval()
+
+                assert stack.encoder.training is False
+
+    def test_the_flag_survives_recursion_from_the_full_model_too(self):
+        """The real call site is MELTForCausalLM.train(), not MELTAudioStack.train()."""
+        config = _local_melt_config(eval_when_frozen=True)
+        model = MELTForCausalLM(config, load_backbones=False)
+        model.audio_stack.encoder.freeze()
+
+        model.train()
+
+        assert model.audio_stack.encoder.training is False
+        # Not a global eval() call -- the rest of the model is unaffected.
+        assert model.text_decoder.training is True
 
 
 # ============================================================================
@@ -491,7 +569,7 @@ class TestAdapterOutputFeaturesShape:
 # ============================================================================
 
 
-def _local_melt_config(audio_encoder_config=None):
+def _local_melt_config(audio_encoder_config=None, **config_kwargs):
     """A MELTConfig whose sub-configs are built in-process, so no Hub access."""
     from transformers import LlamaConfig, Wav2Vec2BertConfig
 
@@ -508,6 +586,7 @@ def _local_melt_config(audio_encoder_config=None):
             num_hidden_layers=1, num_attention_heads=2, num_key_value_heads=2,
         ),
         adapter_config={"_type": "mlp"},
+        **config_kwargs,
     )
 
 

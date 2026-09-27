@@ -169,7 +169,7 @@ not where this section says, ask the PI and the answer gets added here.
   `checkout --`, stash that one file with a unique tag and **drop the stash
   once the sync lands**; the worktrees share one stash stack, so a forgotten
   entry is another session's hazard.
-- `EXP_NAME` grammar: `{STAGE}-{data}-{encoder}{F|T}-{decoder}{F|T}[-lora]-{adapter}{F|T}[-skN][-csNkN][-hz<rate>][-bdN][-gaN][-epN][-tt<template>][-lid|-nolid][-wsd][-wu<ratio>]-{elr}-{dlr}-{lr}-s{seed}-{world}g`. `hz<rate>` is the declared decoder frame rate (`frame_rate_hz`), the only tag that carries the Q-Former's.
+- `EXP_NAME` grammar: `{STAGE}-{data}-{encoder}{F|T}[-evalfrozen]-{decoder}{F|T}[-lora]-{adapter}{F|T}[-skN][-csNkN][-hz<rate>][-bdN][-gaN][-epN][-tt<template>][-lid|-nolid][-wsd][-wu<ratio>]-{elr}-{dlr}-{lr}-s{seed}-{world}g`. `hz<rate>` is the declared decoder frame rate (`frame_rate_hz`), the only tag that carries the Q-Former's. `evalfrozen` (`eval_when_frozen`) keeps a fully-frozen encoder in eval mode instead of the historical train() mode -- see `03-audio-stack.md` §3.
 - `build_campaign_config.py` renders the data axis (budget × task) from the
   Italian-anchored corpus template; run it where the data is, keep the
   `--cache` file, never train on a `--sample-shards` render.

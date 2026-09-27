@@ -93,6 +93,12 @@ model:
     # utter-project/mHuBERT-147 ship it true (time masking whenever the encoder is in
     # train mode, and a frozen one is), w2v-BERT and Whisper ship it false. Set it
     # explicitly to compare encoders.
+    eval_when_frozen: false
+    # false reproduces the historical behaviour: a frozen encoder still runs in
+    # train() mode (HF's Trainer puts the whole model there), so its layerdrop,
+    # dropout and SpecAugment fire on every training step regardless of freeze.
+    # true keeps a fully-frozen encoder (no trainable parameters at all) in eval
+    # mode instead -- see MELTAudioEncoder.train(). Opt-in pending an A/B.
 
   decoder:
     name: Qwen/Qwen2.5-0.5B

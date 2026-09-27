@@ -20,7 +20,7 @@
 #                                        rendered by build_campaign_config.py --
 #                                        never write a new one per arm)
 #   Architecture   ADAPTER, ADAPTER_FREEZE, STACK_FACTOR, FRAME_RATE_HZ, ENCODER,
-#                  ENCODER_FREEZE, MAX_AUDIO_SEQ_LEN,
+#                  ENCODER_FREEZE, EVAL_WHEN_FROZEN, MAX_AUDIO_SEQ_LEN,
 #                  DECODER, DECODER_FREEZE, DECODER_LORA     (2-8 CLI overrides;
 #                  STACK_FACTOR only affects the MLP and MoE adapters, and
 #                  FRAME_RATE_HZ derives it -- or the Conformer's stride/kernel,
@@ -97,6 +97,10 @@ STACK_FACTOR="${STACK_FACTOR:-}"
 FRAME_RATE_HZ="${FRAME_RATE_HZ:-}"
 ENCODER="${ENCODER:-}"
 ENCODER_FREEZE="${ENCODER_FREEZE:-}"
+# Empty = inherit the config's own value (every ABL-*.yaml today omits the key, i.e.
+# false, the historical behaviour: a frozen encoder still runs in train() mode). See
+# melt/modeling/modeling_melt.py's MELTAudioEncoder.train().
+EVAL_WHEN_FROZEN="${EVAL_WHEN_FROZEN:-}"
 # Empty = derive from ENCODER (a fixed-window encoder gets the window it
 # demands) and otherwise inherit from CONFIG. See plan_arm.py.
 MAX_AUDIO_SEQ_LEN="${MAX_AUDIO_SEQ_LEN:-}"
@@ -152,6 +156,7 @@ PLAN="$(python3 "${SCRIPT_DIR}/plan_arm.py" \
     --adapter "$ADAPTER" --adapter-freeze "$ADAPTER_FREEZE" \
     --stack-factor "$STACK_FACTOR" --frame-rate-hz "$FRAME_RATE_HZ" \
     --encoder "$ENCODER" --encoder-freeze "$ENCODER_FREEZE" \
+    --eval-when-frozen "$EVAL_WHEN_FROZEN" \
     --max-audio-seq-len "$MAX_AUDIO_SEQ_LEN" \
     --lr-scheduler "$LR_SCHEDULER" --warmup-ratio "$WARMUP_RATIO" \
     --decoder "$DECODER" --decoder-freeze "$DECODER_FREEZE" \

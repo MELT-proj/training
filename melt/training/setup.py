@@ -239,6 +239,9 @@ def prepare_melt_config(cfg: DictConfig, processor: MELTProcessor) -> MELTConfig
         encoder_kwargs=encoder_kwargs,
         decoder_kwargs={"attn_implementation": decoder_cfg.get("attn_implementation", "sdpa")},
         max_audio_seq_len=max_audio_seq_len,
+        # See MELTAudioEncoder.train(): opt-in, default False, so this is a no-op for
+        # every config that does not ask for it.
+        eval_when_frozen=bool(encoder_cfg.get("eval_when_frozen", False)),
     )
 
     config.audio_encoder_config.max_audio_seq_len = max_audio_seq_len

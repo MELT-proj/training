@@ -595,6 +595,14 @@ class ArmAxes:
     frame_rate_hz: str = ""
     encoder: str = ""
     encoder_freeze: str = ""
+    # eval_when_frozen: keep a fully-frozen encoder in eval mode (see
+    # melt/modeling/modeling_melt.py's MELTAudioEncoder.train() for why this matters --
+    # layerdrop, dropout and SpecAugment otherwise fire on a frozen encoder's features on
+    # every training step). "" inherits the config's own value (every ABL-*.yaml today
+    # omits the key, i.e. false, the historical behaviour). Tagged into EXP_NAME by
+    # EFFECTIVE value, like decoder_lora's `-lora` below, not only when overridden: this
+    # is one half of an A/B and the two arms must not collide on one output directory.
+    eval_when_frozen: str = ""
     # lr_scheduler: "" inherits the base config's own lr_scheduler_type.
     # Set to one of LR_SCHEDULERS to override it; warmup_stable_decay also
     # gets its lr_scheduler_kwargs composed here from the arm's own derived
@@ -804,6 +812,7 @@ def plan(args: ArmAxes) -> ArmPlan:
     # default (false) for every ABL-*.yaml config, none of which declare a
     # lora: block of their own.
     cfg_decoder_lora = bool(get(cfg, "model.lora.enabled"))
+    cfg_eval_when_frozen = bool(get(cfg, "model.encoder.eval_when_frozen"))
     cfg_encoder_lr = get(cfg, "optimization.encoder_lr", DEFAULT_ENCODER_LR)
     cfg_decoder_lr = get(cfg, "optimization.decoder_lr", DEFAULT_DECODER_LR)
     cfg_adapter_lr = get(cfg, "optimization.adapter_lr", DEFAULT_ADAPTER_LR)
@@ -821,6 +830,7 @@ def plan(args: ArmAxes) -> ArmPlan:
     encoder_freeze = as_bool(args.encoder_freeze) if args.encoder_freeze else cfg_encoder_freeze
     decoder_freeze = as_bool(args.decoder_freeze) if args.decoder_freeze else cfg_decoder_freeze
     decoder_lora = as_bool(args.decoder_lora) if args.decoder_lora else cfg_decoder_lora
+    eval_when_frozen = as_bool(args.eval_when_frozen) if args.eval_when_frozen else cfg_eval_when_frozen
     # The frame-rate route may derive a stack_factor; from here on `stack_factor_request`
     # is the one value the stack_factor logic below reads, whether a row typed it or the
     # rate derived it.
@@ -834,6 +844,18 @@ def plan(args: ArmAxes) -> ArmPlan:
         overrides += ["--model.encoder.name", encoder_effective]
     if args.encoder_freeze and encoder_freeze != cfg_encoder_freeze:
         overrides += ["--model.encoder.freeze", str(encoder_freeze).lower()]
+
+    if args.eval_when_frozen and eval_when_frozen != cfg_eval_when_frozen:
+        overrides += ["--model.encoder.eval_when_frozen", str(eval_when_frozen).lower()]
+    if eval_when_frozen and not encoder_freeze:
+        print(
+            "WARNING: EVAL_WHEN_FROZEN=true but the encoder is not frozen "
+            f"(ENCODER_FREEZE={'true' if args.encoder_freeze else '<inherited>'}). "
+            "MELTAudioEncoder.train() only forces eval mode when EVERY encoder parameter "
+            "has requires_grad False, so this is a silent no-op with a trainable encoder. "
+            "Pass ENCODER_FREEZE=true if the encoder is meant to be frozen here.",
+            file=sys.stderr,
+        )
 
     # SpecAugment: the base config has to pin it off for an encoder that ships it on. The
     # pin is identical across arms, so it lives in the base YAML (agent-protocol.md §3);
@@ -1152,7 +1174,8 @@ def plan(args: ArmAxes) -> ArmPlan:
     composed_name = "-".join([
         args.stage,
         data_tag(args.config, args.stage),
-        f"{encoder_tag(encoder_effective)}{'F' if encoder_freeze else 'T'}",
+        f"{encoder_tag(encoder_effective)}{'F' if encoder_freeze else 'T'}"
+        + ("-evalfrozen" if eval_when_frozen else ""),
         f"{decoder_tag(decoder_effective)}{'F' if decoder_freeze else 'T'}" + ("-lora" if decoder_lora else ""),
         f"{adapter_effective}{'F' if adapter_freeze else 'T'}",
         *stack_factor_tags,
@@ -1199,6 +1222,7 @@ def main() -> None:
     p.add_argument("--frame-rate-hz", required=True, help="empty string means: no rate declared. Otherwise the adapter's route to it is derived (stack_factor, or the Conformer's stride/kernel) or checked (Q-Former), and `hz<rate>` is tagged into EXP_NAME")
     p.add_argument("--encoder", required=True)
     p.add_argument("--encoder-freeze", required=True)
+    p.add_argument("--eval-when-frozen", required=True, help="empty string means: use the config's own value, no override. See MELTAudioEncoder.train()")
     p.add_argument("--lr-scheduler", required=True, help="empty string means: use the config's own lr_scheduler_type")
     p.add_argument("--warmup-ratio", required=True, help="empty string means: use the config's own warmup settings")
     p.add_argument("--max-audio-seq-len", required=True, help="empty string means: derive it from the encoder, else use the config's own value")
@@ -1227,6 +1251,7 @@ def main() -> None:
         frame_rate_hz=args.frame_rate_hz,
         encoder=args.encoder,
         encoder_freeze=args.encoder_freeze,
+        eval_when_frozen=args.eval_when_frozen,
         lr_scheduler=args.lr_scheduler,
         warmup_ratio=args.warmup_ratio,
         max_audio_seq_len=args.max_audio_seq_len,

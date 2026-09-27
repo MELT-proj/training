@@ -1086,6 +1086,34 @@ class MELTAudioEncoder(nn.Module):
 
         return self
 
+    def train(self, mode: bool = True):
+        """Stay in eval mode while frozen, if ``config.eval_when_frozen`` asks for it.
+
+        HF's ``Trainer.train()`` calls ``model.train()`` once at the start of training and
+        again after every evaluation round, which recurses down to every submodule
+        including this one -- MELT never puts a frozen encoder back into eval mode on its
+        own. So a frozen encoder's layerdrop, dropout and (wav2vec2 family) SpecAugment
+        fire on every training step regardless of freeze, while every evaluation sees
+        clean features: measured on real speech (``frozen_encoder_train_mode.py``, board
+        2026-09-26) as a relative L2 error between train- and eval-mode last hidden states
+        of 0.36 (w2v-BERT 2.0) to 0.76 (MMS-1b), with SpecAugment already pinned off.
+
+        A frozen module has no gradient to regularise, so eval is the mode that matches
+        what it is: not being trained. Opt-in (``config.eval_when_frozen``, default
+        ``False``) rather than unconditional, so this can be A/B'd against the existing
+        behaviour before it becomes the default for anything already running.
+
+        ``mode=False`` (an explicit ``.eval()`` call) is untouched either way. A partially
+        frozen encoder -- some but not all parameters trainable, which nothing in MELT
+        constructs today -- is treated as not frozen: this is a NO gate, not a mixed one.
+        """
+        force_eval = (
+            mode
+            and self.config.eval_when_frozen
+            and not any(p.requires_grad for p in self.parameters())
+        )
+        return super().train(mode=False if force_eval else mode)
+
 
 class MELTAudioStack(nn.Module):
     """Audio stack = encoder + adapter.

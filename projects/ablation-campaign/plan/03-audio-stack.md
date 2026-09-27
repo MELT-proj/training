@@ -187,6 +187,7 @@ interaction is assumed small and is stated as an assumption.
 | waveform vs feature input, and encoder compute | goes into the cost axis, not hidden |
 | Whisper's fixed 30 s input window | every utterance costs a full window of encoder compute whatever its duration (`encoder_specs.py` `window_frames: 3000`; `processing_melt.py::_extract_windowed` pads the tail waveform). The *decoder* side is unaffected — the mask keeps only real frames, so positions per audio second stay 50 Hz as for w2v-BERT. Measure the padding ratio (`30 s / mean utterance duration`) per corpus and put it in the cost axis; it is larger on Common Voice and FLEURS than on LibriSpeech, and duration-sorted batching does not recover it because the window is per utterance |
 | MoE aux-loss weight and router LR | the MoE's router barely moves at 2e-5; the crossing runs it at the recipe LR, and its aux loss is logged |
+| a frozen encoder still trains in `train()` mode: layerdrop, dropout, SpecAugment fire on every step regardless of freeze | measured (`frozen_encoder_train_mode.py`, board 2026-09-26): train-vs-eval relative L2 error 0.00 (Whisper, no layerdrop/dropout) to 0.36 (w2v-BERT) to 0.76 (MMS-1b). `EVAL_WHEN_FROZEN` (`plan_arm.py`) fixes it opt-in, pending an A/B against the historical behaviour |
 
 The running 10-epoch MoE arm at 2e-5 does not count as MoE evidence: it
 changes adapter, training length and prompt at once.
