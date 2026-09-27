@@ -58,8 +58,9 @@ Finding / proposal:
    other-PR baggage rides along -- w2v-BERT has no flash path and no spec-augment change to
    make (its own default is already `apply_spec_augment: false`), so nothing else in #144
    touches this row.
-3. **Control needs no new run**: `MA-700-screen-w2vb-lr2e3-b300` (job 46258535) is already
-   COMPLETE, score **0.7149** (`01-interface-recipe.md` §3 / board 2026-09-24) -- this is
+3. **Control needs no new run**: `MA-700-screen-w2vb-lr2e3-b300` is already
+   COMPLETE, score **0.7149** (`01-interface-recipe.md` §3 / board 2026-09-24; job id in
+   `arms.tsv`) -- this is
    also the crossing's own chosen recipe corner, so the read-out is directly "does the fix
    move the number the crossing is about to be built on." Only the treatment needs
    submitting, ~40 GPU-h (the k=5 replicate at this corner measured 10h10min at 4 ranks).
