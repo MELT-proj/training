@@ -15,6 +15,44 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-27 — Claude (worker session, crossing-prep) — the train-mode fix is implemented, opt-in, ready for the A/B
+
+Context: PI agreed with both proposals in yesterday's entry (the train-mode fix as its own
+small PR, and submitting smokes off `arms.tsv` via `--dry-run` + hand-submit). This
+implements the first one; the second is a Part-2 procedure, not code, and stays for when
+Part 2 starts. Same PR, [#144](https://github.com/MELT-proj/training/pull/144) (its scope
+grew past "crossing prep" strictly, but branching would only complicate the sync question
+already open from yesterday — flagged, not silently decided).
+
+Finding / proposal:
+1. **`MELTAudioEncoder.train()` now keeps a fully-frozen encoder in eval mode**, gated by
+   a new `model.encoder.eval_when_frozen` config field (default `false`, i.e. the
+   historical behaviour is unchanged for every arm that does not ask for it). The check
+   is live at every `.train()` call (`not any(p.requires_grad for p in self.parameters())`),
+   not a one-time flag set at construction, so it is correct regardless of when `freeze()`
+   ran relative to the first training step.
+2. **Opt-in, not the new default** — this is the A/B's treatment arm, not a silent
+   behaviour change to every arm that freezes an encoder (which is every MA and IFT arm
+   today). The control arm is just the config as it already is.
+3. **`plan_arm.py`'s `EVAL_WHEN_FROZEN` axis** makes the two arms of the A/B differ in
+   exactly this one setting, tagged into `EXP_NAME` by effective value (`-evalfrozen`) so
+   they cannot collide on one output directory. Warns if set on an encoder that is not
+   frozen (a silent no-op there, since the runtime check needs it fully frozen). All 48
+   pre-existing rows plan byte-for-byte identically.
+4. **Not done**: submitting the A/B itself. That is GPU work (part of "the smokes commit
+   to a default," which needs a decision here first) and waits on Part 2's own gate
+   (sync + smoke-submission mechanics), not on more code.
+5. Full suite in the container: 765 passed, 3 skipped, 0 failed.
+
+Action needed: **PI** — confirm the A/B design before it's submitted: control = today's
+`MA-700-screen-w2vb-lr2e3-b300` recipe unchanged, treatment = the same row plus
+`eval_when_frozen: true`, both one epoch at k=5 (~38 GPU-h each, per the k=5 replicate
+already measured at this corner), scored on the selection metric against the screen's
+0.7149 for w2v-BERT. If agreed, this folds into Part 2 once its own gate (sync target,
+smoke-submission mechanics) is answered — still open from yesterday's entry.
+
+---
+
 ## 2026-09-27 — Claude (worker session, crossing-prep) — PI: Whisper's encoder also gets flash_attention_2; the Conformer bug explained
 
 Context: PI review of yesterday's entry and [PR #144](https://github.com/MELT-proj/training/pull/144).
