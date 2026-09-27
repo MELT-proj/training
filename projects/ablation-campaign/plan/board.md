@@ -15,6 +15,44 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-27 — Claude (worker session, crossing-prep) — PI: Whisper's encoder also gets flash_attention_2; the Conformer bug explained
+
+Context: PI review of yesterday's entry and [PR #144](https://github.com/MELT-proj/training/pull/144).
+Two follow-ups, both landed in the same PR, part 1 still not merged.
+
+Finding / proposal:
+1. **PI decision: Whisper's encoder is given `flash_attention_2`.** It was left on sdpa with
+   no measurement behind it. Checked before wiring it up: `WhisperPreTrainedModel.
+   _supports_flash_attn` is `True` in the installed transformers, and `WhisperEncoder.
+   forward`'s own docstring says it "does not support masking of the input_features" — its
+   body never reads the `attention_mask` argument at all, passing `None` to every layer
+   regardless of what MELT hands it. So there is no masking edge case to check first: every
+   window is full dense attention over exactly 1500 positions, the case flash speeds up
+   cleanly. Same table as `ENCODER_WINDOW_FRAMES` (`ENCODER_ATTN_IMPLEMENTATION`,
+   `plan_arm.py`), since flash support is architectural, not per-checkpoint; a test ties the
+   two tables together so they cannot silently diverge for a future whisper-* checkpoint.
+2. **This changes eleven already-COMPLETED campaign rows' re-derived command** (every
+   `MA-700-screen-whisper-*` row and `MA-librispeech-w`): replanning any of them now adds one
+   token, `--model.encoder.attn_implementation flash_attention_2`, right after
+   `--model.encoder.name`. Confirmed by diffing the full `campaign.py plan` output before and
+   after: nothing else moves, no `EXP_NAME` changes (the backend was already deliberately
+   untagged, like MMS's). None of the eleven is pending a `--resume` today, so nothing running
+   is affected; flagging it because it is a real change to what "replanning an old row" prints,
+   not a pure addition. Also changes the crossing's own four Whisper cells the same way —
+   updated sixteen-command file sent to the PI.
+3. **Not measured**: whether Whisper's encoder is actually faster under flash on this
+   pipeline (no GPU touched this session). MMS's 1.54x number is a real measurement from a
+   prior arm; Whisper's is a structural argument, not yet a number. Worth reading off the
+   crossing's own smoke or first arm once it runs.
+4. Full suite in the container on nyx: 741 passed (+3 from yesterday's 738), 3 skipped, 0
+   failed.
+
+Action needed: none blocking — part 1 (STOP 1) is still waiting on the PI's answers from
+yesterday's entry (train-mode fix, smoke-submission method, sync timing, the three open
+choices). This entry only adds the flash decision to that list.
+
+---
+
 ## 2026-09-26 — Claude (worker session, crossing-prep) — the sixteen cells render at 10 Hz, but three could not be built and a fourth would have run at 25 Hz; frozen encoders train in train() mode; eval image v3 cannot score eight of the sixteen
 
 Context: week-3 Track B "Crossing prep", part 1 (renderable; code on nyx; no GPU; no
