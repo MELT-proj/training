@@ -15,6 +15,47 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-27 — Claude (worker session) — eval_when_frozen A/B treatment submitted (job 46703807), PR #146 still open
+
+Context: routine check of PR #145 and #146 per the standing follow-up from the two entries
+below. [PR #145](https://github.com/MELT-proj/training/pull/145) (the one campaign.yaml row
+for this A/B) merged today, 2026-09-27T21:20:52Z. [PR #146](https://github.com/MELT-proj/training/pull/146)
+(the sixteen crossing rows) is still open, untouched — nothing done on that side, per the
+"don't submit anything for the crossing until the PI decides the 7 over-cap cells" rule.
+
+Finding / proposal:
+1. Fast-forwarded this worktree's branch onto `origin/main` (`cb76cf4`, the #145 merge) —
+   clean, no PR #146 content, verified by diff before syncing.
+2. `infra/sync_repo.sh mn5` initially landed the push as a *new* branch on MN5 rather than
+   updating the checked-out one, because the local branch name
+   (`worktree-bridge-cse_...`) didn't match MN5's checked-out branch name
+   (`mn5-sync-2026-09-27`); `updateInstead` only fires for a name match. Fixed with a plain
+   `git merge --ff-only` on MN5 onto the pushed ref (no conflicts; MN5's only dirty state was
+   pre-existing untracked crossing-prep smoke scripts). MN5's checked-out branch is now at
+   `b07a899`, matching `main`.
+3. `campaign.py plan` on MN5 reproduced the exact command verified in the entry below,
+   token for token. Submitted via `campaign.py run`: **job 46703807**, 1 node x 4 GPUs,
+   `acc_ehpc`, 16h wall — confirmed running within a minute of submission.
+4. Ledger reconciliation (`infrastructure.md` §3): copied `arms.tsv` back, committed and
+   pushed the new row to `main` (`b07a899`). MN5's push then hit the documented
+   "Working directory has unstaged changes" rejection since its `arms.tsv` still had the
+   same row uncommitted; used `git stash push -u` on that one file (verified content was
+   byte-identical to what had already landed on `main`), pushed clean, confirmed MN5's
+   working tree now matches `HEAD` with no diff, then dropped the stash.
+5. **Not done this session**: scoring. The run is ~16h wall; nothing to read yet. Next
+   session (or this one, later): once job 46703807 completes, run the selection-metric eval
+   (`submit_selection_eval.sh` + `score.py`, top-level output dir, `-T task_filter=asr`,
+   `--log-format json`) and compare against the control's **0.7149**. A difference clearly
+   bigger than the ~0.035 seed-shift noise floor at this corner is evidence the fix matters;
+   smaller is not separable from noise (per the entry below). Report the result to the PI
+   either way.
+
+Action needed: next session checks `squeue -j 46703807` / the output dir for completion,
+then scores and reports. PR #146 (the crossing rows) is unchanged — still waiting on the
+PI's decision on the 7 over-cap cells; do not touch it until that lands.
+
+---
+
 ## 2026-09-27 — Claude (worker session, crossing-prep) — the A/B is finalised on w2v-BERT; Whisper was ruled out as a structural no-op; the row is rendered and verified, waiting on PR #144's merge
 
 Context: PI approved the A/B, first asked for it on Whisper ("more robust to noise after
