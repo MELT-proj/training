@@ -15,6 +15,67 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-27 — Claude (worker session, crossing-prep) — the A/B is finalised on w2v-BERT; Whisper was ruled out as a structural no-op; the row is rendered and verified, waiting on PR #144's merge
+
+Context: PI approved the A/B, first asked for it on Whisper ("more robust to noise after
+one epoch"), then confirmed w2v-BERT after a finding surfaced in between. PI is merging
+[#144](https://github.com/MELT-proj/training/pull/144) now; nothing here is submitted.
+
+Finding / proposal:
+1. **Whisper's own train-vs-eval gap measures at exactly zero, so it cannot show the fix
+   mattering.** Its config ships `encoder_layerdrop: 0.0`, `dropout: 0.0`,
+   `apply_spec_augment: False` -- confirmed both by config and by the direct measurement
+   two entries below (`frozen_encoder_train_mode.py`: cos 1.0000, relative L2 0.0000).
+   `eval_when_frozen` is a no-op for an encoder with nothing stochastic to gate. Flagged to
+   the PI rather than run a test that cannot answer the question it's meant to; **decided:
+   w2v-BERT**, the only already-screened encoder that actually has the mechanism
+   (layerdrop 0.1) to exercise, accepting its noisier regime (seed-shift 0.035 at this
+   corner) as the cost of a real test.
+2. **The row is rendered against the real `campaign.yaml` and verified clean**, on the
+   `claude/crossing-prep-plan-arm` branch (has `eval_when_frozen`; `main` does not yet):
+
+   ```yaml
+   - id: MA-700-screen-w2vb-lr2e3-b300-evalfrozen
+     stage: MA
+     config: ABL-MA-700-asr.yaml
+     stack_factor: 5
+     eval_when_frozen: true
+     lr_scheduler: warmup_stable_decay
+     warmup_ratio: 0.03
+     adapter_lr: 2e-3
+     batch_duration: 75
+     grad_accum_steps: 1
+     nodes: 1                 # 75 x 1 x 4 = 300 s
+     seed: 42
+     time: "16:00:00"         # matches the control row; same corner, no reason to expect
+                               # the flag to move wall time
+   ```
+
+   Composes to `MA-700asr-w2vbF-evalfrozen-llama1bInsF-mlpT-sk5-bd75-ga1-wsd-wu0p03-elr6e6-
+   dlr2e5-lr2e3-s42-4g`, same 42,000 steps as the control. Diffed the two rows' full
+   rendered commands token by token: the **only** difference is the name (necessarily, for
+   a separate output dir) and one added token, `--model.encoder.eval_when_frozen true`. No
+   other-PR baggage rides along -- w2v-BERT has no flash path and no spec-augment change to
+   make (its own default is already `apply_spec_augment: false`), so nothing else in #144
+   touches this row.
+3. **Control needs no new run**: `MA-700-screen-w2vb-lr2e3-b300` (job 46258535) is already
+   COMPLETE, score **0.7149** (`01-interface-recipe.md` §3 / board 2026-09-24) -- this is
+   also the crossing's own chosen recipe corner, so the read-out is directly "does the fix
+   move the number the crossing is about to be built on." Only the treatment needs
+   submitting, ~40 GPU-h (the k=5 replicate at this corner measured 10h10min at 4 ranks).
+4. **Read-out plan**: score the treatment on the selection metric
+   (`submit_selection_eval.sh`, then `score.py`) and compare directly to 0.7149. w2v-BERT's
+   only measured seed-shift in this regime is 0.035 (at the neighbouring `lr1e3-b300`
+   corner, not this exact one, so treat it as approximate); a difference clearly bigger
+   than that is evidence the fix matters, smaller is not separable from noise.
+
+Action needed: **none until #144 merges.** Once it does: add this row to `campaign.yaml`
+(small PR, since campaign.yaml changes go through review per its own header), sync to MN5,
+submit via `campaign.py run` (a normal one-epoch arm, not a step-capped smoke, so no
+`arms.tsv` workaround needed for this one), then eval and score.
+
+---
+
 ## 2026-09-27 — Claude (worker session, crossing-prep) — the train-mode fix is implemented, opt-in, ready for the A/B
 
 Context: PI agreed with both proposals in yesterday's entry (the train-mode fix as its own
