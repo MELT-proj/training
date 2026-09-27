@@ -50,7 +50,7 @@ AXIS_FIELDS = {
     "eval_when_frozen", "max_audio_seq_len", "lr_scheduler", "warmup_ratio",
     "decoder", "decoder_freeze", "decoder_lora",
     "encoder_lr", "decoder_lr", "adapter_lr",
-    "batch_duration", "grad_accum_steps", "gradient_checkpointing",
+    "batch_duration", "grad_accum_steps", "gradient_checkpointing", "ddp_find_unused_parameters",
     "epochs", "template_task_override", "template_selection",
 }
 POLICY_FIELDS = {

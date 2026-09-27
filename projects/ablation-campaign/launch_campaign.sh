@@ -33,6 +33,11 @@
 #                                        independent -- trades recompute for
 #                                        activation memory, DDP's only route to
 #                                        it since FSDP2 gets it from accelerate)
+#   DDP mechanics  DDP_FIND_UNUSED_PARAMETERS                  (0-1 CLI override,
+#                                        independent, not a scientific axis --
+#                                        the MoE adapter's router can leave an
+#                                        expert unused in a small batch, which
+#                                        DDP's default rejects; see ArmAxes)
 #   Duration       EPOCHS                                       (0-1 CLI override,
 #                                        trainer.num_train_epochs -- see the
 #                                        "One epoch" note below)
@@ -117,6 +122,7 @@ ADAPTER_LR="${ADAPTER_LR:-}"
 BATCH_DURATION="${BATCH_DURATION:-}"
 GRAD_ACCUM_STEPS="${GRAD_ACCUM_STEPS:-}"
 GRADIENT_CHECKPOINTING="${GRADIENT_CHECKPOINTING:-}"
+DDP_FIND_UNUSED_PARAMETERS="${DDP_FIND_UNUSED_PARAMETERS:-}"
 EPOCHS="${EPOCHS:-}"
 TEMPLATE_TASK_OVERRIDE="${TEMPLATE_TASK_OVERRIDE:-}"
 TEMPLATE_SELECTION="${TEMPLATE_SELECTION:-}"
@@ -164,6 +170,7 @@ PLAN="$(python3 "${SCRIPT_DIR}/plan_arm.py" \
     --encoder-lr "$ENCODER_LR" --decoder-lr "$DECODER_LR" --adapter-lr "$ADAPTER_LR" \
     --batch-duration "$BATCH_DURATION" --grad-accum-steps "$GRAD_ACCUM_STEPS" \
     --gradient-checkpointing "$GRADIENT_CHECKPOINTING" \
+    --ddp-find-unused-parameters "$DDP_FIND_UNUSED_PARAMETERS" \
     --epochs "$EPOCHS" --template-task-override "$TEMPLATE_TASK_OVERRIDE" \
     --template-selection "$TEMPLATE_SELECTION" \
     --seed "$SEED")" || { echo "ERROR: plan_arm.py failed (see above)" >&2; exit 1; }

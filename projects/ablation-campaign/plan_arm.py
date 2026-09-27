@@ -664,6 +664,20 @@ class ArmAxes:
     # fsdp_activation_checkpointing instead) -- see melt/modeling/modeling_melt.py's
     # commit enabling supports_gradient_checkpointing for why this exists.
     gradient_checkpointing: str = ""
+    # ddp_find_unused_parameters: independent boolean, same character as
+    # gradient_checkpointing above -- a DDP mechanical concern, not a
+    # scientific one, so it is not tagged into EXP_NAME either. Needed for
+    # the MoE adapter specifically: its top-k router can leave an expert
+    # with zero tokens routed to it in a given micro-batch (small
+    # train_cuts_per_batch make this common, not an edge case), and DDP's
+    # default expects every parameter passed to it to receive a gradient on
+    # every step -- see torch's own "Expected to have finished reduction"
+    # RuntimeError, reproduced on real GPU 2026-09-27 (board.md) at step 1 of
+    # the crossing-prep MoE smoke, both times eval_on_start had already run
+    # clean. The other three adapters route every parameter every step, so
+    # they neither need nor should pay this flag's traversal overhead --
+    # it stays per-arm, never moved into config/accelerate/ddp.yaml itself.
+    ddp_find_unused_parameters: str = ""
     # epochs: independent override of trainer.num_train_epochs, same
     # inherit-or-override rule as every axis above ("" = inherit the base
     # config's own value -- every ABL-*.yaml currently declares 1, the
@@ -1039,6 +1053,13 @@ def plan(args: ArmAxes) -> ArmPlan:
     if args.gradient_checkpointing and gradient_checkpointing_effective != cfg_gradient_checkpointing:
         overrides += ["--trainer.gradient_checkpointing", str(gradient_checkpointing_effective).lower()]
 
+    cfg_ddp_find_unused = bool(get(cfg, "trainer.ddp_find_unused_parameters"))
+    ddp_find_unused_effective = (
+        as_bool(args.ddp_find_unused_parameters) if args.ddp_find_unused_parameters else cfg_ddp_find_unused
+    )
+    if args.ddp_find_unused_parameters and ddp_find_unused_effective != cfg_ddp_find_unused:
+        overrides += ["--trainer.ddp_find_unused_parameters", str(ddp_find_unused_effective).lower()]
+
     # trainer.num_train_epochs is ALWAYS emitted (unlike the "only when it
     # differs" rule above) because launch_campaign.sh and campaign.py used to
     # hardcode it to 1 unconditionally -- emitting it here unconditionally,
@@ -1235,6 +1256,7 @@ def main() -> None:
     p.add_argument("--batch-duration", required=True, help="empty string means: use the config's own value, no override")
     p.add_argument("--grad-accum-steps", required=True, help="empty string means: use the config's own value, no override")
     p.add_argument("--gradient-checkpointing", required=True, help="empty string means: use the config's own value, no override")
+    p.add_argument("--ddp-find-unused-parameters", required=True, help="empty string means: use the config's own value, no override. Needed for the MoE adapter under DDP -- see ArmAxes.ddp_find_unused_parameters")
     p.add_argument("--epochs", required=True, help="empty string means: use the config's own value, no override")
     p.add_argument("--template-task-override", required=True, help="empty string means: use the config's own prompt_template_selection/prompt_template, no override")
     p.add_argument("--template-selection", required=True, help="empty string means: random over the whole bucket; else random, with_language or without_language (needs --template-task-override)")
@@ -1264,6 +1286,7 @@ def main() -> None:
         batch_duration=args.batch_duration,
         grad_accum_steps=args.grad_accum_steps,
         gradient_checkpointing=args.gradient_checkpointing,
+        ddp_find_unused_parameters=args.ddp_find_unused_parameters,
         epochs=args.epochs,
         template_task_override=args.template_task_override,
         template_selection=args.template_selection,
