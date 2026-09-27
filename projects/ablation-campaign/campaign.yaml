@@ -821,3 +821,24 @@ arms:
     grad_accum_steps: 1
     seed: 43
     time: "14:00:00"
+
+  # --- eval_when_frozen A/B (03-audio-stack.md; PI 2026-09-27) --------------
+  #
+  # Does keeping a fully-frozen encoder in eval() mode during training change
+  # anything? Same settings as MA-700-screen-w2vb-lr2e3-b300 (already run),
+  # plus the flag. w2v-BERT only: Whisper ships zero dropout/layerdrop/
+  # SpecAugment, so the flag would be a no-op there by construction.
+
+  - id: MA-700-screen-w2vb-lr2e3-b300-evalfrozen
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    eval_when_frozen: true
+    seed: 42
+    time: "16:00:00"
