@@ -298,8 +298,12 @@ derives or checks them from the encoder name (tables at the top of the file):
   Whisper false, and a frozen encoder still time-masks in train mode. The base YAML pins
   it off (`model.encoder.apply_spec_augment: false`, read by `prepare_melt_config`);
   `plan_arm.py` refuses to render an MMS or mHuBERT arm against a config that does not.
-- **Attention backend.** MMS is given `flash_attention_2` (its steps take 1.54x as long
-  under sdpa, `plan/infrastructure.md` §4); the other encoders keep the config's own.
+- **Attention backend.** MMS and Whisper are given `flash_attention_2`; w2v-BERT (relative-
+  position bias, no flash path at all) and mHuBERT-147 (95M, not expensive enough to
+  matter) keep the config's own sdpa. MMS's gain is measured (its steps take 1.54x as long
+  under sdpa, `plan/infrastructure.md` §4); Whisper's is not, but its `forward()` never
+  reads the attention mask at all (full dense attention over a fixed 1500 positions every
+  window), so there is no masking complication to check first.
 - **Encoder tag.** `w2vb`, `whisperlarge`, `mms1b`, `mhubert147` (`ENCODER_TAGS`).
 
 ### Encoder/decoder LR fallback when a config omits the key

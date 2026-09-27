@@ -71,7 +71,7 @@ asserted rather than shown.
 |---|---|---|---|---|
 | `facebook/w2v-bert-2.0` | 580M | precomputed features | 50 Hz | the baseline; no flash attention (relative-position bias) |
 | `facebook/mms-1b` | 962M | raw waveform | 50 Hz | flash-eligible; matches w2v-BERT step time with flash, 1.54× slower with sdpa; ships `apply_spec_augment: true`, which must be set to match the others |
-| Whisper-large-v3 encoder | ~635M | log-Mel | 50 Hz after conv | supervised ASR pretraining, the odd one out |
+| Whisper-large-v3 encoder | ~635M | log-Mel | 50 Hz after conv | supervised ASR pretraining, the odd one out; flash-eligible and now given flash_attention_2 (PI, 2026-09-27) -- its own `forward()` never reads the attention mask at all, so there is no masking complication, only a fixed 1500-position dense attention every window |
 | mHuBERT-147 | 95M | raw waveform | 50 Hz | the small one; 147 languages |
 
 | adapter | params (w2v-BERT → 2048-wide decoder) | output rate | state |

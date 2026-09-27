@@ -147,34 +147,55 @@ def test_the_pin_never_reaches_the_command_line():
 # ---------------------------------------------------------------------------
 
 
+GIVEN_FLASH = (MMS, WHISPER)
+
+
 def test_mms_is_given_flash_attention():
-    """1.54x slower under sdpa: at the crossing's length that is 72 h+ per arm."""
+    """1.54x slower under sdpa (measured): at the crossing's length that is 72 h+ per arm."""
     plan = plan_arm.plan(_axes(encoder=MMS))
 
     assert _value(plan, "--model.encoder.attn_implementation") == "flash_attention_2"
 
 
-@pytest.mark.parametrize("encoder", [W2VB, WHISPER, MHUBERT])
+def test_whisper_is_given_flash_attention():
+    """Flash-eligible and never checked before (PI, 2026-09-27): its own forward() never
+    reads the attention mask at all, so there is no masking complication to trip over."""
+    plan = plan_arm.plan(_axes(encoder=WHISPER))
+
+    assert _value(plan, "--model.encoder.attn_implementation") == "flash_attention_2"
+
+
+@pytest.mark.parametrize("encoder", [W2VB, MHUBERT])
 def test_the_other_encoders_keep_the_configs_own_backend(encoder):
+    """w2v-BERT has no flash path (relative-position bias); mHuBERT-147 (95M) is not
+    expensive enough to matter."""
     plan = plan_arm.plan(_axes(encoder=encoder))
 
     assert "--model.encoder.attn_implementation" not in plan.overrides
 
 
-def test_a_config_that_already_says_flash_emits_nothing(tmp_path):
+@pytest.mark.parametrize("encoder", GIVEN_FLASH)
+def test_a_config_that_already_says_flash_emits_nothing(encoder, tmp_path):
     with open(CONFIG) as fh:
         cfg = yaml.safe_load(fh)
     cfg["model"]["encoder"]["attn_implementation"] = "flash_attention_2"
     path = tmp_path / "ABL-MA-700-asr.yaml"
     path.write_text(yaml.safe_dump(cfg))
 
-    plan = plan_arm.plan(_axes(config=str(path), encoder=MMS))
+    plan = plan_arm.plan(_axes(config=str(path), encoder=encoder))
 
     assert "--model.encoder.attn_implementation" not in plan.overrides
 
 
-def test_the_backend_is_not_tagged_into_the_name():
+@pytest.mark.parametrize("encoder", GIVEN_FLASH)
+def test_the_backend_is_not_tagged_into_the_name(encoder):
     """A property of the encoder, already in its tag, like the window."""
-    plan = plan_arm.plan(_axes(encoder=MMS))
+    plan = plan_arm.plan(_axes(encoder=encoder))
 
     assert "flash" not in plan.exp_name
+
+
+def test_every_whisper_family_member_in_the_window_table_also_gets_flash():
+    """Flash support is architectural (WhisperPreTrainedModel), not per-checkpoint, so the
+    two tables should not silently diverge for a whisper-family encoder."""
+    assert set(plan_arm.ENCODER_WINDOW_FRAMES) <= set(plan_arm.ENCODER_ATTN_IMPLEMENTATION)

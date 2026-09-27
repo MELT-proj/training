@@ -307,11 +307,25 @@ WAVEFORM_SAMPLES_PER_FRAME = 320
 ENCODERS_SHIPPING_SPEC_AUGMENT = frozenset({"facebook/mms-1b", "utter-project/mHuBERT-147"})
 
 # Encoder attention backend, where the choice moves throughput. facebook/mms-1b steps
-# 1.54x slower under sdpa than under flash_attention_2 (infrastructure.md §4), which at
-# the crossing's ~52 h per arm is the difference between fitting acc_ehpc's 72 h wall
-# and not. w2v-BERT has no flash path at all, and neither Whisper nor mHuBERT-147 is
-# expensive enough to matter, so they keep the config's own sdpa.
-ENCODER_ATTN_IMPLEMENTATION: dict[str, str] = {"facebook/mms-1b": "flash_attention_2"}
+# 1.54x slower under sdpa than under flash_attention_2 (infrastructure.md §4). Whisper
+# (`_supports_flash_attn = True` in the installed transformers, verified directly) was
+# left on sdpa with no measurement behind it -- corrected 2026-09-27, PI. Its encoder is
+# flash-friendly by construction: WhisperEncoder.forward's own docstring says it "does
+# not support masking of the input_features", and its body never references the
+# attention_mask parameter at all (passes None to every layer regardless of what MELT
+# hands it) -- full dense attention over exactly 1500 positions every time, the case
+# flash_attention_2 speeds up with no masking complication. w2v-BERT has no flash path at
+# all (relative-position bias inside self-attention), and mHuBERT-147 (95M) is not
+# expensive enough to matter, so those two keep the config's own sdpa. Same family as
+# ENCODER_WINDOW_FRAMES, for the same reason: flash support is architectural
+# (WhisperPreTrainedModel), not per-checkpoint.
+ENCODER_ATTN_IMPLEMENTATION: dict[str, str] = {
+    "facebook/mms-1b": "flash_attention_2",
+    "openai/whisper-large-v3": "flash_attention_2",
+    "openai/whisper-large-v3-turbo": "flash_attention_2",
+    "openai/whisper-medium": "flash_attention_2",
+    "openai/whisper-small": "flash_attention_2",
+}
 
 # The rate every crossing encoder hands its adapter (03-audio-stack.md §1): w2v-BERT's
 # 20 ms frames, Whisper's 1500 positions per 30 s window, and the wav2vec2 conv
