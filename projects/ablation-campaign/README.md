@@ -13,7 +13,7 @@ The campaign varies three things. Each lives in exactly one place:
 | axis | varies how | belongs in |
 |---|---|---|
 | **Data**: mixture, hours, task | a rendered config, ~550 lines | one YAML per budget x task: `ABL-MA-700-asr.yaml`, `ABL-IFT-700.yaml` |
-| **Architecture**: adapter, encoder, decoder, freezing, decoder LoRA, MLP stack factor | 0-9 CLI overrides | `ADAPTER`, `ADAPTER_FREEZE`, `STACK_FACTOR`, `ENCODER`, `ENCODER_FREEZE`, `DECODER`, `DECODER_FREEZE`, `DECODER_LORA` env vars |
+| **Architecture**: adapter, encoder, decoder, freezing, decoder LoRA, MLP/MoE stack factor, decoder frame rate | 0-10 CLI overrides | `ADAPTER`, `ADAPTER_FREEZE`, `STACK_FACTOR`, `FRAME_RATE_HZ`, `ENCODER`, `ENCODER_FREEZE`, `EVAL_WHEN_FROZEN`, `DECODER`, `DECODER_FREEZE`, `DECODER_LORA` env vars |
 | **Optimisation**: encoder/decoder/adapter LR | 0-3 CLI overrides | `ENCODER_LR`, `DECODER_LR`, `ADAPTER_LR` env vars |
 | **Batch/accum** (exception, not a fourth axis): `batch_duration`, `gradient_accumulation_steps` | 0-2 CLI overrides, always paired | `BATCH_DURATION`, `GRAD_ACCUM_STEPS` env vars -- see "Two rules" below for why this pair, and only this pair, is allowed to leave the base YAML |
 | **Memory/perf** (also not a fourth axis): `trainer.gradient_checkpointing` | 0-1 CLI override, independent | `GRADIENT_CHECKPOINTING` env var -- trades recompute for activation memory without changing what a step trains on, so (unlike batch/accum) it needs no compensating override and is not tagged into `EXP_NAME` |
@@ -227,7 +227,7 @@ dies on a `world_size` mismatch.
 `EXP_NAME` is composed, never typed by hand, from:
 
 ```
-{STAGE}-{data tag}-{encoder}{F|T}-{decoder}{F|T}[-lora]-{adapter}{F|T}[-skN][-bdN][-gaN][-epN][-tt<value>]-{elr tag}-{dlr tag}-{lr tag}-s{seed}-{world_size}g
+{STAGE}-{data tag}-{encoder}{F|T}[-evalfrozen]-{decoder}{F|T}[-lora]-{adapter}{F|T}[-skN][-csNkN][-hz<rate>][-bdN][-gaN][-epN][-tt<value>]-{elr tag}-{dlr tag}-{lr tag}-s{seed}-{world_size}g
 ```
 
 e.g. `MA-125asr-w2vbF-llama1bInsF-mlpT-elr6e6-dlr2e5-lr2e4-s42-8g`, or with
@@ -257,11 +257,76 @@ this."
 
 `STACK_FACTOR` (`--model.adapter.stack_factor`, default 1) is architecture-scoped
 like `ADAPTER`/`ADAPTER_FREEZE` above it in the axes table, not paired like
-`BATCH_DURATION`/`GRAD_ACCUM_STEPS` -- it only affects the MLP adapter
-(`melt/modeling/modeling_melt.py`'s `MELTMLPAdapter`), concatenating that many
-consecutive encoder frames along the feature axis before `fc1` and lowering
-the adapter's output frame rate by the same factor; the other adapter types
-ignore it. See `plan/01-interface-recipe.md` §4 for what it has to do and why.
+`BATCH_DURATION`/`GRAD_ACCUM_STEPS` -- it affects the MLP and MoE adapters
+(`melt/modeling/modeling_melt.py`'s `MELTMLPAdapter`, `MELTMoEAdapter`),
+concatenating that many consecutive encoder frames along the feature axis before
+the first projection (the MoE's router) and lowering the adapter's output frame
+rate by the same factor. The Conformer and Q-Former never read it, so `plan_arm.py`
+refuses it there rather than tag an arm with a rate it does not have. See
+`plan/01-interface-recipe.md` §4 for what it has to do and why.
+
+### One decoder frame rate for every adapter (`FRAME_RATE_HZ`)
+
+Each adapter reaches a decoder frame rate by a different route, and a row that had to
+remember its own adapter's knobs is the kind of per-row note this campaign keeps
+losing arms to. So a row states the **rate** (`frame_rate_hz: 10`) and `plan_arm.py`
+derives the route from it:
+
+| adapter | route to the rate | tags |
+|---|---|---|
+| `mlp`, `moe` | `stack_factor = 50 / rate` | `skN`, `hz<rate>` |
+| `conformer` | `adapter_stride = adapter_kernel_size = 50 / rate`, one layer | `csNkN`, `hz<rate>` |
+| `qformer` | none: `window_size` / `downsample_rate` queries per window is its rate, so the rate is *checked* and a mismatch refused | `hz<rate>` |
+
+50 Hz is what every encoder of the crossing hands its adapter. An explicit
+`stack_factor` that disagrees with the derived one is refused, and so is a multi-layer
+Conformer (its strides would multiply). The `hz<rate>` tag is what makes the rate
+readable off the name for every adapter; the Q-Former's is in no other tag.
+
+### Encoder-derived settings
+
+Some settings differ by encoder and are not the operator's to remember, so `plan_arm.py`
+derives or checks them from the encoder name (tables at the top of the file):
+
+- **`max_audio_seq_len`.** A raw-waveform encoder (`facebook/mms-1b`,
+  `utter-project/mHuBERT-147`) counts SAMPLES, not frames; the base config's 1500 is
+  30 s of w2v-BERT frames and would slice every cut into 94 ms pieces. It is derived as
+  the same 30 s window (480000 samples) so all four encoders see one attention span;
+  Whisper's fixed 3000 frames is derived as before. An explicit value that contradicts
+  the derived one is refused.
+- **SpecAugment.** MMS and mHuBERT-147 ship `apply_spec_augment: true`, w2v-BERT and
+  Whisper false, and a frozen encoder still time-masks in train mode. The base YAML pins
+  it off (`model.encoder.apply_spec_augment: false`, read by `prepare_melt_config`);
+  `plan_arm.py` refuses to render an MMS or mHuBERT arm against a config that does not.
+- **Attention backend.** MMS and Whisper are given `flash_attention_2`; w2v-BERT (relative-
+  position bias, no flash path at all) and mHuBERT-147 (95M, not expensive enough to
+  matter) keep the config's own sdpa. MMS's gain is measured (its steps take 1.54x as long
+  under sdpa, `plan/infrastructure.md` §4); Whisper's is not, but its `forward()` never
+  reads the attention mask at all (full dense attention over a fixed 1500 positions every
+  window), so there is no masking complication to check first.
+- **Encoder tag.** `w2vb`, `whisperlarge`, `mms1b`, `mhubert147` (`ENCODER_TAGS`).
+
+### A frozen encoder still trains in `train()` mode (`EVAL_WHEN_FROZEN`)
+
+HF's `Trainer` calls `model.train()` once at the start of training and again after every
+evaluation round, which recurses down into every submodule -- including a frozen encoder,
+which MELT never puts back into eval mode on its own. So its layerdrop, dropout and (wav2vec2
+family) SpecAugment fire on every training step regardless of freeze, while every evaluation
+sees clean features. Measured on real speech (`frozen_encoder_train_mode.py`, board
+2026-09-26) as the relative L2 error between an encoder's train- and eval-mode last hidden
+state, SpecAugment already pinned off: 0.36 (w2v-BERT 2.0) to 0.76 (MMS-1b); Whisper (no
+layerdrop, no dropout) is 0.00.
+
+`EVAL_WHEN_FROZEN` (`model.encoder.eval_when_frozen`, default `false`, `MELTAudioEncoder.
+train()`) keeps a *fully* frozen encoder (every parameter's `requires_grad` `False`) in eval
+mode instead. It is opt-in rather than the new default, so it can be A/B'd against the
+historical behaviour before it changes anything already running. A partially frozen encoder
+-- some but not all parameters trainable, which nothing in MELT constructs today -- is
+treated as not frozen, a no gate rather than a mixed one. Tagged into `EXP_NAME` by
+*effective* value (`-evalfrozen`, right after the encoder segment, the same slot
+`DECODER_LORA`'s `-lora` uses on the decoder segment) rather than only when overridden: the
+two arms of an A/B must not collide on one output directory. A `false` request that matches
+the config's own default is still not an override, same rule as every other axis.
 
 ### Encoder/decoder LR fallback when a config omits the key
 

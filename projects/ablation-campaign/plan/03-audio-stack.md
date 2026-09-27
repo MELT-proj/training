@@ -71,15 +71,28 @@ asserted rather than shown.
 |---|---|---|---|---|
 | `facebook/w2v-bert-2.0` | 580M | precomputed features | 50 Hz | the baseline; no flash attention (relative-position bias) |
 | `facebook/mms-1b` | 962M | raw waveform | 50 Hz | flash-eligible; matches w2v-BERT step time with flash, 1.54× slower with sdpa; ships `apply_spec_augment: true`, which must be set to match the others |
-| Whisper-large-v3 encoder | ~635M | log-Mel | 50 Hz after conv | supervised ASR pretraining, the odd one out |
+| Whisper-large-v3 encoder | ~635M | log-Mel | 50 Hz after conv | supervised ASR pretraining, the odd one out; flash-eligible and now given flash_attention_2 (PI, 2026-09-27) -- its own `forward()` never reads the attention mask at all, so there is no masking complication, only a fixed 1500-position dense attention every window |
 | mHuBERT-147 | 95M | raw waveform | 50 Hz | the small one; 147 languages |
 
 | adapter | params (w2v-BERT → 2048-wide decoder) | output rate | state |
 |---|---|---|---|
 | MLP (2-layer, GELU, LayerNorm × gain) | 6.30M | 50 Hz, or 50/k with `stack_factor` k | baseline |
-| Conformer, 1 layer | 27.28M | 25 Hz (stride 2) | ready |
+| Conformer, 1 layer | 27.28M at stride 2 / kernel 3; 35.67M at the crossing's stride 5 / kernel 5 (measured) | 25 Hz (stride 2); 10 Hz at stride 5 / kernel 5 | ready; builds on every encoder |
 | MoE, 8 SwiGLU experts, top-2, load-balancing aux loss | 33.57M total, 8.39M active | 50 Hz, or 50/k with `stack_factor` k | ready |
-| Q-Former, window 15, 3 queries | not instantiable today | 10 Hz by design | broken; PI fixes in week 4 |
+| Q-Former, window 15, 3 queries | 35.70M (measured) | 10 Hz native; ignores `stack_factor` | ready (PR #138) |
+
+Adapter parameters at the crossing's 10 Hz, into a 2048-wide decoder (measured on
+CPU from the real adapter classes and the four encoders' own configs, 2026-09-26). The
+Conformer's layer is w2v-BERT 2.0's own adapter recipe at the encoder's width (64-wide
+heads, 4x feed-forward); w2v-BERT's is unchanged, the other three had no Conformer
+before.
+
+| adapter at 10 Hz | w2v-BERT (1024 wide) | Whisper, MMS (1280) | mHuBERT (768) |
+|---|---|---|---|
+| MLP, `stack_factor` 5 | 14.69M | 17.31M | 12.07M |
+| Conformer, stride 5 / kernel 5 | 35.67M | 55.08M | 20.46M |
+| MoE, `stack_factor` 5 (total) | 100.71M | 121.69M | 79.73M |
+| Q-Former, window 15 | 35.70M | 36.75M | 34.65M |
 
 ## 1b. The budget problem the five-language screen just exposed (2026-09-23)
 
@@ -174,6 +187,7 @@ interaction is assumed small and is stated as an assumption.
 | waveform vs feature input, and encoder compute | goes into the cost axis, not hidden |
 | Whisper's fixed 30 s input window | every utterance costs a full window of encoder compute whatever its duration (`encoder_specs.py` `window_frames: 3000`; `processing_melt.py::_extract_windowed` pads the tail waveform). The *decoder* side is unaffected — the mask keeps only real frames, so positions per audio second stay 50 Hz as for w2v-BERT. Measure the padding ratio (`30 s / mean utterance duration`) per corpus and put it in the cost axis; it is larger on Common Voice and FLEURS than on LibriSpeech, and duration-sorted batching does not recover it because the window is per utterance |
 | MoE aux-loss weight and router LR | the MoE's router barely moves at 2e-5; the crossing runs it at the recipe LR, and its aux loss is logged |
+| a frozen encoder still trains in `train()` mode: layerdrop, dropout, SpecAugment fire on every step regardless of freeze | measured (`frozen_encoder_train_mode.py`, board 2026-09-26): train-vs-eval relative L2 error 0.00 (Whisper, no layerdrop/dropout) to 0.36 (w2v-BERT) to 0.76 (MMS-1b). `EVAL_WHEN_FROZEN` (`plan_arm.py`) fixes it opt-in, pending an A/B against the historical behaviour |
 
 The running 10-epoch MoE arm at 2e-5 does not count as MoE evidence: it
 changes adapter, training length and prompt at once.

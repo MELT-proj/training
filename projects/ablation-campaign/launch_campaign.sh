@@ -19,12 +19,13 @@
 #   Data           CONFIG               one YAML per budget x task (~550 lines,
 #                                        rendered by build_campaign_config.py --
 #                                        never write a new one per arm)
-#   Architecture   ADAPTER, ADAPTER_FREEZE, STACK_FACTOR, ENCODER, ENCODER_FREEZE,
-#                  MAX_AUDIO_SEQ_LEN,
+#   Architecture   ADAPTER, ADAPTER_FREEZE, STACK_FACTOR, FRAME_RATE_HZ, ENCODER,
+#                  ENCODER_FREEZE, EVAL_WHEN_FROZEN, MAX_AUDIO_SEQ_LEN,
 #                  DECODER, DECODER_FREEZE, DECODER_LORA     (2-8 CLI overrides;
-#                  STACK_FACTOR only affects the MLP adapter -- see
-#                  plan_arm.py's ArmAxes and melt/modeling/modeling_melt.py's
-#                  MELTMLPAdapter)
+#                  STACK_FACTOR only affects the MLP and MoE adapters, and
+#                  FRAME_RATE_HZ derives it -- or the Conformer's stride/kernel,
+#                  or checks the Q-Former's window -- from one declared rate; see
+#                  plan_arm.py's ArmAxes)
 #   Optimisation   ENCODER_LR, DECODER_LR, ADAPTER_LR         (0-3 CLI overrides)
 #   Batch/accum    BATCH_DURATION, GRAD_ACCUM_STEPS            (0-2 CLI overrides,
 #                                        coupled -- see plan_arm.py's ArmAxes)
@@ -91,8 +92,15 @@ ACCELERATE_CONFIG="${ACCELERATE_CONFIG:-config/accelerate/ddp.yaml}"
 ADAPTER="${ADAPTER:-}"
 ADAPTER_FREEZE="${ADAPTER_FREEZE:-}"
 STACK_FACTOR="${STACK_FACTOR:-}"
+# Empty = no decoder frame rate declared. Otherwise plan_arm.py derives the adapter's
+# route to it (stack_factor, or the Conformer's stride and kernel) and tags `hz<rate>`.
+FRAME_RATE_HZ="${FRAME_RATE_HZ:-}"
 ENCODER="${ENCODER:-}"
 ENCODER_FREEZE="${ENCODER_FREEZE:-}"
+# Empty = inherit the config's own value (every ABL-*.yaml today omits the key, i.e.
+# false, the historical behaviour: a frozen encoder still runs in train() mode). See
+# melt/modeling/modeling_melt.py's MELTAudioEncoder.train().
+EVAL_WHEN_FROZEN="${EVAL_WHEN_FROZEN:-}"
 # Empty = derive from ENCODER (a fixed-window encoder gets the window it
 # demands) and otherwise inherit from CONFIG. See plan_arm.py.
 MAX_AUDIO_SEQ_LEN="${MAX_AUDIO_SEQ_LEN:-}"
@@ -146,8 +154,9 @@ PLAN="$(python3 "${SCRIPT_DIR}/plan_arm.py" \
     --stage "$STAGE" \
     --world-size "$WORLD_SIZE" \
     --adapter "$ADAPTER" --adapter-freeze "$ADAPTER_FREEZE" \
-    --stack-factor "$STACK_FACTOR" \
+    --stack-factor "$STACK_FACTOR" --frame-rate-hz "$FRAME_RATE_HZ" \
     --encoder "$ENCODER" --encoder-freeze "$ENCODER_FREEZE" \
+    --eval-when-frozen "$EVAL_WHEN_FROZEN" \
     --max-audio-seq-len "$MAX_AUDIO_SEQ_LEN" \
     --lr-scheduler "$LR_SCHEDULER" --warmup-ratio "$WARMUP_RATIO" \
     --decoder "$DECODER" --decoder-freeze "$DECODER_FREEZE" \

@@ -223,13 +223,25 @@ def prepare_melt_config(cfg: DictConfig, processor: MELTProcessor) -> MELTConfig
 
     max_audio_seq_len = encoder_cfg.get("max_audio_seq_len", 1500)
 
+    encoder_kwargs = {"attn_implementation": encoder_cfg.get("attn_implementation", "sdpa")}
+    # SpecAugment time masking is applied by the wav2vec2 family whenever the encoder is
+    # in train mode, and a frozen encoder still is. Checkpoints disagree on the default
+    # (facebook/mms-1b and mHuBERT-147 ship it on; w2v-BERT and Whisper ship it off), so a
+    # comparison across encoders has to pin it. Unset (null) keeps the checkpoint's own.
+    apply_spec_augment = encoder_cfg.get("apply_spec_augment")
+    if apply_spec_augment is not None:
+        encoder_kwargs["apply_spec_augment"] = bool(apply_spec_augment)
+
     config = MELTConfig(
         audio_encoder=encoder_cfg.name,
         text_decoder=decoder_cfg.name,
         adapter_config=adapter_cfg,
-        encoder_kwargs={"attn_implementation": encoder_cfg.get("attn_implementation", "sdpa")},
+        encoder_kwargs=encoder_kwargs,
         decoder_kwargs={"attn_implementation": decoder_cfg.get("attn_implementation", "sdpa")},
         max_audio_seq_len=max_audio_seq_len,
+        # See MELTAudioEncoder.train(): opt-in, default False, so this is a no-op for
+        # every config that does not ask for it.
+        eval_when_frozen=bool(encoder_cfg.get("eval_when_frozen", False)),
     )
 
     config.audio_encoder_config.max_audio_seq_len = max_audio_seq_len

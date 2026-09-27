@@ -15,6 +15,7 @@ from transformers.modeling_utils import PreTrainedModel
 from transformers.models.auto.modeling_auto import MODEL_MAPPING
 from transformers.models.blip_2.configuration_blip_2 import Blip2QFormerConfig
 from transformers.models.blip_2.modeling_blip_2 import Blip2QFormerModel
+from transformers.models.wav2vec2_bert.configuration_wav2vec2_bert import Wav2Vec2BertConfig
 from transformers.models.wav2vec2_bert.modeling_wav2vec2_bert import (
     Wav2Vec2BertAdapterLayer,
 )
@@ -546,6 +547,41 @@ class MELTQFormerAdapter(nn.Module):
         )
 
 
+def _conformer_layer_config(width: int, kernel_size: int, stride: int) -> Wav2Vec2BertConfig:
+    """The config one Conformer adapter layer is built from.
+
+    ``Wav2Vec2BertAdapterLayer`` takes its conv kernel and stride, and every width, from
+    the config it is handed. Handing it the *encoder's* config, as this adapter once did,
+    failed two ways (measured on CPU, board 2026-09-26):
+
+    - The adapter's own ``adapter_stride`` / ``adapter_kernel_size`` drive the length and
+      mask bookkeeping, while the layer's convs read the encoder config's copies. Set
+      only the adapter's, and the two disagree: w2v-BERT at stride 5 emitted 750 frames
+      (25 Hz) where the bookkeeping predicted 300 (10 Hz), so every audio embedding after
+      the first was misplaced.
+    - Only w2v-BERT's config carries the attributes the layer reads
+      (``conformer_conv_dropout``, ``adapter_act``, ...). Whisper, MMS and mHuBERT could
+      not build the adapter at all.
+
+    So the layer's config is built here from the two knobs this adapter owns and the
+    encoder's width. Everything else is w2v-BERT 2.0's own adapter recipe -- 64-wide
+    heads, a 4x feed-forward, ReLU, no dropout but the convolution's 0.1 -- which is what
+    that checkpoint's config declares, so w2v-BERT builds the same layer as before.
+    """
+    config = Wav2Vec2BertConfig(
+        hidden_size=width,
+        output_hidden_size=width,
+        num_attention_heads=max(1, width // 64),
+        intermediate_size=4 * width,
+        adapter_kernel_size=kernel_size,
+        adapter_stride=stride,
+    )
+    # The adapter's self-attention is Wav2Vec2BertSelfAttention, which has no flash path,
+    # whatever attention implementation the encoder beside it runs.
+    config._attn_implementation = "sdpa"
+    return config
+
+
 class MELTConformerAdapter(nn.Module):
     """
     Conformer-based audio adapter (similar to Wav2Vec2BertAdapter).
@@ -577,9 +613,6 @@ class MELTConformerAdapter(nn.Module):
             getattr(encoder_config, "num_adapter_layers", 1),
         )
         self.num_adapter_layers = num_adapter_layers
-        self.layers = nn.ModuleList(
-            Wav2Vec2BertAdapterLayer(encoder_config) for _ in range(num_adapter_layers)
-        )
         self.layerdrop = getattr(
             adapter_config, "layerdrop", getattr(encoder_config, "layerdrop", 0.0)
         )
@@ -593,6 +626,24 @@ class MELTConformerAdapter(nn.Module):
             adapter_config,
             "adapter_stride",
             getattr(encoder_config, "adapter_stride", 2),
+        )
+
+        # The layer pads its convolutions by `stride // 2`; the length bookkeeping below
+        # pads by `kernel_size // 2`. They only describe the same convolution when the
+        # two agree, and a disagreement misplaces every audio embedding without an error.
+        if self.kernel_size // 2 != self.stride // 2:
+            raise ValueError(
+                f"Conformer adapter kernel_size {self.kernel_size} and stride {self.stride} "
+                f"pad differently ({self.kernel_size // 2} vs {self.stride // 2}), so the "
+                "output length the adapter reports would not match what it emits. Use a "
+                "kernel and stride with the same `// 2`, e.g. kernel == stride."
+            )
+
+        layer_config = _conformer_layer_config(
+            output_hidden_size, self.kernel_size, self.stride
+        )
+        self.layers = nn.ModuleList(
+            Wav2Vec2BertAdapterLayer(layer_config) for _ in range(num_adapter_layers)
         )
 
         # Final projection to text decoder hidden size
@@ -1034,6 +1085,34 @@ class MELTAudioEncoder(nn.Module):
             param.requires_grad = False
 
         return self
+
+    def train(self, mode: bool = True):
+        """Stay in eval mode while frozen, if ``config.eval_when_frozen`` asks for it.
+
+        HF's ``Trainer.train()`` calls ``model.train()`` once at the start of training and
+        again after every evaluation round, which recurses down to every submodule
+        including this one -- MELT never puts a frozen encoder back into eval mode on its
+        own. So a frozen encoder's layerdrop, dropout and (wav2vec2 family) SpecAugment
+        fire on every training step regardless of freeze, while every evaluation sees
+        clean features: measured on real speech (``frozen_encoder_train_mode.py``, board
+        2026-09-26) as a relative L2 error between train- and eval-mode last hidden states
+        of 0.36 (w2v-BERT 2.0) to 0.76 (MMS-1b), with SpecAugment already pinned off.
+
+        A frozen module has no gradient to regularise, so eval is the mode that matches
+        what it is: not being trained. Opt-in (``config.eval_when_frozen``, default
+        ``False``) rather than unconditional, so this can be A/B'd against the existing
+        behaviour before it becomes the default for anything already running.
+
+        ``mode=False`` (an explicit ``.eval()`` call) is untouched either way. A partially
+        frozen encoder -- some but not all parameters trainable, which nothing in MELT
+        constructs today -- is treated as not frozen: this is a NO gate, not a mixed one.
+        """
+        force_eval = (
+            mode
+            and self.config.eval_when_frozen
+            and not any(p.requires_grad for p in self.parameters())
+        )
+        return super().train(mode=False if force_eval else mode)
 
 
 class MELTAudioStack(nn.Module):

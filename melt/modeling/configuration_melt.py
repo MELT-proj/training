@@ -192,6 +192,7 @@ class MELTConfig(PretrainedConfig):
         initializer_range: float = 0.02,
         encoder_kwargs: dict = {},
         decoder_kwargs: dict = {},
+        eval_when_frozen: bool = False,
         **kwargs,
     ):
         # Build sub-configs from model identifiers *only* when they are not
@@ -230,6 +231,11 @@ class MELTConfig(PretrainedConfig):
         self.adapter_config = adapter_config
 
         self.initializer_range = initializer_range
+
+        # Whether MELTAudioEncoder should force itself into eval mode whenever it has no
+        # trainable parameters, instead of following whatever mode the outer model is in.
+        # See MELTAudioEncoder.train() for why this exists and is opt-in.
+        self.eval_when_frozen = eval_when_frozen
 
         # Set decoder-related attributes. "ForCausalLM" (not "ForCausalLMLoss")
         # is the actual key in transformers' loss registry -- both keys
