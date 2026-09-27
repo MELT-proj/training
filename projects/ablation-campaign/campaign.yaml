@@ -806,3 +806,19 @@ arms:
     grad_accum_steps: 1
     seed: 42
     time: "00:45:00"
+
+  # Fondue MA dry run, third point (PI, 2026-09-27): batch_duration 200 x accum 1. Not the same
+  # effective batch: 200 x 1 x 32 = 6,400 s nominal (1.8 audio-h/step) against 3,840 for the
+  # first two points, so this only measures the micro-batch shape (s/step, memory, fill). 240
+  # was rejected on memory: peak scaled from 31.9 GB at 120 puts it near 58 of 64 GB.
+  #   campaign.py run Fondue-MA-dryrun-bd200 -- --trainer.max_steps 300 \
+  #     --trainer.eval_on_start false --trainer.eval_steps 100000 --trainer.save_steps 100000
+  - id: Fondue-MA-dryrun-bd200
+    stage: MA
+    config: Fondue-MA-dryrun.yaml
+    nodes: 8
+    qos: acc_debug
+    batch_duration: 200
+    grad_accum_steps: 1
+    seed: 42
+    time: "00:45:00"
