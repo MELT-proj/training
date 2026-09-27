@@ -821,3 +821,288 @@ arms:
     grad_accum_steps: 1
     seed: 43
     time: "14:00:00"
+
+  # --- The audio-stack crossing (03-audio-stack.md Sec2; recipe decided PI, ---
+  # 2026-09-26) -- 4 encoders x 4 adapters, one recipe, every arm at 10 Hz via
+  # frame_rate_hz (derives stack_factor for mlp/moe, stride+kernel for
+  # conformer, and checks the q-former's own window/downsample rate). Five
+  # epochs per arm (PI, 2026-09-23), NOT the config's own one -- see epochs:
+  # below on every row. Crossing-prep (plan_arm support, offline loads, one
+  # acc_debug smoke per new encoder and per non-MLP adapter, one
+  # selection-metric eval per new encoder) is done; see 03 Sec1b/Sec4 and the
+  # board for the full write-up, including the measured per-arm cost table
+  # this section's time: values come from. NOT SUBMITTED -- rows only.
+  #
+  # time: three bands, from the five measured smokes plus the two existing
+  # w2v-bert/whisper +mlp screen runs (rescaled x5 for epochs), extrapolated
+  # to the other nine cells by an encoder-multiplier x adapter-multiplier
+  # model (full table on the board):
+  #   - most rows: the estimate +30% margin, matching this file's own
+  #     existing margin convention (the screen's 300s corner: 16h budget on
+  #     ~10.3h measured);
+  #   - a few land within the 30% of acc_ehpc's 72h/3-day cap, so they are
+  #     capped at 72h exactly instead (less margin, but still one-shot);
+  #   - seven rows -- every Q-Former cell, plus the two next-most-expensive
+  #     Conformer cells and one MoE cell -- have a raw estimate ABOVE 72h.
+  #     No time: value fixes that: it is a wall-clock need the recipe's own
+  #     world_size (1 node, 4 ranks) cannot deliver in one acc_ehpc
+  #     allocation, however long the request. Their time: below is the honest
+  #     (margin-free) estimate, not a workable budget -- `campaign.py run`
+  #     would render them, and `sbatch` would then refuse them at submission,
+  #     which is the point: failing loudly there beats a job silently killed
+  #     at 72h with the run half-done. PI decides before any of these seven
+  #     go anywhere near a submission: more nodes for just these cells (breaks
+  #     "one recipe" for a cost reason, not a scientific one), fewer epochs
+  #     for just these cells, or an accepted multi-allocation --resume chain.
+
+  - id: MA-700-crossing-w2vb-mlp
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    epochs: 5
+    seed: 42
+    time: "68:00:00"
+
+  - id: MA-700-crossing-w2vb-conformer
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    adapter: conformer
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    epochs: 5
+    seed: 42
+    time: "80:00:00"          # exceeds acc_ehpc's 72h cap -- see the note above and the board
+
+  - id: MA-700-crossing-w2vb-moe
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    adapter: moe
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    ddp_find_unused_parameters: true   # the router can leave an expert unused in a small batch (see plan_arm.py's ArmAxes)
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    epochs: 5
+    seed: 42
+    time: "72:00:00"          # capped at the acc_ehpc ceiling; ~12% margin, not the usual 30%
+
+  - id: MA-700-crossing-w2vb-qformer
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    adapter: qformer
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    epochs: 5
+    seed: 42
+    time: "119:00:00"         # exceeds acc_ehpc's 72h cap -- see the note above and the board
+
+  - id: MA-700-crossing-mms1b-mlp
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    encoder: facebook/mms-1b
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    epochs: 5
+    seed: 42
+    time: "59:00:00"
+
+  - id: MA-700-crossing-mms1b-conformer
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    encoder: facebook/mms-1b
+    adapter: conformer
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    epochs: 5
+    seed: 42
+    time: "72:00:00"          # capped at the acc_ehpc ceiling; ~4% margin, not the usual 30%
+
+  - id: MA-700-crossing-mms1b-moe
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    encoder: facebook/mms-1b
+    adapter: moe
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    ddp_find_unused_parameters: true   # the router can leave an expert unused in a small batch (see plan_arm.py's ArmAxes)
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    epochs: 5
+    seed: 42
+    time: "72:00:00"          # capped at the acc_ehpc ceiling; ~29% margin
+
+  - id: MA-700-crossing-mms1b-qformer
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    encoder: facebook/mms-1b
+    adapter: qformer
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    epochs: 5
+    seed: 42
+    time: "104:00:00"         # exceeds acc_ehpc's 72h cap -- see the note above and the board
+
+  - id: MA-700-crossing-mhubert-mlp
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    encoder: utter-project/mHuBERT-147
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    epochs: 5
+    seed: 42
+    time: "72:00:00"          # capped at the acc_ehpc ceiling; ~14% margin, not the usual 30%
+
+  - id: MA-700-crossing-mhubert-conformer
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    encoder: utter-project/mHuBERT-147
+    adapter: conformer
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    epochs: 5
+    seed: 42
+    time: "98:00:00"          # exceeds acc_ehpc's 72h cap -- see the note above and the board
+
+  - id: MA-700-crossing-mhubert-moe
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    encoder: utter-project/mHuBERT-147
+    adapter: moe
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    ddp_find_unused_parameters: true   # the router can leave an expert unused in a small batch (see plan_arm.py's ArmAxes)
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    epochs: 5
+    seed: 42
+    time: "79:00:00"          # exceeds acc_ehpc's 72h cap -- see the note above and the board
+
+  - id: MA-700-crossing-mhubert-qformer
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    encoder: utter-project/mHuBERT-147
+    adapter: qformer
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    epochs: 5
+    seed: 42
+    time: "146:00:00"         # exceeds acc_ehpc's 72h cap -- see the note above and the board
+
+  - id: MA-700-crossing-whisper-mlp
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    encoder: openai/whisper-large-v3
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    epochs: 5
+    seed: 42
+    time: "56:00:00"
+
+  - id: MA-700-crossing-whisper-conformer
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    encoder: openai/whisper-large-v3
+    adapter: conformer
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    epochs: 5
+    seed: 42
+    time: "72:00:00"          # capped at the acc_ehpc ceiling; ~9% margin, not the usual 30%
+
+  - id: MA-700-crossing-whisper-moe
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    ddp_find_unused_parameters: true   # the router can leave an expert unused in a small batch (see plan_arm.py's ArmAxes)
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    epochs: 5
+    seed: 42
+    time: "69:00:00"
+
+  - id: MA-700-crossing-whisper-qformer
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    encoder: openai/whisper-large-v3
+    adapter: qformer
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    epochs: 5
+    seed: 42
+    time: "99:00:00"          # exceeds acc_ehpc's 72h cap -- see the note above and the board

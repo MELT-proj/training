@@ -15,6 +15,109 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-27 — Claude (worker session, crossing-prep) — Part 2 proven end to end on real GPU; a real MoE/DDP bug found and fixed; the sixteen crossing rows are in, seven of them cannot fit a single acc_ehpc allocation at this recipe
+
+Context: PR #144 merged; this is the rest of crossing-prep (timeline.md week 3 Track B) --
+offline loads, the five required smokes, one selection-metric eval per untested encoder,
+then the sixteen `campaign.yaml` rows. All on `acc_debug`/`acc_ehpc`, nothing hand-run on a
+GPU interactively.
+
+Finding / proposal:
+
+1. **Offline loads verified**, `alogin1`, `HF_HUB_OFFLINE=1`, login-node CPU (config/weight
+   parse only, not GPU work -- same class of check as the 2026-09-16 backbone verifications).
+   `facebook/mms-1b`: `wav2vec2`, 962,497,408 params, `apply_spec_augment: True`.
+   `utter-project/mHuBERT-147`: `hubert`, 94,371,712 params, `apply_spec_augment: True`. Both
+   confirm the SpecAugment pin from #144 was necessary, not precautionary.
+
+2. **All five required smokes pass** (`acc_debug`, 50 steps, `run.memory_preallocation` on
+   defensively since these are first-ever runs of each cell): MMS-1b+mlp, mHuBERT-147+mlp,
+   w2v-BERT+Conformer, w2v-BERT+MoE, w2v-BERT+Q-Former. Steady-state throughput (read from
+   mid-run tqdm, never the closing average -- eval_on_start's ~13 min sits inside that
+   average and inflates it 10-30x):
+
+   | encoder | adapter | s/step | notes |
+   |---|---|---|---|
+   | MMS-1b | mlp | 0.77 | flash_attention_2, peak ~19.5 GB |
+   | mHuBERT-147 | mlp | 1.08 | no flash path, peak ~10-12 GB |
+   | w2v-BERT | Conformer | 1.37 | real strided-conv layer, not just a projection |
+   | w2v-BERT | MoE | 1.10 | after the DDP fix below |
+   | w2v-BERT | Q-Former | 2.04 | still trending down at step 50, cross-attention over the window |
+
+3. **The `run.memory_preallocation` OOM warning fired on every one of the four non-Whisper
+   smokes, identically.** Traced it to the actual synthetic batches this time (mHuBERT's log
+   printed both): `max_duration` (one 60 s utterance) passes fine, ~6-8 GB. `min_duration`
+   (0.5 s x 150 utterances, packing `batch_duration`'s 75 s as tiny clips) is the one that
+   OOMs -- pressure is on the **decoder** (150 concurrent text sequences through the 1B-param
+   Llama), not the audio side, so this is a property of `batch_duration=75/min_duration=0.5`
+   with this decoder, not of any one encoder. Real training steps across all five smokes
+   peaked at 8-20 GB, nowhere near this synthetic worst case, so it is not read as a live risk
+   for the crossing's actual data -- flagging the mechanism precisely so it is not
+   misattributed to an encoder later.
+
+4. **The MoE smoke crashed at step 1 on the first real GPU run of that cell** (both
+   eval_on_start rounds had already completed clean): torch's DDP
+   `RuntimeError: Expected to have finished reduction in the prior iteration...`, the
+   classic sparse-router-vs-DDP incompatibility -- the top-k router leaves some experts with
+   zero routed tokens in a batch this small (`train_cuts_per_batch` is single digits at this
+   recipe), and DDP's default expects every parameter to receive a gradient every step.
+   Fixed: a new `ddp_find_unused_parameters` axis in `plan_arm.py`/`campaign.py`, same
+   character and wiring as the existing `gradient_checkpointing` (independent boolean, not
+   tagged into EXP_NAME, per-arm rather than moved into `config/accelerate/ddp.yaml` since
+   the other three adapters route every parameter every step and should not pay the
+   traversal overhead). 106+ tests pass, full-grid render unaffected for every existing row.
+   Re-ran the MoE smoke with the flag: passed step 1, ran clean to completion, router
+   diagnostics logging correctly (`aux_loss`/`entropy`). Pushed directly to `main` (small,
+   mechanical, mirrors an existing pattern) rather than opening a PR.
+
+5. **Both new-encoder selection-metric evals ran end to end with no crash**
+   (`submit_selection_eval.sh`, the six frozen sets, `score.py`) -- MMS-1b scored 1.0000
+   (fully clipped, every group), mHuBERT-147 scored 0.9255. Neither score means anything at
+   50 steps; the point proven is that checkpoint -> melt-eval -> `score.py` works for these
+   two encoders, which is what the crossing-prep task asked for.
+
+6. **The crossing's real cost is higher than the existing extrapolation, and seven of the
+   sixteen cells do not fit one `acc_ehpc` allocation at this recipe's world_size.** The
+   existing `~200 GPU-h / ~52h wall per arm, ~3,000 total` figure (03 Sec1b) was extrapolated
+   from the screen's w2v-BERT/Whisper-with-MLP numbers only. With five more real
+   measurements, encoder cost and adapter cost look separable (an encoder-multiplier x
+   adapter-multiplier model reproduces every directly-measured cell), and it reproduces a
+   real number for every one of the seven cells not yet run. Full sixteen, extrapolated to
+   210,000 steps (5 epochs) at world_size 4:
+
+   | | mlp | Conformer | MoE | Q-Former |
+   |---|---|---|---|---|
+   | w2v-BERT | 51.6h / 207 GPU-h | **79.9h** / 320 | 64.2h / 257 | **119.0h** / 476 |
+   | MMS-1b | 44.9h / 180 GPU-h | **69.5h*** / 278 | 55.8h / 223 | **103.6h** / 414 |
+   | mHuBERT-147 | 63.0h* / 252 GPU-h | **97.5h** / 390 | **78.3h** / 313 | **145.2h** / 581 |
+   | Whisper | 42.6h / 171 GPU-h | 66.0h* / 264 | 53.0h / 212 | **98.3h** / 393 |
+
+   (bold = raw estimate exceeds acc_ehpc's 72h/3-day cap outright; `*` = under the cap but
+   less than 20% margin room. Four cells are direct smoke measurements, two are the existing
+   w2v-BERT/Whisper +mlp screen runs rescaled x5 for epochs, the other ten are the
+   multiplier-model estimate.) **Total: ~4,900 GPU-h for sixteen arms**, not ~3,000 -- every
+   Q-Former cell plus w2v-BERT/mHuBERT-Conformer and mHuBERT-MoE need more wall-clock than a
+   single allocation can give them at 1 node / 4 ranks, however long the request: `time:`
+   cannot fix a request above the QOS ceiling.
+
+7. **The sixteen rows are in `campaign.yaml` (`MA-700-crossing-<encoder>-<adapter>`), not
+   submitted.** `time:` in three bands: the nine cells that fit get the estimate +30% (this
+   file's own existing margin convention) or, where that would cross 72h, capped there
+   instead (less margin, still one-shot); the seven that cannot fit get the honest
+   (margin-free) estimate so the row is truthful about what it needs -- `campaign.py plan`
+   renders them fine, `sbatch` would refuse them at submission, which is the intended
+   failure mode (loud and immediate, not a job silently killed at 72h with the run
+   half-done). Full-grid diff confirms every pre-existing row renders byte-for-byte
+   unchanged; plan_arm/campaign/MoE test suite (143 tests) passes.
+
+Action needed: **PI decision on the seven over-cap cells** before any of them go near a
+submission -- more nodes for just those seven (breaks "one recipe for all sixteen" for a
+cost reason, not a scientific one), fewer epochs for just those seven, or an accepted
+multi-allocation `--resume` chain. The other nine rows, and the crossing-prep item itself,
+need no further action; timeline.md's box for it is ticked below.
+
+---
+
 ## 2026-09-27 — Claude (worker session, crossing-prep) — the A/B is finalised on w2v-BERT; Whisper was ruled out as a structural no-op; the row is rendered and verified, waiting on PR #144's merge
 
 Context: PI approved the A/B, first asked for it on Whisper ("more robust to noise after
