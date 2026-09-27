@@ -811,6 +811,9 @@ arms:
   # effective batch: 200 x 1 x 32 = 6,400 s nominal (1.8 audio-h/step) against 3,840 for the
   # first two points, so this only measures the micro-batch shape (s/step, memory, fill). 240
   # was rejected on memory: peak scaled from 31.9 GB at 120 puts it near 58 of 64 GB.
+  # Result (2026-09-27, job 46667595): the scaling guess was wrong -- real OOM at step 70
+  # (a 72-cut batch, GPU at 57.72 GB allocated, tried to allocate 5.46 more). 120 stays the
+  # recommended shape; nothing between 120 and 200 tried.
   #   campaign.py run Fondue-MA-dryrun-bd200 -- --trainer.max_steps 300 \
   #     --trainer.eval_on_start false --trainer.eval_steps 100000 --trainer.save_steps 100000
   - id: Fondue-MA-dryrun-bd200

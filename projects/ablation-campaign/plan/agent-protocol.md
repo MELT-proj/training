@@ -27,6 +27,16 @@ into `timeline.md`. This keeps one person's view of what the campaign owes
 itself, and keeps two sessions from inventing overlapping work. Ticking a
 box you finished is always yours to do.
 
+**Leftovers go in `leftovers.md`, not the board.** A disposable artifact you
+create on purpose and leave behind — a debug run's output directory, a
+scratch backup, a probe checkpoint — is not a finding, so it does not belong
+in a board entry's prose where it will scroll away unactioned. Append one
+entry to `projects/ablation-campaign/leftovers.md` (template at its top)
+naming the exact host and path, its rough size if known, and why it's safe to
+delete; the PI deletes at their own pace and removes the entry once gone.
+This is separate from a finished campaign run's checkpoints, which follow the
+off-boarding plan (`06-fondue.md` §7) instead.
+
 ## 1. Where things are
 
 - Branch: `claude/speech-llm-ablation-research-46d735` until it is merged;
@@ -139,6 +149,8 @@ Every session ends with both of these, in this order:
    Do not add, delete or reword an item, and do not move one between weeks
    — say so on the board and the orchestrator does it. A box you could not
    finish stays unticked with a board entry explaining why.
+3. **`leftovers.md`**: append an entry for anything disposable you left on a
+   machine (§0), if you left anything.
 
 Then, only if you produced a measured result or changed a design: update
 the relevant section file's results table or design text. Measured numbers

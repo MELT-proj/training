@@ -15,6 +15,33 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-27 — Claude (worker, fondue-dry-run) — batch_duration 200 OOMs for real; 120 stays the recommended shape; leftovers.md introduced
+
+Context: PI asked to probe higher than the 120 point (job 46649405, 1.57 s/step, 31.9 GB peak). 240 was
+rejected up front on a linear extrapolation from 120 (~58 of 64 GB); tried 200 instead
+(`Fondue-MA-dryrun-bd200`, job 46667595, `batch_duration 200 x accum 1`, **not** the same effective batch as
+the other two points -- 200 x 1 x 32 = 6,400 s nominal, so this measures shape only, not a comparable step count).
+
+Finding:
+1. **Real OOM, not the warmup-pass warning.** Failed at step 70, `torch.OutOfMemoryError: CUDA out of memory.
+   Tried to allocate 5.46 GiB. GPU 2 has a total capacity of 63.29 GiB of which 4.03 GiB is free`, after the
+   `[OOM]` batch dump: 72 cuts, `input_features` (72, 3000, 128), GPU 2 at 57.72 GB allocated. 6:49 wall,
+   FAILED, exit 15:0. Sixteen tracebacks in the log (the OOM plus the usual DeepSpeed Triton ones at exit).
+2. **The 120 -> 200 extrapolation was wrong.** Peak scaled linearly from 120's 31.9 GB predicted ~50 GB at 200;
+   actual usage depends on how many cuts a dynamic-bucketing batch happens to pack in (72 here vs the mean 6.5
+   at 120), not just the nominal duration budget, so it isn't linear in `batch_duration`.
+3. **120 remains the recommended shape** (job 46649405: 1.57 s/step, 31.9 GB peak, comfortable headroom). Not
+   tried: something between 120 and 200, or `num_buckets`/duration-sort tuning to reduce worst-batch variance
+   before trying 200 again -- neither attempted here.
+4. **`leftovers.md` introduced** (PI, 2026-09-27): a new file in this directory for disposable artifacts a
+   session leaves behind (debug outputs, scratch backups, probe checkpoints), separate from the board and from
+   the off-boarding plan (`06-fondue.md` §7, which is for finished campaign runs). `agent-protocol.md` §0 and §5
+   now point every session at it. First entries: every Fondue-dry-run leftover across MN5/nyx/artemis, listed
+   there rather than repeated here.
+
+Action needed: PI reviews `leftovers.md` and deletes what's no longer needed, at their own pace. No further
+Fondue dry-run action pending; phase 2 (bucket bins, throughput, the two working batch shapes) is complete.
+
 ## 2026-09-26 — Claude (worker, fondue-dry-run) — batch_duration 120 x accum 1 is 3.9x faster at the same effective batch: ~3,100 GPU-h for the derived MA run, not ~12,100
 
 Context: PI asked to explore the dry run's grad_accum (it was 4, `batch_duration 30`, 3,840 s nominal). Second point:
