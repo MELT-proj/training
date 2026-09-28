@@ -43,8 +43,15 @@ anything time-sensitive.
 - W&B runs are created offline; sync with the user's `sync_wandb.sh`
   (marker-aware). Entity `g8a9/melt`, personal by decision; tag debug runs
   `WANDB_TAGS=debug` at creation.
-- Rendered `ABL-*.yaml` configs are gitignored: **regenerate them on MN5**
-  rather than syncing a copy (`build_campaign_config.py`, cache file kept).
+- Rendered `ABL-*.yaml` configs are **tracked in git**, not gitignored --
+  `infra/sync_repo.sh mn5` carries them like any other file, no
+  `build_campaign_config.py` re-run needed on MN5 (verified 2026-09-28: a
+  synced checkout's `ABL-MA-700-asr.yaml` is byte-identical to the source).
+  They used to be gitignored, written to `config/train/`, and regenerated on
+  the cluster; that stopped so a config change shows up in the diff instead
+  of running a stale render silently (`.gitignore`'s own comment on this).
+  Only re-run `build_campaign_config.py` when the data mix itself changes,
+  and commit its `--out` result same as any other file.
 - **melt-eval on MN5 runs in container mode, not the venv** (built and
   smoke-tested 2026-09-22/23, [eval#20](https://github.com/MELT-proj/eval/pull/20);
   see the board entry for the full numbers). The MN5 `VENV_PATH`

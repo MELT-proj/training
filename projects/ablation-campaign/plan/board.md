@@ -15,6 +15,36 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-28 — Claude (worker session) — PR #146 merged; synced and rendered on MN5, not submitted
+
+Context: PR #146 merged (2026-09-28T03:05:15Z). Confirmed explicitly with the PI that
+"proceed" meant sync-and-render only, not submitting the crossing's real allocations --
+that stays gated on an explicit go-ahead per the task's own hard constraint, separate from
+the nodes decision.
+
+Finding / proposal:
+1. Fast-forwarded this worktree onto `origin/main` (`6720d89`, the #146 merge) and pushed
+   to MN5 (`infra/sync_repo.sh mn5`) -- clean fast-forward, no conflicts with MN5's
+   pre-existing untracked crossing-prep smoke scripts.
+2. **`infrastructure.md`'s line on `ABL-*.yaml` was stale** and I fixed it: it said these
+   configs are gitignored and must be regenerated on MN5 with `build_campaign_config.py`.
+   They are not -- `.gitignore`'s own comment says they were untracked once but that stopped
+   ("a config nobody can see in the diff is a config nobody reviews"). Verified directly:
+   MN5's freshly-synced `ABL-MA-700-asr.yaml` is byte-identical to the source, no render
+   step needed. Updated the doc rather than leave the next session chasing a script that
+   isn't the actual mechanism anymore.
+3. Re-verified the full grid on MN5 itself (not just locally): `campaign.py plan` over all
+   65 arms, 0 errors. The 16 crossing rows' topology lines confirm the nodes decision landed
+   correctly on the real synced repo: 9 unchanged at `1x4`, 6 at `2x4` (52h/72h/68h/64h/52h/
+   65h, all under the 72h cap), `mhubert-qformer` alone at `4x4`, 48h.
+
+Action needed: **nothing submitted.** The crossing is ready to go per timeline.md Week 3
+Track A, but real GPU allocations (~4,900 GPU-h across 16 jobs, several multi-node) need an
+explicit PI go-ahead beyond today's nodes decision before `campaign.py run` touches any of
+them. Job 46703807 (eval_when_frozen A/B) is still running, ~7h10m/16h elapsed, unaffected.
+
+---
+
 ## 2026-09-28 — Claude (worker session) — PI decision on the 7 over-cap crossing cells: add nodes, not epochs
 
 Context: PI, mid-session, on the standing "PI decides" item from PR #146: for the 7 cells
