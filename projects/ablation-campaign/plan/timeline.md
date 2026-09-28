@@ -344,7 +344,7 @@ assumed one (`03-audio-stack.md` §0).*
       which replaces the high/low-resource FLEURS split named here before.
 
 ### Track B — preparation
-- [ ] **Crossing prep** (added 2026-09-26; the crossing's critical path).
+- [x] **Crossing prep** (added 2026-09-26; the crossing's critical path).
       Make all sixteen encoder × adapter cells renderable and proven before
       the rows go in: `plan_arm.py` support for the Conformer's route to
       10 Hz and for the MMS/mHuBERT encoders (tags, input length, MMS
