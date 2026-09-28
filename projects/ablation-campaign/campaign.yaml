@@ -843,17 +843,17 @@ arms:
   #   - a few land within the 30% of acc_ehpc's 72h/3-day cap, so they are
   #     capped at 72h exactly instead (less margin, but still one-shot);
   #   - seven rows -- every Q-Former cell, plus the two next-most-expensive
-  #     Conformer cells and one MoE cell -- have a raw estimate ABOVE 72h.
-  #     No time: value fixes that: it is a wall-clock need the recipe's own
-  #     world_size (1 node, 4 ranks) cannot deliver in one acc_ehpc
-  #     allocation, however long the request. Their time: below is the honest
-  #     (margin-free) estimate, not a workable budget -- `campaign.py run`
-  #     would render them, and `sbatch` would then refuse them at submission,
-  #     which is the point: failing loudly there beats a job silently killed
-  #     at 72h with the run half-done. PI decides before any of these seven
-  #     go anywhere near a submission: more nodes for just these cells (breaks
-  #     "one recipe" for a cost reason, not a scientific one), fewer epochs
-  #     for just these cells, or an accepted multi-allocation --resume chain.
+  #     Conformer cells and one MoE cell -- had a raw estimate ABOVE 72h at
+  #     the recipe's world_size (1 node, 4 ranks). PI decision (2026-09-28):
+  #     add nodes for just these seven, not for the other nine, per the
+  #     measured "keep grad_accum fixed, add nodes: GPU-h flat, wall halves
+  #     per doubling" scaling (infrastructure.md Sec4, measured for IFT, not
+  #     yet for MA -- treat the halving below as extrapolated until the
+  #     first of these seven lands and a real s/step number replaces it).
+  #     Six go to nodes: 2 (world_size 8); mhubert-qformer's raw estimate
+  #     (146h) still cleared 72h at nodes: 2 (~73h), so it alone goes to
+  #     nodes: 4 (world_size 16). Same +30%-margin / 72h-cap convention as
+  #     above, applied to the halved (or quartered) raw estimate.
 
   - id: MA-700-crossing-w2vb-mlp
     stage: MA
@@ -879,10 +879,10 @@ arms:
     adapter_lr: 2e-3
     batch_duration: 75
     grad_accum_steps: 1
-    nodes: 1                 # 75 x 1 x 4 = 300 s
+    nodes: 2                 # 75 x 1 x 8 = 600 s -- PI 2026-09-28, was 80h raw at nodes: 1
     epochs: 5
     seed: 42
-    time: "80:00:00"          # exceeds acc_ehpc's 72h cap -- see the note above and the board
+    time: "52:00:00"
 
   - id: MA-700-crossing-w2vb-moe
     stage: MA
@@ -910,10 +910,10 @@ arms:
     adapter_lr: 2e-3
     batch_duration: 75
     grad_accum_steps: 1
-    nodes: 1                 # 75 x 1 x 4 = 300 s
+    nodes: 2                 # 75 x 1 x 8 = 600 s -- PI 2026-09-28, was 119h raw at nodes: 1
     epochs: 5
     seed: 42
-    time: "119:00:00"         # exceeds acc_ehpc's 72h cap -- see the note above and the board
+    time: "72:00:00"          # capped at the acc_ehpc ceiling; ~21% margin, not the usual 30%
 
   - id: MA-700-crossing-mms1b-mlp
     stage: MA
@@ -974,10 +974,10 @@ arms:
     adapter_lr: 2e-3
     batch_duration: 75
     grad_accum_steps: 1
-    nodes: 1                 # 75 x 1 x 4 = 300 s
+    nodes: 2                 # 75 x 1 x 8 = 600 s -- PI 2026-09-28, was 104h raw at nodes: 1
     epochs: 5
     seed: 42
-    time: "104:00:00"         # exceeds acc_ehpc's 72h cap -- see the note above and the board
+    time: "68:00:00"
 
   - id: MA-700-crossing-mhubert-mlp
     stage: MA
@@ -1005,10 +1005,10 @@ arms:
     adapter_lr: 2e-3
     batch_duration: 75
     grad_accum_steps: 1
-    nodes: 1                 # 75 x 1 x 4 = 300 s
+    nodes: 2                 # 75 x 1 x 8 = 600 s -- PI 2026-09-28, was 98h raw at nodes: 1
     epochs: 5
     seed: 42
-    time: "98:00:00"          # exceeds acc_ehpc's 72h cap -- see the note above and the board
+    time: "64:00:00"
 
   - id: MA-700-crossing-mhubert-moe
     stage: MA
@@ -1022,10 +1022,10 @@ arms:
     batch_duration: 75
     grad_accum_steps: 1
     ddp_find_unused_parameters: true   # the router can leave an expert unused in a small batch (see plan_arm.py's ArmAxes)
-    nodes: 1                 # 75 x 1 x 4 = 300 s
+    nodes: 2                 # 75 x 1 x 8 = 600 s -- PI 2026-09-28, was 79h raw at nodes: 1
     epochs: 5
     seed: 42
-    time: "79:00:00"          # exceeds acc_ehpc's 72h cap -- see the note above and the board
+    time: "52:00:00"
 
   - id: MA-700-crossing-mhubert-qformer
     stage: MA
@@ -1038,10 +1038,11 @@ arms:
     adapter_lr: 2e-3
     batch_duration: 75
     grad_accum_steps: 1
-    nodes: 1                 # 75 x 1 x 4 = 300 s
+    nodes: 4                 # 75 x 1 x 16 = 1200 s -- PI 2026-09-28, was 146h raw at nodes: 1,
+                              # still ~73h (over cap) at nodes: 2, so this one alone goes to 4
     epochs: 5
     seed: 42
-    time: "146:00:00"         # exceeds acc_ehpc's 72h cap -- see the note above and the board
+    time: "48:00:00"
 
   - id: MA-700-crossing-whisper-mlp
     stage: MA
@@ -1102,7 +1103,7 @@ arms:
     adapter_lr: 2e-3
     batch_duration: 75
     grad_accum_steps: 1
-    nodes: 1                 # 75 x 1 x 4 = 300 s
+    nodes: 2                 # 75 x 1 x 8 = 600 s -- PI 2026-09-28, was 99h raw at nodes: 1
     epochs: 5
     seed: 42
-    time: "99:00:00"          # exceeds acc_ehpc's 72h cap -- see the note above and the board
+    time: "65:00:00"
