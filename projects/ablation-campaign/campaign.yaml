@@ -852,7 +852,21 @@ arms:
   # acc_debug smoke per new encoder and per non-MLP adapter, one
   # selection-metric eval per new encoder) is done; see 03 Sec1b/Sec4 and the
   # board for the full write-up, including the measured per-arm cost table
-  # this section's time: values come from. NOT SUBMITTED -- rows only.
+  # this section's time: values come from. The 4 Whisper cells are already
+  # submitted (board 2026-09-28, jobs 46724839-46724842). The other 12 are
+  # not, as of this row.
+  #
+  # eval_when_frozen: true on the 12 non-Whisper cells (PI, 2026-09-28), after
+  # the A/B on w2v-BERT (job 46703807, board 2026-09-28) came back mixed, not
+  # a clean win -- ID CER improves (-0.0516) but OOD-train FLEURS worsens
+  # badly (+0.1249, weight 1.5x), netting a score regression (0.7149 ->
+  # 0.7587). PI decided to apply it anyway to all three encoders that share
+  # the live layerdrop-0.1 mechanism (w2v-BERT, MMS-1b, mHuBERT-147) rather
+  # than split the crossing's read-out by flag value. Whisper is unaffected
+  # either way (structural no-op, zero layerdrop/dropout) and its 4 cells
+  # already ran without the flag -- not re-run, since it provably does not
+  # change their result (`frozen_encoder_train_mode.py`, board 2026-09-26:
+  # cos 1.0000, relative L2 0.0000 for Whisper specifically).
   #
   # time: three bands, from the five measured smokes plus the two existing
   # w2v-bert/whisper +mlp screen runs (rescaled x5 for epochs), extrapolated
@@ -886,6 +900,7 @@ arms:
     batch_duration: 75
     grad_accum_steps: 1
     nodes: 1                 # 75 x 1 x 4 = 300 s
+    eval_when_frozen: true
     epochs: 5
     seed: 42
     time: "68:00:00"
@@ -901,6 +916,7 @@ arms:
     batch_duration: 75
     grad_accum_steps: 1
     nodes: 2                 # 75 x 1 x 8 = 600 s -- PI 2026-09-28, was 80h raw at nodes: 1
+    eval_when_frozen: true
     epochs: 5
     seed: 42
     time: "52:00:00"
@@ -917,6 +933,7 @@ arms:
     grad_accum_steps: 1
     ddp_find_unused_parameters: true   # the router can leave an expert unused in a small batch (see plan_arm.py's ArmAxes)
     nodes: 1                 # 75 x 1 x 4 = 300 s
+    eval_when_frozen: true
     epochs: 5
     seed: 42
     time: "72:00:00"          # capped at the acc_ehpc ceiling; ~12% margin, not the usual 30%
@@ -932,6 +949,7 @@ arms:
     batch_duration: 75
     grad_accum_steps: 1
     nodes: 2                 # 75 x 1 x 8 = 600 s -- PI 2026-09-28, was 119h raw at nodes: 1
+    eval_when_frozen: true
     epochs: 5
     seed: 42
     time: "72:00:00"          # capped at the acc_ehpc ceiling; ~21% margin, not the usual 30%
@@ -947,6 +965,7 @@ arms:
     batch_duration: 75
     grad_accum_steps: 1
     nodes: 1                 # 75 x 1 x 4 = 300 s
+    eval_when_frozen: true
     epochs: 5
     seed: 42
     time: "59:00:00"
@@ -963,6 +982,7 @@ arms:
     batch_duration: 75
     grad_accum_steps: 1
     nodes: 1                 # 75 x 1 x 4 = 300 s
+    eval_when_frozen: true
     epochs: 5
     seed: 42
     time: "72:00:00"          # capped at the acc_ehpc ceiling; ~4% margin, not the usual 30%
@@ -980,6 +1000,7 @@ arms:
     grad_accum_steps: 1
     ddp_find_unused_parameters: true   # the router can leave an expert unused in a small batch (see plan_arm.py's ArmAxes)
     nodes: 1                 # 75 x 1 x 4 = 300 s
+    eval_when_frozen: true
     epochs: 5
     seed: 42
     time: "72:00:00"          # capped at the acc_ehpc ceiling; ~29% margin
@@ -996,6 +1017,7 @@ arms:
     batch_duration: 75
     grad_accum_steps: 1
     nodes: 2                 # 75 x 1 x 8 = 600 s -- PI 2026-09-28, was 104h raw at nodes: 1
+    eval_when_frozen: true
     epochs: 5
     seed: 42
     time: "68:00:00"
@@ -1011,6 +1033,7 @@ arms:
     batch_duration: 75
     grad_accum_steps: 1
     nodes: 1                 # 75 x 1 x 4 = 300 s
+    eval_when_frozen: true
     epochs: 5
     seed: 42
     time: "72:00:00"          # capped at the acc_ehpc ceiling; ~14% margin, not the usual 30%
@@ -1027,6 +1050,7 @@ arms:
     batch_duration: 75
     grad_accum_steps: 1
     nodes: 2                 # 75 x 1 x 8 = 600 s -- PI 2026-09-28, was 98h raw at nodes: 1
+    eval_when_frozen: true
     epochs: 5
     seed: 42
     time: "64:00:00"
@@ -1044,6 +1068,7 @@ arms:
     grad_accum_steps: 1
     ddp_find_unused_parameters: true   # the router can leave an expert unused in a small batch (see plan_arm.py's ArmAxes)
     nodes: 2                 # 75 x 1 x 8 = 600 s -- PI 2026-09-28, was 79h raw at nodes: 1
+    eval_when_frozen: true
     epochs: 5
     seed: 42
     time: "52:00:00"
@@ -1060,6 +1085,7 @@ arms:
     batch_duration: 75
     grad_accum_steps: 1
     nodes: 4                 # 75 x 1 x 16 = 1200 s -- PI 2026-09-28, was 146h raw at nodes: 1,
+    eval_when_frozen: true
                               # still ~73h (over cap) at nodes: 2, so this one alone goes to 4
     epochs: 5
     seed: 42
