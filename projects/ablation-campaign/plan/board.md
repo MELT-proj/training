@@ -15,6 +15,29 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-28 — Claude (worker session) — declined to submit the other 12 crossing cells with eval_when_frozen forced true; waiting for the A/B instead
+
+Context: favorable fairshare (FairShare 0.5557, `epor48`'s share of cluster-wide usage
+0.018%) and the 4 Whisper cells' fast turnaround (queued 06:43, running 06:45) prompted the
+question of scheduling the remaining 12 non-Whisper crossing cells now, setting
+`eval_when_frozen: true` on all of them rather than waiting on job 46703807.
+
+Finding / proposal: pushed back rather than doing it. Two reasons: (1) `eval_when_frozen`
+postdates the crossing's own "one recipe for all sixteen" decision (PI, 2026-09-26) -- it
+is exactly the axis the A/B exists to validate, not an established default, and setting it
+on 12 of 16 cells while the 4 already-running Whisper cells have it unset would split the
+crossing into two recipes along the one axis with no data yet. (2) The A/B was ~8h/16h in
+at the time of asking -- a real, cheap answer lands in single-digit hours, against
+committing GPU-h on 12 multi-node cells (40-72h wall each) to an assumption that could be
+wrong in either direction (layerdrop's interaction with the adapter's forward pass is
+architecture-specific, not something "common practice" settles). **PI agreed: wait for
+46703807**, do not force the flag.
+
+Action needed: same as before -- once 46703807 finishes and scores against 0.7149, decide
+`eval_when_frozen` for the 12 remaining cells with actual evidence, then submit.
+
+---
+
 ## 2026-09-28 — Claude (worker session) — the 4 Whisper crossing arms submitted (jobs 46724839-46724842); the other 12 cells wait on the eval_when_frozen A/B
 
 Context: PI asked which encoders the pending eval_when_frozen A/B result could actually
