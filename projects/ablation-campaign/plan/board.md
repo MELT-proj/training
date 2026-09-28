@@ -15,6 +15,49 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-28 — Claude (worker session) — eval_when_frozen A/B result: mixed, not a clean win, score regresses overall
+
+Context: job 46703807 completed (09:50:23 elapsed, exit 0:0, full epoch, checkpoint verified).
+Scored on the selection metric per the read-out plan in the 2026-09-27 "A/B is finalised"
+entry: `submit_selection_eval.sh` (6 jobs: 5 in-domain + FLEURS-26, all `COMPLETED 0:0`,
+5-6 min each except FLEURS-26 at 1h16m) then `score.py`.
+
+Finding / proposal:
+1. **Score regresses**: control (`MA-700-screen-w2vb-lr2e3-b300`, complete, `01` §3) **0.7149**
+   -> treatment (`...-evalfrozen`) **0.7587**, Δ **+0.0438** (higher = worse). That is outside
+   the ~0.035 seed-noise floor measured at the neighbouring `lr1e3-b300` corner (board
+   2026-09-23) -- approximate for this exact corner, but the gap is real enough to not read
+   as pure noise.
+2. **But it is not uniform** -- this is the useful part:
+   - **ID** (in-domain, weight 1.0): 0.6115 -> 0.5599, Δ **-0.0516** -- the fix *helps*
+     in-domain generative CER.
+   - **OOD-train** (FLEURS on en/de/es/fr/it, weight 1.5): 0.6698 -> 0.7947, Δ **+0.1249**
+     -- the fix *hurts* zero-shot generalization on the training languages, badly, and this
+     group's 1.5x weight is what drags the composite score down despite ID improving.
+   - OOD-related/latin/script: unchanged, already clipped at 1.0 in both (uninformative at
+     this recipe regardless of the flag).
+   Full per-language numbers in `03-audio-stack.md` §3 (folded in) and on MN5 at
+   `selection-metric/scores/` (not yet copied into git, per that folder's own convention --
+   ad hoc scoring runs are not committed, only the frozen `screen-wsd-grid` snapshot is).
+3. **Read**: keeping a fully-frozen encoder in eval() mode is not simply "more correct" for
+   this pipeline -- it changes what representations the adapter sees during training in a
+   way that trades in-domain fit for out-of-domain robustness, at least at this corner and
+   this encoder. This directly answers the question asked before submitting the Whisper
+   cells: it would have been wrong to assume `eval_when_frozen: true` as a blanket "more
+   common approach" default for the other three encoders.
+4. Folded the measured result into `03-audio-stack.md` §3 (the confound table row), replacing
+   "pending an A/B" with the numbers above.
+
+Action needed: **PI decision** for the 12 non-Whisper crossing cells (w2v-BERT, MMS-1b,
+mHuBERT-147 all share the live layerdrop-0.1 mechanism w2v-BERT was tested on): given a
+mixed result (ID better, OOD-train much worse, net worse), submit them without the flag
+(matches the already-running Whisper cells and the existing screen baseline, keeps one
+recipe), with the flag (trades ID for OOD-train, diverges from the screen baseline those
+checkpoints get compared against), or split by what each downstream use case cares about
+more. Nothing further submitted this session pending that call.
+
+---
+
 ## 2026-09-28 — Claude (worker session) — declined to submit the other 12 crossing cells with eval_when_frozen forced true; waiting for the A/B instead
 
 Context: favorable fairshare (FairShare 0.5557, `epor48`'s share of cluster-wide usage
