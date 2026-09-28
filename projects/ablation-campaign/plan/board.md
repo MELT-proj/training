@@ -15,6 +15,49 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-28 — Claude (worker session) — PI decision on the 7 over-cap crossing cells: add nodes, not epochs
+
+Context: PI, mid-session, on the standing "PI decides" item from PR #146: for the 7 cells
+whose raw wall-time estimate exceeds acc_ehpc's 72h cap at the recipe's world_size=4, "use a
+second node -- we know that scaling is nearly linear with nodes." This matches
+`infrastructure.md` §4's own measured line for IFT: "keep `grad_accum 4` and add nodes: GPU-h
+flat, wall halves per doubling."
+
+Finding / proposal:
+1. Checked the raw (margin-free) per-cell estimates already in PR #146: halving all seven
+   puts six comfortably under 72h, but `mhubert-qformer` (146h raw) halves to ~73h -- still
+   just over the cap. Flagged this edge case to the PI before touching anything rather than
+   silently rounding it into "good enough": **decided, nodes: 4 for this one cell alone**
+   (quartering to ~36.5h raw), nodes: 2 for the other six.
+2. Updated all seven rows on `crossing-rows-part3` (PR #146, not `main` -- it is still
+   unmerged): `nodes: 1` -> `2` (six rows) or `4` (`mhubert-qformer`), `time:` recomputed from
+   the halved/quartered raw estimate at the file's own +30%-margin / 72h-cap convention, the
+   `world_size` arithmetic in each row's inline comment updated, and the section's header
+   comment rewritten to record the decision instead of describing the blocker.
+3. **Verified, not just asserted**: `campaign.py plan` (pure python, no melt import, runs
+   fine on nyx) on all sixteen crossing rows before and after, diffed. Exactly the seven
+   touched rows changed -- world_size, step count (halves/quarters with the effective batch,
+   as expected), wall time, and the `-Ng` `EXP_NAME` suffix. The other nine render
+   byte-identical. Full plan output and diff kept in this session's scratch, not committed
+   (nothing new to commit beyond the yaml).
+4. **This is an extrapolation, not a measurement, for MA-stage arms** -- the "wall halves per
+   doubling" line was measured on IFT. Said so both in the yaml's header comment and in a PR
+   comment, so whoever reads the first of these seven's real run knows to check it, not
+   assume it.
+5. Pushed to `crossing-rows-part3` (`e359769`) and commented on PR #146 with the same
+   summary. **Did not merge** -- #146 is still open pending review, and "add nodes" is a
+   config change riding the same PR, not a reason to bypass review.
+
+Action needed: PR #146 still needs a merge (unchanged from before, now with the nodes fix
+folded in). Once merged, this is exactly the "sync + submit" case already described in the
+task briefing -- render on MN5 with `build_campaign_config.py`, confirm `world_size` in the
+`[run_train] starting` log line for the six 2-node rows and the one 4-node row before trusting
+the first result, and get an explicit PI go-ahead before submitting real allocations
+(timeline.md Week 3 Track A gate). Job 46703807 (the eval_when_frozen A/B) is still running,
+unaffected by any of this, ~4h07m elapsed of the 16h budget as of this entry.
+
+---
+
 ## 2026-09-27 — Claude (worker session) — eval_when_frozen A/B treatment submitted (job 46703807), PR #146 still open
 
 Context: routine check of PR #145 and #146 per the standing follow-up from the two entries
