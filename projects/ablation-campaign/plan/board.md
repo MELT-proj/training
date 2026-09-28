@@ -15,6 +15,51 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-28 — Claude (worker session) — the 4 Whisper crossing arms submitted (jobs 46724839-46724842); the other 12 cells wait on the eval_when_frozen A/B
+
+Context: PI asked which encoders the pending eval_when_frozen A/B result could actually
+touch, before deciding whether any crossing cells could be submitted ahead of it.
+
+Finding / proposal:
+1. **Checked the real HF configs, not just family membership** (`facebook/mms-1b`,
+   `utter-project/mHuBERT-147`, `facebook/w2v-bert-2.0`, `openai/whisper-large-v3`,
+   offline on the MN5 login node, no GPU): `apply_spec_augment` is moot for all four --
+   the campaign's own `ABL-MA-700-asr.yaml` pins it `false` on every arm regardless of the
+   checkpoint's own default. That leaves layerdrop and ordinary dropout as the only
+   train()-vs-eval() difference `eval_when_frozen` can touch.
+
+   | encoder | layerdrop | dropout (attn/hidden/final/etc) |
+   |---|---|---|
+   | Whisper | 0.0 | 0.0 everywhere |
+   | w2v-BERT | 0.1 | final 0.1, conformer_conv 0.1 |
+   | MMS-1b | 0.1 | attn/hidden/feat_proj 0.1 |
+   | mHuBERT-147 | 0.1 | activation/attn/hidden/final/feat_proj 0.1 |
+
+   **Whisper is the only encoder immune to the A/B's result either way** -- already proven
+   a structural no-op (cos 1.0000, relative L2 0.0000, board 2026-09-27). w2v-BERT,
+   MMS-1b and mHuBERT-147 all carry the same live mechanism (nonzero layerdrop + dropout
+   while frozen), so a finding that the fix matters would put all twelve of their crossing
+   cells in question -- they might need `eval_when_frozen: true` or at least a caveat on
+   their read-out.
+2. **Submitted the 4 Whisper crossing cells** via `campaign.py run` (one at a time --
+   `run` takes a single id): `whisper-mlp` (job 46724839, 1x4, 56h), `whisper-conformer`
+   (46724840, 1x4, 72h), `whisper-moe` (46724841, 1x4, 69h), `whisper-qformer` (46724842,
+   2x4, 65h). All four confirmed queued (`PD`, priority) within a minute of submission.
+   ~1,300 GPU-h combined. The other 12 crossing rows are untouched -- still waiting on
+   the A/B.
+3. Ledger reconciliation as usual: copied `arms.tsv` back, pushed to `main` (`6aa36b7`),
+   hit the expected MN5 dirty-tree push rejection, `git stash push -u` on that one file
+   (verified byte-identical to what had landed on `main`), pushed clean, dropped the stash.
+
+Action needed: once job 46703807 (eval_when_frozen A/B) lands and is scored against 0.7149,
+report whether the fix matters. If yes, the 12 non-Whisper crossing cells need a decision
+before they go anywhere -- add `eval_when_frozen: true` to all of them (recipe change,
+touches `campaign.yaml` again) or accept the caveat and note it in the results table. If no,
+they can be submitted as already rendered, same as today's four, still needing the earlier
+per-cell PI go-ahead this session already has for the Whisper subset only.
+
+---
+
 ## 2026-09-28 — Claude (worker session) — PR #146 merged; synced and rendered on MN5, not submitted
 
 Context: PR #146 merged (2026-09-28T03:05:15Z). Confirmed explicitly with the PI that
