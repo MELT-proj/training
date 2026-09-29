@@ -40,6 +40,12 @@ Action needed: none yet -- watching. Will report if it explodes later, or once i
 comfortably past both previous failure points with real margin (e.g. an eval/save
 checkpoint landing, which failed to happen on both prior attempts).
 
+**Update, same day:** first checkpoint (step 19091, epoch 0.4545) saved cleanly, 3h17m
+elapsed. In-training eval WER healthy and improving normally (en 0.160, de 0.206, fr 0.199,
+es 0.140, it 0.230), zero `nan`/`inf` anywhere in the log through this point -- both prior
+attempts died before step 4300, well short of any checkpoint. Reads as the LR fix holding;
+not yet complete (currently epoch 0.4545/5, 72h budget), still watching through to the end.
+
 ---
 
 ## 2026-09-29 — Claude (worker session) — whisper-conformer's retry reproduced the same gradient explosion; cancelled, needs a recipe decision
