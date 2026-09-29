@@ -15,6 +15,37 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-29 — Claude (worker session) — whisper-conformer's retry reproduced the same gradient explosion; cancelled, needs a recipe decision
+
+Context: watched job 46751008 (the as-is retry from the previous entry) through its early
+steps specifically to test the "cluster hiccup" hypothesis before concluding a recipe fix
+was needed.
+
+Finding / proposal:
+1. **Reproduced.** `grad_norm` went `inf` at epoch 0.088 (~260 audio-h in, loss healthy at
+   ~3.2-3.5 immediately before), same signature as the first attempt (epoch 0.10, ~298
+   audio-h in). Two independent runs of the same recipe (same seed, same everything)
+   exploding within ~10% of the same training point rules out an environmental/transient
+   explanation. This is a systematic numerical instability specific to Whisper+Conformer at
+   the crossing's shared recipe LR (2e-3, tuned for w2v-BERT+MLP).
+2. **Cancelled** (PI) rather than let it run out to the same ~3.5h-of-garbage-then-hard-crash
+   the first attempt did -- `scancel 46751008`, confirmed `CANCELLED+`, 1h04m elapsed, no
+   further GPU-h wasted once the reproduction was confirmed.
+3. **All 12 `eval_when_frozen` crossing arms are now running** (started well ahead of
+   Slurm's own pessimistic `--start` estimates from ~4h earlier -- worth noting those
+   estimates are backfill guesses, not commitments). Plus the 3 healthy original Whisper
+   arms at 20h40m elapsed, on track.
+
+Action needed: **PI decision on `whisper-conformer`** before any further attempt --
+resubmitting as-is a third time is not expected to behave differently given two-for-two
+reproduction. Candidates: lower adapter LR for this cell only (breaks "one recipe" for a
+stability reason, same class of exception as the node-count changes already made for cost);
+add a non-finite-gradient skip/abort-early guard (code change, would need its own small PR);
+or drop the cell and report the gap in the crossing's results table. Nothing resubmitted
+this session pending that call.
+
+---
+
 ## 2026-09-28 — Claude (worker session) — PI applied eval_when_frozen to all 12 remaining crossing cells (PR #147); whisper-conformer failed with a gradient explosion and was retried as-is
 
 Context: after the A/B result (previous entry), PI decided to apply `eval_when_frozen: true`
