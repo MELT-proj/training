@@ -51,8 +51,9 @@ Finding / proposal:
 5. **Repro/proof:** MN5 `acc_debug` job 46804534, `ABL-MA-700-asr` whisper-large-v3 + conformer stride
    5 / kernel 5, batch_duration 75, 4 GPUs DDP, LR 2e-3, seed 42, same warmup flags as the failing
    runs (probe: `debug/gradprobe-conformer`, unmerged). Unfixed identical recipe exploded at step
-   ~5130-5204. With QK-norm: **past step 5269, max grad_norm 182, no non-finite step, median loss
-   ~1.7** (unfixed probe run: ~2.9 at step 4600). Run continues to the 2 h limit.
+   ~5130-5204. With QK-norm: **11534 steps (to the 2 h limit), max grad_norm 182, zero non-finite
+   steps, median loss of the last 100 steps 0.52** (unfixed probe run: ~2.9 at step 4600). Still
+   one seed and ~5% of an epoch-scale run; it clears the failure window, not the whole schedule.
 6. **Trust.** (a) whisper-conformer 1e-3 (46776437): NaN-poisoned from epoch ~0.53; its checkpoint-19091
    (epoch 0.4545) predates the failure and is probably clean, but the run had many spikes before onset
    (1.6% of steps above 20x rolling median), so the lower LR only delayed the failure. mhubert's
