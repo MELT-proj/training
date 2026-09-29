@@ -15,6 +15,13 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-29 — Claude (worker session) — every `wu0p03` arm trained with NO warmup; fix on branch, 12 non-Conformer crossing cells resubmitted
+Context: an orchestrator investigation into the Conformer gradient explosions pointed at warmup; checked against the logs.
+Finding: transformers 5.16.1 removed `warmup_ratio` (training logs: "dropping ... ['warmup_ratio'] ... will NOT take effect"), and `plan_arm.py` also forced `warmup_steps 0`, so nothing warmed up. Confirmed in five logs (screen, LR grid, A/B, crossing): `learning_rate` is the full 1e-3 / 2e-3 at the first logged step. Every arm tagged `wu0p03` (2026-09-21 onward) is affected; the 3%-warmup recipe in the plan was never applied. All five Conformer failures began from a cold start at full LR, so this is the leading suspect for them.
+Fix: `plan_arm.py` now emits `--trainer.warmup_steps 0.03` (a float in [0,1) is a ratio in tf5); tag renamed `wu` -> `wus` so new outputs cannot collide with the old no-warmup ones. 114 plan_arm tests pass. Not yet on main (branch `worktree-bridge-cse_01FG269t6XvP8zDaF9tog3oN`, synced to MN5).
+Action: cancelled the 10 running non-Conformer crossing jobs (~11 h in; the two whisper mlp/moe had already completed, also without warmup) and resubmitted all 12 non-Conformer crossing cells with warmup. The 4 Conformer cells were left alone at the user's request (another session is investigating). Old no-warmup outputs are untouched under their `wu0p03` names. Submissions are in `arms.tsv`.
+Open (PI): the earlier screen results (LR grid, k-sweep, eval_when_frozen A/B, 0.7149 vs 0.7587) were all measured without warmup; whether any need repeating is undecided. A warmed-up A/B on one screen arm would show if rankings move.
+
 ## 2026-09-29 — Claude (worker session) — whisper-conformer resubmitted at adapter_lr 1e-3 (PR #148); past both prior failure points cleanly so far
 
 Context: PI decided to try a per-cell LR drop (2e-3 -> 1e-3, an already-measured screen grid
