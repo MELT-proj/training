@@ -1114,7 +1114,11 @@ arms:
     frame_rate_hz: 10
     lr_scheduler: warmup_stable_decay
     warmup_ratio: 0.03
-    adapter_lr: 2e-3
+    adapter_lr: 1e-3          # PI 2026-09-29, was 2e-3: two runs at 2e-3 (jobs 46724840,
+                              # 46751008) both exploded (grad_norm inf->nan) around step
+                              # ~4200/210000, during warmup, before any checkpoint. 1e-3 is
+                              # an already-measured screen grid point (lr1e3-b300), not a
+                              # new value -- see board 2026-09-29.
     batch_duration: 75
     grad_accum_steps: 1
     nodes: 1                 # 75 x 1 x 4 = 300 s
