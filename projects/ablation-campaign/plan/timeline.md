@@ -60,6 +60,16 @@ Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
 - **The week-3 crossing render waits on the crossing-prep item** (week 3
   Track B). All its PI decisions were made on 2026-09-26 (`03-audio-stack.md`
   §1b).
+- **The Conformer adapter's gradient explodes: 5 of 5 crossing runs** (board
+  2026-09-28/29). The signature is `grad_norm` inf for several steps, then nan;
+  loss reads 0 and the job trains a poisoned model for hours before a CUDA
+  assert. Seen on every encoder at 2e-3, at unrelated points (epoch 0.02-0.76),
+  and on whisper-conformer at 1e-3 at epoch 0.53. Every non-Conformer cell is
+  clean. The four Conformer cells of the crossing cannot be ranked until this
+  is diagnosed. **PI decides** whether to dispatch the diagnosis (prompt
+  handed 2026-09-29) and whether the 1e-3 resume (46789935) runs meanwhile.
+  Separately, the trainer has no non-finite check, so a dead run keeps
+  burning GPU-h.
 - **FLEURS shard duplication on MN5's indexed tree** (78 leaves, af_za..fr_fr).
   The PI has a dry-run-by-default `~/fleurs_dedupe.sh`, not yet run.
   `fleurs24-asr-dev` on MN5 was frozen from the doubled tree; re-freeze it
@@ -353,6 +363,10 @@ assumed one (`03-audio-stack.md` §0).*
       one selection-metric eval on a smoke checkpoint for each untested
       encoder; then sixteen `campaign.yaml` rows at the PI's recipe.
       Cold-agent prompt handed to the PI 2026-09-26.
+- [ ] **Conformer gradient explosion: diagnose** (added 2026-09-29; see
+      Blocked / waiting). Root cause from the MN5 logs and a reproduction on
+      artemis, before any fix or LR change is made.
+      *Outcome:* a cause, and a fix or recipe change for the PI to approve.
 - [ ] **Fondue dry run at full scale on MN5**: config resolves, dataloader
       builds, bucket bins re-measured on the full distribution, startup time,
       exposure audit output, host-RAM trace. Write findings to `06-fondue.md`.
