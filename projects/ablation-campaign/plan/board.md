@@ -15,6 +15,60 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-29 — Claude (bridge session) — Conformer gradient explosion: unbounded attention logits; QK-norm fix in PR #149
+
+Context: PI asked for a diagnosis of the Conformer-adapter explosion (5 of 5 crossing runs: grad_norm
+inf, then nan, loss reads 0, job runs on a poisoned model). Logs read-only, code read, then repro on
+MN5 `acc_debug` with a gradient probe (debug branch, never merged), then a fix.
+
+Finding / proposal:
+1. **Root cause (confidence: medium-high, one causal test so far).** `MELTConformerAdapter` self-attention
+   (`Wav2Vec2BertSelfAttention`) has no bound on its logits. The recipe has **no LR warmup**:
+   `--trainer.warmup_ratio 0.03 --trainer.warmup_steps 0` -> transformers 5 drops `warmup_ratio`
+   (logged `learning_rate` is the full peak on every step), so Adam moves every weight ~lr per step from
+   step 1. q/k grow, the softmax saturates from step ~5 (top-1 probability ~0.99), and the backward pass
+   through it grows 1e1 -> 1e4 -> 1e9-1e12 -> inf in bf16. Forward and loss stay finite and normal until
+   the end; `clip_grad_norm_` cannot repair it (inf norm -> coefficient 0, 0*inf = nan). MLP/MoE/Q-Former
+   don't fail because they have no unbounded attention (MLP/MoE also end in a LayerNorm).
+   At a captured spike (probe v3, rank 3, step 4536) the gradient at `linear_q`/`linear_k` is ~1e4x
+   that at `linear_v`.
+2. **Ruled out:** output-scale runaway. Closing the adapter with `post_norm * gain` (as MLP/MoE do) still
+   exploded on MN5 (gn 1e4 at step 3817, inf by 3892). That branch is not PR'd.
+3. **Evidence table** (first non-finite `grad_norm` per failing job; "prior-50 median" is the median of
+   the 50 logged values before it, i.e. the gradients were already astronomically large while finite):
+
+   | job | arm | LR | first non-finite (epoch) | prior-50 median gn | prior-50 max gn |
+   |---|---|---|---|---|---|
+   | 46724840 | whisper-conformer | 2e-3 | 0.097 | 1.04 | 2.5e11 |
+   | 46751008 | whisper-conformer | 2e-3 | 0.088 | 0.71 | 2.0e12 |
+   | 46776437 | whisper-conformer | 1e-3 | 0.531 | 1.2e5 | 3.1e12 |
+   | 46750640 | w2vb-conformer | 2e-3 | 0.325 | 1.0e11 | 6.8e11 |
+   | 46750646 | mms1b-conformer | 2e-3 | 0.019 | 2.3e3 | 2.9e10 |
+   | 46750651 | mhubert-conformer | 2e-3 | 0.758 | 1.5e4 | 2.1e13 |
+
+4. **Fix (PR #149):** RMS-normalise q and k per head (learnable gain, fp32), so logits cannot grow with
+   the weights. Unit test fails before, passes after.
+5. **Repro/proof:** MN5 `acc_debug` job 46804534, `ABL-MA-700-asr` whisper-large-v3 + conformer stride
+   5 / kernel 5, batch_duration 75, 4 GPUs DDP, LR 2e-3, seed 42, same warmup flags as the failing
+   runs (probe: `debug/gradprobe-conformer`, unmerged). Unfixed identical recipe exploded at step
+   ~5130-5204. With QK-norm: **past step 5269, max grad_norm 182, no non-finite step, median loss
+   ~1.7** (unfixed probe run: ~2.9 at step 4600). Run continues to the 2 h limit.
+6. **Trust.** (a) whisper-conformer 1e-3 (46776437): NaN-poisoned from epoch ~0.53; its checkpoint-19091
+   (epoch 0.4545) predates the failure and is probably clean, but the run had many spikes before onset
+   (1.6% of steps above 20x rolling median), so the lower LR only delayed the failure. mhubert's
+   checkpoint-19091 (failure at 0.758) is likewise probably clean. (b) Any 2e-3 or 1e-3 Conformer result
+   is questionable as science even when it looks healthy: attention has been saturated (hard argmax)
+   from step ~5, so those runs trained with a degenerate attention. I would not compare Conformer cells
+   to MLP/MoE/Q-Former cells from these runs; re-run them with the fix.
+7. **Separate proposal for the PI (not in the PR):** fail-fast abort when `grad_norm` is non-finite for N
+   consecutive steps (e.g. N=10), so a poisoned run stops instead of burning hours. Report-and-stop, no
+   skipping of batches or nan-to-zero. Also note: `warmup_ratio` is silently dropped under transformers 5
+   in `campaign.yaml`, so the crossing runs have no warmup (your decision; I did not change it).
+
+Action needed: PI to review PR #149 and decide on re-running the Conformer crossing cells and on the
+fail-fast abort. No crossing job was cancelled, resubmitted or resumed. Debug outputs remain on MN5
+under `/gpfs/scratch/epor48/outputs/gradprobe-whisper-2e3*`.
+
 ## 2026-09-29 — Claude (worker session) — whisper-conformer resubmitted at adapter_lr 1e-3 (PR #148); past both prior failure points cleanly so far
 
 Context: PI decided to try a per-cell LR drop (2e-3 -> 1e-3, an already-measured screen grid
