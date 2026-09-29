@@ -15,6 +15,33 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-09-29 — Claude (worker session) — whisper-conformer resubmitted at adapter_lr 1e-3 (PR #148); past both prior failure points cleanly so far
+
+Context: PI decided to try a per-cell LR drop (2e-3 -> 1e-3, an already-measured screen grid
+point) rather than a code change or dropping the cell, given the failure happened during
+warmup and a lower peak LR halves the actual LR at the point both prior attempts broke.
+
+Finding / proposal:
+1. **PR #148**, opened and merged in-session (again hit the harness's merge-without-review
+   guard on my own self-merge; PI looked at the diff on GitHub and confirmed, same
+   resolution as PR #147). Verified via `campaign.py plan` + full-grid diff regression
+   before opening: exactly one row changed (`adapter_lr` and the `-lr1e3`-tagged
+   exp_name/output_dir), all 64 other rows byte-identical.
+2. **Job 46776437 submitted** after sync. Watched the same early-step window that killed
+   both prior attempts (~step 4200/210000, epoch ~0.09-0.10): **clean through step 8246**
+   (4% of the first epoch, ~1h35m elapsed, 2x further than either previous attempt got),
+   `grad_norm` finite throughout, no `inf`/`nan` anywhere in the log so far.
+3. Not conclusive yet -- still very early (4% of one epoch), and the LR schedule has more
+   phases ahead (warmup completes then holds at the new 1e-3 peak, later a cosine decay).
+   Continuing to watch, but this is a meaningfully better sign than either prior attempt
+   gave at this point.
+
+Action needed: none yet -- watching. Will report if it explodes later, or once it clears
+comfortably past both previous failure points with real margin (e.g. an eval/save
+checkpoint landing, which failed to happen on both prior attempts).
+
+---
+
 ## 2026-09-29 — Claude (worker session) — whisper-conformer's retry reproduced the same gradient explosion; cancelled, needs a recipe decision
 
 Context: watched job 46751008 (the as-is retry from the previous entry) through its early
