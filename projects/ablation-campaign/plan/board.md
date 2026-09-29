@@ -54,6 +54,15 @@ Finding / proposal:
    ~5130-5204. With QK-norm: **11534 steps (to the 2 h limit), max grad_norm 182, zero non-finite
    steps, median loss of the last 100 steps 0.52** (unfixed probe run: ~2.9 at step 4600). Still
    one seed and ~5% of an epoch-scale run; it clears the failure window, not the whole schedule.
+5b. **Control the PI asked for: original architecture (no QK-norm) with warmup applied.** Same recipe but
+   `--trainer.warmup_steps 0.03` instead of the dropped `warmup_ratio` (MN5 `acc_debug`, one seed):
+   LR ramps from 2e-4 to the 2e-3 peak, **9031 steps (2 h limit), max grad_norm 113, zero non-finite
+   steps, median loss of the last 100 steps 0.41.** The unwarmed identical recipe exploded at step
+   ~5130-5204. So warmup alone removes the failure inside this window. Reading: the mechanism is still
+   unbounded attention logits (probe evidence above), but the missing warmup is the trigger that
+   matters for the campaign recipe; QK-norm is protection against the same failure at a full-LR start.
+   Caveat: one seed, ~4% of the planned schedule, and the 1e-3 run only failed at epoch 0.53, so 9k
+   steps does not prove the failure is gone for the whole run. Not tested: warmup + QK-norm together.
 6. **Trust.** (a) whisper-conformer 1e-3 (46776437): NaN-poisoned from epoch ~0.53; its checkpoint-19091
    (epoch 0.4545) predates the failure and is probably clean, but the run had many spikes before onset
    (1.6% of steps above 20x rolling median), so the lower LR only delayed the failure. mhubert's
