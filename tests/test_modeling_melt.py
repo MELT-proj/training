@@ -431,7 +431,10 @@ class TestAdapterOutputFeaturesShape:
         config.text_decoder_config = MagicMock()
         config.text_decoder_config.hidden_size = 1024
 
-        with patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
+        with (
+            patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()),
+            patch("melt.modeling.modeling_melt._add_qk_norm"),
+        ):
             adapter = MELTConformerAdapter(config)
 
         seq_len = 100
@@ -461,7 +464,10 @@ class TestAdapterOutputFeaturesShape:
         config.text_decoder_config = MagicMock()
         config.text_decoder_config.hidden_size = 1024
 
-        with patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
+        with (
+            patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()),
+            patch("melt.modeling.modeling_melt._add_qk_norm"),
+        ):
             adapter = MELTConformerAdapter(config)
 
         seq_len = 100
@@ -494,7 +500,10 @@ class TestAdapterOutputFeaturesShape:
         config.text_decoder_config = MagicMock()
         config.text_decoder_config.hidden_size = 2048
 
-        with patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
+        with (
+            patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()),
+            patch("melt.modeling.modeling_melt._add_qk_norm"),
+        ):
             adapter = MELTConformerAdapter(config)
 
         batch_size = 2
@@ -527,7 +536,10 @@ class TestAdapterOutputFeaturesShape:
         config.text_decoder_config = MagicMock()
         config.text_decoder_config.hidden_size = 1024
 
-        with patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
+        with (
+            patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()),
+            patch("melt.modeling.modeling_melt._add_qk_norm"),
+        ):
             adapter = MELTConformerAdapter(config)
 
         batch_size = 2
@@ -821,9 +833,31 @@ class TestConformerAdapterLayers:
         ours = MELTConformerAdapter(config).layers[0]
         original = Wav2Vec2BertAdapterLayer(encoder)
 
-        assert {k: tuple(v.shape) for k, v in ours.state_dict().items()} == {
+        assert {
+            k: tuple(v.shape) for k, v in ours.state_dict().items() if "norm_weight" not in k
+        } == {
             k: tuple(v.shape) for k, v in original.state_dict().items()
         }
+
+    def test_the_attention_logits_do_not_follow_the_query_and_key_weights(self):
+        """Unbounded logits saturate the softmax under full-LR Adam and overflow the backward
+        in bf16 (board 2026-09-29): q and k must be normalised per head."""
+        adapter = _conformer_adapter(_tiny_encoder_config("whisper", 64)).eval()
+        attn = adapter.layers[0].self_attn
+        x = torch.randn(2, 20, 64)
+
+        def q_and_k_rms():
+            with torch.no_grad():
+                return [getattr(attn, n)(x).pow(2).mean().sqrt() for n in ("linear_q", "linear_k")]
+
+        before = q_and_k_rms()
+        with torch.no_grad():
+            attn.linear_q.weight.mul_(100)
+            attn.linear_k.weight.mul_(100)
+        after = q_and_k_rms()
+
+        for b, a in zip(before, after):
+            assert a == pytest.approx(b, rel=0.1)
 
     def test_the_layers_attention_is_sdpa_whatever_the_encoder_runs(self):
         """Wav2Vec2BertSelfAttention has no flash path."""
