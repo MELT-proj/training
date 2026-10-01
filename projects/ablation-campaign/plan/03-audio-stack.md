@@ -176,6 +176,32 @@ Then IFT for the top three or four stacks (week 4), and one confirmation of
 the winning stack on the winning backbone (week 6). The encoder × backbone
 interaction is assumed small and is stated as an assumption.
 
+## 2b. Whisper size ladder (PI, 2026-10-01)
+
+Whisper-large-v3 is the leading encoder, and it encodes a full 30 s window
+(1,500 positions) per utterance whatever the length. A rough count puts
+its encoder forward pass at about 1.9 TFLOP per utterance, against about
+1 TFLOP for the Llama-1B forward and backward, so the encoder may dominate
+the step. This is an estimate; the arms' step times will measure it.
+Smaller Whisper encoders could save most of that, and the question is how
+much multilingual quality they give up, since the small models are much
+weaker outside English.
+
+| encoder | encoder params | width × layers |
+|---|---|---|
+| whisper-tiny | ~8M | 384 × 4 |
+| whisper-base | ~20M | 512 × 6 |
+| whisper-small | ~88M | 768 × 12 |
+| whisper-medium | ~307M | 1024 × 24 |
+| whisper-large-v3 (crossing) | ~635M | 1280 × 32 |
+
+Four MA arms: tiny, base, small and medium, each with **the adapter that wins
+the crossing**, on the crossing recipe (§1b), one seed. Large-v3 is the
+crossing's own cell. Scored with the selection metric; GPU-h per step taken
+from SLURM accounting. Runs **after the backbone MA arms** (week 5).
+`large-v3-turbo` is not included: it prunes only the decoder, which this
+pipeline does not use. The result is one curve on the §4 figure.
+
 ## 3. Confounds, and how each is handled
 
 | confound | handling |

@@ -399,6 +399,11 @@ audio stacks, regime fraction.
       encoder, and that assumption is stated in `04-regime.md`.
 
 ### Track B — preparation
+- [ ] **Whisper size ladder prep** (`03` §2b): stage whisper-tiny/-base/
+      -small/-medium in MN5's hf_cache via `mn5transfer`; add tiny and base
+      to `plan_arm.py` `ENCODER_WINDOW_FRAMES`; one offline-load `acc_debug`
+      smoke per size; render the four rows once the crossing names its
+      adapter.
 - [ ] Ladder eval pipeline: melt-eval configs for FLEURS-24 ASR, FLEURS X→en,
       CV22 test, CoVoST2 X→en where it exists; COMET rescoring environment on
       an internal GPU.
@@ -424,6 +429,13 @@ audio stacks, regime fraction.
       and independent of the regime decision so they can go early.
 - [ ] **R9 and R10**, the decoder-frozen regime runs (`04-regime.md` §3),
       if not already queued in week 4.
+- [ ] **Whisper size ladder** (`03-audio-stack.md` §2b; PI, 2026-10-01):
+      whisper-tiny, -base, -small and -medium encoders, each with the adapter
+      that wins the week-3 crossing, on the crossing recipe, one seed each.
+      Queued after the backbone MA arms. Est. under ~750 GPU-h for four,
+      since each is cheaper than a large-v3 arm.
+      *Outcome:* how the selection metric and the cost per step change with
+      encoder size, so that compute can be saved if a smaller encoder holds up.
 - [ ] Q-Former arms of the week-3 crossing, if the fix landed late.
 
 ### Track B — preparation
