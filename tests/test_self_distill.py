@@ -584,6 +584,56 @@ class TestTrainerEndToEnd:
 
 
 @pytest.mark.hub
+class TestTeacherReadsTheStoredText:
+    """The dataset lowercases labels; the teacher must still get the field as stored."""
+
+    PNC = "Hello, World. It's 5 o'clock."
+
+    def test_map_dataset_returns_raw_text_next_to_the_lowercased_text(self):
+        from lhotse import MonoCut
+        from lhotse.audio import Recording
+        from lhotse.supervision import SupervisionSegment
+
+        from melt.training.self_distill import SelfDistillMapDataset
+
+        cut = MonoCut(
+            id="c0", start=0.0, duration=1.0, channel=0,
+            supervisions=[SupervisionSegment(id="c0", recording_id="r", start=0.0, duration=1.0, text="x")],
+            custom={"pnc_text": self.PNC},
+            recording=Recording(id="r", sources=[], sampling_rate=16000, num_samples=16000, duration=1.0),
+        )
+        ds = object.__new__(SelfDistillMapDataset)
+        ds.cuts = [cut]
+        ds._valid_indices = [0]
+        ds._text_field = "custom.pnc_text"
+        ds._strict_text_field = False
+        ds._skip_text_field_mismatch = False
+        with patch("melt.training.data.audio.lhotse.map_dataset.load_audio_from_cut", return_value=object()):
+            item = ds[0]
+        assert item["text"] == self.PNC.lower()
+        assert item["raw_text"] == self.PNC
+
+    def test_eval_collator_builds_the_teacher_prompt_from_raw_text(self):
+        from melt.training.self_distill import SelfDistillEvalCollator
+
+        seen = {}
+
+        def fake_build(processor, texts, tasks, langs, template):
+            seen["texts"] = texts
+            return {}
+
+        collator = object.__new__(SelfDistillEvalCollator)
+        collator.processor = None
+        collator.student_prompt_template = "{audio_token}"
+        items = [{"text": self.PNC.lower(), "raw_text": self.PNC, "task": "asr", "lang": "en"}]
+        with (
+            patch("melt.training.self_distill.build_distill_prompts", fake_build),
+            patch("melt.training.self_distill.MELTDataCollator.__call__", return_value={}),
+        ):
+            collator(items)
+        assert seen["texts"] == [self.PNC]
+
+
 class TestPrompts:
     """Student and teacher prompts differ in the user turn, and only there."""
 

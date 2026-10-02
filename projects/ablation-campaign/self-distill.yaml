@@ -42,12 +42,8 @@ trainer:
     num_decay_steps: 8400
     min_lr_ratio: 0.1
     decay_type: cosine
-  # The reference arm is rendered with warmup_ratio 0.03 + warmup_steps 0, but
-  # transformers 5 removed warmup_ratio (config.py drops it with a warning) and
-  # takes a ratio as a float warmup_steps instead -- so that arm trains with no
-  # warmup at all. Matched here as it actually ran, not as it was meant to;
-  # 0.03 is the value to use once the campaign renders it as warmup_steps.
-  warmup_steps: 0
+  # A float is a ratio of the total steps in transformers 5.
+  warmup_steps: 0.03
   eval_steps: 3818
   save_steps: 3818
   save_total_limit: 2

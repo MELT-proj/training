@@ -84,8 +84,9 @@ TRL (the `distill` extra, pinned to 0.29.x because every TRL 1.x needs a newer
 - Every step generates up to `distill.max_new_tokens` tokens with HF
   `generate` (MELT's audio-embedding model cannot be served by vLLM), so a step
   costs several times an MA step. Measure it before sizing a run.
-- Transcripts reach the teacher lowercased, because the dataset lowercases all
-  text. AZeroS feeds the raw transcript.
+- The teacher reads the transcript as stored in the source field (punctuated
+  and cased for `custom.pnc_text`), whereas the student's labels in the standard
+  path are lowercased by the dataset.
 - The method assumes an instruct decoder whose instruction-free reply actually
   restates the content of the input (AZeroS's "self-elicit" condition, their
   §5.7). Check that on the target decoder before training: a decoder that
