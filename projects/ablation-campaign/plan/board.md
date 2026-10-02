@@ -15,6 +15,48 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-02 — Claude (worker session) — online self-distillation MA trainer built (not launched); WSD arms run with NO warmup under transformers 5
+
+Context: PI asked for an assessment and an implementation of online, on-policy
+AZeroS-style modality alignment (teacher = frozen decoder on the transcript,
+student = audio path, adapter-only). No run was submitted; the trial run is to
+be discussed with the PI first.
+
+Finding / proposal:
+1. **`warmup_ratio` is silently dropped under transformers 5.16, so every
+   WSD arm rendered with `warmup_ratio 0.03` + `warmup_steps 0` (the screen and
+   the crossing) trains with zero warmup**, at the full peak LR from step 0.
+   transformers 5 removed the `warmup_ratio` field and accepts a ratio as a
+   float `warmup_steps` instead; `config.py`'s `trainer_args_dict` drops the
+   unknown key with a warning ("dropping ... ['group_by_length',
+   'warmup_ratio'] ... will NOT take effect"), and `plan_arm.py` forces
+   `warmup_steps 0` next to it. Checked against the installed
+   `Seq2SeqTrainingArguments` fields; not checked against a real run log yet --
+   any WSD arm's startup log should carry that warning. Possibly relevant to
+   whisper-conformer, whose explosion the entries below place "during warmup".
+   Not fixed: the one-line fix (render the ratio as `--trainer.warmup_steps
+   0.03`) changes the recipe of arms still to run, so it is a PI decision.
+2. Self-distillation code: `melt/training/self_distill.py`,
+   `melt/training/train_self_distill.py`, overlay
+   `projects/ablation-campaign/self-distill.yaml`, off-ledger launcher
+   `launch_self_distill.sh`, design notes `docs/self_distillation.md`. The
+   overlay matches `MA-700-screen-w2vb-lr2e3-b300-evalfrozen` except for the
+   objective (including its effective zero warmup, see 1). Standard path
+   untouched; `run_train.sh` gained `MELT_TRAIN_MODULE` (default unchanged).
+   Loss from TRL 0.29.1's GKD divergence; TRL is not in the image.
+3. `uv.lock` already fails `uv lock --check` at HEAD (project version bumped
+   without a relock); a relock also moves ~30 packages (numpy etc.) from the
+   PyTorch index to PyPI. Left untouched -- relocking is a deliberate decision
+   because the image builds with `--locked`.
+4. `infrastructure.md`'s nyx test image is stale: the `_lhotse2_td` image named
+   there carries transformers 4.57.1; the suite needs the transformers 5 image
+   (the default symlink). Not edited, since the line is a cluster path.
+
+Action needed: PI -- decide on the warmup fix (1); decide the self-distillation
+trial setup and how TRL reaches the image (2, 3).
+
+---
+
 ## 2026-09-29 — Claude (worker session) — whisper-conformer resubmitted at adapter_lr 1e-3 (PR #148); past both prior failure points cleanly so far
 
 Context: PI decided to try a per-cell LR drop (2e-3 -> 1e-3, an already-measured screen grid

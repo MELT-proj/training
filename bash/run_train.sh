@@ -3,7 +3,8 @@
 # THE training launcher for every context: local machine, SLURM (native venv),
 # and inside a Singularity/Apptainer container (invoked by the sbatch shim).
 # It knows nothing about containers — it just activates a venv (if present) and
-# runs `accelerate launch python -m melt.training.train`.
+# runs `accelerate launch python -m melt.training.train` (or the module named by
+# MELT_TRAIN_MODULE, e.g. melt.training.train_self_distill).
 #
 # Usage:
 #   ./bash/run_train.sh <accelerate_config> [train_args...]
@@ -52,6 +53,10 @@ export TMPDIR="${TMPDIR:-/tmp}"
 export WANDB_PROJECT="${WANDB_PROJECT:-melt}"
 export WANDB_MODE="${WANDB_MODE:-online}"
 export MELT_SEED="${MELT_SEED:-42}"
+# Training entrypoint module. Every campaign arm runs the default; a method
+# with its own trainer (melt.training.train_self_distill) sets this instead of
+# forking the launcher.
+export MELT_TRAIN_MODULE="${MELT_TRAIN_MODULE:-melt.training.train}"
 export TORCHDYNAMO_VERBOSE="${TORCHDYNAMO_VERBOSE:-1}"
 export TORCH_NCCL_ASYNC_ERROR_HANDLING="${TORCH_NCCL_ASYNC_ERROR_HANDLING:-1}"
 export HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-1}"
@@ -167,7 +172,7 @@ if is_master_node; then
     echo "[run_train] environment:"
     for v in VENV_PATH HF_HOME HF_HUB_OFFLINE LOCAL_DATASETS_DIR \
              TMPDIR ACCELERATE_LOG_LEVEL TRANSFORMERS_VERBOSITY TORCHDYNAMO_VERBOSE \
-             TORCH_NCCL_ASYNC_ERROR_HANDLING HF_HUB_ENABLE_HF_TRANSFER MELT_SEED; do
+             TORCH_NCCL_ASYNC_ERROR_HANDLING HF_HUB_ENABLE_HF_TRANSFER MELT_SEED MELT_TRAIN_MODULE; do
         echo "  $v=${!v:-}"
     done
     # Whatever experiment tracker is configured, print its settings: they
@@ -271,7 +276,7 @@ if [[ "$RUNNING_UNDER_SLURM" -eq 1 ]]; then
         # Re-invoking srun inside a step nests/breaks; SLURM_PROCID is this task's rank.
         log_master "[run_train] inside an srun step; launching directly"
         "${LAUNCH_CMD[@]}" --machine_rank "${SLURM_PROCID:-0}" \
-            --module melt.training.train "${SEED_ARGS[@]}" "$@" 2>&1
+            --module "$MELT_TRAIN_MODULE" "${SEED_ARGS[@]}" "$@" 2>&1
     else
         # One srun task per node; --machine_rank is evaluated per task inside the
         # step (splice it in right after `accelerate launch`).
@@ -279,8 +284,8 @@ if [[ "$RUNNING_UNDER_SLURM" -eq 1 ]]; then
         srun "${SRUN_ARGS[@]}" --jobid "$SLURM_JOB_ID" bash -c '
             cmd=("$@")
             exec "${cmd[@]:0:2}" --machine_rank "${SLURM_PROCID:-0}" "${cmd[@]:2}"
-        ' _ "${LAUNCH_CMD[@]}" --module melt.training.train "${SEED_ARGS[@]}" "$@" 2>&1
+        ' _ "${LAUNCH_CMD[@]}" --module "$MELT_TRAIN_MODULE" "${SEED_ARGS[@]}" "$@" 2>&1
     fi
 else
-    "${LAUNCH_CMD[@]}" --module melt.training.train "${SEED_ARGS[@]}" "$@" 2>&1
+    "${LAUNCH_CMD[@]}" --module "$MELT_TRAIN_MODULE" "${SEED_ARGS[@]}" "$@" 2>&1
 fi
