@@ -46,8 +46,7 @@ from .data.audio.lhotse import (
     SpeechToTextDataset,
     get_train_dataloader_from_config,
 )
-from .data.audio.lhotse.helpers import _get_config_value, apply_chat_template_to_texts, get_text_from_cut
-from .data.audio.lhotse.map_dataset import MELTMapDataset
+from .data.audio.lhotse.helpers import _get_config_value, apply_chat_template_to_texts
 from .trainer import MELTTrainer
 
 
@@ -233,13 +232,6 @@ class SelfDistillDataset(SpeechToTextDataset):
         super().__init__(*args, **kwargs)
         _require_instruction_free_setup(self.config)
         self._batch_meta: tuple[list[str], list[str], list[str]] | None = None
-        self._raw_texts: list[str] = []
-
-    def _get_text(self, cut):
-        text = super()._get_text(cut)
-        if text and text.strip():
-            self._raw_texts.append(text.strip())
-        return text
 
     def _apply_chat_template(self, texts, tasks, langs, src_langs=None, tgt_langs=None):
         self._batch_meta = (list(texts), list(tasks), list(langs))
@@ -247,34 +239,12 @@ class SelfDistillDataset(SpeechToTextDataset):
 
     def __getitem__(self, cuts):
         self._batch_meta = None
-        self._raw_texts = []
         batch = super().__getitem__(cuts)
         if batch is None:
             return None
         texts, tasks, langs = self._batch_meta
-        # The parent lowercases every transcript before it reaches the student's
-        # labels; the teacher reads the text as stored (PNC for pnc_text sources).
-        if [t.lower() for t in self._raw_texts] != texts:
-            raise RuntimeError("Raw transcripts no longer line up with the kept cuts of the batch.")
-        batch.update(build_distill_prompts(self.processor, self._raw_texts, tasks, langs, self.prompt_template))
+        batch.update(build_distill_prompts(self.processor, texts, tasks, langs, self.prompt_template))
         return batch
-
-
-class SelfDistillMapDataset(MELTMapDataset):
-    """``MELTMapDataset`` that also returns the transcript as stored (``raw_text``)."""
-
-    def __getitem__(self, idx: int) -> dict:
-        item = super().__getitem__(idx)
-        if not item.get("__invalid__", False):
-            cut = self.cuts[self._valid_indices[idx]]
-            raw = get_text_from_cut(
-                cut,
-                self._resolve_text_field(cut),
-                strict=self._strict_text_field,
-                skip_on_mismatch=self._skip_text_field_mismatch,
-            )
-            item["raw_text"] = raw.strip()
-        return item
 
 
 class SelfDistillEvalCollator(MELTDataCollator):
@@ -295,7 +265,7 @@ class SelfDistillEvalCollator(MELTDataCollator):
         batch.update(
             build_distill_prompts(
                 self.processor,
-                [it["raw_text"] for it in valid],
+                [it["text"] for it in valid],
                 [it.get("task", "asr") for it in valid],
                 [it.get("lang", "") for it in valid],
                 self.student_prompt_template,
@@ -484,9 +454,6 @@ class MELTSelfDistillTrainer(MELTTrainer):
         self._distill_stats: dict[str, list[float]] = defaultdict(list)
 
         if self._eval_collator is not None:
-            eval_sets = self.eval_dataset if isinstance(self.eval_dataset, dict) else {"": self.eval_dataset}
-            for ds in eval_sets.values():
-                ds.__class__ = SelfDistillMapDataset  # adds raw_text only; no new state
             self._eval_collator = SelfDistillEvalCollator(
                 processor=processor,
                 config=self._eval_collator.config,
@@ -694,7 +661,6 @@ __all__ = [
     "SelfDistillConfig",
     "SelfDistillDataset",
     "SelfDistillEvalCollator",
-    "SelfDistillMapDataset",
     "build_distill_prompts",
     "check_adapter_only",
     "check_adapter_only_gradients",
