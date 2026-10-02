@@ -584,6 +584,26 @@ class TestTrainerEndToEnd:
 
 
 @pytest.mark.hub
+class TestVocabLimit:
+    @staticmethod
+    def _processor(eos, pad):
+        return SimpleNamespace(
+            audio_token_id=100, audio_bos_token_id=101, audio_eos_token_id=102,
+            tokenizer=SimpleNamespace(eos_token_id=eos, pad_token_id=pad),
+        )
+
+    def test_a_pad_token_added_after_the_audio_tokens_is_allowed(self):
+        from melt.training.self_distill import distill_vocab_limit
+
+        assert distill_vocab_limit(self._processor(eos=7, pad=103)) == 100
+
+    def test_an_eos_past_the_limit_is_refused(self):
+        from melt.training.self_distill import distill_vocab_limit
+
+        with pytest.raises(ValueError, match="eos_token_id"):
+            distill_vocab_limit(self._processor(eos=103, pad=3))
+
+
 class TestTeacherReadsTheStoredText:
     """The dataset lowercases labels; the teacher must still get the field as stored."""
 

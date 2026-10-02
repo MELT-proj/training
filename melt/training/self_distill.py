@@ -348,10 +348,11 @@ def distill_vocab_limit(processor) -> int:
     keeps the student from being scored on mass it can only put on placeholders.
     """
     limit = min(processor.audio_token_id, processor.audio_bos_token_id, processor.audio_eos_token_id)
-    for name in ("eos_token_id", "pad_token_id"):
-        token_id = getattr(processor.tokenizer, name, None)
-        if token_id is not None and token_id >= limit:
-            raise ValueError(f"tokenizer.{name}={token_id} lies past MELT's added tokens (limit {limit}).")
+    # The stop token must be inside the teacher's distribution. The pad id may lie
+    # past the limit (Qwen's is a token MELT adds): it only fills masked positions.
+    eos = getattr(processor.tokenizer, "eos_token_id", None)
+    if eos is not None and eos >= limit:
+        raise ValueError(f"tokenizer.eos_token_id={eos} lies past MELT's added tokens (limit {limit}).")
     return limit
 
 
