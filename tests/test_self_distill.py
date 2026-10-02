@@ -26,7 +26,6 @@ from unittest.mock import patch
 import pytest
 import torch
 from omegaconf import OmegaConf
-from transformers import LlamaConfig, Seq2SeqTrainingArguments, Wav2Vec2BertConfig
 
 from melt.modeling import MELTConfig, MELTForCausalLM
 from melt.training import train as standard_train
@@ -45,6 +44,7 @@ from melt.training.train_self_distill import (
     install_self_distill_trainer,
     load_layered_config,
 )
+from transformers import LlamaConfig, Seq2SeqTrainingArguments, Wav2Vec2BertConfig
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -639,10 +639,9 @@ class TestPrompts:
 
     @staticmethod
     def _processor():
+        from melt.modeling.processing_melt import MELTProcessor
         from transformers import AutoTokenizer
         from transformers.feature_extraction_utils import FeatureExtractionMixin
-
-        from melt.modeling.processing_melt import MELTProcessor
 
         tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-1.7B")
         specials = {"audio_token": "<|audio|>", "audio_bos_token": "<|audio_bos|>", "audio_eos_token": "<|audio_eos|>"}
