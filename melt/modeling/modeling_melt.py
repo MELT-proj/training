@@ -582,6 +582,36 @@ def _conformer_layer_config(width: int, kernel_size: int, stride: int) -> Wav2Ve
     return config
 
 
+class _HeadNormLinear(nn.Linear):
+    """``nn.Linear`` whose output is RMS-normalised per attention head (QK-norm).
+
+    Bounds the attention logits regardless of the projection weights' scale; without it
+    they grow with the weights under full-LR Adam, the softmax saturates, and the
+    backward pass overflows in bf16. The normalisation runs in fp32.
+    """
+
+    def __init__(self, in_features: int, out_features: int, head_size: int):
+        super().__init__(in_features, out_features)
+        self.head_size = head_size
+        self.norm_weight = nn.Parameter(torch.ones(head_size))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        y = super().forward(x)
+        heads = y.float().unflatten(-1, (-1, self.head_size))
+        heads = F.rms_norm(heads, (self.head_size,)) * self.norm_weight.float()
+        return heads.flatten(-2).to(y.dtype)
+
+
+def _add_qk_norm(layer: Wav2Vec2BertAdapterLayer) -> None:
+    """Swap the layer's query and key projections for per-head normalising ones."""
+    attn = layer.self_attn
+    for name in ("linear_q", "linear_k"):
+        old = getattr(attn, name)
+        new = _HeadNormLinear(old.in_features, old.out_features, attn.head_size)
+        new.load_state_dict(old.state_dict(), strict=False)
+        setattr(attn, name, new)
+
+
 class MELTConformerAdapter(nn.Module):
     """
     Conformer-based audio adapter (similar to Wav2Vec2BertAdapter).
@@ -645,6 +675,8 @@ class MELTConformerAdapter(nn.Module):
         self.layers = nn.ModuleList(
             Wav2Vec2BertAdapterLayer(layer_config) for _ in range(num_adapter_layers)
         )
+        for layer in self.layers:
+            _add_qk_norm(layer)
 
         # Final projection to text decoder hidden size
         adapter_output_size = output_hidden_size
