@@ -60,6 +60,12 @@ Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
 - **The week-3 crossing render waits on the crossing-prep item** (week 3
   Track B). All its PI decisions were made on 2026-09-26 (`03-audio-stack.md`
   §1b).
+- **The crossing waits on Yodas v3** (PI, 2026-10-02). Yodas v3 is
+  being prepared as a Shar source in another session. When it lands, the
+  orchestrator edits the MA campaign config: add the source, reweight it to
+  2,100 h per language and 10,500 h in total, and replace epochs with
+  absolute hours (`03` §1b). Before rendering, check that each language,
+  Italian included, has at least 2,100 distinct hours.
 - **The Conformer adapter's gradient explodes: 5 of 5 crossing runs** (board
   2026-09-28/29). The signature is `grad_norm` inf for several steps, then nan;
   loss reads 0 and the job trains a poisoned model for hours before a CUDA
@@ -344,8 +350,9 @@ assumed one (`03-audio-stack.md` §0).*
       *Outcome:* the new baseline numbers, replacing the August ones.
 - [ ] **Audio-stack MA crossing** (`03-audio-stack.md` §2), moved from week 4:
       4 encoders × 4 adapters at MA-stage cost on Llama-3.2-1B-Instruct, one
-      recipe for all sixteen, all at the same frame rate, **five epochs per
-      arm** (PI, 2026-09-23; 17,500 sampled audio-h, `03` §1b). ≈ 150 GPU-h
+      recipe for all sixteen, all at the same frame rate, **2,100 h per
+      language, 10,500 h per arm** (PI, 2026-10-02, replacing five epochs;
+      `03` §1b). ≈ 150 GPU-h
       per arm at 1200 s, ≈ 2,400 for sixteen, all in the queue at once.
       Render waits on the PI decisions under Blocked / waiting and on the
       crossing-prep item below.
