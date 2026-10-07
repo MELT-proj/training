@@ -70,8 +70,9 @@ Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
   once the runs are going): shards 0..N-1, about 2,000 h per language, into
   `/gpfs/scratch/epor48/melt-data/yodas3/<lang>/train`; the orchestrator
   verifies it on arrival;
-  (3) the crossing session sets the yodas3 paths to that scratch path,
-  re-points the rows (new ids, the new config, no `epochs: 5`, walltimes cut
+  (3) the crossing session links `shar-indexed/yodas3` to that scratch
+  path (the config keeps `LOCAL_DATASETS_DIR`; check that the container can
+  see `/gpfs/scratch`), re-points the rows (new ids, the new config, no `epochs: 5`, walltimes cut
   to ~0.6x) and
   (4) runs an acc_debug smoke on the new mix;
   (5) copy the remaining yodas3 shards once the crossing is running.
