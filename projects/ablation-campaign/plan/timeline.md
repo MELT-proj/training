@@ -60,12 +60,17 @@ Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
 - **The week-3 crossing render waits on the crossing-prep item** (week 3
   Track B). All its PI decisions were made on 2026-09-26 (`03-audio-stack.md`
   §1b).
-- **The crossing waits on Yodas v3** (PI, 2026-10-02). Yodas v3 is
-  being prepared as a Shar source in another session. When it lands, the
-  orchestrator edits the MA campaign config: add the source, reweight it to
-  2,100 h per language and 10,500 h in total, and replace epochs with
-  absolute hours (`03` §1b). Before rendering, check that each language,
-  Italian included, has at least 2,100 distinct hours.
+- **The crossing waits on Yodas v3 reaching MN5, and on its rows.**
+  Prepared on nyx 2026-10-07 (de/es/fr/it; 15.5k-55.6k h each). The config
+  is rendered in PR #150 as `ABL-MA-2100-asr.yaml`: 2,100 h per language,
+  10,500 h in total, with yodas3 topping up past Italian's 700 h. English
+  tops up from yodas-granary (PI, 2026-10-07). Still to do:
+  (1) merge #150;
+  (2) copy yodas3 to MN5 (PI decides: everything, ~7 TB, or a shard subset of
+  at least 1,400 h per language, ~0.5 TB);
+  (3) the crossing session re-points the rows (new ids, the new config, no
+  `epochs: 5`, walltimes cut to ~0.6x);
+  (4) an acc_debug smoke on the new mix.
 - **The Conformer adapter's gradient explodes: 5 of 5 crossing runs** (board
   2026-09-28/29). The signature is `grad_norm` inf for several steps, then nan;
   loss reads 0 and the job trains a poisoned model for hours before a CUDA
