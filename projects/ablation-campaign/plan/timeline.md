@@ -66,11 +66,15 @@ Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
   10,500 h in total, with yodas3 topping up past Italian's 700 h. English
   tops up from yodas-granary (PI, 2026-10-07). Still to do:
   (1) merge #150;
-  (2) copy yodas3 to MN5 (PI decides: everything, ~7 TB, or a shard subset of
-  at least 1,400 h per language, ~0.5 TB);
-  (3) the crossing session re-points the rows (new ids, the new config, no
-  `epochs: 5`, walltimes cut to ~0.6x);
-  (4) an acc_debug smoke on the new mix.
+  (2) the copy to MN5 is in flight (PI, 2026-10-08: a subset first, the rest
+  once the runs are going): shards 0..N-1, about 2,000 h per language, into
+  `/gpfs/scratch/epor48/melt-data/yodas3/<lang>/train`; the orchestrator
+  verifies it on arrival;
+  (3) the crossing session sets the yodas3 paths to that scratch path,
+  re-points the rows (new ids, the new config, no `epochs: 5`, walltimes cut
+  to ~0.6x) and
+  (4) runs an acc_debug smoke on the new mix;
+  (5) copy the remaining yodas3 shards once the crossing is running.
 - **The Conformer adapter's gradient explodes: 5 of 5 crossing runs** (board
   2026-09-28/29). The signature is `grad_norm` inf for several steps, then nan;
   loss reads 0 and the job trains a poisoned model for hours before a CUDA
