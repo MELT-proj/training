@@ -93,235 +93,239 @@ data:
 
     # Data sources - list of datasets to load
     input_cfg:
-      # ASR en: 2,100.0 h, reference-matched mix
+      # `weight` is a per-CUT draw probability: lhotse's mux picks one cut per draw, so
+      # a source's share of the audio is weight x its mean cut length. Each weight is the
+      # share of the cuts that make up the hours listed beside it (hours / mean cut), so
+      # those hours are what a run draws. build_campaign_config.py --weights cuts.
+      # ASR en: 2,100.0 h, reference-matched mix -- 26.9% of the cuts, 20.0% of the hours
       - type: group
-        weight: 0.20000000
+        weight: 0.26918439
         tags:
           task: asr
           lang: en
         input_cfg:
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/English/asr_only
-            weight: 0.66650880
+            weight: 0.65299205
             tags:
               task: asr
               lang: en
-            # 1,399.7 h of yodas3
+            # 1,399.7 h of yodas3 (read from yodas-granary), mean cut 9.0 s
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/en/train
-            weight: 0.12126304
+            weight: 0.18886545
             tags:
               task: asr
               lang: en
               text_field: custom.metadata.sentence
-            # 254.7 h of cv22_sidon
+            # 254.7 h of cv22_sidon, mean cut 5.7 s
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/english/train
-            weight: 0.11779900
+            weight: 0.07012110
             tags:
               task: asr
               lang: en
               text_field: custom.pnc_text
-            # 247.4 h of mls_sidon
+            # 247.4 h of mls_sidon, mean cut 14.9 s
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/English/asr_only
-            weight: 0.05725785
+            weight: 0.05609667
             tags:
               task: asr
               lang: en
-            # 120.2 h of yodas-granary
+            # 120.2 h of yodas-granary, mean cut 9.0 s
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/en/train
-            weight: 0.03717131
+            weight: 0.03192473
             tags:
               task: asr
               lang: en
               text_field: custom.pnc_text
-            # 78.1 h of voxpopuli
-      # ASR de: 2,100.0 h, reference-matched mix
+            # 78.1 h of voxpopuli, mean cut 10.3 s
+      # ASR de: 2,100.0 h, reference-matched mix -- 18.2% of the cuts, 20.0% of the hours
       - type: group
-        weight: 0.20000000
+        weight: 0.18165521
         tags:
           task: asr
           lang: de
         input_cfg:
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas3/de/train
-            weight: 0.66650880
+            weight: 0.38813642
             tags:
               task: asr
               lang: de
               text_field: custom.pnc_text
-            # 1,399.7 h of yodas3
+            # 1,399.7 h of yodas3, mean cut 22.5 s
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/de/train
-            weight: 0.12126304
+            weight: 0.27907265
             tags:
               task: asr
               lang: de
               text_field: custom.metadata.sentence
-            # 254.7 h of cv22_sidon
+            # 254.7 h of cv22_sidon, mean cut 5.7 s
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/german/train
-            weight: 0.11779900
+            weight: 0.10260379
             tags:
               task: asr
               lang: de
               text_field: custom.pnc_text
-            # 247.4 h of mls_sidon
+            # 247.4 h of mls_sidon, mean cut 15.1 s
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/German/asr_only
-            weight: 0.05725785
+            weight: 0.17464777
             tags:
               task: asr
               lang: de
-            # 120.2 h of yodas-granary
+            # 120.2 h of yodas-granary, mean cut 4.3 s
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/de/train
-            weight: 0.03717131
+            weight: 0.05553937
             tags:
               task: asr
               lang: de
               text_field: custom.pnc_text
-            # 78.1 h of voxpopuli
-      # ASR fr: 2,100.0 h, reference-matched mix
+            # 78.1 h of voxpopuli, mean cut 8.8 s
+      # ASR fr: 2,100.0 h, reference-matched mix -- 18.3% of the cuts, 20.0% of the hours
       - type: group
-        weight: 0.20000000
+        weight: 0.18347391
         tags:
           task: asr
           lang: fr
         input_cfg:
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas3/fr/train
-            weight: 0.66650880
+            weight: 0.38366952
             tags:
               task: asr
               lang: fr
               text_field: custom.pnc_text
-            # 1,399.7 h of yodas3
+            # 1,399.7 h of yodas3, mean cut 22.6 s
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/fr/train
-            weight: 0.12126304
+            weight: 0.30502308
             tags:
               task: asr
               lang: fr
               text_field: custom.metadata.sentence
-            # 254.7 h of cv22_sidon
+            # 254.7 h of cv22_sidon, mean cut 5.2 s
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/french/train
-            weight: 0.11779900
+            weight: 0.10195772
             tags:
               task: asr
               lang: fr
               text_field: custom.pnc_text
-            # 247.4 h of mls_sidon
+            # 247.4 h of mls_sidon, mean cut 15.0 s
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/French/asr_only
-            weight: 0.05725785
+            weight: 0.16137964
             tags:
               task: asr
               lang: fr
-            # 120.2 h of yodas-granary
+            # 120.2 h of yodas-granary, mean cut 4.6 s
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/fr/train
-            weight: 0.03717131
+            weight: 0.04797004
             tags:
               task: asr
               lang: fr
               text_field: custom.pnc_text
-            # 78.1 h of voxpopuli
-      # ASR es: 2,100.0 h, reference-matched mix
+            # 78.1 h of voxpopuli, mean cut 10.1 s
+      # ASR es: 2,100.0 h, reference-matched mix -- 19.4% of the cuts, 20.0% of the hours
       - type: group
-        weight: 0.20000000
+        weight: 0.19443579
         tags:
           task: asr
           lang: es
         input_cfg:
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas3/es/train
-            weight: 0.66650880
+            weight: 0.33604339
             tags:
               task: asr
               lang: es
               text_field: custom.pnc_text
-            # 1,399.7 h of yodas3
+            # 1,399.7 h of yodas3, mean cut 24.3 s
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/es/train
-            weight: 0.12126304
+            weight: 0.28710525
             tags:
               task: asr
               lang: es
               text_field: custom.metadata.sentence
-            # 254.7 h of cv22_sidon
+            # 254.7 h of cv22_sidon, mean cut 5.2 s
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/spanish/train
-            weight: 0.11779900
+            weight: 0.09647120
             tags:
               task: asr
               lang: es
               text_field: custom.pnc_text
-            # 247.4 h of mls_sidon
+            # 247.4 h of mls_sidon, mean cut 15.0 s
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Spanish/asr_only
-            weight: 0.05725785
+            weight: 0.23795468
             tags:
               task: asr
               lang: es
-            # 120.2 h of yodas-granary
+            # 120.2 h of yodas-granary, mean cut 2.9 s
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/es/train
-            weight: 0.03717131
+            weight: 0.04242548
             tags:
               task: asr
               lang: es
               text_field: custom.pnc_text
-            # 78.1 h of voxpopuli
-      # ASR it: 2,100.0 h, reference-matched mix
+            # 78.1 h of voxpopuli, mean cut 10.7 s
+      # ASR it: 2,100.0 h, reference-matched mix -- 17.1% of the cuts, 20.0% of the hours
       - type: group
-        weight: 0.20000000
+        weight: 0.17125070
         tags:
           task: asr
           lang: it
         input_cfg:
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas3/it/train
-            weight: 0.66650880
+            weight: 0.37106577
             tags:
               task: asr
               lang: it
               text_field: custom.pnc_text
-            # 1,399.7 h of yodas3
+            # 1,399.7 h of yodas3, mean cut 25.0 s
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/it/train
-            weight: 0.12126304
+            weight: 0.31818791
             tags:
               task: asr
               lang: it
               text_field: custom.metadata.sentence
-            # 254.7 h of cv22_sidon
+            # 254.7 h of cv22_sidon, mean cut 5.3 s
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/italian/train
-            weight: 0.11779900
+            weight: 0.10976993
             tags:
               task: asr
               lang: it
               text_field: custom.pnc_text
-            # 247.4 h of mls_sidon
+            # 247.4 h of mls_sidon, mean cut 14.9 s
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Italian/asr_only
-            weight: 0.05725785
+            weight: 0.15941246
             tags:
               task: asr
               lang: it
-            # 120.2 h of yodas-granary
+            # 120.2 h of yodas-granary, mean cut 5.0 s
           - type: lhotse_shar
             shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/it/train
-            weight: 0.03717131
+            weight: 0.04156393
             tags:
               task: asr
               lang: it
               text_field: custom.pnc_text
-            # 78.1 h of voxpopuli
+            # 78.1 h of voxpopuli, mean cut 12.4 s
     # Batch settings
     batch_size: null  # Use batch_duration instead for dynamic batching
     # 150, down from 180, for headroom at max_duration 60.
@@ -385,11 +389,12 @@ data:
     # 60-90 s band, so the filtered distribution -- and every boundary derived
     # from it -- does not move. The rule above still applies to any OTHER
     # change of max_duration; 60 and 90 simply happen to coincide here.
-    # 2,100 h mix (2026-10-08): the notes above describe the 700 h config. These bins are
-    # re-measured on this config's own draw (cached per-source duration histograms x its
-    # effective weights, 0.5-60 s filter, 30 buckets); yodas3 caps at ~30 s, hence the dense
-    # 26-30 s tail and nothing above it.
-    bucket_duration_bins: [4.86, 6.91, 10.0, 12.19, 14.15, 15.98, 17.79, 19.62, 23.15, 25.92, 26.87, 27.35, 27.67, 27.91, 28.13, 28.31, 28.47, 28.63, 28.79, 28.92, 29.07, 29.19, 29.35, 29.47, 29.61, 29.75, 29.87, 30.0, 30.15]
+    # 2,100 h mix: the notes above describe the 700 h config. These bins are measured on this
+    # config's own draw (build_campaign_config.py --bins-hist-cache: per-source duration
+    # histograms x the cut-probability weights above, 0.5-60 s filter, 30 buckets). yodas3
+    # caps at ~30 s, hence the dense 26-30 s tail; the last edge (36.54 s) is the
+    # yodas-granary tail past 30 s (English most of it). Re-measure whenever the weights change.
+    bucket_duration_bins: [3.5, 4.68, 5.52, 6.34, 7.38, 9.0, 11.04, 12.8, 14.44, 16.02, 17.61, 19.22, 21.75, 25.3, 26.79, 27.43, 27.83, 28.11, 28.37, 28.59, 28.79, 28.99, 29.19, 29.37, 29.55, 29.73, 29.91, 30.1, 36.54]
 
     # Sampling
     shuffle: true
