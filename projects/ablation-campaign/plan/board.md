@@ -15,6 +15,11 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-08 — Claude (worker session, crossing) — bin extraction and config check on the 2,100 h mix: bins are loose but cost no extra padding
+Context: PI asked for `check_training_config.py --measure` (nyx, full yodas3 pool, 39 sources) on `ABL-MA-2100-asr.yaml`.
+Finding: 22 pass, 4 fail, none blocking. H1/H2/W3 fail only because the checker compares against the whole pool (370,028 h) while this config deliberately draws 10,500 h from it by explicit weights. B3/C5 are real: the train bins are byte-identical to another config's and sit up to 9.65 s from the checker's pool-level suggestion, which is itself the wrong target (the pool is not the draw). Re-measured against the draw (cached per-source histograms x the config's effective weights): yodas3 caps at ~30 s, only 3.45% of cuts exceed 30 s and 1.1% exceed 31 s, so the inherited bins' five top buckets above 33 s are nearly empty. Bins on the draw: [4.86, 6.91, 10.0, 12.19, 14.15, 15.98, 17.79, 19.62, 23.15, 25.92, 26.87, 27.35, 27.67, 27.91, 28.13, 28.31, 28.47, 28.63, 28.79, 28.92, 29.07, 29.19, 29.35, 29.47, 29.61, 29.75, 29.87, 30.0, 30.15]. Crude pad-to-bucket-max waste: 6.9% with the inherited bins vs 7.4% with the re-measured ones, i.e. no gain.
+Action needed: PI: keep the inherited bins (recommended; changing them alters the recipe for no padding gain), or swap in the re-measured ones. Nothing edited. Validation-set bins fail C4 (top bin 19.97 s, 1% of cuts longer); unchanged from the 700 h config.
+
 ## 2026-10-08 — Claude (worker session, crossing) — crossing re-pointed at the 2,100 h config; acc_debug smoke on the Yodas v3 mix passes
 Context: PR #150 merged (2,100 h/lang, Yodas v3 top-up, 16 crossing rows now `MA-2100-crossing-*`, warmup fix included). Earlier 12-cell resubmission (09-29 entry) was cancelled, all still pending, after the PI found a data bug; nothing from the `MA-700-crossing-*` budget is to be ranked against the new runs.
 Setup: on MN5, `shar-indexed/yodas3` is a symlink to `/gpfs/scratch/epor48/melt-data/yodas3`; `/gpfs` resolves inside the container (all 284 `it` files visible via `/workspace/shar/yodas3`), so the launcher needs no extra bind.
