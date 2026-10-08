@@ -54,7 +54,7 @@ AXIS_FIELDS = {
     "epochs", "template_task_override", "template_selection",
 }
 POLICY_FIELDS = {
-    "seed", "eval_rounds", "keep_checkpoints", "checkpoint_count",
+    "seed", "eval_rounds", "keep_checkpoints", "checkpoint_count", "max_steps",
     "exp_name", "init_from",
 }
 RUN_FIELDS = {"site", "accelerate", "nodes", "gpus_per_node", "qos", "time"}
@@ -129,6 +129,7 @@ def resolve(row: dict, defaults: dict, arms: list[dict]) -> tuple[ArmAxes, dict]
         eval_rounds=int(merged.get("eval_rounds", ArmAxes.eval_rounds)),
         keep_checkpoints=int(merged.get("keep_checkpoints", ArmAxes.keep_checkpoints)),
         checkpoint_count=merged.get("checkpoint_count"),
+        max_steps=int(merged["max_steps"]) if merged.get("max_steps") is not None else None,
         exp_name=merged.get("exp_name"),
         init_from=init_path,
         **{f: str(merged.get(f, "")) if merged.get(f) is not None else "" for f in AXIS_FIELDS},

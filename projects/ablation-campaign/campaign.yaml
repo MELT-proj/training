@@ -25,6 +25,10 @@
 #     activation memory without changing what a step trains on. DDP's only
 #     route to activation checkpointing -- FSDP2 gets it from accelerate's
 #     own fsdp_activation_checkpointing instead.
+#   - max_steps states a run's length outright instead of deriving it from the
+#     config's total_hours (the estimate assumes full batches). It replaces the
+#     derived steps for the eval/save cadence and the WSD decay window, is
+#     emitted as --trainer.max_steps, and is tagged `ms<N>` into the run name.
 #
 # Every field except `id`, `stage` and `config` is optional and falls back to
 # `defaults:` and then to the base config's own value. An omitted axis means
@@ -851,9 +855,8 @@ arms:
   # counted in hours rather than epochs (PI, 2026-10-02/10-07), so the rows
   # carry no `epochs:`. These are new ids (MA-2100-*): the earlier
   # MA-700-crossing-* five-epoch runs used a different recipe and no warmup,
-  # and their outputs are not to be ranked next to these. The time: values
-  # below are 0.6x the five-epoch budget (10,500 h replaces 17,500 h); rows
-  # that were capped at 72h are rescaled from their raw estimate + 30% instead.
+  # and their outputs are not to be ranked next to these. max_steps and time:
+  # below were set on 2026-10-08 (see the last paragraph of this comment).
   # warmup_ratio: 0.03 now takes effect (plan_arm emits it as a fractional
   # warmup_steps; transformers 5 had been dropping `warmup_ratio`).
   #
@@ -869,10 +872,11 @@ arms:
   # change their result (`frozen_encoder_train_mode.py`, board 2026-09-26:
   # cos 1.0000, relative L2 0.0000 for Whisper specifically).
   #
-  # time: three bands, from the five measured smokes plus the two existing
-  # w2v-bert/whisper +mlp screen runs (rescaled x5 for epochs), extrapolated
-  # to the other nine cells by an encoder-multiplier x adapter-multiplier
-  # model (full table on the board):
+  # nodes: and the first time: values (2026-09-28; time: was re-derived on
+  # 2026-10-08, see the last paragraph): three bands, from the five measured
+  # smokes plus the two existing w2v-bert/whisper +mlp screen runs (rescaled x5
+  # for epochs), extrapolated to the other nine cells by an encoder-multiplier
+  # x adapter-multiplier model (full table on the board):
   #   - most rows: the estimate +30% margin, matching this file's own
   #     existing margin convention (the screen's 300s corner: 16h budget on
   #     ~10.3h measured);
@@ -890,6 +894,17 @@ arms:
   #     (146h) still cleared 72h at nodes: 2 (~73h), so it alone goes to
   #     nodes: 4 (world_size 16). Same +30%-margin / 72h-cap convention as
   #     above, applied to the halved (or quartered) raw estimate.
+  #
+  # max_steps and time: (2026-10-08). The step estimate behind the derived step
+  # count assumes full batches; the 1,500-step smoke of this config measured
+  # 79.9% (239.7 s of the 300 s nominal per step), so each row states 1.25x the
+  # estimate -- 157,500 / 78,750 / 39,375 steps at 4 / 8 / 16 ranks -- which
+  # trains about the budgeted 10,500 h. time: is the projected wall time + 30%
+  # (the margin above): 0.88 s/step measured on the w2v-BERT + MLP cell, scaled
+  # to the other cells by their 700 h long-run rates, plus 0.8 h of fixed
+  # overhead per job. A row keeps its earlier value when that already gives
+  # 30%. The 2- and 4-node cells are scaled the same way and are not measured
+  # on this data (board 2026-10-08).
 
   - id: MA-2100-crossing-w2vb-mlp
     stage: MA
@@ -903,7 +918,8 @@ arms:
     nodes: 1                 # 75 x 1 x 4 = 300 s
     eval_when_frozen: true
     seed: 42
-    time: "41:00:00"
+    max_steps: 157500
+    time: "54:00:00"
 
   - id: MA-2100-crossing-w2vb-conformer
     stage: MA
@@ -918,7 +934,8 @@ arms:
     nodes: 2                 # 75 x 1 x 8 = 600 s -- PI 2026-09-28, was 80h raw at nodes: 1
     eval_when_frozen: true
     seed: 42
-    time: "31:00:00"
+    max_steps: 78750
+    time: "34:00:00"
 
   - id: MA-2100-crossing-w2vb-moe
     stage: MA
@@ -934,7 +951,8 @@ arms:
     nodes: 1                 # 75 x 1 x 4 = 300 s
     eval_when_frozen: true
     seed: 42
-    time: "50:00:00"          # capped at the acc_ehpc ceiling; ~12% margin, not the usual 30%
+    max_steps: 157500
+    time: "56:00:00"
 
   - id: MA-2100-crossing-w2vb-qformer
     stage: MA
@@ -949,7 +967,8 @@ arms:
     nodes: 2                 # 75 x 1 x 8 = 600 s -- PI 2026-09-28, was 119h raw at nodes: 1
     eval_when_frozen: true
     seed: 42
-    time: "46:00:00"          # capped at the acc_ehpc ceiling; ~21% margin, not the usual 30%
+    max_steps: 78750
+    time: "46:00:00"
 
   - id: MA-2100-crossing-mms1b-mlp
     stage: MA
@@ -964,7 +983,8 @@ arms:
     nodes: 1                 # 75 x 1 x 4 = 300 s
     eval_when_frozen: true
     seed: 42
-    time: "35:00:00"
+    max_steps: 157500
+    time: "52:00:00"
 
   - id: MA-2100-crossing-mms1b-conformer
     stage: MA
@@ -980,7 +1000,8 @@ arms:
     nodes: 1                 # 75 x 1 x 4 = 300 s
     eval_when_frozen: true
     seed: 42
-    time: "54:00:00"          # capped at the acc_ehpc ceiling; ~4% margin, not the usual 30%
+    max_steps: 157500
+    time: "54:00:00"
 
   - id: MA-2100-crossing-mms1b-moe
     stage: MA
@@ -997,7 +1018,8 @@ arms:
     nodes: 1                 # 75 x 1 x 4 = 300 s
     eval_when_frozen: true
     seed: 42
-    time: "44:00:00"          # capped at the acc_ehpc ceiling; ~29% margin
+    max_steps: 157500
+    time: "52:00:00"
 
   - id: MA-2100-crossing-mms1b-qformer
     stage: MA
@@ -1013,6 +1035,7 @@ arms:
     nodes: 2                 # 75 x 1 x 8 = 600 s -- PI 2026-09-28, was 104h raw at nodes: 1
     eval_when_frozen: true
     seed: 42
+    max_steps: 78750
     time: "41:00:00"
 
   - id: MA-2100-crossing-mhubert-mlp
@@ -1028,7 +1051,8 @@ arms:
     nodes: 1                 # 75 x 1 x 4 = 300 s
     eval_when_frozen: true
     seed: 42
-    time: "49:00:00"          # capped at the acc_ehpc ceiling; ~14% margin, not the usual 30%
+    max_steps: 157500
+    time: "52:00:00"
 
   - id: MA-2100-crossing-mhubert-conformer
     stage: MA
@@ -1044,6 +1068,7 @@ arms:
     nodes: 2                 # 75 x 1 x 8 = 600 s -- PI 2026-09-28, was 98h raw at nodes: 1
     eval_when_frozen: true
     seed: 42
+    max_steps: 78750
     time: "38:00:00"
 
   - id: MA-2100-crossing-mhubert-moe
@@ -1061,6 +1086,7 @@ arms:
     nodes: 2                 # 75 x 1 x 8 = 600 s -- PI 2026-09-28, was 79h raw at nodes: 1
     eval_when_frozen: true
     seed: 42
+    max_steps: 78750
     time: "31:00:00"
 
   - id: MA-2100-crossing-mhubert-qformer
@@ -1078,6 +1104,7 @@ arms:
     eval_when_frozen: true
                               # still ~73h (over cap) at nodes: 2, so this one alone goes to 4
     seed: 42
+    max_steps: 39375
     time: "29:00:00"
 
   - id: MA-2100-crossing-whisper-mlp
@@ -1092,7 +1119,8 @@ arms:
     grad_accum_steps: 1
     nodes: 1                 # 75 x 1 x 4 = 300 s
     seed: 42
-    time: "34:00:00"
+    max_steps: 157500
+    time: "55:00:00"
 
   - id: MA-2100-crossing-whisper-conformer
     stage: MA
@@ -1111,7 +1139,8 @@ arms:
     grad_accum_steps: 1
     nodes: 1                 # 75 x 1 x 4 = 300 s
     seed: 42
-    time: "52:00:00"          # capped at the acc_ehpc ceiling; ~9% margin, not the usual 30%
+    max_steps: 157500
+    time: "52:00:00"
 
   - id: MA-2100-crossing-whisper-moe
     stage: MA
@@ -1127,7 +1156,8 @@ arms:
     ddp_find_unused_parameters: true   # the router can leave an expert unused in a small batch (see plan_arm.py's ArmAxes)
     nodes: 1                 # 75 x 1 x 4 = 300 s
     seed: 42
-    time: "41:00:00"
+    max_steps: 157500
+    time: "55:00:00"
 
   - id: MA-2100-crossing-whisper-qformer
     stage: MA
@@ -1142,4 +1172,5 @@ arms:
     grad_accum_steps: 1
     nodes: 2                 # 75 x 1 x 8 = 600 s -- PI 2026-09-28, was 99h raw at nodes: 1
     seed: 42
+    max_steps: 78750
     time: "39:00:00"

@@ -715,6 +715,16 @@ class ArmAxes:
     # and keep_checkpoints applies -- the original convention.
     checkpoint_count: int | None = None
     keep_checkpoints: int = 2
+    # max_steps: the run's length in optimizer steps, stated outright instead of
+    # derived from total_hours. derive_steps assumes every batch is full; the
+    # 2,100 h crossing's batches carry ~80% of their nominal audio (smoke, board
+    # 2026-10-08), so its rows state 1.25x the estimate to train the hours they
+    # budget. It replaces the derived steps wherever they are used (eval/save
+    # cadence, the WSD decay window), is emitted as --trainer.max_steps (which the
+    # trainer prefers to its own estimate), and is tagged into EXP_NAME as
+    # `ms<N>` because it changes what the run trains on. Refused together with
+    # `epochs`, which it would silently override.
+    max_steps: int | None = None
     # exp_name: pin the run identity instead of composing it. Only for
     # continuity with an arm already started under a hand-written launcher's
     # name -- a new arm should let it be composed so it can never be
@@ -774,6 +784,15 @@ def plan(args: ArmAxes) -> ArmPlan:
 
     steps_per_epoch = derive_steps(train_ds, batch_duration_effective, grad_accum_effective, args.world_size)
     steps = steps_per_epoch * epochs_effective
+    if args.max_steps is not None:
+        if args.max_steps < 1:
+            die(f"max_steps must be a positive number of optimizer steps (got {args.max_steps})")
+        if args.epochs:
+            die(
+                f"max_steps={args.max_steps} and epochs={args.epochs} both set the run's length; "
+                "set one of them"
+            )
+        steps = args.max_steps
     # ~11 eval rounds over the run by default, per the campaign convention
     # documented in the old launchers' headers (both landed close to 11:
     # 903/100~=9, 2188/200~=11 -- this makes the derivation land on ~11 for
@@ -1067,6 +1086,8 @@ def plan(args: ArmAxes) -> ArmPlan:
     # it.
     overrides += ["--trainer.num_train_epochs", str(epochs_effective)]
     epochs_overridden = bool(args.epochs) and epochs_effective != int(cfg_num_train_epochs or 1)
+    if args.max_steps is not None:
+        overrides += ["--trainer.max_steps", str(steps)]
 
     # template_task_override: forces data.prompt_template_selection to "random"
     # (regardless of what the config declares -- ABL-MA-700-asr.yaml itself
@@ -1173,6 +1194,8 @@ def plan(args: ArmAxes) -> ArmPlan:
         extra_tags.append(f"ga{grad_accum_effective}")
     if epochs_overridden:
         extra_tags.append(f"ep{epochs_effective}")
+    if args.max_steps is not None:
+        extra_tags.append(f"ms{args.max_steps}")
     if args.template_task_override:
         extra_tags.append(f"tt{_slug(args.template_task_override, 12)}")
     if args.template_selection in TEMPLATE_SELECTION_TAGS:
