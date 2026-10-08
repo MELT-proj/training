@@ -69,18 +69,14 @@ Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
   - **Don't merge `yodas3-rest/`** into `yodas3/<lang>/train`. Jobs list their
     shards at start, so a merge while some are queued, or on a resume, gives
     arms different data. The copy itself continues.
-  - The four Conformer cells are not submitted. They wait on the Conformer
-    investigation (#149) and the PI's decision.
-- **The Conformer adapter's gradient explodes: 5 of 5 crossing runs** (board
-  2026-09-28/29). The signature is `grad_norm` inf for several steps, then nan;
-  loss reads 0 and the job trains a poisoned model for hours before a CUDA
-  assert. Seen on every encoder at 2e-3, at unrelated points (epoch 0.02-0.76),
-  and on whisper-conformer at 1e-3 at epoch 0.53. Every non-Conformer cell is
-  clean. The four Conformer cells of the crossing cannot be ranked until this
-  is diagnosed. **PI decides** whether to dispatch the diagnosis (prompt
-  handed 2026-09-29) and whether the 1e-3 resume (46789935) runs meanwhile.
-  Separately, the trainer has no non-finite check, so a dead run keeps
-  burning GPU-h.
+  - All 16 arms are queued. For the Conformer cells, read `grad_norm`
+    first: the warmup fix is proven only on Whisper, one seed, 9k steps.
+- **Conformer explosion: mitigated, not yet proven at scale** (2026-10-08).
+  LR warmup prevents the attention saturation behind it (week 3 Track B).
+  All four Conformer crossing cells run with warmup; the worker reads their
+  `grad_norm` first. If one explodes anyway, #149 (QK-norm) is the fallback.
+  The trainer still has no non-finite-gradient abort, so a dead run burns
+  GPU-h until it crashes.
 - **FLEURS shard duplication on MN5's indexed tree** (78 leaves, af_za..fr_fr).
   The PI has a dry-run-by-default `~/fleurs_dedupe.sh`, not yet run.
   `fleurs24-asr-dev` on MN5 was frozen from the doubled tree; re-freeze it
@@ -360,8 +356,9 @@ assumed one (`03-audio-stack.md` §0).*
       `03` §1b). Explicit `max_steps`, 1.25 × the
       estimate (~80% of each step's nominal audio is real), ≈ 2,800 GPU-h for
       sixteen, 12-43 h wall per arm, all in the queue at once. Rows rendered
-      (726ca28). **12 non-Conformer arms
-      submitted 2026-10-08** (pending, d91c0e1). Conformer cells held (#149).
+      (726ca28). **All 16 arms submitted
+      2026-10-08** (12 at d91c0e1, the 4 Conformer cells at fd347d6, all with
+      warmup), ~2,830 GPU-h, 25 nodes if all start at once.
       *Outcome:* the audio stack — encoder, adapter, frame rate — ranked by
       the selection metric (`selection-metric/README.md`, PI 2026-09-23),
       which replaces the high/low-resource FLEURS split named here before.
@@ -376,8 +373,15 @@ assumed one (`03-audio-stack.md` §0).*
       one selection-metric eval on a smoke checkpoint for each untested
       encoder; then sixteen `campaign.yaml` rows at the PI's recipe.
       Cold-agent prompt handed to the PI 2026-09-26.
-- [ ] **Conformer gradient explosion: diagnose** (added 2026-09-29; see
-      Blocked / waiting). Root cause from the MN5 logs and a reproduction on
+- [x] **Conformer gradient explosion: diagnose** (added 2026-09-29; see
+      Blocked / waiting). *Closed 2026-10-08:* the cause is attention
+      saturating without LR warmup (mean top-1 attention probability 0.99
+      from step 500; 0.003-0.03 with warmup). Whisper + Conformer at 2e-3
+      with warmup ran 9,031 steps clean, against an explosion at ~5,150
+      without (board entries on the #149 branch). Adopted for the crossing:
+      warmup, no QK-norm; #149 stays open as the fallback. Limits: one
+      seed, Whisper only. The other three Conformer cells are first tested
+      in the crossing itself. Root cause from the MN5 logs and a reproduction on
       artemis, before any fix or LR change is made.
       *Outcome:* a cause, and a fix or recipe change for the PI to approve.
 - [ ] **Re-check every hour-weighted config for per-cut mux weights**
