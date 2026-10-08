@@ -15,6 +15,16 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-08 — Claude (worker session, crossing) — the 12 non-Conformer crossing arms are submitted; the four Conformer cells are held
+Context: the user gave the go for the twelve MLP, MoE and Q-Former cells. Submitted with `campaign.py run` on MN5; the job ids are in `arms.tsv`.
+Done:
+1. Where the code runs from. `~/training-crossing` on MN5 is a separate clone, detached at `origin/main` `e6cc269` (#151, `max_steps`, the re-set walltimes). It is separate on purpose: `run_train_singularity.sbatch` bind-mounts the submit directory as `/workspace/training` when a job *starts*, so a job that queues for hours runs whatever its submit directory holds by then. **Do not sync to, switch branches in or edit `~/training-crossing` until the crossing has finished** (a resume runs from it too). Logs still land in `~/training/logs` (`logs` there is a symlink). `~/training` itself is untouched, still on its old branch, and is safe to sync.
+2. The rows are as committed in `campaign.yaml` (726ca28): seven 1-node rows at 157,500 steps (w2vb mlp and moe, mms1b mlp and moe, mhubert mlp, whisper mlp and moe), four 2-node rows at 78,750 (w2vb, mms1b and whisper Q-Former, mhubert MoE), one 4-node row at 39,375 (mhubert Q-Former); 19 nodes in all. A dry run of each was checked against the committed rows before anything was submitted. All twelve were pending at submission.
+3. At submission: ACC grant 825 of 1,752 khours used (47%; `bsc_acct` lags by about a day); the twelve project to ~2,130 GPU-h (~43 khours). Scratch 5.5 of 19.5 TB.
+Held: the four Conformer cells (w2vb, mms1b, mhubert, whisper) stay with the Conformer investigation (#149 open). All five earlier Conformer runs diverged, and none of them had warmup; whether they survive with it is untested.
+Cautions while these run: (a) do not merge `yodas3-rest` into `yodas3/<lang>/train` until the last crossing job has finished. Jobs list their shards when they start, so a merge while some are queued (or on a resume) gives arms different data. (b) That copy and the jobs' cold starts (~14 min on one node) share the scratch filesystem. (c) The trainer has no non-finite check, so a diverged run keeps burning GPU-h: read `grad_norm` in each log in the first hours.
+Action needed: none from the PI. Worker: check each job's startup and `grad_norm` once it runs. Orchestrator: update the crossing text in `timeline.md` (box stays unticked: nothing has finished).
+
 ## 2026-10-08 — Claude (worker session, crossing) — PR #151 merged; the crossing rows now state their steps (+25%) and carry re-set walltimes
 Context: the user merged PR #151 and chose the fill-aware step budget of the entry below, with the steps written into the rows. At the user's word this went straight to main (`726ca28`), without a PR. Nothing is submitted.
 Change:
