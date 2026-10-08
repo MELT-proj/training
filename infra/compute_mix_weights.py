@@ -226,14 +226,16 @@ def shar_manifest_files(shar_path: Path) -> list[Path]:
     return [by_shard[k] for k in sorted(by_shard)]
 
 
-def shard_seconds(shard: str) -> float:
-    """Sum top-level cut durations in one JSONL manifest, gzipped or plain.
+def shard_stats(shard: str) -> tuple[float, int]:
+    """(seconds, cuts) in one JSONL manifest, gzipped or plain.
 
     Only the top-level ``duration`` is counted. A regex over the raw text would
     be faster but would also pick up ``duration`` inside each supervision and
-    silently double-count.
+    silently double-count. A line that does not parse, or has no numeric
+    duration, is neither summed nor counted.
     """
     total = 0.0
+    cuts = 0
     opener = gzip.open if str(shard).endswith(".gz") else open
     with opener(shard, "rt", encoding="utf-8") as fh:
         for line in fh:
@@ -244,7 +246,13 @@ def shard_seconds(shard: str) -> float:
                 total += float(json.loads(line)["duration"])
             except (json.JSONDecodeError, KeyError, TypeError, ValueError):
                 continue
-    return total
+            cuts += 1
+    return total, cuts
+
+
+def shard_seconds(shard: str) -> float:
+    """Sum top-level cut durations in one JSONL manifest, gzipped or plain."""
+    return shard_stats(shard)[0]
 
 
 def write_cache(cache: dict, path: Path) -> None:
@@ -271,6 +279,13 @@ def measure_shard(task: tuple[str, str]) -> tuple[str, float]:
     """
     source, shard = task
     return source, shard_seconds(shard)
+
+
+def measure_shard_stats(task: tuple[str, str]) -> tuple[str, float, int]:
+    """Return (source_path, seconds, cuts) for one shard; see :func:`measure_shard`."""
+    source, shard = task
+    seconds, cuts = shard_stats(shard)
+    return source, seconds, cuts
 
 
 # ---------------------------------------------------------------------------
