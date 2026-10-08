@@ -15,6 +15,17 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-08 — Claude (worker session, crossing) — the four Conformer cells are submitted too, with warmup and without QK-norm; all 16 crossing arms are queued
+Context: the user read the Conformer divergences (5 of 5 earlier runs) as fixed by the warmup repair (`7502bcb`) and asked me to check the history before the four cells went in. They were then submitted from the same frozen checkout as the other twelve (`~/training-crossing` at `e6cc269`); the job ids are in `arms.tsv`.
+Evidence checked. It sits on the #149 branch (`fix/conformer-attention-qk-norm`, board entries of 2026-09-29), not on main: the control "original architecture with warmup" (whisper-large-v3 + Conformer, adapter LR 2e-3, seed 42, `--trainer.warmup_steps 0.03`, MN5 `acc_debug`). It ran 9,031 steps with no non-finite step, max grad_norm 113 at step 1 (<= 11 after step 500) and loss ~0.4; the identical recipe without warmup exploded at step ~5,150. I read the probe files too (`gradprobe-whisper-2e3-orig-warmup` and `gradprobe-whisper-2e3-v3` under `/gpfs/scratch/epor48/outputs`):
+- Without warmup the mean top-1 attention probability is 0.99 from the first 500 steps, the median |logit| grows from 2e5 to 1.4e7, and the q/k weight norms from 56 to 128.
+- With warmup the top-1 probability stays at 0.003-0.03, the median |logit| peaks near 160 around step 2,000 and falls to ~0.01 after step 6,000, and the q/k norms stay at 26-36 and drift down.
+So warmup removes the mechanism in this window, not only the symptom. The late failures of the unwarmed runs (steps ~16k and ~22k) came from runs whose attention had been saturated since step ~5.
+Not established: one seed, Whisper only (the w2v-BERT, MMS and mHuBERT Conformer cells have never run with warmup), and 9k steps, ~6% of a one-node row's 157,500. With warmup the attention logits shrink to ~0, so the layer's attention ends up close to flat: stable, but keep it in mind when reading the Conformer cells.
+Decision (user, 2026-10-08): run all four as in the grid (adapter LR 2e-3, whisper 1e-3; warmup live), no QK-norm. #149 stays open as the fallback; QK-norm alone also cleared the failure window (11,534 steps without warmup). Cost if all four died unnoticed: up to ~1,000 GPU-h. The trainer still has no non-finite check, so `grad_norm` gets read in each Conformer log early and regularly, and a diverged run is reported at once (cancelling it is the user's call).
+All 16 crossing arms are now queued: 25 nodes if every job started at once, ~2,830 GPU-h projected in all (the four Conformer cells ~690 of it).
+Action needed: none from the PI. Worker: startup and `grad_norm` checks, Conformer cells first. Orchestrator: the timeline's "Conformer gradient explosion: diagnose" box is probably tickable (cause found, warmup recipe adopted); I left it, since the diagnosis was another session's work and sits on the #149 branch.
+
 ## 2026-10-08 — Claude (worker session, crossing) — the 12 non-Conformer crossing arms are submitted; the four Conformer cells are held
 Context: the user gave the go for the twelve MLP, MoE and Q-Former cells. Submitted with `campaign.py run` on MN5; the job ids are in `arms.tsv`.
 Done:
