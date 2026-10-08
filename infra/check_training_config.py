@@ -1252,48 +1252,72 @@ def check_weights(
         return
 
     report.ran_check("W3")
-    sources = [
-        {"path": leaf.path, "lang_key": leaf.lang_key or "?",
-         "hours": cache[leaf.path]["hours"], "leaf": leaf}
-        for leaf in leaves
-    ]
-    cmw.compute_weights(sources, alpha, beta)
 
-    worst_pc = worst_pl = 0.0
-    offenders: list[str] = []
-    for source in sources:
-        leaf: Leaf = source["leaf"]
-        if leaf.weight is not None:
-            delta = abs(source["p_c"] - leaf.weight)
-            worst_pc = max(worst_pc, delta)
+    def policy_sources(as_cuts: bool) -> list[dict]:
+        """The policy's weights for these leaves: shares of audio, or cut probabilities."""
+        sources = [
+            {"path": leaf.path, "lang_key": leaf.lang_key or "?",
+             "hours": cache[leaf.path]["hours"], "cuts": cache[leaf.path].get("cuts"), "leaf": leaf}
+            for leaf in leaves
+        ]
+        cmw.compute_weights(sources, alpha, beta)
+        if as_cuts:
+            cmw.to_cut_probabilities(sources)
+        return sources
+
+    def compare(sources: list[dict]) -> tuple[list[str], float, float]:
+        worst_pc = worst_pl = 0.0
+        offenders: list[str] = []
+        for source in sources:
+            leaf: Leaf = source["leaf"]
+            if leaf.weight is not None:
+                delta = abs(source["p_c"] - leaf.weight)
+                worst_pc = max(worst_pc, delta)
+                if delta > tol:
+                    offenders.append(
+                        f"{leaf.display}: weight {leaf.weight:.8f}, expected p_c {source['p_c']:.8f} "
+                        f"(delta {delta:.2e})"
+                    )
+
+        # p_l is a property of the language entry, so every member of a group agrees
+        # on it; reading it off any one member is safe.
+        group_expected: dict[str, float] = {}
+        for source in sources:
+            leaf = source["leaf"]
+            if leaf.group_yaml_path:
+                group_expected[leaf.group_yaml_path] = source["p_l"]
+        for level in levels:
+            # A group level's own weight was recorded from its entry in the parent
+            # list while flattening, so no search is needed here.
+            if level.kind != "group" or level.own_weight is None:
+                continue
+            expected = group_expected.get(level.yaml_path.rsplit(".input_cfg", 1)[0])
+            if expected is None:
+                continue
+            delta = abs(expected - level.own_weight)
+            worst_pl = max(worst_pl, delta)
             if delta > tol:
                 offenders.append(
-                    f"{leaf.display}: weight {leaf.weight:.8f}, expected p_c {source['p_c']:.8f} "
-                    f"(delta {delta:.2e})"
+                    f"{level.yaml_path}: group weight {level.own_weight:.8f}, expected p_l "
+                    f"{expected:.8f} (delta {delta:.2e})"
                 )
+        return offenders, worst_pc, worst_pl
 
-    # p_l is a property of the language entry, so every member of a group agrees
-    # on it; reading it off any one member is safe.
-    group_expected: dict[str, float] = {}
-    for source in sources:
-        leaf = source["leaf"]
-        if leaf.group_yaml_path:
-            group_expected[leaf.group_yaml_path] = source["p_l"]
-    for level in levels:
-        # A group level's own weight was recorded from its entry in the parent
-        # list while flattening, so no search is needed here.
-        if level.kind != "group" or level.own_weight is None:
-            continue
-        expected = group_expected.get(level.yaml_path.rsplit(".input_cfg", 1)[0])
-        if expected is None:
-            continue
-        delta = abs(expected - level.own_weight)
-        worst_pl = max(worst_pl, delta)
-        if delta > tol:
-            offenders.append(
-                f"{level.yaml_path}: group weight {level.own_weight:.8f}, expected p_l "
-                f"{expected:.8f} (delta {delta:.2e})"
-            )
+    offenders, worst_pc, worst_pl = compare(policy_sources(as_cuts=False))
+    as_cuts = False
+    cut_hint: list[str] = []
+    if offenders:
+        # lhotse draws cuts, so compute_mix_weights.py writes the policy as cut
+        # probabilities by default (--weights cuts). Accept that reading too, when
+        # the cut counts it needs have been measured.
+        try:
+            cut_offenders, cut_pc, cut_pl = compare(policy_sources(as_cuts=True))
+        except ValueError:
+            cut_hint = ["If these weights are cut probabilities (compute_mix_weights.py --weights cuts), "
+                        "W3 can only check them with a cut count per source: run with --measure."]
+        else:
+            if not cut_offenders:
+                offenders, worst_pc, worst_pl, as_cuts = cut_offenders, cut_pc, cut_pl, True
 
     if offenders:
         report.add(
@@ -1301,11 +1325,12 @@ def check_weights(
             f"{len(offenders)} weights do not match the two-tier policy at "
             f"alpha={alpha}, beta={beta}",
             detail=offenders[:20] + ([f"… and {len(offenders) - 20} more"] if len(offenders) > 20 else []),
-            fix=[f"Re-emit the config: {template_hint}"],
+            fix=[f"Re-emit the config: {template_hint}", *cut_hint],
         )
     else:
         report.note(
-            f"Weights reproduce the policy at alpha={alpha}, beta={beta}: "
+            f"Weights reproduce the policy at alpha={alpha}, beta={beta}"
+            f"{' as cut probabilities (hours / mean cut length)' if as_cuts else ''}: "
             f"worst |delta p_c| = {worst_pc:.2e}, worst |delta p_l| = {worst_pl:.2e}."
         )
 

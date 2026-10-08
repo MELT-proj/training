@@ -43,6 +43,27 @@ manifest no longer lines up with its audio, and rewriting the tars would mean
 copying audio the disk budget cannot hold. Hours are therefore enforced the way
 the trainer already works: sampling weights plus a step budget.
 
+The weights have to be **cut** probabilities, not hour shares. lhotse's
+multiplexer draws one cut per pick (``rng.choices`` over the sources, then
+``next()`` on the winner), so a source's share of the audio is its weight times
+its mean cut length, normalised. Hour-share weights over-draw sources with long
+cuts and under-draw those with short ones. On the 2,100 h config they gave
+English 11.9% of the hours instead of 20%: its top-up source averages 9 s per
+cut, against 22-25 s for yodas3 in the other four languages. ``--weights cuts``
+(the default) therefore sets each weight in proportion to the number of cuts
+that make up the hours it must supply, ``hours x cuts / hours_of_source``,
+within a language and across languages, so the hours written beside each
+source are the hours the run draws. The conversion is
+``infra/compute_mix_weights.cut_mux_weights``, shared with that tool's own
+``--weights cuts``. ``--weights hours`` keeps the older hour-share weights, to
+re-render a config made before 2026-10-08 byte for byte; it does not enforce
+hours, and says so when it runs.
+
+Bucket bins are a property of the draw, so they move with the weights.
+``--bins-hist-cache`` re-measures them on the audio this render actually
+draws, from the per-source duration histograms that
+``infra/check_training_config.py --measure`` caches.
+
 For that to hold, the sources have to be measurable in the first place — the
 length filters read ``custom.num_tokens``, which many sources do not carry.
 Check the collection with ``verification/check_shar_content.py`` in the
@@ -91,6 +112,20 @@ Usage::
         --cache          projects/ablation-campaign/campaign_hours.json \\
         --out            projects/ablation-campaign/ABL-MA-125-asr.yaml
 
+    # The 2,100 h crossing mix, rendered over itself so that everything but the
+    # input_cfg blocks, total_hours and the bins is kept as it is. The render pins
+    # data.apply_chat_template to false; that config has it true by hand, so put it back.
+    python3 projects/ablation-campaign/build_campaign_config.py \\
+        --template       projects/ablation-campaign/ABL-MA-2100-asr.yaml \\
+        --datasets-root  /mnt/scratch-nyx/giuseppe/melt/melt-data/shar \\
+        --budget-hours   2100 \\
+        --exclude-corpus fleurs \\
+        --topup-corpus   yodas3 \\
+        --tasks          asr \\
+        --cache          projects/ablation-campaign/campaign_hours.json \\
+        --bins-hist-cache infra/.config_check_cache.json \\
+        --out            projects/ablation-campaign/ABL-MA-2100-asr.yaml
+
     --tasks both (the ASR+ST mix) and other --budget-hours values still work;
     the 700 h and ASR+ST renders were removed from the tree on 2026-08-19 so the
     campaign could focus on ASR modality alignment at 125 h.  Re-render them
@@ -102,6 +137,7 @@ Run it where the data is; it reads manifests, not audio.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from concurrent.futures import ProcessPoolExecutor
@@ -113,11 +149,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "infra"))
 
 from compute_mix_weights import (  # noqa: E402
+    HOURS_WEIGHTS_WARNING,
     _find_block,
-    measure_shard,
+    check_hour_shares,
+    cut_mux_weights,
+    measure_shard_stats,
     plan_source,
     write_cache,
 )
+from compute_mix_weights import implied_hour_shares as _implied_hour_shares  # noqa: E402
+from compute_mix_weights import mean_cut_seconds as _mean_cut_seconds  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -279,10 +320,42 @@ def validation_path(train_path: str, split: str) -> str:
     return f"{prefix}/{split}"
 
 
+def cache_hours(entry: object) -> float | None:
+    """Hours from a cache entry: ``{"hours", "cuts"}``, or the bare float older caches held."""
+    if isinstance(entry, dict):
+        value = entry.get("hours")
+        return None if value is None else float(value)
+    if isinstance(entry, (int, float)):
+        return float(entry)
+    return None
+
+
+def cache_cuts(entry: object) -> int | None:
+    """Cut count from a cache entry, or None for an older hours-only one."""
+    if isinstance(entry, dict) and entry.get("cuts") is not None:
+        return int(entry["cuts"])
+    return None
+
+
 def measure(paths: list[str], root: Path, cache: dict, cache_path: Path | None,
-            sample: int | None, jobs: int) -> dict[str, float]:
-    """Return hours per source path, reading manifests and reusing the cache."""
-    todo = [p for p in paths if p not in cache]
+            sample: int | None, jobs: int,
+            need_cuts: frozenset[str] | set[str] = frozenset(),
+            ) -> tuple[dict[str, float], dict[str, int]]:
+    """Return (hours, cuts) per source path, reading manifests and reusing the cache.
+
+    A source is read when the cache has no entry for it, or when it is in
+    *need_cuts* and the entry predates cut counts (a bare hours float). Reading
+    a source always records both numbers, so each is measured once and they stay
+    consistent with each other.
+    """
+    # Deduplicated: with --topup-corpus yodas3, English's top-up and its
+    # yodas-granary entry are the same directory, and reading it twice would
+    # double its hours and cuts.
+    todo = list(dict.fromkeys(
+        p for p in paths
+        if cache_hours(cache.get(p)) is None
+        or (p in need_cuts and cache_cuts(cache.get(p)) is None)
+    ))
     if todo:
         tasks: list[tuple[str, str]] = []
         totals: dict[str, int] = {}
@@ -290,24 +363,28 @@ def measure(paths: list[str], root: Path, cache: dict, cache_path: Path | None,
             shards, total = plan_source(str(root / rel), sample)
             if not shards:
                 print(f"  WARNING: no manifests under {rel}", file=sys.stderr)
-                cache[rel] = 0.0
+                cache[rel] = {"hours": 0.0, "cuts": 0}
                 continue
             totals[rel] = total
             tasks.extend((rel, s) for s in shards)
 
         seconds: dict[str, float] = {}
+        counts: dict[str, int] = {}
         with ProcessPoolExecutor(max_workers=jobs) as pool:
-            for rel, secs in pool.map(measure_shard, tasks, chunksize=8):
+            for rel, secs, n in pool.map(measure_shard_stats, tasks, chunksize=8):
                 seconds[rel] = seconds.get(rel, 0.0) + secs
+                counts[rel] = counts.get(rel, 0) + n
 
         for rel, secs in seconds.items():
             read = min(totals[rel], sample) if sample else totals[rel]
             scale = totals[rel] / read if read else 1.0
-            cache[rel] = secs / 3600.0 * scale
+            cache[rel] = {"hours": secs / 3600.0 * scale, "cuts": round(counts[rel] * scale)}
             if cache_path:
                 write_cache(cache, cache_path)
 
-    return {p: cache.get(p, 0.0) for p in paths}
+    hours = {p: cache_hours(cache.get(p)) or 0.0 for p in paths}
+    cuts = {p: n for p in paths if (n := cache_cuts(cache.get(p))) is not None}
+    return hours, cuts
 
 
 def build_template(hours: dict[str, float], reference: str,
@@ -379,52 +456,172 @@ def group_hours(hours: dict[str, float], budget: float,
     return groups
 
 
+# One source a top-level group draws from: (path under the datasets root, corpus
+# name or None for an ST direction, hours the group must draw from it).
+Leaf = tuple[str, str | None, float]
+# A top-level group: (name, hours it draws, its sources).
+Group = tuple[str, float, list[Leaf]]
+
+
+def group_leaves(name: str, drawn: float, template: dict[str, float],
+                 budget: float) -> list[Leaf]:
+    """The sources one top-level group draws from, with the hours each supplies.
+
+    An ASR language draws every template corpus at its share of the budget; an
+    ST direction has one source and draws all of its hours from it.
+    """
+    kind, key = name.split(":", 1)
+    if kind == "asr":
+        return [(ASR_SOURCES[corpus][key], corpus, share * budget)
+                for corpus, share in sorted(template.items(), key=lambda kv: -kv[1])]
+    spec = ST_SOURCES.get(key) or ST_PROBE[key]
+    return [(spec["path"], None, drawn)]
+
+
+def mean_cut_seconds(rel: str, hours: dict[str, float], cuts: dict[str, int]) -> float:
+    """Mean cut length of a measured source, in seconds."""
+    try:
+        return _mean_cut_seconds(hours.get(rel, 0.0), cuts.get(rel), rel)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+
+
+def _mean_cuts(groups: list[Group], hours: dict[str, float],
+               cuts: dict[str, int]) -> list[list[float]]:
+    """Mean cut length of every source, shaped like the groups."""
+    return [[mean_cut_seconds(rel, hours, cuts) for rel, _, _ in leaves] for _, _, leaves in groups]
+
+
+def mux_weights(groups: list[Group], hours: dict[str, float],
+                cuts: dict[str, int] | None) -> tuple[list[float], list[list[float]]]:
+    """Mux weights for each top-level group, and for the sources inside each.
+
+    lhotse draws one *cut* per pick, so these are cut probabilities. With *cuts*
+    (cut counts per source) each source's weight is the share of the cuts that
+    make up the hours it must supply -- ``compute_mix_weights.cut_mux_weights``,
+    shared with that tool -- so a source's share of the *audio* is exactly its
+    share of the hours.
+
+    With ``cuts=None`` the weights are plain shares of hours, which is what this
+    script wrote before 2026-10-08. A source with long cuts then supplies more
+    audio than its share, one with short cuts less. Kept so older renders can be
+    reproduced byte for byte.
+    """
+    if cuts is None:
+        mixture = sum(drawn for _, drawn, _ in groups)
+        return (
+            [drawn / mixture for _, drawn, _ in groups],
+            [[1.0 if len(leaves) == 1 else h / drawn for _, _, h in leaves]
+             for _, drawn, leaves in groups],
+        )
+    return cut_mux_weights(
+        [[h for _, _, h in leaves] for _, _, leaves in groups],
+        _mean_cuts(groups, hours, cuts),
+    )
+
+
+def implied_hour_shares(groups: list[Group], group_w: list[float],
+                        leaf_w: list[list[float]], hours: dict[str, float],
+                        cuts: dict[str, int]) -> list[list[float]]:
+    """Each source's share of the audio the muxer would emit under these weights."""
+    return _implied_hour_shares(group_w, leaf_w, _mean_cuts(groups, hours, cuts))
+
+
+def _check_hour_shares(groups: list[Group], group_w: list[float],
+                       leaf_w: list[list[float]], hours: dict[str, float],
+                       cuts: dict[str, int]) -> None:
+    """Fail if the weights, as written (8 decimals), do not deliver the intended hours."""
+    try:
+        check_hour_shares([[h for _, _, h in leaves] for _, _, leaves in groups],
+                          group_w, leaf_w, _mean_cuts(groups, hours, cuts))
+    except ValueError as exc:
+        raise SystemExit(f"internal error: {exc}") from exc
+
+
+def plan_mux(template: dict[str, float], hours: dict[str, float], budget: float,
+             tasks: str, cuts: dict[str, int] | None = None,
+             ) -> tuple[list[Group], list[float], list[list[float]]]:
+    """The groups this task composition trains, and the weights that mux them."""
+    groups: list[Group] = [
+        (name, drawn, group_leaves(name, drawn, template, budget))
+        for name, drawn in group_hours(hours, budget, tasks)
+    ]
+    if sum(drawn for _, drawn, _ in groups) <= 0:
+        raise SystemExit(f"No trainable hours for --tasks {tasks}.")
+    group_w, leaf_w = mux_weights(groups, hours, cuts)
+    if cuts is not None:
+        _check_hour_shares(groups, group_w, leaf_w, hours, cuts)
+    return groups, group_w, leaf_w
+
+
+def draw_probabilities(groups: list[Group], group_w: list[float],
+                       leaf_w: list[list[float]]) -> list[tuple[str, float]]:
+    """(source, probability that a draw is a cut of it), from the weights as written."""
+    return [(rel, round(gw, 8) * round(lw, 8))
+            for (_, _, leaves), gw, lws in zip(groups, group_w, leaf_w)
+            for (rel, _, _), lw in zip(leaves, lws)]
+
+
 def yaml_block(template: dict[str, float], hours: dict[str, float],
-               budget: float, tasks: str) -> tuple[list[str], float]:
+               budget: float, tasks: str,
+               cuts: dict[str, int] | None = None) -> tuple[list[str], float]:
     """Render the input_cfg block, and return it with the total hours it implies.
 
-    Group weights are the group's share of the mixture's *hours*, not a flat
-    ``1/len(groups)``: a group that draws fewer hours than the budget has to be
-    sampled proportionally less often, or the mixture the trainer actually
-    draws stops matching the ``total_hours`` written beside it. This only ever
-    bites the en->de probe (~430 h against a 700 h budget); with ``--tasks
-    asr`` every group draws the same budget and the weights collapse back to
-    ``1/len(TRAIN_LANGS)`` exactly.
+    With *cuts* the weights are cut probabilities that deliver each source's
+    hours (see :func:`mux_weights`); without it they are the older hour shares,
+    which only equal the intended hours when every source has the same mean cut
+    length. Either way a group that draws fewer hours than the budget is sampled
+    proportionally less often, or the mixture the trainer actually draws stops
+    matching the ``total_hours`` written beside it. This only ever bites the
+    en->de probe (~430 h against a 700 h budget); with ``--tasks asr`` every group
+    draws the same budget.
     """
+    groups, group_w, leaf_w = plan_mux(template, hours, budget, tasks, cuts)
+    mixture_hours = sum(drawn for _, drawn, _ in groups)
+
     lines: list[str] = ["    input_cfg:"]
+    if cuts is not None:
+        lines.extend([
+            "      # `weight` is a per-CUT draw probability: lhotse's mux picks one cut per draw, so",
+            "      # a source's share of the audio is weight x its mean cut length. Each weight is the",
+            "      # share of the cuts that make up the hours listed beside it (hours / mean cut), so",
+            "      # those hours are what a run draws. build_campaign_config.py --weights cuts.",
+        ])
 
-    groups = group_hours(hours, budget, tasks)
-    mixture_hours = sum(h for _, h in groups)
-    if mixture_hours <= 0:
-        raise SystemExit(f"No trainable hours for --tasks {tasks}.")
     total_hours = 0.0
-
-    for name, drawn in groups:
+    for (name, drawn, leaves), group_weight, weights in zip(groups, group_w, leaf_w):
         kind, key = name.split(":", 1)
-        group_weight = drawn / mixture_hours
+        cut_note = (f" -- {group_weight:.1%} of the cuts, {drawn / mixture_hours:.1%} of the hours"
+                    if cuts is not None else "")
 
         if kind == "asr":
             lang = key
-            lines.append(f"      # ASR {lang}: {budget:,.1f} h, reference-matched mix")
+            lines.append(f"      # ASR {lang}: {budget:,.1f} h, reference-matched mix{cut_note}")
             lines.append("      - type: group")
             lines.append(f"        weight: {group_weight:.8f}")
             lines.append("        tags:")
             lines.append("          task: asr")
             lines.append(f"          lang: {lang}")
             lines.append("        input_cfg:")
-            for corpus, share in sorted(template.items(), key=lambda kv: -kv[1]):
-                rel = ASR_SOURCES[corpus][lang]
+            for (rel, corpus, h), weight in zip(leaves, weights):
                 lines.append("          - type: lhotse_shar")
                 lines.append(
                     f"            shar_path: ${{oc.env:LOCAL_DATASETS_DIR}}/{rel}"
                 )
-                lines.append(f"            weight: {share:.8f}")
+                lines.append(f"            weight: {weight:.8f}")
                 lines.append("            tags:")
                 lines.append("              task: asr")
                 lines.append(f"              lang: {lang}")
                 if (field := text_field_for(rel)) is not None:
                     lines.append(f"              text_field: {field}")
-                lines.append(f"            # {share * budget:,.1f} h of {corpus}")
+                note = ""
+                if cuts is not None:
+                    # English's yodas3 slot is read from yodas-granary (YODAS v3 has no
+                    # English); the corpus name alone would hide that.
+                    origin = rel.split("/", 1)[0]
+                    read_from = f" (read from {origin})" if origin != corpus else ""
+                    note = f"{read_from}, mean cut {mean_cut_seconds(rel, hours, cuts):.1f} s"
+                lines.append(f"            # {h:,.1f} h of {corpus}{note}")
             total_hours += drawn
 
         else:
@@ -433,7 +630,7 @@ def yaml_block(template: dict[str, float], hours: dict[str, float],
             available = hours.get(rel, 0.0)
             lines.append(
                 f"      # ST {spec['src']}->{spec['tgt']}: {drawn:,.1f} h "
-                f"({available:,.1f} h available)"
+                f"({available:,.1f} h available){cut_note}"
             )
             lines.append("      - type: group")
             lines.append(f"        weight: {group_weight:.8f}")
@@ -446,7 +643,7 @@ def yaml_block(template: dict[str, float], hours: dict[str, float],
             lines.append(
                 f"            shar_path: ${{oc.env:LOCAL_DATASETS_DIR}}/{rel}"
             )
-            lines.append("            weight: 1.00000000")
+            lines.append(f"            weight: {weights[0]:.8f}")
             lines.append("            tags:")
             lines.append("              task: st")
             lines.append(f"              src_lang: {spec['src']}")
@@ -459,6 +656,51 @@ def yaml_block(template: dict[str, float], hours: dict[str, float],
             total_hours += drawn
 
     return lines, total_hours
+
+
+def draw_bins(draw: list[tuple[str, float]], hist_cache: dict, root: Path,
+              min_duration: float, max_duration: float, num_buckets: int,
+              resolution: float = 0.01, scale: int = 2_000_000) -> list[float]:
+    """Bucket bins for the audio the muxer actually emits.
+
+    *draw* lists (source, probability that a draw is a cut of it). Each source's
+    duration histogram is normalised to a distribution over its own cuts,
+    weighted by that probability and summed, which gives the duration
+    distribution of the draw. That differs from the pool's wherever the weights
+    do not follow cut counts, and it is the draw that the sampler buckets. Cuts
+    outside ``[min_duration, max_duration]`` are removed after normalising, as
+    the loader's filter removes them after the mux.
+
+    *hist_cache* is the per-source cache ``infra/check_training_config.py
+    --measure`` writes, keyed by absolute source path.
+    """
+    from bucket_bins import estimate_bins_from_histogram  # numpy; only needed here
+
+    by_path = {os.path.normpath(k): v for k, v in hist_cache.items() if isinstance(v, dict)}
+    lo = int(round(min_duration / resolution))
+    hi = int(round(max_duration / resolution))
+    mass: dict[int, float] = {}
+    missing: list[str] = []
+    for rel, prob in draw:
+        entry = by_path.get(os.path.normpath(str(root / rel)))
+        hist = entry.get("hist") if entry else None
+        if not hist or abs(float(entry.get("res", resolution)) - resolution) > 1e-9:
+            missing.append(rel)
+            continue
+        total = sum(int(c) for c in hist.values())
+        for key, count in hist.items():
+            k = int(key)
+            if lo <= k <= hi:
+                mass[k] = mass.get(k, 0.0) + prob * int(count) / total
+    if missing:
+        raise SystemExit(
+            "No duration histogram cached for: " + ", ".join(sorted(set(missing))) + ".\n"
+            "Measure them first (reads every manifest once):\n"
+            "  python3 infra/check_training_config.py --config <a config listing these "
+            "sources> --datasets-root <root> --measure"
+        )
+    counts = {k: round(v * scale) for k, v in mass.items() if round(v * scale) > 0}
+    return estimate_bins_from_histogram(counts, resolution, num_buckets)
 
 
 def validation_yaml_block(asr_sources: dict[str, dict[str, str]], hours: dict[str, float],
@@ -558,6 +800,17 @@ def _replace_scalar_in_section(lines: list[str], section: str, key: str, value: 
     raise ValueError(f"Could not find '{key}:' scalar under '{section}:' in the template")
 
 
+def _read_scalar_in_section(lines: list[str], section: str, key: str) -> str | None:
+    """The first ``key: value`` scalar within ``section:``'s own block, without a trailing comment."""
+    start, end, _ = _section_span(lines, section)
+    pattern = re.compile(rf"^\s*{key}:\s*([^\s#]+)")
+    for i in range(start, end):
+        m = pattern.match(lines[i])
+        if m:
+            return m.group(1)
+    return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--template", required=True, type=Path,
@@ -579,6 +832,19 @@ def main() -> int:
                              "language's absolute hours and fill the rest of "
                              "the budget from this corpus (see the module "
                              "docstring).")
+    parser.add_argument("--weights", choices=("cuts", "hours"), default="cuts",
+                        help="What the mux weights are. 'cuts' (default): draw "
+                             "probabilities of cuts, set so each source supplies "
+                             "its intended hours (hours / mean cut length). "
+                             "'hours': plain hour shares, as renders made before "
+                             "2026-10-08 have; they over-draw sources with long "
+                             "cuts and do not enforce the hours.")
+    parser.add_argument("--bins-hist-cache", type=Path, default=None,
+                        help="Also replace train_ds.bucket_duration_bins with bins "
+                             "measured on the audio this render draws, from the "
+                             "per-source duration histograms in this cache "
+                             "(infra/.config_check_cache.json, filled by "
+                             "infra/check_training_config.py --measure).")
     parser.add_argument("--cache", type=Path, default=None)
     parser.add_argument("--sample-shards", type=int, default=None,
                         help="Read only N shards per source and extrapolate. For "
@@ -618,9 +884,20 @@ def main() -> int:
         paths += [s["path"] for s in ST_PROBE.values()]
         paths.append(validation_path(ST_PROBE["en-de"]["path"], ST_PROBE_VALIDATION_SPLIT))
 
+    # Cut counts only turn hours into draw probabilities, and only for the
+    # sources the mix draws from.
+    need_cuts: set[str] = set()
+    if args.weights == "cuts":
+        if args.tasks in ("asr", "both"):
+            need_cuts |= {p for corpus in asr_sources.values() for p in corpus.values()}
+        if args.tasks in ("st", "both"):
+            need_cuts |= {s["path"] for s in ST_SOURCES.values()}
+            need_cuts |= {s["path"] for s in ST_PROBE.values()}
+
     print(f"Measuring {len(paths)} sources under {args.datasets_root}")
-    hours = measure(paths, args.datasets_root, cache, args.cache,
-                    args.sample_shards, args.jobs)
+    hours, cut_counts = measure(paths, args.datasets_root, cache, args.cache,
+                                args.sample_shards, args.jobs, need_cuts)
+    cuts = cut_counts if args.weights == "cuts" else None
 
     template = build_template(hours, args.reference_lang, asr_sources,
                               args.budget_hours, args.topup_corpus)
@@ -642,14 +919,23 @@ def main() -> int:
         print(f"\nThe matched ceiling is {ceiling:,.1f} h/language.")
         return 1
 
-    groups = group_hours(hours, args.budget_hours, args.tasks)
-    mixture_hours = sum(h for _, h in groups)
-    print(f"\nTop-level groups for --tasks {args.tasks} "
-          f"(weight = share of the mixture's hours):")
-    for name, drawn in groups:
-        print(f"  {name:<12} {drawn / mixture_hours:.6f}  {drawn:8,.1f} h")
+    groups, group_w, leaf_w = plan_mux(template, hours, args.budget_hours, args.tasks, cuts)
+    mixture_hours = sum(drawn for _, drawn, _ in groups)
+    if cuts is None:
+        print(f"\n{HOURS_WEIGHTS_WARNING}")
+        print(f"\nTop-level groups for --tasks {args.tasks} "
+              f"(weight = share of the mixture's hours):")
+        for (name, drawn, _), gw in zip(groups, group_w):
+            print(f"  {name:<12} {gw:.6f}  {drawn:8,.1f} h")
+    else:
+        print(f"\nTop-level groups for --tasks {args.tasks} "
+              f"(weight = share of the cuts; hours = what the group draws):")
+        for (name, drawn, leaves), gw in zip(groups, group_w):
+            per_hour = sum(h / mean_cut_seconds(rel, hours, cuts) for rel, _, h in leaves)
+            print(f"  {name:<12} cuts {gw:.6f}  hours {drawn / mixture_hours:.6f}  "
+                  f"{drawn:8,.1f} h  mean cut {drawn / per_hour:5.1f} s")
 
-    lines, total = yaml_block(template, hours, args.budget_hours, args.tasks)
+    lines, total = yaml_block(template, hours, args.budget_hours, args.tasks, cuts)
     val_lines, val_total = validation_yaml_block(asr_sources, hours, args.tasks)
 
     out_lines = args.template.read_text(encoding="utf-8").splitlines()
@@ -666,6 +952,24 @@ def main() -> int:
         # alignment under a chat template. The instruct arms turn it back on per
         # run from the command line (see the module docstring).
         _replace_scalar_in_section(out_lines, "data", "apply_chat_template", "false")
+
+        if args.bins_hist_cache:
+            num_buckets = int(_read_scalar_in_section(out_lines, "train_ds", "num_buckets") or 0)
+            if num_buckets < 2:
+                raise ValueError("train_ds.num_buckets is not set in the template")
+            min_duration = float(_read_scalar_in_section(out_lines, "train_ds", "min_duration") or 0.0)
+            max_duration = float(_read_scalar_in_section(out_lines, "train_ds", "max_duration") or 3600.0)
+            from bucket_bins import format_bins_for_yaml  # numpy; only needed here
+
+            bins = draw_bins(
+                draw_probabilities(groups, group_w, leaf_w),
+                json.loads(args.bins_hist_cache.read_text()),
+                args.datasets_root, min_duration, max_duration, num_buckets,
+            )
+            formatted_bins = format_bins_for_yaml(bins)
+            _replace_scalar_in_section(out_lines, "train_ds", "bucket_duration_bins", formatted_bins)
+            print(f"\nbucket_duration_bins re-measured on this draw "
+                  f"({min_duration:g}-{max_duration:g} s, {num_buckets} buckets):\n  {formatted_bins}")
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -687,11 +991,20 @@ def main() -> int:
     print(f"  total val hours     : {val_total:,.1f} "
           f"(full sets, not subsampled, from: {', '.join(val_corpora) or 'none'})")
     print(f"  held out            : {', '.join(HELD_OUT_LANGS)}")
+    if cuts is not None and not args.bins_hist_cache:
+        print(
+            "\nNOTE: bucket_duration_bins were left as the template had them. They are a\n"
+            "property of the draw, and these weights changed the draw: re-measure them\n"
+            "(--bins-hist-cache), or a stale set means padding waste or an OOM."
+        )
     print(
         "\nHours are enforced by weights plus a step budget, not by subsetting.\n"
-        "Set trainer.max_steps so the run consumes the intended audio:\n"
-        "  max_steps = total_hours * 3600 / (batch_duration * world_size * grad_accum)\n"
-        "and run preprocessing's `verification/check_shar_content.py` first —\n"
+        "The step budget the trainer derives is\n"
+        "  steps = total_hours * 3600 / (batch_duration * world_size * grad_accum),\n"
+        "which assumes every batch is full. Batches hold less than batch_duration (how much\n"
+        "less depends on the cut lengths), so the audio a run really saw is train_hours/total\n"
+        "in its log, not steps x batch_duration x world_size.\n"
+        "Run preprocessing's `verification/check_shar_content.py` first --\n"
         "the length filters are inert on any source lacking custom.num_tokens."
     )
     return 0
