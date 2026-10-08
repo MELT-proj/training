@@ -299,6 +299,69 @@ class TestWeights:
         ctc.check_weights(report, leaves, levels, cache, 0.5, 0.5, 1e-6, "cmd")
         assert report.status("W3") == ctc.PASS, [f.message for f in report.findings]
 
+    # Hours and cuts with very different cut lengths (32 s, 0.9 s, 7.2 s), so the policy
+    # read as shares of audio and read as cut probabilities give different weights.
+    CUT_HOURS = {"/d/en1": 900.0, "/d/en2": 100.0, "/d/de1": 400.0}
+    CUT_COUNTS = {"/d/en1": 100_000, "/d/en2": 400_000, "/d/de1": 200_000}
+
+    def _cut_probability_config(self) -> str:
+        sources = [
+            {"path": p, "lang_key": "en" if "en" in p else "de", "hours": h, "cuts": self.CUT_COUNTS[p]}
+            for p, h in self.CUT_HOURS.items()
+        ]
+        ctc.cmw.compute_weights(sources, 0.5, 0.5)
+        ctc.cmw.to_cut_probabilities(sources)
+        by_path = {s["path"]: s for s in sources}
+        return f"""
+        input_cfg:
+          - type: group
+            weight: {by_path['/d/en1']['p_l']:.8f}
+            tags: {{task: asr, lang: en}}
+            input_cfg:
+              - type: lhotse_shar
+                shar_path: /d/en1
+                weight: {by_path['/d/en1']['p_c']:.8f}
+                tags: {{task: asr, lang: en}}
+              - type: lhotse_shar
+                shar_path: /d/en2
+                weight: {by_path['/d/en2']['p_c']:.8f}
+                tags: {{task: asr, lang: en}}
+          - type: group
+            weight: {by_path['/d/de1']['p_l']:.8f}
+            tags: {{task: asr, lang: de}}
+            input_cfg:
+              - type: lhotse_shar
+                shar_path: /d/de1
+                weight: {by_path['/d/de1']['p_c']:.8f}
+                tags: {{task: asr, lang: de}}
+        """
+
+    def test_cut_probability_weights_pass_when_cut_counts_are_measured(self):
+        cache = {p: {"hours": h, "cuts": self.CUT_COUNTS[p], "hist": {"100": 10}} for p, h in self.CUT_HOURS.items()}
+        report = ctc.Report(Path("cfg.yaml"))
+        leaves, levels = flatten_yaml(self._cut_probability_config())
+        ctc.check_weights(report, leaves, levels, cache, 0.5, 0.5, 1e-6, "cmd")
+        assert report.status("W3") == ctc.PASS, [f.message for f in report.findings]
+        assert any("as cut probabilities" in n for n in report.notes)
+
+    def test_cut_probability_weights_without_cut_counts_fail_with_a_pointer_to_measure(self):
+        cache = {p: {"hours": h, "cuts": None, "hist": None} for p, h in self.CUT_HOURS.items()}
+        report = ctc.Report(Path("cfg.yaml"))
+        leaves, levels = flatten_yaml(self._cut_probability_config())
+        ctc.check_weights(report, leaves, levels, cache, 0.5, 0.5, 1e-6, "cmd")
+        assert report.status("W3") == ctc.FAIL
+        finding = next(f for f in report.findings if f.check == "W3")
+        assert any("cut count per source" in line and "--measure" in line for line in finding.fix)
+
+    def test_weights_that_are_neither_reading_of_the_policy_still_fail(self):
+        cache = {p: {"hours": h, "cuts": self.CUT_COUNTS[p], "hist": {"100": 10}} for p, h in self.CUT_HOURS.items()}
+        report = ctc.Report(Path("cfg.yaml"))
+        leaves, levels = flatten_yaml(self._two_group_config(0.5, 0.5))
+        ctc.check_weights(report, leaves, levels, cache, 0.5, 0.5, 1e-6, "cmd")
+        assert report.status("W3") == ctc.FAIL
+        finding = next(f for f in report.findings if f.check == "W3")
+        assert "expected p_c" in " ".join(finding.detail)
+
     def test_wrong_weights_are_reported_with_the_expected_value(self):
         hours = {"/d/en1": 900.0, "/d/en2": 100.0, "/d/de1": 400.0}
         report = ctc.Report(Path("cfg.yaml"))
