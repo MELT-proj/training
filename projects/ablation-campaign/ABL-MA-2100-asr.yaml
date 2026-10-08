@@ -17,7 +17,7 @@ run:
   # insurance now that max_duration is 60 s: it reports the real peak in the
   # first minute instead of leaving an OOM to surface mid-run. An OOM in the
   # warmup pass is caught and warned about rather than fatal.
-  memory_preallocation: true
+  memory_preallocation: false  # off for MA (PI review, PR #150): not needed now
 
 # =============================================================================
 # Model Configuration
