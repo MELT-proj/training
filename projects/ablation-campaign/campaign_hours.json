@@ -44,5 +44,9 @@
   "cv22_sidon/it/validation": 25.410520486110794,
   "mls_sidon/italian/dev": 5.175593506944448,
   "voxpopuli/it/validation": 4.451892552083332,
-  "covost2/en_de/dev": 26.047262534722268
+  "covost2/en_de/dev": 26.047262534722268,
+  "yodas3/de/train": 15514.022108784662,
+  "yodas3/fr/train": 27405.98042670129,
+  "yodas3/es/train": 55610.68941364576,
+  "yodas3/it/train": 15450.149830364553
 }

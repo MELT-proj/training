@@ -26,6 +26,17 @@ budget above ~590 h fails feasibility the same way it did during design.
 FLEURS is still measured and cached like any other source, just not
 trained on, so it stays comparable if this decision is revisited.
 
+Above 700 h a top-up corpus is needed (``--topup-corpus yodas3``). The four
+matched corpora stay at Italian's absolute hours -- all of Italian, 700.3 h,
+in the same proportions as before -- and every language draws the rest of
+its budget from the top-up corpus. At 2,100 h that is 1,399.7 h of YouTube per
+language. The domain mix is still identical across languages, but it is no
+longer Italian's natural one: YouTube is ~72% of it rather than ~17%. YODAS
+v3 (``yodas3/<lang>/train``) has no English, so English's top-up is drawn
+from ``yodas-granary/English/asr_only``. That is the same domain, but a
+different release and transcript pipeline (PI, 2026-10-07). Without the flag,
+``yodas3`` is left out entirely and a render is unchanged.
+
 Hours are **not** enforced by subsetting manifests. A Shar source pairs
 ``cuts.NNNNNN.jsonl`` positionally with ``recording.NNNNNN.tar``, so a filtered
 manifest no longer lines up with its audio, and rewriting the tars would mean
@@ -156,6 +167,18 @@ ASR_SOURCES: dict[str, dict[str, str]] = {
         "es": "voxpopuli/es/train",
         "it": "voxpopuli/it/train",
     },
+    # Top-up only: never part of the proportional template (see
+    # TOPUP_CORPORA). English is the yodas-granary set, because YODAS v3 has
+    # no English; it is the same path as English's "yodas-granary" entry, so
+    # English draws from it as two independent streams, which over ~102k h
+    # makes repeats negligible.
+    "yodas3": {
+        "en": "yodas-granary/English/asr_only",
+        "de": "yodas3/de/train",
+        "fr": "yodas3/fr/train",
+        "es": "yodas3/es/train",
+        "it": "yodas3/it/train",
+    },
     "fleurs": {
         "en": "fleurs/en_us/train",
         "de": "fleurs/de_de/train",
@@ -184,12 +207,27 @@ ASR_SOURCES: dict[str, dict[str, str]] = {
 # loader skips it as it always did. See ``docs/pnc_coverage.md`` in the
 # MELT-proj/preprocessing repo for exactly which sources have ``pnc_text``
 # today; do not add a corpus here ahead of its backfill landing.
+# Keyed by the source's top-level directory, not by corpus name, because the
+# "yodas3" corpus points English at a yodas-granary directory, which keeps its
+# text in the supervision. YODAS v3 keeps the raw caption in the supervision
+# and the guarded, punctuated text in ``custom.pnc_text``.
 TEXT_FIELD_OVERRIDES = {
     "cv22_sidon": "custom.metadata.sentence",
     "mls_sidon": "custom.pnc_text",
     "fleurs": "custom.pnc_text",
     "voxpopuli": "custom.pnc_text",
+    "yodas3": "custom.pnc_text",
 }
+
+# Corpora that only ever top a language up past what the reference language's
+# matched corpora hold. They are left out of the template unless named with
+# --topup-corpus.
+TOPUP_CORPORA = {"yodas3"}
+
+
+def text_field_for(rel: str) -> str | None:
+    """The text field a source trains on, or None to use the supervision."""
+    return TEXT_FIELD_OVERRIDES.get(rel.split("/", 1)[0])
 
 # Speech translation. Genuine en->X barely exists in this collection (CoVoST2
 # en_de at 430 h is the only direction among the training languages), whereas
@@ -273,12 +311,30 @@ def measure(paths: list[str], root: Path, cache: dict, cache_path: Path | None,
 
 
 def build_template(hours: dict[str, float], reference: str,
-                    sources: dict[str, dict[str, str]]) -> dict[str, float]:
-    """Corpus shares of the reference language, normalised to 1."""
+                    sources: dict[str, dict[str, str]],
+                    budget: float | None = None,
+                    topup: str | None = None) -> dict[str, float]:
+    """Corpus shares of the reference language, normalised to 1.
+
+    With *topup*, the other corpora keep the reference language's absolute
+    hours and *topup* supplies the rest of *budget*, so the shares are of the
+    budget rather than of the reference language's own total.
+    """
     per_corpus = {
         corpus: hours.get(paths[reference], 0.0)
         for corpus, paths in sources.items()
+        if corpus != topup
     }
+    if topup is not None:
+        base = sum(per_corpus.values())
+        if budget is None or budget <= base:
+            raise SystemExit(
+                f"--topup-corpus needs a budget above the reference language's "
+                f"{base:,.1f} h in the matched corpora (got {budget})."
+            )
+        template = {corpus: h / budget for corpus, h in per_corpus.items()}
+        template[topup] = (budget - base) / budget
+        return template
     total = sum(per_corpus.values())
     if total <= 0:
         raise SystemExit(
@@ -366,10 +422,8 @@ def yaml_block(template: dict[str, float], hours: dict[str, float],
                 lines.append("            tags:")
                 lines.append("              task: asr")
                 lines.append(f"              lang: {lang}")
-                if corpus in TEXT_FIELD_OVERRIDES:
-                    lines.append(
-                        f"              text_field: {TEXT_FIELD_OVERRIDES[corpus]}"
-                    )
+                if (field := text_field_for(rel)) is not None:
+                    lines.append(f"              text_field: {field}")
                 lines.append(f"            # {share * budget:,.1f} h of {corpus}")
             total_hours += drawn
 
@@ -442,10 +496,8 @@ def validation_yaml_block(asr_sources: dict[str, dict[str, str]], hours: dict[st
                 lines.append("        tags:")
                 lines.append("          task: asr")
                 lines.append(f"          lang: {lang}")
-                if corpus in TEXT_FIELD_OVERRIDES:
-                    lines.append(
-                        f"          text_field: {TEXT_FIELD_OVERRIDES[corpus]}"
-                    )
+                if (field := text_field_for(rel)) is not None:
+                    lines.append(f"          text_field: {field}")
                 lines.append(f"        # {h:,.1f} h of {corpus} ({split} split)")
                 total_hours += h
 
@@ -521,6 +573,12 @@ def main() -> int:
                              "entirely (e.g. one too small to hit the budget "
                              "in every language). Still measured and cached, "
                              "just not trained on.")
+    parser.add_argument("--topup-corpus", default=None,
+                        choices=sorted(TOPUP_CORPORA),
+                        help="Keep the matched corpora at the reference "
+                             "language's absolute hours and fill the rest of "
+                             "the budget from this corpus (see the module "
+                             "docstring).")
     parser.add_argument("--cache", type=Path, default=None)
     parser.add_argument("--sample-shards", type=int, default=None,
                         help="Read only N shards per source and extrapolate. For "
@@ -536,7 +594,8 @@ def main() -> int:
         cache = json.loads(args.cache.read_text())
 
     asr_sources = {c: p for c, p in ASR_SOURCES.items()
-                   if c not in args.exclude_corpus}
+                   if c not in args.exclude_corpus
+                   and (c not in TOPUP_CORPORA or c == args.topup_corpus)}
     val_corpora = [c for c in VALIDATION_SPLIT if c in asr_sources]
 
     # Every ASR corpus is measured even when excluded from the mix, so the
@@ -545,7 +604,9 @@ def main() -> int:
     # yodas-granary's `ast` sets are the largest sources in the collection
     # (es->en alone is 25,833 h) — measuring them would dominate a cold run's
     # I/O to produce numbers the config never uses.
-    paths = [p for corpus in ASR_SOURCES.values() for p in corpus.values()]
+    paths = [p for c, corpus in ASR_SOURCES.items()
+             if c not in TOPUP_CORPORA or c == args.topup_corpus
+             for p in corpus.values()]
     if args.tasks in ("asr", "both"):
         paths += [
             validation_path(ASR_SOURCES[corpus][lang], VALIDATION_SPLIT[corpus])
@@ -561,7 +622,8 @@ def main() -> int:
     hours = measure(paths, args.datasets_root, cache, args.cache,
                     args.sample_shards, args.jobs)
 
-    template = build_template(hours, args.reference_lang, asr_sources)
+    template = build_template(hours, args.reference_lang, asr_sources,
+                              args.budget_hours, args.topup_corpus)
     print(f"\nDomain template from '{args.reference_lang}':")
     for corpus, share in sorted(template.items(), key=lambda kv: -kv[1]):
         print(f"  {corpus:<16} {share * 100:5.1f}%  "

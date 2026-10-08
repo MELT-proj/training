@@ -156,6 +156,16 @@ per-language expert usage is measured after training, by running each
 checkpoint over the per-language dev sets; the arms do not wait for it.
 Extrapolated cost: ≈ 3,000 GPU-h for sixteen, ~52 h wall per arm.
 
+**Revised (PI, 2026-10-02): 2,100 h per language, 10,500 h total, counted
+in absolute hours.** This supersedes the five-epoch decision above. The
+budget is now stated as training hours per language and in total, not as
+epochs. The PI cut it to the old "three epochs" (3 × 700 h). Yodas v3 is
+added as a new Shar source for the five languages, so every language,
+Italian included, has at least 2,100 distinct hours, and nothing is
+resampled. This should be checked once the Yodas v3 hours are known. The
+crossing waits for Yodas v3 to be prepared and for the campaign config to
+gain the source and its sampling weights.
+
 ## 2. The crossing
 
 Four encoders × four adapters = 16 MA arms on the provisional backbone
@@ -175,6 +185,32 @@ not as the winner.
 Then IFT for the top three or four stacks (week 4), and one confirmation of
 the winning stack on the winning backbone (week 6). The encoder × backbone
 interaction is assumed small and is stated as an assumption.
+
+## 2b. Whisper size ladder (PI, 2026-10-01)
+
+Whisper-large-v3 is the leading encoder, and it encodes a full 30 s window
+(1,500 positions) per utterance whatever the length. A rough count puts
+its encoder forward pass at about 1.9 TFLOP per utterance, against about
+1 TFLOP for the Llama-1B forward and backward, so the encoder may dominate
+the step. This is an estimate; the arms' step times will measure it.
+Smaller Whisper encoders could save most of that, and the question is how
+much multilingual quality they give up, since the small models are much
+weaker outside English.
+
+| encoder | encoder params | width × layers |
+|---|---|---|
+| whisper-tiny | ~8M | 384 × 4 |
+| whisper-base | ~20M | 512 × 6 |
+| whisper-small | ~88M | 768 × 12 |
+| whisper-medium | ~307M | 1024 × 24 |
+| whisper-large-v3 (crossing) | ~635M | 1280 × 32 |
+
+Four MA arms: tiny, base, small and medium, each with **the adapter that wins
+the crossing**, on the crossing recipe (§1b), one seed. Large-v3 is the
+crossing's own cell. Scored with the selection metric; GPU-h per step taken
+from SLURM accounting. Runs **after the backbone MA arms** (week 5).
+`large-v3-turbo` is not included: it prunes only the decoder, which this
+pipeline does not use. The result is one curve on the §4 figure.
 
 ## 3. Confounds, and how each is handled
 
