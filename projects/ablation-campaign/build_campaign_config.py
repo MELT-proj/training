@@ -53,9 +53,11 @@ cut, against 22-25 s for yodas3 in the other four languages. ``--weights cuts``
 (the default) therefore sets each weight in proportion to the number of cuts
 that make up the hours it must supply, ``hours x cuts / hours_of_source``,
 within a language and across languages, so the hours written beside each
-source are the hours the run draws. ``--weights hours`` keeps the older
-hour-share weights, to re-render a config made before 2026-10-08 byte for byte;
-it does not enforce hours, and says so when it runs.
+source are the hours the run draws. The conversion is
+``infra/compute_mix_weights.cut_mux_weights``, shared with that tool's own
+``--weights cuts``. ``--weights hours`` keeps the older hour-share weights, to
+re-render a config made before 2026-10-08 byte for byte; it does not enforce
+hours, and says so when it runs.
 
 Bucket bins are a property of the draw, so they move with the weights.
 ``--bins-hist-cache`` re-measures them on the audio this render actually
@@ -147,11 +149,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "infra"))
 
 from compute_mix_weights import (  # noqa: E402
+    HOURS_WEIGHTS_WARNING,
     _find_block,
+    check_hour_shares,
+    cut_mux_weights,
     measure_shard_stats,
     plan_source,
     write_cache,
 )
+from compute_mix_weights import implied_hour_shares as _implied_hour_shares  # noqa: E402
+from compute_mix_weights import mean_cut_seconds as _mean_cut_seconds  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -473,15 +480,16 @@ def group_leaves(name: str, drawn: float, template: dict[str, float],
 
 def mean_cut_seconds(rel: str, hours: dict[str, float], cuts: dict[str, int]) -> float:
     """Mean cut length of a measured source, in seconds."""
-    n, h = cuts.get(rel), hours.get(rel, 0.0)
-    if not n or h <= 0:
-        raise SystemExit(
-            f"No cut count measured for {rel}, so its hours cannot be converted to a "
-            "draw probability. Re-run with a cache that has one (the builder records "
-            "cuts whenever it reads a source), or pass --weights hours to keep "
-            "hour-share weights."
-        )
-    return h * 3600.0 / n
+    try:
+        return _mean_cut_seconds(hours.get(rel, 0.0), cuts.get(rel), rel)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+
+
+def _mean_cuts(groups: list[Group], hours: dict[str, float],
+               cuts: dict[str, int]) -> list[list[float]]:
+    """Mean cut length of every source, shaped like the groups."""
+    return [[mean_cut_seconds(rel, hours, cuts) for rel, _, _ in leaves] for _, _, leaves in groups]
 
 
 def mux_weights(groups: list[Group], hours: dict[str, float],
@@ -490,10 +498,9 @@ def mux_weights(groups: list[Group], hours: dict[str, float],
 
     lhotse draws one *cut* per pick, so these are cut probabilities. With *cuts*
     (cut counts per source) each source's weight is the share of the cuts that
-    make up the hours it must supply, ``hours x cuts / hours_of_source``; the
-    product of a group's weight and a source's weight is then the source's
-    share of all cuts, and its share of the *audio* is exactly its share of the
-    hours.
+    make up the hours it must supply -- ``compute_mix_weights.cut_mux_weights``,
+    shared with that tool -- so a source's share of the *audio* is exactly its
+    share of the hours.
 
     With ``cuts=None`` the weights are plain shares of hours, which is what this
     script wrote before 2026-10-08. A source with long cuts then supplies more
@@ -507,49 +514,28 @@ def mux_weights(groups: list[Group], hours: dict[str, float],
             [[1.0 if len(leaves) == 1 else h / drawn for _, _, h in leaves]
              for _, drawn, leaves in groups],
         )
-    to_draw = [[h * 3600.0 / mean_cut_seconds(rel, hours, cuts) for rel, _, h in leaves]
-               for _, _, leaves in groups]
-    per_group = [sum(row) for row in to_draw]
-    total = sum(per_group)
-    return (
-        [n / total for n in per_group],
-        [[x / n for x in row] for row, n in zip(to_draw, per_group)],
+    return cut_mux_weights(
+        [[h for _, _, h in leaves] for _, _, leaves in groups],
+        _mean_cuts(groups, hours, cuts),
     )
 
 
 def implied_hour_shares(groups: list[Group], group_w: list[float],
                         leaf_w: list[list[float]], hours: dict[str, float],
                         cuts: dict[str, int]) -> list[list[float]]:
-    """Each source's share of the audio the muxer would emit under these weights.
-
-    Per draw a source supplies ``group weight x source weight x mean cut`` seconds.
-    """
-    mass = [[gw * lw * mean_cut_seconds(rel, hours, cuts)
-             for (rel, _, _), lw in zip(leaves, lws)]
-            for (_, _, leaves), gw, lws in zip(groups, group_w, leaf_w)]
-    total = sum(sum(row) for row in mass)
-    return [[m / total for m in row] for row in mass]
+    """Each source's share of the audio the muxer would emit under these weights."""
+    return _implied_hour_shares(group_w, leaf_w, _mean_cuts(groups, hours, cuts))
 
 
 def _check_hour_shares(groups: list[Group], group_w: list[float],
                        leaf_w: list[list[float]], hours: dict[str, float],
                        cuts: dict[str, int]) -> None:
     """Fail if the weights, as written (8 decimals), do not deliver the intended hours."""
-    target = sum(h for _, _, leaves in groups for _, _, h in leaves)
-    shares = implied_hour_shares(
-        groups,
-        [round(w, 8) for w in group_w],
-        [[round(w, 8) for w in row] for row in leaf_w],
-        hours, cuts,
-    )
-    for (name, _, leaves), row in zip(groups, shares):
-        for (rel, _, h), got in zip(leaves, row):
-            want = h / target
-            if abs(got - want) > 1e-5 * want:
-                raise SystemExit(
-                    f"internal error: {name} / {rel} would supply {got:.6%} of the audio, "
-                    f"not the intended {want:.6%}"
-                )
+    try:
+        check_hour_shares([[h for _, _, h in leaves] for _, _, leaves in groups],
+                          group_w, leaf_w, _mean_cuts(groups, hours, cuts))
+    except ValueError as exc:
+        raise SystemExit(f"internal error: {exc}") from exc
 
 
 def plan_mux(template: dict[str, float], hours: dict[str, float], budget: float,
@@ -936,12 +922,7 @@ def main() -> int:
     groups, group_w, leaf_w = plan_mux(template, hours, args.budget_hours, args.tasks, cuts)
     mixture_hours = sum(drawn for _, drawn, _ in groups)
     if cuts is None:
-        print(
-            "\nWARNING: --weights hours. These weights are shares of HOURS, but the loader\n"
-            "draws CUTS, so each source supplies weight x mean cut length of the audio, not\n"
-            "its share: sources with long cuts are over-drawn and the hours below are not\n"
-            "what a run sees. Use --weights cuts unless you are reproducing an older render."
-        )
+        print(f"\n{HOURS_WEIGHTS_WARNING}")
         print(f"\nTop-level groups for --tasks {args.tasks} "
               f"(weight = share of the mixture's hours):")
         for (name, drawn, _), gw in zip(groups, group_w):

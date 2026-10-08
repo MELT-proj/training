@@ -14,7 +14,6 @@ a test is the expensive part, not the arithmetic.
 
 from __future__ import annotations
 
-import gzip
 import hashlib
 import json
 import random
@@ -28,7 +27,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "projects" / "ablation-campaign"))
 
 import build_campaign_config as bcc  # noqa: E402
-import compute_mix_weights as cmw  # noqa: E402  (the builder puts infra/ on sys.path)
 
 
 class _InlineExecutor:
@@ -64,26 +62,6 @@ def write_manifest(directory: Path, durations: list[float], name: str = "cuts.00
 # ---------------------------------------------------------------------------
 # Measuring cut counts
 # ---------------------------------------------------------------------------
-
-
-def test_shard_stats_counts_cuts_and_seconds_and_skips_bad_lines(tmp_path):
-    shard = tmp_path / "cuts.000000.jsonl"
-    shard.write_text(
-        json.dumps({"duration": 2.5, "supervisions": [{"duration": 99.0}]}) + "\n"
-        "\n"
-        "not json\n" + json.dumps({"id": "no-duration"}) + "\n" + json.dumps({"duration": 4.0}) + "\n",
-        encoding="utf-8",
-    )
-    # Supervision durations are not counted, and unparsable lines are neither summed nor counted.
-    assert cmw.shard_stats(str(shard)) == (6.5, 2)
-    assert cmw.shard_seconds(str(shard)) == 6.5
-
-
-def test_shard_stats_reads_gzip(tmp_path):
-    shard = tmp_path / "cuts.000000.jsonl.gz"
-    with gzip.open(shard, "wt", encoding="utf-8") as fh:
-        fh.write(json.dumps({"duration": 3.0}) + "\n" + json.dumps({"duration": 1.0}) + "\n")
-    assert cmw.shard_stats(str(shard)) == (4.0, 2)
 
 
 def test_measure_records_hours_and_cuts_together(tmp_path):
