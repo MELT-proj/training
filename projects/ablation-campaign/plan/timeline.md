@@ -60,26 +60,22 @@ Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
 - **The week-3 crossing render waits on the crossing-prep item** (week 3
   Track B). All its PI decisions were made on 2026-09-26 (`03-audio-stack.md`
   §1b).
-- **The crossing waits on Yodas v3 reaching MN5, and on its rows.**
-  Prepared on nyx 2026-10-07 (de/es/fr/it; 15.5k-55.6k h each). The config
-  is rendered in PR #150 as `ABL-MA-2100-asr.yaml`: 2,100 h per language,
-  10,500 h in total, with yodas3 topping up past Italian's 700 h. English
-  tops up from yodas-granary (PI, 2026-10-07). Still to do:
-  (1) merge #150;
-  (2) the copy to MN5 is in flight (PI, 2026-10-08: a subset first, the rest
-  once the runs are going): shards 0..N-1, about 2,000 h per language, into
-  `/gpfs/scratch/epor48/melt-data/yodas3/<lang>/train`; the orchestrator
-  verifies it on arrival;
-  (3) the crossing session links `shar-indexed/yodas3` to that scratch
-  path (the config keeps `LOCAL_DATASETS_DIR`; check that the container can
-  see `/gpfs/scratch`), re-points the rows (new ids, the new config, no `epochs: 5`, walltimes cut
-  to ~0.6x) and
-  (4) runs an acc_debug smoke on the new mix;
-  (5) the remaining yodas3 shards (7.07 TB, untranscribed leaves included) are
-  being copied since 2026-10-08 into a separate
-  `/gpfs/scratch/epor48/melt-data/yodas3-rest/`, keeping the original shard
-  numbers so they can be merged into `yodas3/<lang>/train` later. The subset
-  copy was verified file for file on 2026-10-08.
+- **The crossing is ready to submit, pending the PI's go** (2026-10-08).
+  - Done:
+    - #150 merged (`ABL-MA-2100-asr.yaml`, 2,100 h/lang).
+    - Bucket bins re-measured on the 2,100 h draw (44d0436).
+    - 16 `MA-2100-crossing-*` rows, with the warmup fix.
+    - `shar-indexed/yodas3` links to the scratch subset, verified file for
+      file.
+    - A 50-step acc_debug smoke passed.
+  - Running: a 3,000-step acc_debug smoke (job 47068429), to get the s/step
+    that sets the 41-72 h walltimes. A fresh crossing session replaces
+    "Audio Stack Runs" and reports it.
+  - Held back: the Whisper-Conformer cells stay with the Conformer
+    investigation (#149).
+  - The yodas3 remainder (7.07 TB) has been copying into `yodas3-rest/` since
+    2026-10-08, at ~1 day ETA. Merge it into `yodas3/<lang>/train` on the
+    PI's word once the crossing runs.
 - **The Conformer adapter's gradient explodes: 5 of 5 crossing runs** (board
   2026-09-28/29). The signature is `grad_norm` inf for several steps, then nan;
   loss reads 0 and the job trains a poisoned model for hours before a CUDA
