@@ -19,6 +19,24 @@ corpus is not swamped before cross-language balancing runs:
 paper's pre-training setting and the script default. Lower values flatten harder;
 the paper uses `alpha = 0.2` for one fine-tuning stage.
 
+### The loader draws cuts, not hours
+
+The weights above are computed from hours, but lhotse's multiplexer draws one
+*cut* per pick, so a weight is a cut probability and a source supplies
+`weight x its mean cut length` of audio. Hour-based weights therefore deliver
+those hours only when every source has the same mean cut length. They do not
+when cuts differ several-fold (YODAS v3 segments average ~23 s, CommonVoice
+~5.5 s, YODAS Granary English ~9 s): on the campaign's 2,100 h config they gave
+English 11.9% of the audio instead of 20%.
+
+`projects/ablation-campaign/build_campaign_config.py` corrects for this since
+2026-10-08 (`--weights cuts`, the default: each weight proportional to
+hours / mean cut length). This script does **not** — its output keeps the
+hour-based `p_c` and `p_l`. Before trusting the hours of a config made here,
+predict the shares as `sum(weight x mean cut)` per language and source (cut
+counts come from `infra/check_training_config.py --measure`), or read
+`train_hours/*` from the first log lines of a run.
+
 Every translation **direction** is its own language entry: ASR German is `de`,
 while en→de and de→en are `en-de` and `de-en`. This falls out of the config tags
 (`lang` for ASR, `src_lang`/`tgt_lang` for ST) — you don't declare it anywhere.
