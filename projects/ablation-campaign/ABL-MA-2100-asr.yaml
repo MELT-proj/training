@@ -385,7 +385,11 @@ data:
     # 60-90 s band, so the filtered distribution -- and every boundary derived
     # from it -- does not move. The rule above still applies to any OTHER
     # change of max_duration; 60 and 90 simply happen to coincide here.
-    bucket_duration_bins: [2.6, 4.0, 5.0, 6.0, 7.02, 8.18, 9.54, 10.56, 11.38, 12.16, 12.94, 13.68, 14.41, 15.14, 15.86, 16.59, 17.32, 18.05, 18.81, 19.58, 21.18, 23.78, 26.32, 28.9, 33.18, 35.62, 36.98, 38.08, 39.08]
+    # 2,100 h mix (2026-10-08): the notes above describe the 700 h config. These bins are
+    # re-measured on this config's own draw (cached per-source duration histograms x its
+    # effective weights, 0.5-60 s filter, 30 buckets); yodas3 caps at ~30 s, hence the dense
+    # 26-30 s tail and nothing above it.
+    bucket_duration_bins: [4.86, 6.91, 10.0, 12.19, 14.15, 15.98, 17.79, 19.62, 23.15, 25.92, 26.87, 27.35, 27.67, 27.91, 28.13, 28.31, 28.47, 28.63, 28.79, 28.92, 29.07, 29.19, 29.35, 29.47, 29.61, 29.75, 29.87, 30.0, 30.15]
 
     # Sampling
     shuffle: true

@@ -15,6 +15,11 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-08 — Claude (worker session, crossing) — 2,100 h config now uses the re-measured bucket bins
+Context: PI chose the re-measured bins (previous entry); committed straight to main.
+Finding: `ABL-MA-2100-asr.yaml` `bucket_duration_bins` replaced (30 buckets, dense 26-30 s tail). `check_training_config.py` C5 now passes. B3 still fails and C4 warns because the checker measures the whole pool, not this config's draw; the ~1.1% of drawn cuts above 31 s share the top bucket (already counted in the 7.4% padding estimate). `campaign.py plan` still renders. The 16 crossing rows are unaffected; nothing submitted.
+Action needed: none.
+
 ## 2026-10-08 — Claude (worker session, crossing) — bin extraction and config check on the 2,100 h mix: bins are loose but cost no extra padding
 Context: PI asked for `check_training_config.py --measure` (nyx, full yodas3 pool, 39 sources) on `ABL-MA-2100-asr.yaml`.
 Finding: 22 pass, 4 fail, none blocking. H1/H2/W3 fail only because the checker compares against the whole pool (370,028 h) while this config deliberately draws 10,500 h from it by explicit weights. B3/C5 are real: the train bins are byte-identical to another config's and sit up to 9.65 s from the checker's pool-level suggestion, which is itself the wrong target (the pool is not the draw). Re-measured against the draw (cached per-source histograms x the config's effective weights): yodas3 caps at ~30 s, only 3.45% of cuts exceed 30 s and 1.1% exceed 31 s, so the inherited bins' five top buckets above 33 s are nearly empty. Bins on the draw: [4.86, 6.91, 10.0, 12.19, 14.15, 15.98, 17.79, 19.62, 23.15, 25.92, 26.87, 27.35, 27.67, 27.91, 28.13, 28.31, 28.47, 28.63, 28.79, 28.92, 29.07, 29.19, 29.35, 29.47, 29.61, 29.75, 29.87, 30.0, 30.15]. Crude pad-to-bucket-max waste: 6.9% with the inherited bins vs 7.4% with the re-measured ones, i.e. no gain.
