@@ -75,7 +75,11 @@ Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
   see `/gpfs/scratch`), re-points the rows (new ids, the new config, no `epochs: 5`, walltimes cut
   to ~0.6x) and
   (4) runs an acc_debug smoke on the new mix;
-  (5) copy the remaining yodas3 shards once the crossing is running.
+  (5) the remaining yodas3 shards (7.07 TB, untranscribed leaves included) are
+  being copied since 2026-10-08 into a separate
+  `/gpfs/scratch/epor48/melt-data/yodas3-rest/`, keeping the original shard
+  numbers so they can be merged into `yodas3/<lang>/train` later. The subset
+  copy was verified file for file on 2026-10-08.
 - **The Conformer adapter's gradient explodes: 5 of 5 crossing runs** (board
   2026-09-28/29). The signature is `grad_norm` inf for several steps, then nan;
   loss reads 0 and the job trains a poisoned model for hours before a CUDA
