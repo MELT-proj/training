@@ -490,6 +490,18 @@ def _filter_key(min_duration: float, max_duration: float) -> str:
     return f"{float(min_duration)}:{float(max_duration)}"
 
 
+def _key_range(min_duration: float, max_duration: float, resolution: float) -> tuple[int, float]:
+    """Inclusive histogram-key range ``(lo, hi)`` of a duration filter.
+
+    A split with no ``max_duration`` is read as ``float("inf")``: no upper bound.
+    ``int(round(inf))`` raises OverflowError, so an infinite bound stays infinite
+    and every key from ``lo`` up is kept.
+    """
+    lo = int(round(min_duration / resolution))
+    hi = math.inf if math.isinf(max_duration) else int(round(max_duration / resolution))
+    return lo, hi
+
+
 def measure_shard_detailed(task: tuple[str, str, float]) -> tuple[str, float, int, dict[int, int]]:
     """Return (source, seconds, cuts, duration histogram) for one shard manifest.
 
@@ -647,8 +659,7 @@ def measure_sources(
                 "measured": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             }
             for min_duration, max_duration in filters:
-                lo = int(round(min_duration / resolution))
-                hi = int(round(max_duration / resolution))
+                lo, hi = _key_range(min_duration, max_duration, resolution)
                 f_cuts = sum(v for k, v in hist_all.items() if lo <= k <= hi)
                 f_secs = sum(k * resolution * v for k, v in hist_all.items() if lo <= k <= hi)
                 entry["filtered"][_filter_key(min_duration, max_duration)] = {
@@ -690,8 +701,7 @@ def summed_histogram(
             # the others; treat it as unmeasured rather than mixing scales.
             missing += 1
             continue
-        lo = int(round(min_duration / resolution))
-        hi = int(round(max_duration / resolution))
+        lo, hi = _key_range(min_duration, max_duration, resolution)
         for key, count in entry["hist"].items():
             key = int(key)
             if lo <= key <= hi:
@@ -737,8 +747,7 @@ def split_totals(
             # so flag the result as approximate rather than presenting it as
             # measured at that filter.
             resolution = entry.get("res", HIST_RESOLUTION)
-            lo = int(round(min_duration / resolution))
-            hi = int(round(max_duration / resolution))
+            lo, hi = _key_range(min_duration, max_duration, resolution)
             f_cuts = sum(int(v) for k, v in entry["hist"].items() if lo <= int(k) <= hi)
             f_secs = sum(int(k) * resolution * int(v) for k, v in entry["hist"].items()
                          if lo <= int(k) <= hi)
