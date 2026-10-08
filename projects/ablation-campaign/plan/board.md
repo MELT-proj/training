@@ -15,6 +15,11 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-08 — Claude (worker session, crossing) — 1 h smoke on the 2,100 h mix: ~0.76 s/step, 41 h walltime holds with margin
+Context: 3,000-step `acc_debug` run of w2v-BERT + MLP (1 node x 4 GPUs, merged config incl. re-measured bins, preallocation off, eval/saves off), hand-submitted so not in `arms.tsv`.
+Finding: completed in 57 min. Startup (shard open, cold GPFS) ~13.5 min before step 10; then 0.71-0.79 s/step in each 500-step window from step 1000 on (0.76 mean), steady, no drift. grad_norm finite throughout (max 6.55, none nan), peak CUDA memory 9.9 GB, no OOM. The 50-step smoke's ~1.1 s/step was cold-cache noise. Projection for `w2vb-mlp`: 126,000 steps x 0.76 s = ~26.6 h + startup, against the 41 h time: (~50% margin); the 0.6x walltimes are conservative, at least for the MLP cells. Other adapters/encoders unmeasured on this mix.
+Action needed: PI: ready to submit the 16 rows when the user says go; optionally tighten the MLP walltimes first.
+
 ## 2026-10-08 — Claude (worker session, crossing) — 2,100 h config now uses the re-measured bucket bins
 Context: PI chose the re-measured bins (previous entry); committed straight to main.
 Finding: `ABL-MA-2100-asr.yaml` `bucket_duration_bins` replaced (30 buckets, dense 26-30 s tail). `check_training_config.py` C5 now passes. B3 still fails and C4 warns because the checker measures the whole pool, not this config's draw; the ~1.1% of drawn cuts above 31 s share the top bucket (already counted in the 7.4% padding estimate). `campaign.py plan` still renders. The 16 crossing rows are unaffected; nothing submitted.
