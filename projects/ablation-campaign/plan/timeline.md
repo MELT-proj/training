@@ -60,18 +60,17 @@ Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
 - **The week-3 crossing render waits on the crossing-prep item** (week 3
   Track B). All its PI decisions were made on 2026-09-26 (`03-audio-stack.md`
   §1b).
-- **The crossing waits only on the PI's go** (2026-10-08).
-  - Done:
-    - #151 merged: the mux weights now give equal hours per language
-      (19.6-20.7% each in the smoke).
-    - The sixteen `MA-2100-crossing-*` rows have explicit steps and reset
-      walltimes (726ca28).
-    - The yodas3 subset is on MN5 behind the `shar-indexed/yodas3` symlink.
-  - Before submitting, sync MN5 to `origin/main` at 726ca28 or later; its
-    checkout is still on an old branch.
-  - Whisper-Conformer stays with the Conformer investigation (#149).
-  - The yodas3 remainder (7.07 TB) is copying into `yodas3-rest/` since
-    2026-10-08. Merge it into `yodas3/<lang>/train` on the PI's word.
+- **Crossing in flight; MN5 constraints until the last crossing job ends**
+  (2026-10-08, board d91c0e1).
+  - **Don't touch `~/training-crossing`** on MN5. It's a frozen clone at
+    e6cc269 that the 12 queued arms (and any resume) bind as
+    /workspace/training when they start: no sync, no branch switch, no
+    edits. `~/training` is safe to sync.
+  - **Don't merge `yodas3-rest/`** into `yodas3/<lang>/train`. Jobs list their
+    shards at start, so a merge while some are queued, or on a resume, gives
+    arms different data. The copy itself continues.
+  - The four Conformer cells are not submitted. They wait on the Conformer
+    investigation (#149) and the PI's decision.
 - **The Conformer adapter's gradient explodes: 5 of 5 crossing runs** (board
   2026-09-28/29). The signature is `grad_norm` inf for several steps, then nan;
   loss reads 0 and the job trains a poisoned model for hours before a CUDA
@@ -361,7 +360,8 @@ assumed one (`03-audio-stack.md` §0).*
       `03` §1b). Explicit `max_steps`, 1.25 × the
       estimate (~80% of each step's nominal audio is real), ≈ 2,800 GPU-h for
       sixteen, 12-43 h wall per arm, all in the queue at once. Rows rendered
-      (726ca28); waits on the PI's go.
+      (726ca28). **12 non-Conformer arms
+      submitted 2026-10-08** (pending, d91c0e1). Conformer cells held (#149).
       *Outcome:* the audio stack — encoder, adapter, frame rate — ranked by
       the selection metric (`selection-metric/README.md`, PI 2026-09-23),
       which replaces the high/low-resource FLEURS split named here before.
