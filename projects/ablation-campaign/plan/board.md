@@ -15,6 +15,42 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-08 — Fondue Orchestrator — 2,100 h crossing config, Yodas v3 on MN5, plan folded in through the submission
+Context: orchestrating from 2026-09-29 to 2026-10-08, from the Conformer
+blow-up report to the crossing submission.
+Finding / proposal:
+- **Plan decisions recorded** (timeline, 03, README log):
+  - the Whisper size ladder (03 §2b; tiny/base/small/medium with the
+    crossing's winning adapter, after the backbone MA arms);
+  - a budget of 2,100 h per language counted in hours, replacing five epochs
+    (03 §1b);
+  - Yodas v3 as the top-up past Italian's 700 h, with English topped up
+    from yodas-granary (PI, 2026-10-07).
+- **PR #150** (merged): `build_campaign_config.py --topup-corpus`, and
+  `ABL-MA-2100-asr.yaml`. The 700 h config re-renders unchanged, and the
+  measured yodas3 hours match the preparation session's stats exactly.
+  #151 later corrected the weights to be per cut.
+- **Yodas v3 on MN5 scratch:**
+  - The subset, shards 0..N-1 at ~2,000 h per language (538 GB), is in
+    `/gpfs/scratch/epor48/melt-data/yodas3/`, verified file for file against
+    nyx.
+  - The manifests that the stopped full copy left beyond N are in
+    `<lang>/_pending/`; the PI moved them there.
+  - The remainder (7.07 TB, untranscribed included) has been copying into
+    `yodas3-rest/` since 2026-10-08, over 8 rsync streams via `mn5transfer`.
+    Logs are in nyx `melt/melt-data/logs/yodas3-to-mn5/`.
+- **Per-cut mux weights.** I proposed weight × mean cut duration as the
+  cause of English's missing hours. The worker confirmed it (d2a4bac) and
+  fixed it (#151).
+- **Conformer diagnosis** closed in the timeline as warmup, with #149 as the
+  fallback.
+Action needed:
+- Nobody merges `yodas3-rest/` into `train/` or touches
+  `~/training-crossing` until the last crossing job ends.
+- The orchestrator verifies the `yodas3-rest` copy when it lands.
+- The re-check of the ladder, IFT and Fondue weights (week 3 Track B) is
+  unassigned.
+
 ## 2026-10-08 — Claude (worker session, crossing) — the four Conformer cells are submitted too, with warmup and without QK-norm; all 16 crossing arms are queued
 Context: the user read the Conformer divergences (5 of 5 earlier runs) as fixed by the warmup repair (`7502bcb`) and asked me to check the history before the four cells went in. They were then submitted from the same frozen checkout as the other twelve (`~/training-crossing` at `e6cc269`); the job ids are in `arms.tsv`.
 Evidence checked. It sits on the #149 branch (`fix/conformer-attention-qk-norm`, board entries of 2026-09-29), not on main: the control "original architecture with warmup" (whisper-large-v3 + Conformer, adapter LR 2e-3, seed 42, `--trainer.warmup_steps 0.03`, MN5 `acc_debug`). It ran 9,031 steps with no non-finite step, max grad_norm 113 at step 1 (<= 11 after step 500) and loss ~0.4; the identical recipe without warmup exploded at step ~5,150. I read the probe files too (`gradprobe-whisper-2e3-orig-warmup` and `gradprobe-whisper-2e3-v3` under `/gpfs/scratch/epor48/outputs`):
