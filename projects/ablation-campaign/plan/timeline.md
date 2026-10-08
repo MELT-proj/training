@@ -60,34 +60,18 @@ Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
 - **The week-3 crossing render waits on the crossing-prep item** (week 3
   Track B). All its PI decisions were made on 2026-09-26 (`03-audio-stack.md`
   §1b).
-- **The crossing is on hold for a PI decision on the mix weights**
-  (2026-10-08, board d2a4bac). lhotse's mux weights pick *cuts*, while the
-  builder sets them as shares of *hours*, so a source's real share of hours
-  scales with its mean cut length. The 3,000-step smoke gives English ~11%
-  of hours instead of 20%: its top-up is yodas-granary English at ~9 s per
-  cut, against ~23 s for yodas3. Inside each language, MLS is
-  over-represented in the 700 h config too (predicted 52-59% instead of 35%).
-  A 300 s step also carries only ~234 s of audio. The PI chooses between:
-  submit as is and quote the realised hours; fix the builder
-  (weights ∝ hours / mean cut duration, then re-render, re-bin and re-smoke);
-  or the fix plus ~28% more steps. Check the ladder, IFT and Fondue configs
-  for the same assumption. Reword 03 §1b once decided.
-  Earlier state, which still stands:
+- **The crossing waits only on the PI's go** (2026-10-08).
   - Done:
-    - #150 merged (`ABL-MA-2100-asr.yaml`, 2,100 h/lang).
-    - Bucket bins re-measured on the 2,100 h draw (44d0436).
-    - 16 `MA-2100-crossing-*` rows, with the warmup fix.
-    - `shar-indexed/yodas3` links to the scratch subset, verified file for
-      file.
-    - A 50-step acc_debug smoke passed.
-  - Running: a 3,000-step acc_debug smoke (job 47068429), to get the s/step
-    that sets the 41-72 h walltimes. A fresh crossing session replaces
-    "Audio Stack Runs" and reports it.
-  - Held back: the Whisper-Conformer cells stay with the Conformer
-    investigation (#149).
-  - The yodas3 remainder (7.07 TB) has been copying into `yodas3-rest/` since
-    2026-10-08, at ~1 day ETA. Merge it into `yodas3/<lang>/train` on the
-    PI's word once the crossing runs.
+    - #151 merged: the mux weights now give equal hours per language
+      (19.6-20.7% each in the smoke).
+    - The sixteen `MA-2100-crossing-*` rows have explicit steps and reset
+      walltimes (726ca28).
+    - The yodas3 subset is on MN5 behind the `shar-indexed/yodas3` symlink.
+  - Before submitting, sync MN5 to `origin/main` at 726ca28 or later; its
+    checkout is still on an old branch.
+  - Whisper-Conformer stays with the Conformer investigation (#149).
+  - The yodas3 remainder (7.07 TB) is copying into `yodas3-rest/` since
+    2026-10-08. Merge it into `yodas3/<lang>/train` on the PI's word.
 - **The Conformer adapter's gradient explodes: 5 of 5 crossing runs** (board
   2026-09-28/29). The signature is `grad_norm` inf for several steps, then nan;
   loss reads 0 and the job trains a poisoned model for hours before a CUDA
@@ -374,10 +358,10 @@ assumed one (`03-audio-stack.md` §0).*
       4 encoders × 4 adapters at MA-stage cost on Llama-3.2-1B-Instruct, one
       recipe for all sixteen, all at the same frame rate, **2,100 h per
       language, 10,500 h per arm** (PI, 2026-10-02, replacing five epochs;
-      `03` §1b). ≈ 150 GPU-h
-      per arm at 1200 s, ≈ 2,400 for sixteen, all in the queue at once.
-      Render waits on the PI decisions under Blocked / waiting and on the
-      crossing-prep item below.
+      `03` §1b). Explicit `max_steps`, 1.25 × the
+      estimate (~80% of each step's nominal audio is real), ≈ 2,800 GPU-h for
+      sixteen, 12-43 h wall per arm, all in the queue at once. Rows rendered
+      (726ca28); waits on the PI's go.
       *Outcome:* the audio stack — encoder, adapter, frame rate — ranked by
       the selection metric (`selection-metric/README.md`, PI 2026-09-23),
       which replaces the high/low-resource FLEURS split named here before.
@@ -396,6 +380,14 @@ assumed one (`03-audio-stack.md` §0).*
       Blocked / waiting). Root cause from the MN5 logs and a reproduction on
       artemis, before any fix or LR change is made.
       *Outcome:* a cause, and a fix or recipe change for the PI to approve.
+- [ ] **Re-check every hour-weighted config for per-cut mux weights**
+      (added 2026-10-08, after #151). The ladder renders (`05`), the IFT
+      config and the Fondue/raclette drafts were weighted as hour shares
+      under the old `compute_mix_weights.py` default. Re-emitting them
+      changes their weights, and their per-language hours may be off the
+      same way the crossing's were. Re-render, predict the hours share as
+      weight × mean cut duration, and confirm before anyone reuses the
+      numbers.
 - [ ] **Fondue dry run at full scale on MN5**: config resolves, dataloader
       builds, bucket bins re-measured on the full distribution, startup time,
       exposure audit output, host-RAM trace. Write findings to `06-fondue.md`.
