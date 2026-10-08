@@ -60,7 +60,19 @@ Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
 - **The week-3 crossing render waits on the crossing-prep item** (week 3
   Track B). All its PI decisions were made on 2026-09-26 (`03-audio-stack.md`
   §1b).
-- **The crossing is ready to submit, pending the PI's go** (2026-10-08).
+- **The crossing is on hold for a PI decision on the mix weights**
+  (2026-10-08, board d2a4bac). lhotse's mux weights pick *cuts*, while the
+  builder sets them as shares of *hours*, so a source's real share of hours
+  scales with its mean cut length. The 3,000-step smoke gives English ~11%
+  of hours instead of 20%: its top-up is yodas-granary English at ~9 s per
+  cut, against ~23 s for yodas3. Inside each language, MLS is
+  over-represented in the 700 h config too (predicted 52-59% instead of 35%).
+  A 300 s step also carries only ~234 s of audio. The PI chooses between:
+  submit as is and quote the realised hours; fix the builder
+  (weights ∝ hours / mean cut duration, then re-render, re-bin and re-smoke);
+  or the fix plus ~28% more steps. Check the ladder, IFT and Fondue configs
+  for the same assumption. Reword 03 §1b once decided.
+  Earlier state, which still stands:
   - Done:
     - #150 merged (`ABL-MA-2100-asr.yaml`, 2,100 h/lang).
     - Bucket bins re-measured on the 2,100 h draw (44d0436).
