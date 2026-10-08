@@ -1020,9 +1020,9 @@ def main() -> int:
         "\nHours are enforced by weights plus a step budget, not by subsetting.\n"
         "The step budget the trainer derives is\n"
         "  steps = total_hours * 3600 / (batch_duration * world_size * grad_accum),\n"
-        "which assumes every batch is full. Batches hold less than batch_duration (about\n"
-        "78% on the 2,100 h mix), so the audio a run really saw is train_hours/total in\n"
-        "its log, not steps x batch_duration x world_size.\n"
+        "which assumes every batch is full. Batches hold less than batch_duration (how much\n"
+        "less depends on the cut lengths), so the audio a run really saw is train_hours/total\n"
+        "in its log, not steps x batch_duration x world_size.\n"
         "Run preprocessing's `verification/check_shar_content.py` first --\n"
         "the length filters are inert on any source lacking custom.num_tokens."
     )
