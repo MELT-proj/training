@@ -1,0 +1,674 @@
+# MELT Training Configuration
+# Following NeMo SpeechLM2 configuration structure
+#
+# Usage:
+#   python src/train.py --config config/train/asr.yaml
+#   python src/train.py --config config/train/asr.yaml --trainer.max_steps=1000
+#   python src/train.py --config config/train/asr.yaml --run.exp_name=my_experiment
+
+# =============================================================================
+# Run Configuration (non-TrainingArguments settings)
+# =============================================================================
+run:
+  exp_name: ABL-MA-2100-asr
+  dry_run: false
+  # Run a worst-case forward+backward at max_duration and another at
+  # min_duration before step 1, logging peak CUDA memory for each. Cheap
+  # insurance now that max_duration is 60 s: it reports the real peak in the
+  # first minute instead of leaving an OOM to surface mid-run. An OOM in the
+  # warmup pass is caught and warned about rather than fatal.
+  memory_preallocation: false  # off for MA (PI review, PR #150): not needed now
+
+# =============================================================================
+# Model Configuration
+# =============================================================================
+model:
+  encoder:
+    name: facebook/w2v-bert-2.0
+    freeze: true
+    max_audio_seq_len: 1500 # for frames of 20ms, this is 30s
+    # Pinned off for every encoder. facebook/mms-1b and mHuBERT-147 ship it on, w2v-BERT
+    # and Whisper ship it off, and a frozen encoder still time-masks in train mode, so an
+    # unpinned config would give two of the crossing's four encoders an augmentation the
+    # other two do not have (plan/03-audio-stack.md §3). A no-op for w2v-BERT and Whisper.
+    # plan_arm.py refuses to render an MMS or mHuBERT arm against a config without it.
+    apply_spec_augment: false
+
+  decoder:
+    name: meta-llama/Llama-3.2-1B-Instruct
+    attn_implementation: flash_attention_2
+    # The BASE arm runs from this same config, overriding only:
+    #   --model.decoder.name meta-llama/Llama-3.2-1B \
+    #   --model.decoder.chat_template_from meta-llama/Llama-3.2-1B-Instruct
+    # (the MA-700-llama1b-base row in campaign.yaml).  A base checkpoint ships no
+    # chat template, so it has to borrow one or `apply_chat_template: true`
+    # cannot render; with it borrowed, the two arms produce byte-identical
+    # input_ids.  Do not set chat_template_from here -- this decoder has its
+    # own template, and setting it would only overwrite it with a copy.
+    # No bos_token here: melt/training/setup.py reads only eos_token and
+    # pad_token from this block, so setting it configured nothing.  Llama's
+    # tokenizer already supplies <|begin_of_text|>.
+    #
+    # <|eot_id|> is Llama 3's turn terminator and lands inside the loss under
+    # the llama3 boundary config, so the model learns to stop.  Do NOT use
+    # <|endoftext|>: it is absent from Llama's vocabulary and would be appended
+    # as a brand-new token the frozen decoder has never emitted.
+    eos_token: <|eot_id|>
+    # The pad slot Meta reserved for exactly this, so nothing grows the vocab.
+    pad_token: <|finetune_right_pad_id|>
+    audio_token: <|audio|>
+    audio_bos_token: <|audio_bos|>
+    audio_eos_token: <|audio_eos|>
+    freeze: true
+  
+  adapter:
+    freeze: false
+    _type: mlp
+#   num_adapter_layers: 2
+#   adapter_kernel_size: 3
+#   adapter_stride: 2
+
+  ckpt: null  # Path to checkpoint to resume from
+
+# =============================================================================
+# Data Configuration
+# =============================================================================
+data:
+  sample_rate: 16000
+  # MA on an *instruct* backbone runs through the chat template with NO task
+  # instruction -- the user turn carries only the audio.
+  apply_chat_template: true
+  # Must be llama3 to match the decoder.  Under chatml the assistant span is
+  # never found and the run trains on nothing; the pairing is checked at
+  # startup (PR #89).
+  chat_template_config: llama3
+  prompt_template_selection: custom
+  prompt_template: "{audio_token}"
+  strict_text_field: true
+
+  train_ds:
+    total_hours: 10500.00
+    total_cuts: 2143430 #11588853  # Optional: total number of cuts for estimation
+    force_estimate: false  # Force estimation of total_hours at start
+
+    # Data sources - list of datasets to load
+    input_cfg:
+      # ASR en: 2,100.0 h, reference-matched mix
+      - type: group
+        weight: 0.20000000
+        tags:
+          task: asr
+          lang: en
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/English/asr_only
+            weight: 0.66650880
+            tags:
+              task: asr
+              lang: en
+            # 1,399.7 h of yodas3
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/en/train
+            weight: 0.12126304
+            tags:
+              task: asr
+              lang: en
+              text_field: custom.metadata.sentence
+            # 254.7 h of cv22_sidon
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/english/train
+            weight: 0.11779900
+            tags:
+              task: asr
+              lang: en
+              text_field: custom.pnc_text
+            # 247.4 h of mls_sidon
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/English/asr_only
+            weight: 0.05725785
+            tags:
+              task: asr
+              lang: en
+            # 120.2 h of yodas-granary
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/en/train
+            weight: 0.03717131
+            tags:
+              task: asr
+              lang: en
+              text_field: custom.pnc_text
+            # 78.1 h of voxpopuli
+      # ASR de: 2,100.0 h, reference-matched mix
+      - type: group
+        weight: 0.20000000
+        tags:
+          task: asr
+          lang: de
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas3/de/train
+            weight: 0.66650880
+            tags:
+              task: asr
+              lang: de
+              text_field: custom.pnc_text
+            # 1,399.7 h of yodas3
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/de/train
+            weight: 0.12126304
+            tags:
+              task: asr
+              lang: de
+              text_field: custom.metadata.sentence
+            # 254.7 h of cv22_sidon
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/german/train
+            weight: 0.11779900
+            tags:
+              task: asr
+              lang: de
+              text_field: custom.pnc_text
+            # 247.4 h of mls_sidon
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/German/asr_only
+            weight: 0.05725785
+            tags:
+              task: asr
+              lang: de
+            # 120.2 h of yodas-granary
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/de/train
+            weight: 0.03717131
+            tags:
+              task: asr
+              lang: de
+              text_field: custom.pnc_text
+            # 78.1 h of voxpopuli
+      # ASR fr: 2,100.0 h, reference-matched mix
+      - type: group
+        weight: 0.20000000
+        tags:
+          task: asr
+          lang: fr
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas3/fr/train
+            weight: 0.66650880
+            tags:
+              task: asr
+              lang: fr
+              text_field: custom.pnc_text
+            # 1,399.7 h of yodas3
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/fr/train
+            weight: 0.12126304
+            tags:
+              task: asr
+              lang: fr
+              text_field: custom.metadata.sentence
+            # 254.7 h of cv22_sidon
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/french/train
+            weight: 0.11779900
+            tags:
+              task: asr
+              lang: fr
+              text_field: custom.pnc_text
+            # 247.4 h of mls_sidon
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/French/asr_only
+            weight: 0.05725785
+            tags:
+              task: asr
+              lang: fr
+            # 120.2 h of yodas-granary
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/fr/train
+            weight: 0.03717131
+            tags:
+              task: asr
+              lang: fr
+              text_field: custom.pnc_text
+            # 78.1 h of voxpopuli
+      # ASR es: 2,100.0 h, reference-matched mix
+      - type: group
+        weight: 0.20000000
+        tags:
+          task: asr
+          lang: es
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas3/es/train
+            weight: 0.66650880
+            tags:
+              task: asr
+              lang: es
+              text_field: custom.pnc_text
+            # 1,399.7 h of yodas3
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/es/train
+            weight: 0.12126304
+            tags:
+              task: asr
+              lang: es
+              text_field: custom.metadata.sentence
+            # 254.7 h of cv22_sidon
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/spanish/train
+            weight: 0.11779900
+            tags:
+              task: asr
+              lang: es
+              text_field: custom.pnc_text
+            # 247.4 h of mls_sidon
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Spanish/asr_only
+            weight: 0.05725785
+            tags:
+              task: asr
+              lang: es
+            # 120.2 h of yodas-granary
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/es/train
+            weight: 0.03717131
+            tags:
+              task: asr
+              lang: es
+              text_field: custom.pnc_text
+            # 78.1 h of voxpopuli
+      # ASR it: 2,100.0 h, reference-matched mix
+      - type: group
+        weight: 0.20000000
+        tags:
+          task: asr
+          lang: it
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas3/it/train
+            weight: 0.66650880
+            tags:
+              task: asr
+              lang: it
+              text_field: custom.pnc_text
+            # 1,399.7 h of yodas3
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/it/train
+            weight: 0.12126304
+            tags:
+              task: asr
+              lang: it
+              text_field: custom.metadata.sentence
+            # 254.7 h of cv22_sidon
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/italian/train
+            weight: 0.11779900
+            tags:
+              task: asr
+              lang: it
+              text_field: custom.pnc_text
+            # 247.4 h of mls_sidon
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Italian/asr_only
+            weight: 0.05725785
+            tags:
+              task: asr
+              lang: it
+            # 120.2 h of yodas-granary
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/it/train
+            weight: 0.03717131
+            tags:
+              task: asr
+              lang: it
+              text_field: custom.pnc_text
+            # 78.1 h of voxpopuli
+    # Batch settings
+    batch_size: null  # Use batch_duration instead for dynamic batching
+    # 150, down from 180, for headroom at max_duration 60.
+    #
+    # History, because the number matters and the reasoning was wrong once:
+    # 120 profiled at peak 32.0 GB of 64 (MN5 job 44991596: 7.29 GB resident
+    # model + 24.68 GB transient), which made 180 look comfortable at ~44 GB.
+    # It was, under the 30 s cap that run used.  At max_duration 60 it was not:
+    # job 45025274 OOM'd at step 700 on a batch of input_features
+    # [8, 2880, 160] -- 8 cuts totalling ~180 s of real audio, but PADDED to
+    # 8 x 57.6 s = 461 s of frames, 2.5x the budget, peaking at 61.59 GB.
+    #
+    # The padding came from stale bucket_duration_bins, fixed below, not from
+    # batch_duration.  With homogeneous buckets the worst case falls to roughly
+    # 1.3x the budget; 150 buys margin on top of that rather than relying on
+    # the bins alone.  Both fixes are deliberate: the bins remove the blow-up,
+    # this absorbs what is left.
+    #
+    # Without quadratic_duration a batch is 150 s of *real* audio, and without
+    # activation checkpointing every layer's activations are kept.
+    batch_duration: 150  # seconds of audio per batch
+    # Deliberately unset.  lhotse charges each cut `d + d^2/quadratic_duration`,
+    # so with it set batch_duration budgets *effective* seconds and a "1 epoch"
+    # run silently covers less audio than it claims -- the whole subject of #96.
+    # Unset, the charge is exactly `d`, batch_duration means audio seconds, and
+    # estimate_steps_per_epoch's inflation factor is exactly 1.0.
+    #
+    # Still safe at max_duration 60 s.  The encoder chunks at
+    # max_audio_seq_len=1500 frames (30 s) via _unfold_tensor, so its
+    # attention never sees a longer window however long the cut is, and the
+    # decoder runs flash_attention_2, whose memory is linear in sequence
+    # length -- a 60 s cut costs ~2x a 30 s one rather than ~4x.  Compute
+    # still grows quadratically in the decoder, which is a throughput cost,
+    # not an OOM risk.  Re-examine if max_duration is raised much further.
+    quadratic_duration: null
+
+    # Bucketing for efficient batching
+    lhotse_sampler_type: dynamic_bucketing  # One among: dynamic_bucketing, dynamic, bucketing
+    num_buckets: 30
+    buffer_size: 10000
+    # Re-measured with infra/estimate_bucket_bins.py against the actual
+    # max_duration 60 distribution (train sources only, on nyx).
+    #
+    # The previous bins were measured under the old 30 s cap and topped out at
+    # 15.9 s. Once max_duration became 60, every cut from 15.9-60 s fell into
+    # ONE final bucket: lhotse filled a batch to batch_duration of *real* audio
+    # from that bucket and then padded every item to the longest, so 8 cuts
+    # totalling ~180 s became 8 x 57.6 s = 461 s of padded frames. That is what
+    # OOM'd job 45025274 at step 700, peaking at 61.59 GB of 63.29.
+    #
+    # The new top edge is 39.08, so the final bucket spans [39.08, 60] -- a
+    # 1.54x spread instead of 3.8x, bounding padding waste at roughly 1.2x the
+    # budget. Longest cut in the mixture is 59.5 s.
+    #
+    # RE-MEASURE THESE WHENEVER max_duration CHANGES. They are a property of
+    # the duration distribution under that filter, and a stale set is not a
+    # throughput nuisance -- it is an OOM.
+    #
+    # Measured note, so nobody re-does the pass: these are identical under a
+    # 90 s cap as well. Only 78 cuts (1.51 h of 153,591 h, 0.001%) lie in the
+    # 60-90 s band, so the filtered distribution -- and every boundary derived
+    # from it -- does not move. The rule above still applies to any OTHER
+    # change of max_duration; 60 and 90 simply happen to coincide here.
+    bucket_duration_bins: [2.6, 4.0, 5.0, 6.0, 7.02, 8.18, 9.54, 10.56, 11.38, 12.16, 12.94, 13.68, 14.41, 15.14, 15.86, 16.59, 17.32, 18.05, 18.81, 19.58, 21.18, 23.78, 26.32, 28.9, 33.18, 35.62, 36.98, 38.08, 39.08]
+
+    # Sampling
+    shuffle: true
+    drop_last: false
+    seed: 42
+    shard_seed: 42
+
+    # Duration filtering
+    # 60 s.  The earlier 30 s was not deliberate -- it silently dropped every
+    # cut longer than 30 s from training AND validation, which is not the
+    # mixture this config claims to train.  batch_duration still budgets the
+    # batch, so admitting longer cuts changes which audio is seen, not how
+    # much per step.
+    min_duration: 0.5
+    max_duration: 60.0
+
+    # Drop cuts whose transcript is pathologically long for their audio.
+    #
+    # Batches are budgeted by *audio* seconds, so a cut with short audio and
+    # a runaway transcript passes the duration constraint and still sets the
+    # padded width of the whole batch.  That is what ended artemis job 328290
+    # at step 4292: 17 cuts, only 224 feature frames, but input_ids
+    # [17, 1158] and 77.45 GB allocated on an 80 GB H100.
+    #
+    # 400 removes only the tail: over an 800-cut head sample of all train
+    # sources, p99 num_tokens is <=195 and the largest single value is 291
+    # (voxpopuli/de).
+    #
+    # Cuts without `custom.num_tokens` are KEPT, not dropped (dataloader's
+    # _token_filter), so this can never silently delete a source -- but note
+    # MLS non-English carries neither num_tokens nor pnc_text, so the filter
+    # is blind on four of this mixture's sources.
+    max_tokens: 400
+
+    # DataLoader settings
+    num_workers: 1
+    pin_memory: true
+    prefetch_factor: 2
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+  validation_ds:
+    # Repeated deliberately: eval does NOT inherit this from the data: block --
+    # only the four chat-template keys are (dataloader.py:1226-1231) -- so
+    # without it validation silently falls back to the supervision text.
+    strict_text_field: true
+
+    # Generation-based evaluation costs ~N sequential decoder steps per sample
+    # instead of a single forward, so the full validation set is not affordable.
+    #
+    # NOTE this cap is applied PER NAMED EVAL SET, not per config: here
+    # 5 named eval sets x 200 = ~1000 utterances per eval.
+    #
+    # Measured on an H100 (artemis job 327830): ~2.2 s/utterance at
+    # generation_max_length 64, and the cost is roughly linear in the token
+    # budget because nothing in the training targets teaches the model to stop
+    # (see docs/generation_eval.md) -- so every sample spends the whole budget.
+    # Budget the eval against eval_steps before raising either number.
+    #
+    # materialize_cuts_for_eval applies the cap with a seeded shuffle, so every
+    # run scores the same subset.
+    max_samples: 200
+    total_hours: 186.03
+    total_cuts: 86243  # measured by infra/check_training_config.py
+    force_estimate: false
+
+    input_cfg:
+      # ASR en validation: full cv22_sidon/mls_sidon/voxpopuli sets
+      - type: lhotse_shar
+        name: asr_en
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/en/validation
+        tags:
+          task: asr
+          lang: en
+          text_field: custom.metadata.sentence
+        # 27.3 h of cv22_sidon (validation split)
+      - type: lhotse_shar
+        name: asr_en
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/english/dev
+        tags:
+          task: asr
+          lang: en
+          text_field: custom.pnc_text
+        # 15.8 h of mls_sidon (dev split)
+      - type: lhotse_shar
+        name: asr_en
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/en/validation
+        tags:
+          task: asr
+          lang: en
+          text_field: custom.pnc_text
+        # 5.0 h of voxpopuli (validation split)
+      # ASR de validation: full cv22_sidon/mls_sidon/voxpopuli sets
+      - type: lhotse_shar
+        name: asr_de
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/de/validation
+        tags:
+          task: asr
+          lang: de
+          text_field: custom.metadata.sentence
+        # 2.5 h of cv22_sidon (validation split)
+      - type: lhotse_shar
+        name: asr_de
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/german/dev
+        tags:
+          task: asr
+          lang: de
+          text_field: custom.pnc_text
+        # 14.3 h of mls_sidon (dev split)
+      - type: lhotse_shar
+        name: asr_de
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/de/validation
+        tags:
+          task: asr
+          lang: de
+          text_field: custom.pnc_text
+        # 5.0 h of voxpopuli (validation split)
+      # ASR fr validation: full cv22_sidon/mls_sidon/voxpopuli sets
+      - type: lhotse_shar
+        name: asr_fr
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/fr/validation
+        tags:
+          task: asr
+          lang: fr
+          text_field: custom.metadata.sentence
+        # 24.3 h of cv22_sidon (validation split)
+      - type: lhotse_shar
+        name: asr_fr
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/french/dev
+        tags:
+          task: asr
+          lang: fr
+          text_field: custom.pnc_text
+        # 10.1 h of mls_sidon (dev split)
+      - type: lhotse_shar
+        name: asr_fr
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/fr/validation
+        tags:
+          task: asr
+          lang: fr
+          text_field: custom.pnc_text
+        # 5.0 h of voxpopuli (validation split)
+      # ASR es validation: full cv22_sidon/mls_sidon/voxpopuli sets
+      - type: lhotse_shar
+        name: asr_es
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/es/validation
+        tags:
+          task: asr
+          lang: es
+          text_field: custom.metadata.sentence
+        # 26.8 h of cv22_sidon (validation split)
+      - type: lhotse_shar
+        name: asr_es
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/spanish/dev
+        tags:
+          task: asr
+          lang: es
+          text_field: custom.pnc_text
+        # 10.0 h of mls_sidon (dev split)
+      - type: lhotse_shar
+        name: asr_es
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/es/validation
+        tags:
+          task: asr
+          lang: es
+          text_field: custom.pnc_text
+        # 5.1 h of voxpopuli (validation split)
+      # ASR it validation: full cv22_sidon/mls_sidon/voxpopuli sets
+      - type: lhotse_shar
+        name: asr_it
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/it/validation
+        tags:
+          task: asr
+          lang: it
+          text_field: custom.metadata.sentence
+        # 25.4 h of cv22_sidon (validation split)
+      - type: lhotse_shar
+        name: asr_it
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/italian/dev
+        tags:
+          task: asr
+          lang: it
+          text_field: custom.pnc_text
+        # 5.2 h of mls_sidon (dev split)
+      - type: lhotse_shar
+        name: asr_it
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/it/validation
+        tags:
+          task: asr
+          lang: it
+          text_field: custom.pnc_text
+        # 4.5 h of voxpopuli (validation split)
+    batch_size: null
+    batch_duration: 300.0
+    lhotse_sampler_type: dynamic_bucketing
+    num_buckets: 30
+    bucket_duration_bins: [3.74, 4.32, 4.7, 5.04, 5.33, 5.59, 5.86, 6.1, 6.34, 6.58, 6.84, 7.1, 7.39, 7.72, 8.1, 8.54, 9.14, 10.0, 10.85, 11.87, 12.88, 13.84, 14.76, 15.62, 16.52, 17.37, 18.23, 19.1, 19.97]
+    shuffle: false
+    drop_last: false
+    min_duration: 0.5
+    # Matches train, for the same reason.
+    max_duration: 60.0
+    num_workers: 1
+    pin_memory: true
+    prefetch_factor: 1
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+# =============================================================================
+# Trainer Configuration
+# =============================================================================
+trainer:
+  output_dir: ${oc.env:OUTPUT_DIR}/iwslt_replica_v1
+  overwrite_output_dir: true
+  seed: 42
+  do_train: true
+  do_eval: true
+  eval_on_start: true
+  average_tokens_across_devices: true
+
+  # Batch and accumulation
+  per_device_train_batch_size: -1  # Handled by Lhotse, set to 1
+  # Eval does NOT go through Lhotse — it uses a plain DataLoader, and -1 here
+  # crashes the first eval. 4 is known-good; 16 OOMs on 64 GB H100s.
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 4
+
+  # LR schedule
+  lr_scheduler_type: cosine
+  warmup_steps: 20
+
+  # Duration. The budget is train_ds.total_hours (2,100 h per language,
+  # 10,500 h in total), not a count of epochs: one "epoch" here is one pass of
+  # that many sampled hours, which the trainer turns into a step count. Leave
+  # this at 1 and change the hours instead (PI, 2026-10-02).
+  num_train_epochs: 1
+  max_steps: -1
+
+  # Logging
+  logging_strategy: steps
+  logging_steps: 2
+  report_to: wandb
+
+  # Evaluation
+  eval_strategy: steps # "no" # steps
+  eval_steps: 100
+  batch_eval_metrics: true
+
+  # Evaluation decodes with generate() -- greedy, at most this many *new*
+  # tokens (MELT's prompt is audio, so generation_max_length is read as a
+  # new-token budget; see MELTTrainer._generation_kwargs).
+  predict_with_generate: true
+  generation_max_length: 256
+  generation_num_beams: 1
+
+  # Checkpointing
+  save_strategy: steps
+  save_steps: 1000
+  save_total_limit: 5
+
+  # Performance
+  bf16: true
+  group_by_length: false  # Handled by Lhotse bucketing
+  dataloader_num_workers: 4  # Eval-only knob (train workers come from data.train_ds.num_workers)
+  remove_unused_columns: false
+  ddp_find_unused_parameters: false
+
+  max_grad_norm: 1.0
+
+evaluation:
+  compute_metrics: true
+  enable_whisper_normalization: true
+  # Reference/hypothesis pairs printed to stdout and logged to W&B each eval.
+  # 0 disables.
+  log_num_samples: 10
+
+optimization:
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+
+  # encoder_lr: 6e-6 # Not used since it's frozen
+  # decoder_lr: 2e-5 # Not used since it's frozen
+  adapter_lr: 2e-5
+  min_lr_scale: 0.1

@@ -87,7 +87,7 @@ def test_whisper_keeps_the_name_it_ran_under():
     )
 
     assert plan.exp_name == (
-        "MA-700asr-whisperlargeF-llama1bInsF-mlpT-sk5-ga1-wsd-wu0p03-elr6e6-dlr2e5-lr1e3-s42-8g"
+        "MA-700asr-whisperlargeF-llama1bInsF-mlpT-sk5-ga1-wsd-wus0p03-elr6e6-dlr2e5-lr1e3-s42-8g"
     )
 
 
