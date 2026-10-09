@@ -28,6 +28,7 @@ WARM_START="${WARM_START:?set WARM_START to a GOLDW checkpoint path as the conta
 SITE="${SITE:-artemis}"
 SEED="${SEED:-42}"
 CONFIG="${CONFIG:-projects/ablation-campaign/ABL-MA-700-asr.yaml}"
+ENCODER="${ENCODER:-openai/whisper-large-v3}"
 DECODER="${DECODER:-Qwen/Qwen3.5-2B}"
 BATCH_DURATION="${BATCH_DURATION:-30}"
 MAX_STEPS="${MAX_STEPS:-3000}"
@@ -72,13 +73,27 @@ if [[ "$MELT_TRAIN_MODULE" == melt.training.train_self_distill ]]; then
     export SINGULARITYENV_PYTHONPATH=/workspace/training/.trl-overlay
 fi
 
-mapfile -t DECODER_OVERRIDES < <(python3 - "${REPO_ROOT}/projects/ablation-campaign" "$DECODER" <<'PY'
+# The weights and model config come from WARM_START, but train.py still builds a
+# processor from model.encoder/decoder.name before loading it, reads the encoder
+# attention backend from the YAML (a checkpoint does not record one), and saves
+# resolved_config.json from these values -- so describe the warm start's stack
+# exactly as launch_goldw.sh did, or the run says w2v-BERT + Llama-1B.
+mapfile -t STACK_OVERRIDES < <(python3 - "${REPO_ROOT}/projects/ablation-campaign" "$DECODER" "$ENCODER" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[1])
-from plan_arm import DECODER_PROFILES
-p = DECODER_PROFILES[sys.argv[2]]
-for key, value in [("model.decoder.eos_token", p["eos_token"]), ("model.decoder.pad_token", p["pad_token"]),
-                   ("data.chat_template_config", p["chat_template_config"])]:
+from plan_arm import DECODER_PROFILES, ENCODER_ATTN_IMPLEMENTATION, ENCODER_WINDOW_FRAMES
+decoder, encoder = sys.argv[2], sys.argv[3]
+p = DECODER_PROFILES[decoder]
+pairs = [("model.decoder.name", decoder), ("model.decoder.eos_token", p["eos_token"]),
+         ("model.decoder.pad_token", p["pad_token"]), ("data.chat_template_config", p["chat_template_config"])]
+if "chat_template_from" in p:
+    pairs.append(("model.decoder.chat_template_from", p["chat_template_from"]))
+pairs.append(("model.encoder.name", encoder))
+if encoder in ENCODER_WINDOW_FRAMES:
+    pairs.append(("model.encoder.max_audio_seq_len", ENCODER_WINDOW_FRAMES[encoder]))
+if encoder in ENCODER_ATTN_IMPLEMENTATION:
+    pairs.append(("model.encoder.attn_implementation", ENCODER_ATTN_IMPLEMENTATION[encoder]))
+for key, value in pairs:
     print(f"--{key}")
     print(value)
 PY
@@ -93,7 +108,8 @@ CMD=(
     --run.exp_name "$EXP_NAME"
     --trainer.output_dir "/workspace/outputs/${EXP_NAME}"
     --model.ckpt "$WARM_START"
-    "${DECODER_OVERRIDES[@]}"
+    "${STACK_OVERRIDES[@]}"
+    --model.adapter.stack_factor 5
     --model.encoder.eval_when_frozen true
     --data.apply_chat_template true
     --data.prompt_template_selection custom
