@@ -47,8 +47,12 @@ from melt.training.data.audio.lhotse import (
 from melt.training.self_distill import SelfDistillEvalCollator, distill_vocab_limit, response_logits
 
 
-def load_checkpoint(ckpt: Path, run_cfg) -> tuple[MELTForCausalLM, MELTProcessor]:
-    """As train.py's model.ckpt branch: the attention implementations come from the run config."""
+def load_checkpoint(ckpt: Path, run_cfg, processor_dir: Path | None = None) -> tuple[MELTForCausalLM, MELTProcessor]:
+    """As train.py's model.ckpt branch: the attention implementations come from the run config.
+
+    ``checkpoint-N`` directories carry no processor; pass the one
+    save_run_processor.py wrote for the run.
+    """
     config = MELTConfig.from_pretrained(ckpt)
     decoder_attn = OmegaConf.select(run_cfg, "model.decoder.attn_implementation")
     encoder_attn = OmegaConf.select(run_cfg, "model.encoder.attn_implementation")
@@ -56,7 +60,7 @@ def load_checkpoint(ckpt: Path, run_cfg) -> tuple[MELTForCausalLM, MELTProcessor
         config.text_decoder_config._attn_implementation = decoder_attn
     if encoder_attn:
         config.audio_encoder_config._attn_implementation = encoder_attn
-    processor = MELTProcessor.from_pretrained(ckpt)
+    processor = MELTProcessor.from_pretrained(processor_dir or ckpt)
     model = MELTForCausalLM.from_pretrained(ckpt, config=config, dtype=torch.bfloat16)
     return model.to("cuda").eval(), processor
 
@@ -175,6 +179,7 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--ckpt", required=True, help="checkpoint directory (a run root or a checkpoint-N)")
     p.add_argument("--run-config", default=None, help="default: resolved_config.json in the ckpt dir or its parent")
+    p.add_argument("--processor", default=None, help="processor dir (save_run_processor.py) for checkpoint-N dirs")
     p.add_argument("--out", required=True)
     p.add_argument("--max-samples", type=int, default=100, help="utterances per named eval set")
     p.add_argument("--prompt-template", default=None, help="student template; default: the run's data.prompt_template")
@@ -190,7 +195,7 @@ def main() -> None:
         raise SystemExit("no resolved_config.json next to the checkpoint; pass --run-config")
     cfg = OmegaConf.load(run_config)
     cfg.data.validation_ds.max_samples = args.max_samples
-    model, processor = load_checkpoint(ckpt, cfg)
+    model, processor = load_checkpoint(ckpt, cfg, Path(args.processor) if args.processor else None)
     tokenizer = processor.tokenizer
     n_layers = model.text_decoder.config.get_text_config().num_hidden_layers
     layers = [int(x) for x in args.layers.split(",")] if args.layers else sorted(
