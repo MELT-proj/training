@@ -135,7 +135,8 @@ gradient steps they demonstrably need.
 self-supervised encoders have room to finish the transition the screen
 caught them part-way through. "Epoch" here is a step budget, not a pass over a fixed
 set: hours are enforced by sampling weights plus a derived step count, never
-by subsetting (`build_campaign_config.py` docstring), and the dataloader is
+by subsetting (*corrected 2026-10-08:* the weights pick cuts, not hours; see
+the 2026-10-08 paragraph below) (`build_campaign_config.py` docstring), and the dataloader is
 infinite. Five epochs is therefore **17,500 audio-h sampled per arm**. Italian,
 whose four corpora *are* the 700 h, repeats about five times; a source larger
 than its share (most of en/de/es/fr) mostly yields new cuts. The repetition
@@ -156,6 +157,14 @@ per-language expert usage is measured after training, by running each
 checkpoint over the per-language dev sets; the arms do not wait for it.
 Extrapolated cost: ≈ 3,000 GPU-h for sixteen, ~52 h wall per arm.
 
+*Amended 2026-10-09:* at adapter LR 2e-3 both attention adapters diverge.
+The Q-Former does so in all 4 cells, the Conformer in 2 of 4 even with
+warmup; MLP and MoE are stable. The PI chose to test the LR before changing
+the architecture: whisper-conformer, w2vb-conformer, mms1b-conformer and
+mms1b-qformer run at 1e-3 (board 4182f9a, b483fc6). So the crossing is no
+longer one recipe for all sixteen arms. Report each cell's LR next to its
+result.
+
 **Revised (PI, 2026-10-02): 2,100 h per language, 10,500 h total, counted
 in absolute hours.** This supersedes the five-epoch decision above. The
 budget is now stated as training hours per language and in total, not as
@@ -166,11 +175,33 @@ resampled. This should be checked once the Yodas v3 hours are known. The
 crossing waits for Yodas v3 to be prepared and for the campaign config to
 gain the source and its sampling weights.
 
+**How the hours are realised (2026-10-08, board d2a4bac/b17af08/df48665).**
+Two corrections to the "weights plus a derived step count" mechanism:
+
+- **The mux weights are per-cut probabilities.** lhotse's multiplexer picks
+  a source by weight and then takes one cut from it, so a source's share of
+  hours is weight × mean cut duration. With hour-share weights, English got
+  ~12% of the audio instead of 20%, because its top-up (yodas-granary
+  English) averages ~9 s per cut against ~23 s for yodas3. The 700 h
+  config is skewed the same way inside each language: MLS is predicted at
+  52-59% of hours instead of 35%. #151 makes the default weight hours ÷ mean
+  cut duration (`compute_mix_weights.py --weights cuts`). On the re-rendered
+  config, every language gets 19.6-20.7% of the audio. **The 700 h screens
+  were not re-run and carry the within-language skew**; comparisons between
+  them still hold, since every arm used the same mix.
+- **A step carries ~80% of its nominal audio** (234-240 s per 300 s step).
+  So the crossing rows state their steps explicitly: 1.25 × the estimate,
+  i.e. 157,500 steps on 4 ranks, 78,750 on 8, and 39,375 on 16. That trains
+  ~10,490 h, ~2,100 h per language (PI, 2026-10-08).
+
+Cost at the corrected mix's 0.88 s/step: ~2,800 GPU-h for the sixteen arms,
+12-43 h wall per arm. Walltimes are set at projection + 30%.
+
 ## 2. The crossing
 
 Four encoders × four adapters = 16 MA arms on the provisional backbone
 (Llama-3.2-1B-Instruct) with the recipe from `01-interface-recipe.md`, five
-languages at 700 h, ASR-only, five epochs (§1b). ≈ 150 GPU-h each, all in the queue
+languages at 2,100 h each, ASR-only, explicit step counts (§1b). ≈ 2,800 GPU-h for sixteen, all in the queue
 at once in **week 3**. Scored on MA-stage generative WER/CER in-domain and
 FLEURS-24 zero-shot CER from melt-eval.
 

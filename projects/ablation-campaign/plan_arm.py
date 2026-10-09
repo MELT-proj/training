@@ -611,10 +611,9 @@ class ArmAxes:
     # step 0b's A0 (cosine) and R (WSD) differ in EXP_NAME only by seed, which
     # is precisely how a schedule silently goes missing.
     lr_scheduler: str = ""
-    # warmup_ratio: "" inherits. When set, warmup_steps is ALSO forced to 0,
-    # because HF's Trainer.get_warmup_steps only consults warmup_ratio when
-    # warmup_steps <= 0 -- and ABL-MA-700-asr.yaml sets warmup_steps: 20, so
-    # a ratio alone would be silently ignored there. A fixed step count is not
+    # warmup_ratio: "" inherits. When set, it is emitted as `warmup_steps <ratio>`
+    # (a float in [0, 1) is a ratio under transformers 5, which removed the
+    # `warmup_ratio` argument). A fixed step count is not
     # comparable across arms that vary the effective batch (the screen's 1200/
     # 600/300 s levels are 10,500/21,000/42,000 steps, so 20 steps of warmup
     # means three different fractions of training); ABL-MA-librispeech.yaml
@@ -716,6 +715,16 @@ class ArmAxes:
     # and keep_checkpoints applies -- the original convention.
     checkpoint_count: int | None = None
     keep_checkpoints: int = 2
+    # max_steps: the run's length in optimizer steps, stated outright instead of
+    # derived from total_hours. derive_steps assumes every batch is full; the
+    # 2,100 h crossing's batches carry ~80% of their nominal audio (smoke, board
+    # 2026-10-08), so its rows state 1.25x the estimate to train the hours they
+    # budget. It replaces the derived steps wherever they are used (eval/save
+    # cadence, the WSD decay window), is emitted as --trainer.max_steps (which the
+    # trainer prefers to its own estimate), and is tagged into EXP_NAME as
+    # `ms<N>` because it changes what the run trains on. Refused together with
+    # `epochs`, which it would silently override.
+    max_steps: int | None = None
     # exp_name: pin the run identity instead of composing it. Only for
     # continuity with an arm already started under a hand-written launcher's
     # name -- a new arm should let it be composed so it can never be
@@ -775,6 +784,15 @@ def plan(args: ArmAxes) -> ArmPlan:
 
     steps_per_epoch = derive_steps(train_ds, batch_duration_effective, grad_accum_effective, args.world_size)
     steps = steps_per_epoch * epochs_effective
+    if args.max_steps is not None:
+        if args.max_steps < 1:
+            die(f"max_steps must be a positive number of optimizer steps (got {args.max_steps})")
+        if args.epochs:
+            die(
+                f"max_steps={args.max_steps} and epochs={args.epochs} both set the run's length; "
+                "set one of them"
+            )
+        steps = args.max_steps
     # ~11 eval rounds over the run by default, per the campaign convention
     # documented in the old launchers' headers (both landed close to 11:
     # 903/100~=9, 2188/200~=11 -- this makes the derivation land on ~11 for
@@ -1068,6 +1086,8 @@ def plan(args: ArmAxes) -> ArmPlan:
     # it.
     overrides += ["--trainer.num_train_epochs", str(epochs_effective)]
     epochs_overridden = bool(args.epochs) and epochs_effective != int(cfg_num_train_epochs or 1)
+    if args.max_steps is not None:
+        overrides += ["--trainer.max_steps", str(steps)]
 
     # template_task_override: forces data.prompt_template_selection to "random"
     # (regardless of what the config declares -- ABL-MA-700-asr.yaml itself
@@ -1156,14 +1176,10 @@ def plan(args: ArmAxes) -> ArmPlan:
             ),
         ]
 
-    cfg_warmup_ratio = get(cfg, "trainer.warmup_ratio")
-    cfg_warmup_steps = get(cfg, "trainer.warmup_steps")
     if args.warmup_ratio:
-        if float(args.warmup_ratio) != (cfg_warmup_ratio or 0.0):
-            overrides += ["--trainer.warmup_ratio", args.warmup_ratio]
-        # See ArmAxes.warmup_ratio: a nonzero warmup_steps silently wins.
-        if cfg_warmup_steps:
-            overrides += ["--trainer.warmup_steps", "0"]
+        # transformers 5 dropped `warmup_ratio`; a float in [0, 1) in
+        # `warmup_steps` is now the ratio of total steps.
+        overrides += ["--trainer.warmup_steps", args.warmup_ratio]
 
     # Only appear when overridden, unlike the always-present LR tags: adding
     # them unconditionally would rename every arm ever composed under the old
@@ -1178,6 +1194,8 @@ def plan(args: ArmAxes) -> ArmPlan:
         extra_tags.append(f"ga{grad_accum_effective}")
     if epochs_overridden:
         extra_tags.append(f"ep{epochs_effective}")
+    if args.max_steps is not None:
+        extra_tags.append(f"ms{args.max_steps}")
     if args.template_task_override:
         extra_tags.append(f"tt{_slug(args.template_task_override, 12)}")
     if args.template_selection in TEMPLATE_SELECTION_TAGS:
@@ -1185,7 +1203,9 @@ def plan(args: ArmAxes) -> ArmPlan:
     if args.lr_scheduler in LR_SCHEDULER_TAGS:
         extra_tags.append(LR_SCHEDULER_TAGS[args.lr_scheduler])
     if args.warmup_ratio:
-        extra_tags.append(lr_tag(args.warmup_ratio, "wu"))
+        # "wus", not the old "wu": under transformers 5 the old flag was
+        # dropped, so every "wu0p03" run trained with no warmup at all.
+        extra_tags.append(lr_tag(args.warmup_ratio, "wus"))
 
     # Same "only when overridden" rule, for the same reason (see ArmAxes). The route's own
     # tags (the Conformer's stride/kernel, and the declared rate) follow it: the rate tag
