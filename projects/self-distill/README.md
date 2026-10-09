@@ -41,6 +41,35 @@ continuations from aligned checkpoints.
    into each language, one generic), targets from the teacher, against the same
    mix trained offline at equal compute.
 
+## Results so far
+
+**Teacher audit** (`teacher_audit.py`, Qwen3.5-2B text-only, 210 validation
+utterances per language from CV22/MLS/VoxPopuli, FLEURS dev for translation;
+jobs 335829 and 335832, outputs under `.../outputs/sd-teacher-audit/`):
+
+| teacher prompt | result |
+|---|---|
+| bare transcript (phase 1) | median reply 200-430 tokens, 73-92% longer than 128; restates the transcript 4-10% of the time, otherwise discusses it |
+| `{content} Repeat the above content.` (AZeroS SIT_s) | WER 0.20-0.45; short questions and commands get answered, 2-9% refusals |
+| `{content} Repeat ... exactly, word for word, and write nothing else.` | WER 0.05-0.18, almost all of it the instruction echoed after the transcript |
+| `Repeat the following content exactly, word for word, and write nothing else.\n\n{content}` | **WER 0.000, exact match 99.5-100% in all five languages** |
+| `Content:\n{content}\n\nRepeat the content exactly, ...` | WER <= 0.004 |
+| `Translate the following content into {target}, and write nothing else.\n\n{content}` | chrF 59-65 into English, 47-58 between the other four |
+
+The instruction has to come before the content: in one user turn Qwen3.5-2B
+reads a trailing instruction as part of the content. Phase 2 uses the
+instruction-first templates for both the teacher (transcript) and the student
+(`{audio_token}`). With them the teacher's greedy repeat *is* the transcript, so
+for ASR an offline teacher-target arm is gold CE; the ASR arms separate hard vs
+soft labels and off- vs on-policy instead.
+
+**melt-eval on artemis** imports `melt` from a copy frozen at 7be90c7
+(2026-09-08) that predates `stack_factor` and Whisper windowing; it cannot load
+any phase-1 or phase-2 checkpoint (`fc1` shape mismatch). Run it with
+`PYTHONPATH` pointing at the checkout that trained the checkpoint.
+`eval_parity_spec.py` pins melt-eval to the trainer's exact eval cuts (checked on
+phase-1 GOLD: 50/50 logged references reproduced).
+
 ## Running on artemis
 
 The h200 node (`hades`) does not mount `/mnt/home`. Submit from the clone at
