@@ -157,6 +157,14 @@ per-language expert usage is measured after training, by running each
 checkpoint over the per-language dev sets; the arms do not wait for it.
 Extrapolated cost: ≈ 3,000 GPU-h for sixteen, ~52 h wall per arm.
 
+*Amended 2026-10-09:* at adapter LR 2e-3 both attention adapters diverge.
+The Q-Former does so in all 4 cells, the Conformer in 2 of 4 even with
+warmup; MLP and MoE are stable. The PI chose to test the LR before changing
+the architecture: whisper-conformer, w2vb-conformer, mms1b-conformer and
+mms1b-qformer run at 1e-3 (board 4182f9a, b483fc6). So the crossing is no
+longer one recipe for all sixteen arms. Report each cell's LR next to its
+result.
+
 **Revised (PI, 2026-10-02): 2,100 h per language, 10,500 h total, counted
 in absolute hours.** This supersedes the five-epoch decision above. The
 budget is now stated as training hours per language and in total, not as
