@@ -411,6 +411,52 @@ class TestAdapterOutputFeaturesShape:
         assert torch.allclose(batched[:, :3], alone_masked, atol=1e-5)
         assert alone.shape == (1, 3, 48)
 
+    def test_qformer_queries_and_keys_are_normalised_per_head_in_every_attention(self):
+        """Self- and cross-attention alike; the values stay plain projections."""
+        from melt.modeling.modeling_melt import _HeadNormLinear
+        from transformers.models.blip_2.modeling_blip_2 import Blip2QFormerMultiHeadAttention
+
+        adapter = self._real_qformer_adapter()
+        attentions = [m for m in adapter.qformer.modules() if isinstance(m, Blip2QFormerMultiHeadAttention)]
+
+        assert len(attentions) == 4  # 2 layers, each with self- and cross-attention
+        for attn in attentions:
+            assert isinstance(attn.query, _HeadNormLinear)
+            assert isinstance(attn.key, _HeadNormLinear)
+            assert attn.query.head_size == attn.key.head_size == attn.attention_head_size
+            assert type(attn.value) is torch.nn.Linear
+
+    def test_qformer_attention_logits_do_not_follow_the_query_and_key_weights(self):
+        """Unbounded logits made the gradient norm grow without bound once the learning rate
+        peaked (board 2026-10-09): q and k must be normalised per head, whatever the scale of
+        the projection weights or of the encoder features the keys read."""
+        from transformers.models.blip_2.modeling_blip_2 import Blip2QFormerMultiHeadAttention
+
+        adapter = self._real_qformer_adapter()
+        cross = next(
+            m
+            for m in adapter.qformer.modules()
+            if isinstance(m, Blip2QFormerMultiHeadAttention) and m.key.in_features == 64
+        )
+        queries = torch.randn(2, 3, 32)
+        frames = torch.randn(2, 15, 64)
+
+        def q_and_k_rms(frame_scale=1.0):
+            with torch.no_grad():
+                return [
+                    cross.query(queries).pow(2).mean().sqrt(),
+                    cross.key(frames * frame_scale).pow(2).mean().sqrt(),
+                ]
+
+        before = q_and_k_rms()
+        with torch.no_grad():
+            cross.query.weight.mul_(100)
+            cross.key.weight.mul_(100)
+        after = q_and_k_rms(frame_scale=100.0)  # and 100x larger encoder features
+
+        for b, a in zip(before, after):
+            assert a == pytest.approx(b, rel=0.1)
+
     def test_conformer_adapter_downsampling_single_layer(self):
         """Test Conformer adapter downsampling with a single layer."""
         config = MagicMock(spec=MELTConfig)

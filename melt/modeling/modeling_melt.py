@@ -14,7 +14,7 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.modeling_utils import PreTrainedModel
 from transformers.models.auto.modeling_auto import MODEL_MAPPING
 from transformers.models.blip_2.configuration_blip_2 import Blip2QFormerConfig
-from transformers.models.blip_2.modeling_blip_2 import Blip2QFormerModel
+from transformers.models.blip_2.modeling_blip_2 import Blip2QFormerModel, Blip2QFormerMultiHeadAttention
 from transformers.models.wav2vec2_bert.configuration_wav2vec2_bert import Wav2Vec2BertConfig
 from transformers.models.wav2vec2_bert.modeling_wav2vec2_bert import (
     Wav2Vec2BertAdapterLayer,
@@ -463,6 +463,7 @@ class MELTQFormerAdapter(nn.Module):
                 cross_attention_frequency=1,
             )
         )
+        _add_qformer_qk_norm(self.qformer)
 
         # Final projection to text decoder hidden size
         self.linear = nn.Linear(adapter_cfg.hidden_size, self.output_hidden_size)
@@ -610,6 +611,19 @@ def _add_qk_norm(layer: Wav2Vec2BertAdapterLayer) -> None:
         new = _HeadNormLinear(old.in_features, old.out_features, attn.head_size)
         new.load_state_dict(old.state_dict(), strict=False)
         setattr(attn, name, new)
+
+
+def _add_qformer_qk_norm(qformer: nn.Module) -> None:
+    """Swap the query and key projections of every Q-Former attention, self and cross, for
+    per-head normalising ones. Same failure as the Conformer's (board 2026-10-09): the
+    gradient norm grows without bound once the learning rate peaks."""
+    attentions = [m for m in qformer.modules() if isinstance(m, Blip2QFormerMultiHeadAttention)]
+    for attn in attentions:
+        for name in ("query", "key"):
+            old = getattr(attn, name)
+            new = _HeadNormLinear(old.in_features, old.out_features, attn.attention_head_size)
+            new.load_state_dict(old.state_dict(), strict=False)
+            setattr(attn, name, new)
 
 
 class MELTConformerAdapter(nn.Module):
