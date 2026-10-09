@@ -905,6 +905,14 @@ arms:
   # overhead per job. A row keeps its earlier value when that already gives
   # 30%. The 2- and 4-node cells are scaled the same way and are not measured
   # on this data (board 2026-10-08).
+  #
+  # adapter_lr (2026-10-09): 2e-3, the w2v-BERT + MLP screen's best point, for
+  # every row except the attention-adapter cells whose 2e-3 run diverged:
+  # whisper-conformer (1e-3 since 2026-09-29) and w2vb-conformer, mms1b-conformer
+  # and mms1b-qformer (1e-3 since 2026-10-09, PI). The three re-runs keep seed,
+  # data and steps, so only the LR differs from the diverged runs. The other
+  # Q-Former cells stay at 2e-3 until those show whether 1e-3 holds (board
+  # 2026-10-09).
 
   - id: MA-2100-crossing-w2vb-mlp
     stage: MA
@@ -928,7 +936,7 @@ arms:
     frame_rate_hz: 10
     lr_scheduler: warmup_stable_decay
     warmup_ratio: 0.03
-    adapter_lr: 2e-3
+    adapter_lr: 1e-3          # PI 2026-10-09, was 2e-3: diverged at step ~15.6k (board 2026-10-09)
     batch_duration: 75
     grad_accum_steps: 1
     nodes: 2                 # 75 x 1 x 8 = 600 s -- PI 2026-09-28, was 80h raw at nodes: 1
@@ -994,7 +1002,7 @@ arms:
     frame_rate_hz: 10
     lr_scheduler: warmup_stable_decay
     warmup_ratio: 0.03
-    adapter_lr: 2e-3
+    adapter_lr: 1e-3          # PI 2026-10-09, was 2e-3: diverged at step ~6.2k (board 2026-10-09)
     batch_duration: 75
     grad_accum_steps: 1
     nodes: 1                 # 75 x 1 x 4 = 300 s
@@ -1029,7 +1037,7 @@ arms:
     frame_rate_hz: 10
     lr_scheduler: warmup_stable_decay
     warmup_ratio: 0.03
-    adapter_lr: 2e-3
+    adapter_lr: 1e-3          # PI 2026-10-09, was 2e-3: grad_norm grew without bound from step ~4.5k (board 2026-10-09)
     batch_duration: 75
     grad_accum_steps: 1
     nodes: 2                 # 75 x 1 x 8 = 600 s -- PI 2026-09-28, was 104h raw at nodes: 1
