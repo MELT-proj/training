@@ -71,12 +71,12 @@ Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
     arms different data. The copy itself continues.
   - All 16 arms are queued. For the Conformer cells, read `grad_norm`
     first: the warmup fix is proven only on Whisper, one seed, 9k steps.
-- **Conformer explosion: mitigated, not yet proven at scale** (2026-10-08).
-  LR warmup prevents the attention saturation behind it (week 3 Track B).
-  All four Conformer crossing cells run with warmup; the worker reads their
-  `grad_norm` first. If one explodes anyway, #149 (QK-norm) is the fallback.
-  The trainer still has no non-finite-gradient abort, so a dead run burns
-  GPU-h until it crashes.
+- **Both attention adapters diverge at 2e-3** (2026-10-09, board 4182f9a).
+  Conformer 2 of 4 despite warmup; Q-Former 4 of 4. The PI decides whether to
+  cancel the two non-learning Q-Former jobs (w2vb, mms1b) and which fix to
+  take (week 3 Track B). No new crossing submissions until then. The 8
+  MLP/MoE cells and the 2 live Conformer cells continue. The trainer still
+  has no non-finite-gradient abort.
 - **FLEURS shard duplication on MN5's indexed tree** (78 leaves, af_za..fr_fr).
   The PI has a dry-run-by-default `~/fleurs_dedupe.sh`, not yet run.
   `fleurs24-asr-dev` on MN5 was frozen from the doubled tree; re-freeze it
@@ -373,17 +373,18 @@ assumed one (`03-audio-stack.md` §0).*
       one selection-metric eval on a smoke checkpoint for each untested
       encoder; then sixteen `campaign.yaml` rows at the PI's recipe.
       Cold-agent prompt handed to the PI 2026-09-26.
-- [x] **Conformer gradient explosion: diagnose** (added 2026-09-29; see
-      Blocked / waiting). *Closed 2026-10-08:* the cause is attention
-      saturating without LR warmup (mean top-1 attention probability 0.99
-      from step 500; 0.003-0.03 with warmup). Whisper + Conformer at 2e-3
-      with warmup ran 9,031 steps clean, against an explosion at ~5,150
-      without (board entries on the #149 branch). Adopted for the crossing:
-      warmup, no QK-norm; #149 stays open as the fallback. Limits: one
-      seed, Whisper only. The other three Conformer cells are first tested
-      in the crossing itself. Root cause from the MN5 logs and a reproduction on
-      artemis, before any fix or LR change is made.
-      *Outcome:* a cause, and a fix or recipe change for the PI to approve.
+- [ ] **Attention-adapter divergence: diagnose and fix** (added 2026-09-29;
+      reopened and widened 2026-10-09, board 4182f9a). Warmup is not enough:
+      with it, w2vb-conformer diverged at ~15.6k steps and mms1b-conformer
+      at ~6.2k (`grad_norm` jumps to 1e11, then nan, loss 0).
+      mhubert-conformer and whisper-conformer (LR 1e-3) are alive. **The
+      Q-Former diverges too**: all 4 crossing runs, and the earlier 700 h
+      ones, have unbounded `grad_norm` after the LR peak. w2vb and mms1b
+      don't learn (WER 1.1-1.3), mhubert finished unusable, whisper learns
+      (WER ~0.20). Every MLP and MoE cell is stable. The common factor is an
+      attention adapter at adapter LR 2e-3. Candidate fixes are QK-norm on
+      both attention adapters (#149, plus a new Q-Former patch, validated
+      first), a lower LR, or dropping both columns. **PI decides.**
 - [ ] **Re-check every hour-weighted config for per-cut mux weights**
       (added 2026-10-08, after #151). The ladder renders (`05`), the IFT
       config and the Fondue/raclette drafts were weighted as hour shares
