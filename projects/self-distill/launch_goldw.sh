@@ -96,7 +96,9 @@ CMD=(
     --model.encoder.eval_when_frozen true
     --data.apply_chat_template true
     --data.prompt_template_selection custom
-    --data.prompt_template '{audio_token}'
+    # Quoted inside the value, as plan_arm emits it: a bare {audio_token} is a
+    # YAML flow mapping to OmegaConf's dotlist parser, and the run dies at startup.
+    --data.prompt_template "'{audio_token}'"
     --model.adapter.stack_factor 5
     --data.train_ds.batch_duration "$BATCH_DURATION"
     --trainer.gradient_accumulation_steps 1
