@@ -1,0 +1,127 @@
+#!/bin/bash
+#
+# Self-distillation phase 2, step 2: does on-policy distillation add anything
+# over CE for ASR, from an aligned start? One launcher, four arms, all from the
+# same GOLDW checkpoint, same data, steps, LR schedule and instruction:
+#
+#   ARM=ce          standard MA (melt.training.train): CE on the gold transcript
+#   ARM=soft        forward KL on the teacher's greedy repeat (off-policy, soft labels)
+#   ARM=opd         reverse KL on student samples (on-policy)
+#   ARM=opd_anchor  opd + GOLD_CE_WEIGHT x the gold CE
+#
+# The teacher is the frozen decoder reading the transcript under the student's
+# own instruction (distill.teacher_prompt=mirror). The instruction is the one
+# the teacher audit found the teacher reproduces exactly (README.md); with it
+# the teacher's greedy repeat is the transcript, so an offline teacher-target
+# CE arm would be the ce arm again.
+#
+#   DRY_RUN=1 ARM=opd WARM_START=/workspace/outputs/<GOLDW run>/checkpoint-N bash projects/self-distill/launch_step2.sh
+#   ARM=opd WARM_START=... bash projects/self-distill/launch_step2.sh [extra train overrides]
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+cd "$REPO_ROOT"
+
+ARM="${ARM:?set ARM=ce|soft|opd|opd_anchor}"
+WARM_START="${WARM_START:?set WARM_START to a GOLDW checkpoint path as the container sees it (/workspace/outputs/...)}"
+SITE="${SITE:-artemis}"
+SEED="${SEED:-42}"
+CONFIG="${CONFIG:-projects/ablation-campaign/ABL-MA-700-asr.yaml}"
+DECODER="${DECODER:-Qwen/Qwen3.5-2B}"
+BATCH_DURATION="${BATCH_DURATION:-30}"
+MAX_STEPS="${MAX_STEPS:-3000}"
+ADAPTER_LR="${ADAPTER_LR:-2e-4}"
+EVAL_STEPS="${EVAL_STEPS:-500}"
+EVAL_SAMPLES="${EVAL_SAMPLES:-50}"
+SAVE_STEPS="${SAVE_STEPS:-1000}"
+MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-448}"
+GOLD_CE_WEIGHT="${GOLD_CE_WEIGHT:-0.5}"
+# Literal \n: the value is handed to OmegaConf as a YAML double-quoted scalar,
+# which turns them into the newlines the teacher audit tested.
+TEMPLATE="${TEMPLATE:-Repeat the following content exactly, word for word, and write nothing else.\\n\\n{audio_token}}"
+export MELT_PARTITION="${MELT_PARTITION:-h200}"
+export MELT_QOS="${MELT_QOS:-gpu-h200}"
+export MELT_NODES="${MELT_NODES:-1}"
+export MELT_GPUS_PER_NODE="${MELT_GPUS_PER_NODE:-2}"
+export MELT_TIME="${MELT_TIME:-24:00:00}"
+export MELT_SEED="$SEED"
+WORLD_SIZE=$(( MELT_NODES * MELT_GPUS_PER_NODE ))
+
+case "$ARM" in
+    ce)
+        export MELT_TRAIN_MODULE=melt.training.train
+        ARM_OVERRIDES=() ;;
+    soft)
+        export MELT_TRAIN_MODULE=melt.training.train_self_distill
+        ARM_OVERRIDES=(--distill.lmbda 0 --distill.loss jsd --distill.beta 0 --distill.temperature 0) ;;
+    opd)
+        export MELT_TRAIN_MODULE=melt.training.train_self_distill
+        ARM_OVERRIDES=(--distill.lmbda 1 --distill.loss jsd --distill.beta 1 --distill.temperature 1) ;;
+    opd_anchor)
+        export MELT_TRAIN_MODULE=melt.training.train_self_distill
+        ARM_OVERRIDES=(--distill.lmbda 1 --distill.loss jsd --distill.beta 1 --distill.temperature 1
+                       --distill.gold_ce_weight "$GOLD_CE_WEIGHT") ;;
+    *) echo "ERROR: unknown ARM=$ARM" >&2; exit 1 ;;
+esac
+if [[ "$MELT_TRAIN_MODULE" == melt.training.train_self_distill ]]; then
+    ARM_OVERRIDES+=(--distill.teacher_prompt mirror --distill.max_new_tokens "$MAX_NEW_TOKENS"
+                    --distill.top_p 1.0 --distill.eval_alignment_gap true --run.memory_preallocation false)
+    # TRL is not in the image; .trl-overlay (pip --target trl==0.29.1) is, under the repo root.
+    [[ -d .trl-overlay/trl ]] || { echo "ERROR: .trl-overlay/trl missing under $REPO_ROOT" >&2; exit 1; }
+    export SINGULARITYENV_PYTHONPATH=/workspace/training/.trl-overlay
+fi
+
+mapfile -t DECODER_OVERRIDES < <(python3 - "${REPO_ROOT}/projects/ablation-campaign" "$DECODER" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from plan_arm import DECODER_PROFILES
+p = DECODER_PROFILES[sys.argv[2]]
+for key, value in [("model.decoder.eos_token", p["eos_token"]), ("model.decoder.pad_token", p["pad_token"]),
+                   ("data.chat_template_config", p["chat_template_config"])]:
+    print(f"--{key}")
+    print(value)
+PY
+)
+
+WARM_TAG="$(basename "$(dirname "$WARM_START")" | cut -c1-5)-$(basename "$WARM_START")"
+EXP_NAME="${EXP_NAME:-S2-${ARM}-from-${WARM_TAG}-repeatfirst-bd${BATCH_DURATION}-lr$(echo "$ADAPTER_LR" | tr -d '-')-${MAX_STEPS}st-s${SEED}-${WORLD_SIZE}g}"
+
+CMD=(
+    infra/runners/submit-container.sh "$SITE" config/accelerate/ddp.yaml
+    --config "$CONFIG"
+    --run.exp_name "$EXP_NAME"
+    --trainer.output_dir "/workspace/outputs/${EXP_NAME}"
+    --model.ckpt "$WARM_START"
+    "${DECODER_OVERRIDES[@]}"
+    --model.encoder.eval_when_frozen true
+    --data.apply_chat_template true
+    --data.prompt_template_selection custom
+    --data.prompt_template "\"${TEMPLATE}\""
+    --data.validation_ds.prompt_template "\"${TEMPLATE}\""
+    --data.train_ds.batch_duration "$BATCH_DURATION"
+    --trainer.gradient_accumulation_steps 1
+    --optimization.adapter_lr "$ADAPTER_LR"
+    --trainer.max_steps "$MAX_STEPS"
+    --trainer.lr_scheduler_type warmup_stable_decay
+    --trainer.lr_scheduler_kwargs.num_decay_steps "$(( MAX_STEPS / 5 ))"
+    --trainer.lr_scheduler_kwargs.min_lr_ratio 0.1
+    --trainer.lr_scheduler_kwargs.decay_type cosine
+    --trainer.warmup_steps 0.05
+    --trainer.eval_steps "$EVAL_STEPS"
+    --trainer.save_steps "$SAVE_STEPS"
+    --trainer.save_total_limit 10
+    --trainer.eval_on_start true
+    --data.validation_ds.max_samples "$EVAL_SAMPLES"
+    --trainer.seed "$SEED"
+    "${ARM_OVERRIDES[@]}"
+    "$@"
+)
+
+if [[ "${DRY_RUN:-0}" == "1" ]]; then
+    echo "[DRY_RUN] MELT_TRAIN_MODULE=${MELT_TRAIN_MODULE} SINGULARITYENV_PYTHONPATH=${SINGULARITYENV_PYTHONPATH:-} WORLD_SIZE=${WORLD_SIZE}"
+    printf '[DRY_RUN] would run:'; printf ' %q' "${CMD[@]}"; printf '\n'
+    exit 0
+fi
+
+exec "${CMD[@]}"
