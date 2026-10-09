@@ -135,7 +135,8 @@ gradient steps they demonstrably need.
 self-supervised encoders have room to finish the transition the screen
 caught them part-way through. "Epoch" here is a step budget, not a pass over a fixed
 set: hours are enforced by sampling weights plus a derived step count, never
-by subsetting (`build_campaign_config.py` docstring), and the dataloader is
+by subsetting (*corrected 2026-10-08:* the weights pick cuts, not hours; see
+the 2026-10-08 paragraph below) (`build_campaign_config.py` docstring), and the dataloader is
 infinite. Five epochs is therefore **17,500 audio-h sampled per arm**. Italian,
 whose four corpora *are* the 700 h, repeats about five times; a source larger
 than its share (most of en/de/es/fr) mostly yields new cuts. The repetition
@@ -156,11 +157,43 @@ per-language expert usage is measured after training, by running each
 checkpoint over the per-language dev sets; the arms do not wait for it.
 Extrapolated cost: ≈ 3,000 GPU-h for sixteen, ~52 h wall per arm.
 
+**Revised (PI, 2026-10-02): 2,100 h per language, 10,500 h total, counted
+in absolute hours.** This supersedes the five-epoch decision above. The
+budget is now stated as training hours per language and in total, not as
+epochs. The PI cut it to the old "three epochs" (3 × 700 h). Yodas v3 is
+added as a new Shar source for the five languages, so every language,
+Italian included, has at least 2,100 distinct hours, and nothing is
+resampled. This should be checked once the Yodas v3 hours are known. The
+crossing waits for Yodas v3 to be prepared and for the campaign config to
+gain the source and its sampling weights.
+
+**How the hours are realised (2026-10-08, board d2a4bac/b17af08/df48665).**
+Two corrections to the "weights plus a derived step count" mechanism:
+
+- **The mux weights are per-cut probabilities.** lhotse's multiplexer picks
+  a source by weight and then takes one cut from it, so a source's share of
+  hours is weight × mean cut duration. With hour-share weights, English got
+  ~12% of the audio instead of 20%, because its top-up (yodas-granary
+  English) averages ~9 s per cut against ~23 s for yodas3. The 700 h
+  config is skewed the same way inside each language: MLS is predicted at
+  52-59% of hours instead of 35%. #151 makes the default weight hours ÷ mean
+  cut duration (`compute_mix_weights.py --weights cuts`). On the re-rendered
+  config, every language gets 19.6-20.7% of the audio. **The 700 h screens
+  were not re-run and carry the within-language skew**; comparisons between
+  them still hold, since every arm used the same mix.
+- **A step carries ~80% of its nominal audio** (234-240 s per 300 s step).
+  So the crossing rows state their steps explicitly: 1.25 × the estimate,
+  i.e. 157,500 steps on 4 ranks, 78,750 on 8, and 39,375 on 16. That trains
+  ~10,490 h, ~2,100 h per language (PI, 2026-10-08).
+
+Cost at the corrected mix's 0.88 s/step: ~2,800 GPU-h for the sixteen arms,
+12-43 h wall per arm. Walltimes are set at projection + 30%.
+
 ## 2. The crossing
 
 Four encoders × four adapters = 16 MA arms on the provisional backbone
 (Llama-3.2-1B-Instruct) with the recipe from `01-interface-recipe.md`, five
-languages at 700 h, ASR-only, five epochs (§1b). ≈ 150 GPU-h each, all in the queue
+languages at 2,100 h each, ASR-only, explicit step counts (§1b). ≈ 2,800 GPU-h for sixteen, all in the queue
 at once in **week 3**. Scored on MA-stage generative WER/CER in-domain and
 FLEURS-24 zero-shot CER from melt-eval.
 
@@ -175,6 +208,32 @@ not as the winner.
 Then IFT for the top three or four stacks (week 4), and one confirmation of
 the winning stack on the winning backbone (week 6). The encoder × backbone
 interaction is assumed small and is stated as an assumption.
+
+## 2b. Whisper size ladder (PI, 2026-10-01)
+
+Whisper-large-v3 is the leading encoder, and it encodes a full 30 s window
+(1,500 positions) per utterance whatever the length. A rough count puts
+its encoder forward pass at about 1.9 TFLOP per utterance, against about
+1 TFLOP for the Llama-1B forward and backward, so the encoder may dominate
+the step. This is an estimate; the arms' step times will measure it.
+Smaller Whisper encoders could save most of that, and the question is how
+much multilingual quality they give up, since the small models are much
+weaker outside English.
+
+| encoder | encoder params | width × layers |
+|---|---|---|
+| whisper-tiny | ~8M | 384 × 4 |
+| whisper-base | ~20M | 512 × 6 |
+| whisper-small | ~88M | 768 × 12 |
+| whisper-medium | ~307M | 1024 × 24 |
+| whisper-large-v3 (crossing) | ~635M | 1280 × 32 |
+
+Four MA arms: tiny, base, small and medium, each with **the adapter that wins
+the crossing**, on the crossing recipe (§1b), one seed. Large-v3 is the
+crossing's own cell. Scored with the selection metric; GPU-h per step taken
+from SLURM accounting. Runs **after the backbone MA arms** (week 5).
+`large-v3-turbo` is not included: it prunes only the decoder, which this
+pipeline does not use. The result is one curve on the §4 figure.
 
 ## 3. Confounds, and how each is handled
 

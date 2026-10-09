@@ -60,16 +60,23 @@ Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
 - **The week-3 crossing render waits on the crossing-prep item** (week 3
   Track B). All its PI decisions were made on 2026-09-26 (`03-audio-stack.md`
   §1b).
-- **The Conformer adapter's gradient explodes: 5 of 5 crossing runs** (board
-  2026-09-28/29). The signature is `grad_norm` inf for several steps, then nan;
-  loss reads 0 and the job trains a poisoned model for hours before a CUDA
-  assert. Seen on every encoder at 2e-3, at unrelated points (epoch 0.02-0.76),
-  and on whisper-conformer at 1e-3 at epoch 0.53. Every non-Conformer cell is
-  clean. The four Conformer cells of the crossing cannot be ranked until this
-  is diagnosed. **PI decides** whether to dispatch the diagnosis (prompt
-  handed 2026-09-29) and whether the 1e-3 resume (46789935) runs meanwhile.
-  Separately, the trainer has no non-finite check, so a dead run keeps
-  burning GPU-h.
+- **Crossing in flight; MN5 constraints until the last crossing job ends**
+  (2026-10-08, board d91c0e1).
+  - **Don't touch `~/training-crossing`** on MN5. It's a frozen clone at
+    e6cc269 that the 12 queued arms (and any resume) bind as
+    /workspace/training when they start: no sync, no branch switch, no
+    edits. `~/training` is safe to sync.
+  - **Don't merge `yodas3-rest/`** into `yodas3/<lang>/train`. Jobs list their
+    shards at start, so a merge while some are queued, or on a resume, gives
+    arms different data. The copy itself continues.
+  - All 16 arms are queued. For the Conformer cells, read `grad_norm`
+    first: the warmup fix is proven only on Whisper, one seed, 9k steps.
+- **Both attention adapters diverge at 2e-3** (2026-10-09, board 4182f9a).
+  Conformer 2 of 4 despite warmup; Q-Former 4 of 4. The PI decides whether to
+  cancel the two non-learning Q-Former jobs (w2vb, mms1b) and which fix to
+  take (week 3 Track B). No new crossing submissions until then. The 8
+  MLP/MoE cells and the 2 live Conformer cells continue. The trainer still
+  has no non-finite-gradient abort.
 - **FLEURS shard duplication on MN5's indexed tree** (78 leaves, af_za..fr_fr).
   The PI has a dry-run-by-default `~/fleurs_dedupe.sh`, not yet run.
   `fleurs24-asr-dev` on MN5 was frozen from the doubled tree; re-freeze it
@@ -344,11 +351,14 @@ assumed one (`03-audio-stack.md` §0).*
       *Outcome:* the new baseline numbers, replacing the August ones.
 - [ ] **Audio-stack MA crossing** (`03-audio-stack.md` §2), moved from week 4:
       4 encoders × 4 adapters at MA-stage cost on Llama-3.2-1B-Instruct, one
-      recipe for all sixteen, all at the same frame rate, **five epochs per
-      arm** (PI, 2026-09-23; 17,500 sampled audio-h, `03` §1b). ≈ 150 GPU-h
-      per arm at 1200 s, ≈ 2,400 for sixteen, all in the queue at once.
-      Render waits on the PI decisions under Blocked / waiting and on the
-      crossing-prep item below.
+      recipe for all sixteen, all at the same frame rate, **2,100 h per
+      language, 10,500 h per arm** (PI, 2026-10-02, replacing five epochs;
+      `03` §1b). Explicit `max_steps`, 1.25 × the
+      estimate (~80% of each step's nominal audio is real), ≈ 2,800 GPU-h for
+      sixteen, 12-43 h wall per arm, all in the queue at once. Rows rendered
+      (726ca28). **All 16 arms submitted
+      2026-10-08** (12 at d91c0e1, the 4 Conformer cells at fd347d6, all with
+      warmup), ~2,830 GPU-h, 25 nodes if all start at once.
       *Outcome:* the audio stack — encoder, adapter, frame rate — ranked by
       the selection metric (`selection-metric/README.md`, PI 2026-09-23),
       which replaces the high/low-resource FLEURS split named here before.
@@ -363,10 +373,26 @@ assumed one (`03-audio-stack.md` §0).*
       one selection-metric eval on a smoke checkpoint for each untested
       encoder; then sixteen `campaign.yaml` rows at the PI's recipe.
       Cold-agent prompt handed to the PI 2026-09-26.
-- [ ] **Conformer gradient explosion: diagnose** (added 2026-09-29; see
-      Blocked / waiting). Root cause from the MN5 logs and a reproduction on
-      artemis, before any fix or LR change is made.
-      *Outcome:* a cause, and a fix or recipe change for the PI to approve.
+- [ ] **Attention-adapter divergence: diagnose and fix** (added 2026-09-29;
+      reopened and widened 2026-10-09, board 4182f9a). Warmup is not enough:
+      with it, w2vb-conformer diverged at ~15.6k steps and mms1b-conformer
+      at ~6.2k (`grad_norm` jumps to 1e11, then nan, loss 0).
+      mhubert-conformer and whisper-conformer (LR 1e-3) are alive. **The
+      Q-Former diverges too**: all 4 crossing runs, and the earlier 700 h
+      ones, have unbounded `grad_norm` after the LR peak. w2vb and mms1b
+      don't learn (WER 1.1-1.3), mhubert finished unusable, whisper learns
+      (WER ~0.20). Every MLP and MoE cell is stable. The common factor is an
+      attention adapter at adapter LR 2e-3. Candidate fixes are QK-norm on
+      both attention adapters (#149, plus a new Q-Former patch, validated
+      first), a lower LR, or dropping both columns. **PI decides.**
+- [ ] **Re-check every hour-weighted config for per-cut mux weights**
+      (added 2026-10-08, after #151). The ladder renders (`05`), the IFT
+      config and the Fondue/raclette drafts were weighted as hour shares
+      under the old `compute_mix_weights.py` default. Re-emitting them
+      changes their weights, and their per-language hours may be off the
+      same way the crossing's were. Re-render, predict the hours share as
+      weight × mean cut duration, and confirm before anyone reuses the
+      numbers.
 - [ ] **Fondue dry run at full scale on MN5**: config resolves, dataloader
       builds, bucket bins re-measured on the full distribution, startup time,
       exposure audit output, host-RAM trace. Write findings to `06-fondue.md`.
@@ -399,6 +425,11 @@ audio stacks, regime fraction.
       encoder, and that assumption is stated in `04-regime.md`.
 
 ### Track B — preparation
+- [ ] **Whisper size ladder prep** (`03` §2b): stage whisper-tiny/-base/
+      -small/-medium in MN5's hf_cache via `mn5transfer`; add tiny and base
+      to `plan_arm.py` `ENCODER_WINDOW_FRAMES`; one offline-load `acc_debug`
+      smoke per size; render the four rows once the crossing names its
+      adapter.
 - [ ] Ladder eval pipeline: melt-eval configs for FLEURS-24 ASR, FLEURS X→en,
       CV22 test, CoVoST2 X→en where it exists; COMET rescoring environment on
       an internal GPU.
@@ -424,6 +455,13 @@ audio stacks, regime fraction.
       and independent of the regime decision so they can go early.
 - [ ] **R9 and R10**, the decoder-frozen regime runs (`04-regime.md` §3),
       if not already queued in week 4.
+- [ ] **Whisper size ladder** (`03-audio-stack.md` §2b; PI, 2026-10-01):
+      whisper-tiny, -base, -small and -medium encoders, each with the adapter
+      that wins the week-3 crossing, on the crossing recipe, one seed each.
+      Queued after the backbone MA arms. Est. under ~750 GPU-h for four,
+      since each is cheaper than a large-v3 arm.
+      *Outcome:* how the selection metric and the cost per step change with
+      encoder size, so that compute can be saved if a smaller encoder holds up.
 - [ ] Q-Former arms of the week-3 crossing, if the fix landed late.
 
 ### Track B — preparation

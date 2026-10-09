@@ -1,24 +1,80 @@
 {
-  "cv22_sidon/en/train": 1798.3717753124897,
-  "cv22_sidon/de/train": 962.7109915277736,
-  "cv22_sidon/fr/train": 850.835608611107,
-  "cv22_sidon/es/train": 508.7080277604148,
-  "cv22_sidon/it/train": 254.65237387152723,
-  "mls_sidon/english/train": 39215.79444430554,
-  "mls_sidon/german/train": 1966.508539739583,
-  "mls_sidon/french/train": 1076.5805241493058,
-  "mls_sidon/spanish/train": 917.684176111111,
-  "mls_sidon/italian/train": 247.3779047569443,
-  "yodas-granary/English/asr_only": 102456.95249024298,
-  "yodas-granary/German/asr_only": 496.209949878472,
-  "yodas-granary/French/asr_only": 715.5285056944442,
-  "yodas-granary/Spanish/asr_only": 779.5999222048615,
-  "yodas-granary/Italian/asr_only": 120.24149314236102,
-  "voxpopuli/en/train": 522.6030990104211,
-  "voxpopuli/de/train": 264.60738687500066,
-  "voxpopuli/fr/train": 205.6990726909736,
-  "voxpopuli/es/train": 151.92582439236156,
-  "voxpopuli/it/train": 78.0597570833334,
+  "cv22_sidon/en/train": {
+    "hours": 1798.3717753124897,
+    "cuts": 1138760
+  },
+  "cv22_sidon/de/train": {
+    "hours": 962.7109915277736,
+    "cuts": 607871
+  },
+  "cv22_sidon/fr/train": {
+    "hours": 850.835608611107,
+    "cuts": 593066
+  },
+  "cv22_sidon/es/train": {
+    "hours": 508.7080277604148,
+    "cuts": 353701
+  },
+  "cv22_sidon/it/train": {
+    "hours": 254.65237387152723,
+    "cuts": 172828
+  },
+  "mls_sidon/english/train": {
+    "hours": 39215.79444430554,
+    "cuts": 9490668
+  },
+  "mls_sidon/german/train": {
+    "hours": 1966.508539739583,
+    "cuts": 469942
+  },
+  "mls_sidon/french/train": {
+    "hours": 1076.5805241493058,
+    "cuts": 258213
+  },
+  "mls_sidon/spanish/train": {
+    "hours": 917.684176111111,
+    "cuts": 220701
+  },
+  "mls_sidon/italian/train": {
+    "hours": 247.3779047569443,
+    "cuts": 59623
+  },
+  "yodas-granary/German/asr_only": {
+    "hours": 496.209949878472,
+    "cuts": 415260
+  },
+  "yodas-granary/French/asr_only": {
+    "hours": 715.5285056944442,
+    "cuts": 558848
+  },
+  "yodas-granary/Spanish/asr_only": {
+    "hours": 779.5999222048615,
+    "cuts": 951450
+  },
+  "yodas-granary/Italian/asr_only": {
+    "hours": 120.24149314236102,
+    "cuts": 86587
+  },
+  "voxpopuli/en/train": {
+    "hours": 522.6030990104211,
+    "cuts": 182482
+  },
+  "voxpopuli/de/train": {
+    "hours": 264.60738687500066,
+    "cuts": 108473
+  },
+  "voxpopuli/fr/train": {
+    "hours": 205.6990726909736,
+    "cuts": 73561
+  },
+  "voxpopuli/es/train": {
+    "hours": 151.92582439236156,
+    "cuts": 50922
+  },
+  "voxpopuli/it/train": {
+    "hours": 78.0597570833334,
+    "cuts": 22576
+  },
   "fleurs/en_us/train": 7.4908055555555535,
   "fleurs/de_de/train": 9.000683333333312,
   "fleurs/fr_fr/train": 10.322949999999999,
@@ -44,5 +100,25 @@
   "cv22_sidon/it/validation": 25.410520486110794,
   "mls_sidon/italian/dev": 5.175593506944448,
   "voxpopuli/it/validation": 4.451892552083332,
-  "covost2/en_de/dev": 26.047262534722268
+  "covost2/en_de/dev": 26.047262534722268,
+  "yodas3/de/train": {
+    "hours": 15514.022108784662,
+    "cuts": 2478732
+  },
+  "yodas3/fr/train": {
+    "hours": 27405.98042670129,
+    "cuts": 4371695
+  },
+  "yodas3/es/train": {
+    "hours": 55610.68941364576,
+    "cuts": 8233846
+  },
+  "yodas3/it/train": {
+    "hours": 15450.149830364553,
+    "cuts": 2224789
+  },
+  "yodas-granary/English/asr_only": {
+    "hours": 102456.95249024298,
+    "cuts": 40810517
+  }
 }
