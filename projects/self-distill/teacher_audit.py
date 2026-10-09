@@ -53,13 +53,29 @@ LANG_NAMES = {"en": "English", "de": "German", "fr": "French", "es": "Spanish", 
 FLEURS_LOCALES = {"en": "en_us", "de": "de_de", "fr": "fr_fr", "es": "es_419", "it": "it_it"}
 
 # "{content}" is the transcript here; a student prompt puts "{audio_token}" in its place.
+# With the instruction after the content in one turn, Qwen3.5-2B often repeats the
+# instruction too (it reads the whole turn as "the content"); the *_first and
+# *_delim variants separate the two.
 INSTRUCTIONS = {
     "bare": "{content}",
     "repeat": "{content} Repeat the above content.",
     "repeat_strict": "{content} Repeat the above content exactly, word for word, and write nothing else.",
+    "repeat_first": "Repeat the following content exactly, word for word, and write nothing else.\n\n{content}",
+    "repeat_first_short": "Repeat the following content.\n\n{content}",
+    "repeat_delim": "Content:\n{content}\n\nRepeat the content exactly, word for word, and write nothing else.",
     "translate": "{content} Translate the above content into {target}.",
     "translate_strict": "{content} Translate the above content into {target}. Write only the translation.",
+    "translate_first": "Translate the following content into {target}, and write nothing else.\n\n{content}",
 }
+REPEAT_TASKS = tuple(t for t in INSTRUCTIONS if t.startswith("repeat"))
+TRANSLATE_TASKS = tuple(t for t in INSTRUCTIONS if t.startswith("translate"))
+
+# Opening words of a refusal or a "no content was given" reply, in the five languages.
+_REFUSAL = re.compile(
+    r"^(i (cannot|can't|can not|am unable)|sorry|non posso|mi dispiace|je ne peux|désolé|"
+    r"no puedo|lo siento|ich kann nicht|es tut mir leid|leider)",
+    re.IGNORECASE,
+)
 
 # Phase-1 training rollouts were capped here; a longer reply lost its stop token.
 PHASE1_BUDGET = 128
@@ -241,7 +257,9 @@ def summarise(rows: list[dict], langs: list[str]) -> dict:
             "reply_english_like": _mean(_english_like(norm, r["reply"]) for r in rs),
         }
 
-    for task in ("repeat", "repeat_strict"):
+    for task in REPEAT_TASKS:
+        # The template's longest non-content part, i.e. the instruction sentence itself.
+        instruction = norm(max(INSTRUCTIONS[task].split("{content}"), key=len))
         for lang in langs:
             rs = [r for r in by_task.get(task, []) if r["lang"] == lang and norm(r["text"]).strip()]
             if not rs:
@@ -254,10 +272,12 @@ def summarise(rows: list[dict], langs: list[str]) -> dict:
                 "cer": jiwer.cer(refs, hyps),
                 "exact_match": _mean(h == ref for h, ref in zip(hyps, refs)),
                 "length_ratio": _mean(len(h.split()) / max(1, len(ref.split())) for h, ref in zip(hyps, refs)),
+                "echoes_instruction": _mean(instruction in h for h in hyps),
+                "refusal_like": _mean(bool(_REFUSAL.match(r["reply"].strip())) for r in rs),
                 "hit_cap": _mean(r["hit_cap"] for r in rs),
             }
 
-    for task in ("translate", "translate_strict"):
+    for task in TRANSLATE_TASKS:
         pairs = sorted({(r["lang"], r["target"]) for r in by_task.get(task, [])})
         for src, tgt in pairs:
             rs = [r for r in by_task[task] if r["lang"] == src and r["target"] == tgt]
@@ -320,15 +340,16 @@ def main() -> None:
     print(f"[audit] {args.decoder} ({type(model).__name__}), eos ids {eos_ids}, attn {args.attn}", flush=True)
 
     items = []
-    if {"bare", "repeat", "repeat_strict"} & set(tasks):
+    validation_tasks = ("bare",) + REPEAT_TASKS
+    if set(validation_tasks) & set(tasks):
         for row in read_validation_texts(args.config, langs, args.per_source):
-            for task in ("bare", "repeat", "repeat_strict"):
+            for task in validation_tasks:
                 if task in tasks:
                     items.append({**row, "task": task, "content": INSTRUCTIONS[task].format(content=row["text"])})
-    if {"translate", "translate_strict"} & set(tasks):
+    if set(TRANSLATE_TASKS) & set(tasks):
         root = args.fleurs_root or os.path.join(os.environ["LOCAL_DATASETS_DIR"], "fleurs")
         ids, texts = read_fleurs(root, args.fleurs_split, langs, args.fleurs_n)
-        for task in ("translate", "translate_strict"):
+        for task in TRANSLATE_TASKS:
             if task not in tasks:
                 continue
             for src in langs:
