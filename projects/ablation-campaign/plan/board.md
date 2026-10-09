@@ -15,6 +15,16 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-09 — Claude (worker session, crossing) — QK-norm smoke on the Q-Former: at the unchanged 2e-3, `grad_norm` stays flat to step 9.4k where the unfixed run grew from 3k and passed 100 at 6.1k
+Context: the PI asked for a short smoke of the Q-Former patch (RMS-normalised q and k per head on all four Blip2 Q-Former attentions, self and cross; local commit `25da76a` on branch `qk-norm-qformer`, two tests that fail without it) before it goes on PR #149. Hand-submitted on `acc_debug`, so it is not in `arms.tsv`: the whisper-qformer row exactly as in the crossing (2 nodes, the 78,750-step schedule, LR 2e-3, warmup 3%); only the run name (`-smokeqk`), the evals (every 7,159 steps) and the saves (none) differ. The 2 h cap ended it at step ~9.4k.
+Finding:
+1. `grad_norm` median 0.42-0.50 in every 1,000-step window from 2k to 9.4k, max 5.0 after step 1k (once, at 3-4k; 2.0 or less otherwise), nothing above 100, no inf/nan. The unfixed run of the same cell: median 3.1 at 3-4k, 14.7 at 5-6k, 31.5 at 6-7k, 389 at 7-8k; first value above 100 at step 6,082.
+2. The loss is lower than the unfixed run's in every window from step 1k (0.69 against 0.79 at 7-8k), and the mean validation WER at the 7,159 eval is 0.16 against 0.20.
+3. Not shown: one cell, one seed, 9.4k of 78,750 steps, and the unfixed run went non-finite only at step ~55k. It says that bounding q and k removes the growth at an unchanged LR; whether 1e-3 alone does the same is what the mms1b-qformer re-run answers (entry below), and whether either holds to the end is open.
+4. Consequence: the Q-Former (0 of 4 healthy at 2e-3, also at 700 h) has two candidate fixes. By the PI's rule a patch goes on all four Q-Former cells or on none. Nothing is pushed to PR #149.
+Housekeeping: MN5 `~/training` is back on `worktree-bridge-cse_01FG269t6XvP8zDaF9tog3oN` @ 44d0436 (it had been on the smoke branch); the smoke's output dir `...-smokeqk` holds no checkpoint. The three LR-1e-3 jobs were still pending at 14:46 MN5 time; the sixteen crossing jobs waited 6-9 h in the queue.
+Action needed: PI: the Q-Former commit on PR #149 now for review, or after the 1e-3 result. Orchestrator: none.
+
 ## 2026-10-09 — Claude (worker session, crossing) — the PI chose the learning rate before QK-norm: w2vb-conformer, mms1b-conformer and mms1b-qformer are re-running at adapter LR 1e-3
 Context: the PI read the entry below together with a cell-by-cell status and objected to patching the architecture while some cells of the same adapter run fine (mhubert-conformer at 2e-3, whisper-conformer at 1e-3), noting that 2e-3 was tuned on the w2v-BERT + MLP screen only (03 §1b: "the recipe is w2v-BERT's best screen point"). The data agree with the first half and do not settle the second.
 Finding (logs at ~13:00 MN5 time, 2026-10-09):
