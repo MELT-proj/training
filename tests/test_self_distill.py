@@ -177,7 +177,11 @@ class TestSelfDistillConfig:
             SelfDistillConfig(loss="ce", lmbda=0.5)
         SelfDistillConfig(loss="ce", lmbda=0.0)
 
-    @pytest.mark.parametrize("field,value", [("beta", 1.5), ("lmbda", -0.1), ("top_p", 0.0), ("loss", "kl")])
+    @pytest.mark.parametrize(
+        "field,value",
+        [("beta", 1.5), ("lmbda", -0.1), ("top_p", 0.0), ("loss", "kl"), ("teacher_prompt", "echo"),
+         ("gold_ce_weight", -0.5)],
+    )
     def test_out_of_range_values_are_refused(self, field, value):
         with pytest.raises(ValueError):
             SelfDistillConfig(**{field: value})
@@ -560,6 +564,49 @@ class TestTrainerEndToEnd:
         torch.testing.assert_close(loss, expected)
         assert predictions.shape == (2, 4)
 
+    @staticmethod
+    def _gold_inputs(batch: dict) -> dict:
+        """The standard MA keys: the student prompt followed by a two-token gold transcript."""
+        prompt_ids, prompt_mask = batch["student_prompt_input_ids"], batch["student_prompt_attention_mask"]
+        gold = torch.cat([prompt_ids, torch.tensor([[20, EOS], [21, EOS]])], dim=1)
+        return {
+            "input_ids": gold,
+            "attention_mask": torch.cat([prompt_mask, torch.ones(2, 2, dtype=torch.long)], dim=1),
+            "labels": torch.where(torch.arange(gold.shape[1]) >= prompt_ids.shape[1], gold, -100),
+        }
+
+    def test_gold_ce_anchor_adds_the_ma_loss(self, tmp_path):
+        """distill.gold_ce_weight adds weight x the standard MA cross-entropy on the gold transcript."""
+        batch = _batch()
+        gold_inputs = self._gold_inputs(batch)
+        losses = {}
+        for weight in (0.0, 0.5):
+            trainer = self._trainer(tmp_path, lmbda=0.0, loss="ce", temperature=0.0, gold_ce_weight=weight)
+            losses[weight] = trainer.compute_loss(trainer.model, {**batch, **gold_inputs})
+        with torch.no_grad():
+            gold_ce = trainer.model(
+                **gold_inputs, input_features=batch["input_features"],
+                features_attention_mask=batch["features_attention_mask"],
+            ).loss
+
+        torch.testing.assert_close(losses[0.5], losses[0.0] + 0.5 * gold_ce)
+        assert trainer._distill_stats["gold_ce"] == [pytest.approx(gold_ce.item())]
+
+    def test_training_step_with_the_gold_anchor(self, tmp_path):
+        """Two forwards, one backward: the adapter alone still gets the gradient."""
+        trainer = self._trainer(tmp_path, lmbda=1.0, gold_ce_weight=0.5)
+        trainer.current_gradient_accumulation_steps = 2
+        batch = _batch()
+
+        loss = trainer.training_step(trainer.model, {**batch, **self._gold_inputs(batch)})
+
+        assert torch.isfinite(loss)
+        assert trainer._gradients_checked
+        logs = {"loss": float(loss)}
+        with patch("transformers.Trainer.log"):
+            trainer.log(logs)
+        assert logs["distill/gold_ce"] > 0
+
     def test_memory_preallocation_is_refused(self, tmp_path):
         processor = SimpleNamespace(
             audio_token_id=AUDIO, audio_bos_token_id=AUDIO_BOS, audio_eos_token_id=AUDIO_EOS,
@@ -583,7 +630,6 @@ class TestTrainerEndToEnd:
 # ----------------------------------------------------------------------------
 
 
-@pytest.mark.hub
 class TestVocabLimit:
     @staticmethod
     def _processor(eos, pad):
@@ -604,6 +650,7 @@ class TestVocabLimit:
             distill_vocab_limit(self._processor(eos=103, pad=3))
 
 
+@pytest.mark.hub
 class TestPrompts:
     """Student and teacher prompts differ in the user turn, and only there."""
 
@@ -638,6 +685,26 @@ class TestPrompts:
         # Left-padded, so a response appended to any row follows its last real token.
         assert out["teacher_prompt_attention_mask"][:, -1].all()
         assert out["student_prompt_attention_mask"][:, -1].all()
+
+    def test_mirror_gives_the_teacher_the_student_instruction(self):
+        """teacher_prompt='mirror': same instruction on both paths, transcript where the audio is."""
+        from melt.training.self_distill import build_distill_prompts
+
+        processor = self._processor()
+        template = "Repeat the following content exactly, word for word, and write nothing else.\n\n{audio_token}"
+        texts = ["hello world", "a much longer second transcript to force padding"]
+        decode = processor.tokenizer.decode
+        audio_block = "<|audio_bos|><|audio|><|audio_eos|>"
+
+        mirror = build_distill_prompts(processor, texts, ["asr", "asr"], ["en", "en"], template, "mirror")
+        bare = build_distill_prompts(processor, texts, ["asr", "asr"], ["en", "en"], template, "bare")
+        for i, text in enumerate(texts):
+            student = decode(mirror["student_prompt_input_ids"][i][mirror["student_prompt_attention_mask"][i].bool()])
+            teacher = decode(mirror["teacher_prompt_input_ids"][i][mirror["teacher_prompt_attention_mask"][i].bool()])
+            bare_teacher = decode(bare["teacher_prompt_input_ids"][i][bare["teacher_prompt_attention_mask"][i].bool()])
+            assert "Repeat the following content" in student
+            assert student.replace(audio_block, text) == teacher
+            assert "Repeat the following content" not in bare_teacher and text in bare_teacher
 
     def test_student_prompt_is_a_prefix_of_the_gold_training_sequence(self):
         """The rollout starts from exactly the context MA training conditions on."""

@@ -94,6 +94,14 @@ class SelfDistillConfig:
         eval_alignment_gap: Replace ``eval_loss`` with the forward KL of the
             student from the teacher on greedy teacher responses (see
             ``MELTSelfDistillTrainer.prediction_step``).
+        teacher_prompt: ``"bare"`` gives the teacher the transcript alone as
+            the user turn (AZeroS's instruction-free target). ``"mirror"``
+            gives it the student's prompt with the transcript where the audio
+            is, so both paths answer the same instruction and differ only in
+            the modality of the content.
+        gold_ce_weight: Weight of an added cross-entropy term on the gold
+            transcript under the student prompt (the standard MA loss). ``0``
+            leaves the objective pure distillation.
     """
 
     lmbda: float = 1.0
@@ -103,10 +111,16 @@ class SelfDistillConfig:
     temperature: float = 1.0
     top_p: float = 1.0
     eval_alignment_gap: bool = True
+    teacher_prompt: str = "bare"
+    gold_ce_weight: float = 0.0
 
     def __post_init__(self):
         if self.loss not in ("jsd", "ce"):
             raise ValueError(f"distill.loss must be 'jsd' or 'ce', got {self.loss!r}")
+        if self.teacher_prompt not in ("bare", "mirror"):
+            raise ValueError(f"distill.teacher_prompt must be 'bare' or 'mirror', got {self.teacher_prompt!r}")
+        if self.gold_ce_weight < 0.0:
+            raise ValueError(f"distill.gold_ce_weight must be >= 0, got {self.gold_ce_weight}")
         if not 0.0 <= self.lmbda <= 1.0:
             raise ValueError(f"distill.lmbda must be in [0, 1], got {self.lmbda}")
         if not 0.0 <= self.beta <= 1.0:
@@ -151,16 +165,18 @@ def build_distill_prompts(
     tasks: list[str],
     langs: list[str],
     student_prompt_template: str | dict[str, str],
+    teacher_prompt: str = "bare",
 ) -> dict[str, torch.Tensor]:
     """Tokenise the student and teacher generation prompts for one batch.
 
     Both prompts go through the same chat template and the same tokenizer call,
     and end with the same assistant header, so a response appended to either is
     tokenised identically. They differ only in the user turn: the student's is
-    the instruction-free audio template (``{audio_token}``), the teacher's is
-    the transcript. Tokenised and left-padded exactly as ``MELTDataCollator``
-    tokenises the eval generation prompt, so the student rollout sees the same
-    ids an evaluation would.
+    the training audio template; the teacher's is the transcript alone
+    (``teacher_prompt="bare"``) or the same template with the transcript where
+    the audio is (``"mirror"``). Tokenised and left-padded exactly as
+    ``MELTDataCollator`` tokenises the eval generation prompt, so the student
+    rollout sees the same ids an evaluation would.
 
     Args:
         processor: The run's ``MELTProcessor``.
@@ -168,30 +184,36 @@ def build_distill_prompts(
         tasks: Task tags, aligned with *texts*.
         langs: Language codes, aligned with *texts*.
         student_prompt_template: The training ``data.prompt_template``.
+        teacher_prompt: ``"bare"`` or ``"mirror"``, see ``SelfDistillConfig``.
 
     Returns:
         The four ``DISTILL_PROMPT_KEYS`` tensors.
     """
     tokenizer = processor.tokenizer
+    template_kwargs = {"prompt_template": student_prompt_template, "prompt_template_selection": "custom"}
     _, student_prompts = apply_chat_template_to_texts(
-        texts,
-        tasks,
-        langs,
-        tokenizer=tokenizer,
-        audio_token=processor.audio_token,
-        prompt_template=student_prompt_template,
-        prompt_template_selection="custom",
-        return_prompts=True,
+        texts, tasks, langs, tokenizer=tokenizer, audio_token=processor.audio_token, return_prompts=True,
+        **template_kwargs,
     )
-    teacher_prompts = [
-        tokenizer.apply_chat_template(
-            [{"role": "user", "content": text}],
-            tokenize=False,
-            add_generation_prompt=True,
-            enable_thinking=False,
-        )
-        for text in texts
-    ]
+    if teacher_prompt == "mirror":
+        # The student's template rendered per utterance with its transcript as the
+        # "audio": same instruction, same language placeholders, text content.
+        teacher_prompts = [
+            apply_chat_template_to_texts(
+                [text], [task], [lang], tokenizer=tokenizer, audio_token=text, return_prompts=True, **template_kwargs
+            )[1][0]
+            for text, task, lang in zip(texts, tasks, langs)
+        ]
+    else:
+        teacher_prompts = [
+            tokenizer.apply_chat_template(
+                [{"role": "user", "content": text}],
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=False,
+            )
+            for text in texts
+        ]
     student = tokenizer(
         [processor._surround_bos_eos_mm_tokens(p) for p in student_prompts],
         padding=True,
@@ -228,9 +250,10 @@ class SelfDistillDataset(SpeechToTextDataset):
     captured there and turned into the two prompt tensors afterwards.
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, teacher_prompt: str = "bare", **kwargs):
         super().__init__(*args, **kwargs)
         _require_instruction_free_setup(self.config)
+        self.teacher_prompt = teacher_prompt
         self._batch_meta: tuple[list[str], list[str], list[str]] | None = None
 
     def _apply_chat_template(self, texts, tasks, langs, src_langs=None, tgt_langs=None):
@@ -243,7 +266,9 @@ class SelfDistillDataset(SpeechToTextDataset):
         if batch is None:
             return None
         texts, tasks, langs = self._batch_meta
-        batch.update(build_distill_prompts(self.processor, texts, tasks, langs, self.prompt_template))
+        batch.update(
+            build_distill_prompts(self.processor, texts, tasks, langs, self.prompt_template, self.teacher_prompt)
+        )
         return batch
 
 
@@ -255,9 +280,10 @@ class SelfDistillEvalCollator(MELTDataCollator):
     *training* template, so the metric scores the objective that was trained.
     """
 
-    def __init__(self, processor, config, student_prompt_template, is_train: bool = False):
+    def __init__(self, processor, config, student_prompt_template, is_train: bool = False, teacher_prompt: str = "bare"):
         super().__init__(processor=processor, config=config, is_train=is_train)
         self.student_prompt_template = student_prompt_template
+        self.teacher_prompt = teacher_prompt
 
     def __call__(self, items: list[dict]) -> dict:
         batch = super().__call__(items)
@@ -269,6 +295,7 @@ class SelfDistillEvalCollator(MELTDataCollator):
                 [it.get("task", "asr") for it in valid],
                 [it.get("lang", "") for it in valid],
                 self.student_prompt_template,
+                self.teacher_prompt,
             )
         )
         return batch
@@ -458,6 +485,7 @@ class MELTSelfDistillTrainer(MELTTrainer):
                 processor=processor,
                 config=self._eval_collator.config,
                 student_prompt_template=_get_config_value(config.data, "prompt_template", None),
+                teacher_prompt=self.distill.teacher_prompt,
             )
 
         logger.info(
@@ -478,6 +506,7 @@ class MELTSelfDistillTrainer(MELTTrainer):
                 is_train=True,
                 return_labels=True,
                 return_langs=True,
+                teacher_prompt=self.distill.teacher_prompt,
             )
         )
         dataloader = get_train_dataloader_from_config(
@@ -565,14 +594,36 @@ class MELTSelfDistillTrainer(MELTTrainer):
     # -- training ------------------------------------------------------------
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        for key in _GOLD_ONLY_KEYS:
-            inputs.pop(key, None)
+        gold = {key: inputs.pop(key) for key in _GOLD_ONLY_KEYS if key in inputs}
         from_student = self._rng.random() < self.distill.lmbda
         response, mask = self._rollout(inputs, from_student=from_student)
         student, teacher = self._student_and_teacher_logits(model, inputs, response, mask)
         loss = distillation_loss(student, teacher, response, mask, self.distill)
         self._record_stats(student, teacher, response, mask, from_student)
+        if self.distill.gold_ce_weight > 0:
+            gold_ce = self._gold_cross_entropy(inputs, gold)
+            self._distill_stats["gold_ce"].append(gold_ce.item())
+            loss = loss + self.distill.gold_ce_weight * gold_ce
         return (loss, None) if return_outputs else loss
+
+    def _gold_cross_entropy(self, inputs: dict, gold: dict) -> torch.Tensor:
+        """The standard MA loss on the gold transcript, under the same student prompt.
+
+        Runs on the unwrapped model: the student forward above already went
+        through the DDP wrapper, which allows one forward per backward. The
+        gradient still lands in the adapter's ``.grad`` before DDP's hooks
+        all-reduce it, because both terms reach backward in one graph.
+        """
+        out = self.model(
+            input_ids=gold["input_ids"],
+            attention_mask=gold["attention_mask"],
+            labels=gold["labels"],
+            input_features=inputs["input_features"],
+            features_attention_mask=inputs.get("features_attention_mask"),
+            audio_lengths=gold.get("audio_lengths"),
+            use_cache=False,
+        )
+        return out.loss
 
     def training_step(self, model, inputs, num_items_in_batch=None):
         loss = super().training_step(model, inputs, num_items_in_batch)
