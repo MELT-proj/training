@@ -182,7 +182,8 @@ def main() -> None:
     p.add_argument("--processor", default=None, help="processor dir (save_run_processor.py) for checkpoint-N dirs")
     p.add_argument("--out", required=True)
     p.add_argument("--max-samples", type=int, default=100, help="utterances per named eval set")
-    p.add_argument("--prompt-template", default=None, help="student template; default: the run's data.prompt_template")
+    p.add_argument("--prompt-template", default=None,
+                   help="student template, a literal \\n read as a newline; default: the run's data.prompt_template")
     p.add_argument("--teacher-prompt", default="bare", choices=["bare", "mirror"])
     p.add_argument("--layers", default=None, help="comma-separated hidden-state indices; default 0 and quartiles")
     args = p.parse_args()
@@ -201,7 +202,9 @@ def main() -> None:
     layers = [int(x) for x in args.layers.split(",")] if args.layers else sorted(
         {0, n_layers // 4, n_layers // 2, 3 * n_layers // 4, n_layers}
     )
-    template = args.prompt_template or OmegaConf.select(cfg, "data.prompt_template")
+    # A literal \n on the command line is a newline: real ones do not survive ssh -> sbatch -> singularity.
+    template = args.prompt_template.replace("\\n", "\n") if args.prompt_template else None
+    template = template or OmegaConf.select(cfg, "data.prompt_template")
     eval_cfg = resolve_eval_data_config(cfg.data)
     named = split_eval_config_by_name(eval_cfg) or {"all": eval_cfg}
     collator = SelfDistillEvalCollator(
