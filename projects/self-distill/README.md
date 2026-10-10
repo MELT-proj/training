@@ -90,6 +90,23 @@ phase-1 GOLD scores R@1 0.03-0.07 at its best layer (chance 0.03) and JSD
 0.43-0.48 per token in all five languages; GOLDW-final scores R@1 0.96-0.99 and
 JSD 0.10-0.13. The probe separates an aligned model from an unaligned one.
 
+**GOLDW-final on the step-2 battery** (`eval/launch_eval_step2.sh`, A6000,
+melt-eval, scored by `eval/summarize_evals.py`; means over languages):
+
+| prompt | in-domain WER (4,500 utts) | FLEURS WER, 5 trained | FLEURS WER / CER, 19 unseen | X->en chrF, trained / unseen | chrF vs source, trained |
+|---|---|---|---|---|---|
+| bare (as trained) | 0.108 | 0.081 | 1.28 / 0.75 | 24.4 / 21.4 | 86.5 |
+| repeat instruction | 0.106 | 0.082 | 1.20 / 0.68 | | |
+
+The repeat instruction the step-2 arms train with costs GOLDW nothing. Asked
+to translate, GOLDW transcribes: its output is the source transcript (chrF
+77-91 against it), and the 23-25 chrF against English is what shared names,
+numbers and cognates give a copy. Unseen languages come out in the nearest
+trained one, sometimes with the meaning partly carried over: Portuguese as
+Spanish-like text, Polish as German ("... die planen eine jährliche ... wächst
+die popularität" for "An increasingly more popular option for those planning a
+gap-year ..."). Up to 21% of utterances in an unseen language run away.
+
 **Parity** (melt-eval vs the trainer's own eval, GOLDW-final, the trainer's 250
 clips from `eval_parity_spec.py`): WER en 0.081 / 0.083, de 0.100 / 0.102, fr
 0.134 / 0.134, es 0.070 / 0.065, it 0.085 / 0.092 (melt-eval / trainer); 37 of
