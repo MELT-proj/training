@@ -46,8 +46,12 @@ MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-448}"
 GOLD_CE_WEIGHT="${GOLD_CE_WEIGHT:-0.5}"
 # Literal \n: the value is handed to OmegaConf as a YAML double-quoted scalar,
 # which turns them into the newlines the teacher audit tested.
-TEMPLATE="${TEMPLATE:-Repeat the following content exactly, word for word, and write nothing else.\\n\\n{audio_token}}"
-ST_TEMPLATE="${ST_TEMPLATE:-Translate the following content into {tgt_lang}, and write nothing else.\\n\\n{audio_token}}"
+# Defaults live in single-quoted variables: inside ${VAR:-...} the first "}" ends
+# the expansion, which silently cut "{tgt_lang}" in half.
+DEFAULT_TEMPLATE='Repeat the following content exactly, word for word, and write nothing else.\n\n{audio_token}'
+DEFAULT_ST_TEMPLATE='Translate the following content into {tgt_lang}, and write nothing else.\n\n{audio_token}'
+TEMPLATE="${TEMPLATE:-$DEFAULT_TEMPLATE}"
+ST_TEMPLATE="${ST_TEMPLATE:-$DEFAULT_ST_TEMPLATE}"
 TRANSLATE_FRAC="${TRANSLATE_FRAC:-0}"
 export MELT_PARTITION="${MELT_PARTITION:-h200}"
 export MELT_QOS="${MELT_QOS:-gpu-h200}"
