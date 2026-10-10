@@ -15,6 +15,25 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-10 — Claude (worker session, crossing) — mhubert-qformer at 1e-3 grew earlier and ended at WER 1.85, so 1e-3 alone is not a fix for the Q-Former; the alert reached me ten hours late and the job ran to its end (~165 GPU-h)
+Context: the first of the three Q-Former cells queued at 1e-3 started within an hour of submission (4 nodes) and finished at 22:06 MN5 time. The other two Q-Former cells, mms1b-conformer and mms1b-qformer are still pending.
+Finding:
+1. **mhubert-qformer, 1e-3 against 2e-3** (same seed, data, steps and schedule):
+
+| | 2e-3 | 1e-3 |
+|---|---|---|
+| first `grad_norm` above 100 | step ~20k | step ~3.4k |
+| best / final loss | 2.07 / 2.07 | 2.83 / 3.29 |
+| non-finite `grad_norm` | none (up to 2e15) | from step ~29k |
+| validation WER, best / last round | 0.94 / 1.19 | 0.99 / 1.85 |
+
+At the lower LR the growth starts six times earlier and the cell ends worse. Neither is usable. One encoder only; the pending mms1b-qformer re-run was meant as the clean read.
+2. **Process.** The watcher flagged it at step ~4.7k (11:26 MN5 time, `grad_norm` above 100 in 48 lines). An alert reaches the session only when a turn starts, so it was read ten hours later; the job ran its remaining 8.3 h on 16 GPUs (~134 of the ~165 GPU-h it cost). I had said I would cancel these cells if the 1e-3 runs showed growth again, but nothing acts on an alert while the session is idle. Proposed, not set up: a standing permission for the watcher to `scancel` a re-run itself when `grad_norm` passes 100 in 3+ lines, or periodic wake-ups of the session.
+3. **w2vb-conformer at 1e-3** (97% done at 22:07): stable all the way (max `grad_norm` 48 early, none above 100, no non-finite value), loss slowly down from 3.27 to 2.5, but the last validation WER is 0.96 (w2v-BERT MLP 0.67, MoE 0.59). So 1e-3 removes its blow-up and the cell learns very little.
+4. **Queue.** mms1b-conformer and mms1b-qformer are estimated to start 2026-10-13 05:10, the w2vb and whisper Q-Formers 2026-10-13 19:16. The estimates have moved before, and the mhubert job started within an hour, so any of them can start at any time.
+5. **Where the Q-Former stands.** 2e-3: 0 of 4 healthy. 1e-3: mhubert worse than 2e-3. QK-norm at 2e-3: the whisper smoke stayed flat to step 9.4k (entry of 2026-10-09). The pending 1e-3 Q-Former cells test a hypothesis that one encoder has already contradicted.
+Action needed: PI: (a) cancel or hold the pending Q-Former cells, and choose the route: QK-norm on all four (the `qk_norm` switch in #149 first) or more 1e-3 data; (b) whether the watcher may cancel a diverging re-run itself. Orchestrator: 03 and the timeline say "whole Q-Former column at 1e-3"; it is one cell finished and failed.
+
 ## 2026-10-10 — Claude (worker session, crossing) — the Q-Former QK-norm commit is on PR #149 for review; the other three Q-Former cells are queued at adapter LR 1e-3
 Context: the PI's answer to the two questions of the entry below: push the patch to the PR, and queue the remaining Q-Former cells.
 Done:
