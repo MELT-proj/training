@@ -14,7 +14,7 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.modeling_utils import PreTrainedModel
 from transformers.models.auto.modeling_auto import MODEL_MAPPING
 from transformers.models.blip_2.configuration_blip_2 import Blip2QFormerConfig
-from transformers.models.blip_2.modeling_blip_2 import Blip2QFormerModel
+from transformers.models.blip_2.modeling_blip_2 import Blip2QFormerModel, Blip2QFormerMultiHeadAttention
 from transformers.models.wav2vec2_bert.configuration_wav2vec2_bert import Wav2Vec2BertConfig
 from transformers.models.wav2vec2_bert.modeling_wav2vec2_bert import (
     Wav2Vec2BertAdapterLayer,
@@ -463,6 +463,7 @@ class MELTQFormerAdapter(nn.Module):
                 cross_attention_frequency=1,
             )
         )
+        _add_qformer_qk_norm(self.qformer)
 
         # Final projection to text decoder hidden size
         self.linear = nn.Linear(adapter_cfg.hidden_size, self.output_hidden_size)
@@ -582,6 +583,49 @@ def _conformer_layer_config(width: int, kernel_size: int, stride: int) -> Wav2Ve
     return config
 
 
+class _HeadNormLinear(nn.Linear):
+    """``nn.Linear`` whose output is RMS-normalised per attention head (QK-norm).
+
+    Bounds the attention logits regardless of the projection weights' scale; without it
+    they grow with the weights under full-LR Adam, the softmax saturates, and the
+    backward pass overflows in bf16. The normalisation runs in fp32.
+    """
+
+    def __init__(self, in_features: int, out_features: int, head_size: int):
+        super().__init__(in_features, out_features)
+        self.head_size = head_size
+        self.norm_weight = nn.Parameter(torch.ones(head_size))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        y = super().forward(x)
+        heads = y.float().unflatten(-1, (-1, self.head_size))
+        heads = F.rms_norm(heads, (self.head_size,)) * self.norm_weight.float()
+        return heads.flatten(-2).to(y.dtype)
+
+
+def _add_qk_norm(layer: Wav2Vec2BertAdapterLayer) -> None:
+    """Swap the layer's query and key projections for per-head normalising ones."""
+    attn = layer.self_attn
+    for name in ("linear_q", "linear_k"):
+        old = getattr(attn, name)
+        new = _HeadNormLinear(old.in_features, old.out_features, attn.head_size)
+        new.load_state_dict(old.state_dict(), strict=False)
+        setattr(attn, name, new)
+
+
+def _add_qformer_qk_norm(qformer: nn.Module) -> None:
+    """Swap the query and key projections of every Q-Former attention, self and cross, for
+    per-head normalising ones. Same failure as the Conformer's (board 2026-10-09): the
+    gradient norm grows without bound once the learning rate peaks."""
+    attentions = [m for m in qformer.modules() if isinstance(m, Blip2QFormerMultiHeadAttention)]
+    for attn in attentions:
+        for name in ("query", "key"):
+            old = getattr(attn, name)
+            new = _HeadNormLinear(old.in_features, old.out_features, attn.attention_head_size)
+            new.load_state_dict(old.state_dict(), strict=False)
+            setattr(attn, name, new)
+
+
 class MELTConformerAdapter(nn.Module):
     """
     Conformer-based audio adapter (similar to Wav2Vec2BertAdapter).
@@ -645,6 +689,8 @@ class MELTConformerAdapter(nn.Module):
         self.layers = nn.ModuleList(
             Wav2Vec2BertAdapterLayer(layer_config) for _ in range(num_adapter_layers)
         )
+        for layer in self.layers:
+            _add_qk_norm(layer)
 
         # Final projection to text decoder hidden size
         adapter_output_size = output_hidden_size

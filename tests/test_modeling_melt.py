@@ -411,6 +411,52 @@ class TestAdapterOutputFeaturesShape:
         assert torch.allclose(batched[:, :3], alone_masked, atol=1e-5)
         assert alone.shape == (1, 3, 48)
 
+    def test_qformer_queries_and_keys_are_normalised_per_head_in_every_attention(self):
+        """Self- and cross-attention alike; the values stay plain projections."""
+        from melt.modeling.modeling_melt import _HeadNormLinear
+        from transformers.models.blip_2.modeling_blip_2 import Blip2QFormerMultiHeadAttention
+
+        adapter = self._real_qformer_adapter()
+        attentions = [m for m in adapter.qformer.modules() if isinstance(m, Blip2QFormerMultiHeadAttention)]
+
+        assert len(attentions) == 4  # 2 layers, each with self- and cross-attention
+        for attn in attentions:
+            assert isinstance(attn.query, _HeadNormLinear)
+            assert isinstance(attn.key, _HeadNormLinear)
+            assert attn.query.head_size == attn.key.head_size == attn.attention_head_size
+            assert type(attn.value) is torch.nn.Linear
+
+    def test_qformer_attention_logits_do_not_follow_the_query_and_key_weights(self):
+        """Unbounded logits made the gradient norm grow without bound once the learning rate
+        peaked (board 2026-10-09): q and k must be normalised per head, whatever the scale of
+        the projection weights or of the encoder features the keys read."""
+        from transformers.models.blip_2.modeling_blip_2 import Blip2QFormerMultiHeadAttention
+
+        adapter = self._real_qformer_adapter()
+        cross = next(
+            m
+            for m in adapter.qformer.modules()
+            if isinstance(m, Blip2QFormerMultiHeadAttention) and m.key.in_features == 64
+        )
+        queries = torch.randn(2, 3, 32)
+        frames = torch.randn(2, 15, 64)
+
+        def q_and_k_rms(frame_scale=1.0):
+            with torch.no_grad():
+                return [
+                    cross.query(queries).pow(2).mean().sqrt(),
+                    cross.key(frames * frame_scale).pow(2).mean().sqrt(),
+                ]
+
+        before = q_and_k_rms()
+        with torch.no_grad():
+            cross.query.weight.mul_(100)
+            cross.key.weight.mul_(100)
+        after = q_and_k_rms(frame_scale=100.0)  # and 100x larger encoder features
+
+        for b, a in zip(before, after):
+            assert a == pytest.approx(b, rel=0.1)
+
     def test_conformer_adapter_downsampling_single_layer(self):
         """Test Conformer adapter downsampling with a single layer."""
         config = MagicMock(spec=MELTConfig)
@@ -431,7 +477,10 @@ class TestAdapterOutputFeaturesShape:
         config.text_decoder_config = MagicMock()
         config.text_decoder_config.hidden_size = 1024
 
-        with patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
+        with (
+            patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()),
+            patch("melt.modeling.modeling_melt._add_qk_norm"),
+        ):
             adapter = MELTConformerAdapter(config)
 
         seq_len = 100
@@ -461,7 +510,10 @@ class TestAdapterOutputFeaturesShape:
         config.text_decoder_config = MagicMock()
         config.text_decoder_config.hidden_size = 1024
 
-        with patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
+        with (
+            patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()),
+            patch("melt.modeling.modeling_melt._add_qk_norm"),
+        ):
             adapter = MELTConformerAdapter(config)
 
         seq_len = 100
@@ -494,7 +546,10 @@ class TestAdapterOutputFeaturesShape:
         config.text_decoder_config = MagicMock()
         config.text_decoder_config.hidden_size = 2048
 
-        with patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
+        with (
+            patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()),
+            patch("melt.modeling.modeling_melt._add_qk_norm"),
+        ):
             adapter = MELTConformerAdapter(config)
 
         batch_size = 2
@@ -527,7 +582,10 @@ class TestAdapterOutputFeaturesShape:
         config.text_decoder_config = MagicMock()
         config.text_decoder_config.hidden_size = 1024
 
-        with patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
+        with (
+            patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()),
+            patch("melt.modeling.modeling_melt._add_qk_norm"),
+        ):
             adapter = MELTConformerAdapter(config)
 
         batch_size = 2
@@ -821,9 +879,31 @@ class TestConformerAdapterLayers:
         ours = MELTConformerAdapter(config).layers[0]
         original = Wav2Vec2BertAdapterLayer(encoder)
 
-        assert {k: tuple(v.shape) for k, v in ours.state_dict().items()} == {
+        assert {
+            k: tuple(v.shape) for k, v in ours.state_dict().items() if "norm_weight" not in k
+        } == {
             k: tuple(v.shape) for k, v in original.state_dict().items()
         }
+
+    def test_the_attention_logits_do_not_follow_the_query_and_key_weights(self):
+        """Unbounded logits saturate the softmax under full-LR Adam and overflow the backward
+        in bf16 (board 2026-09-29): q and k must be normalised per head."""
+        adapter = _conformer_adapter(_tiny_encoder_config("whisper", 64)).eval()
+        attn = adapter.layers[0].self_attn
+        x = torch.randn(2, 20, 64)
+
+        def q_and_k_rms():
+            with torch.no_grad():
+                return [getattr(attn, n)(x).pow(2).mean().sqrt() for n in ("linear_q", "linear_k")]
+
+        before = q_and_k_rms()
+        with torch.no_grad():
+            attn.linear_q.weight.mul_(100)
+            attn.linear_k.weight.mul_(100)
+        after = q_and_k_rms()
+
+        for b, a in zip(before, after):
+            assert a == pytest.approx(b, rel=0.1)
 
     def test_the_layers_attention_is_sdpa_whatever_the_encoder_runs(self):
         """Wav2Vec2BertSelfAttention has no flash path."""
