@@ -1,0 +1,13 @@
+# melt-eval prompt format (-T format_config=<this file>) for GOLDW, which trained
+# on the bare audio placeholder. ST uses the same translate instruction as
+# format-repeatfirst.yaml, so the zero-shot probe asks every model the same thing.
+data:
+  apply_chat_template: true
+  prompt_template_selection: custom
+  chat_template_config: chatml
+  prompt_template:
+    asr: "{audio_token}"
+    st: "Translate the following content into {tgt_lang}, and write nothing else.\n\n{audio_token}"
+model:
+  decoder:
+    audio_token: "<|audio|>"
