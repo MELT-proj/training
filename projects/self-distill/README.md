@@ -32,11 +32,16 @@ continuations from aligned checkpoints.
    the alignment transition). `launch_teacher_audit.sh`: what the teacher writes
    for each candidate prompt, per language (reply length, repeat WER, translation
    chrF on FLEURS). Then a melt-eval parity check on a GOLDW checkpoint.
-2. **OPD vs CE for ASR**, all from one GOLDW checkpoint, equal steps: gold CE
-   continued; offline AZeroS (greedy teacher replies with EOS, precomputed); OPD
-   with a privileged teacher (transcript + the student's instruction); OPD with
-   a small gold-CE anchor. Scored on full-set WER with S/D/I and runaway,
-   within-language retrieval, and zero-shot "translate" as a transfer probe.
+2. **OPD vs CE for ASR**, `launch_step2.sh`, all four arms from GOLDW-final with
+   the repeat instruction, 3,000 steps at 30 s x 2 GPUs (50 h), seed 43 (seed 42
+   would replay GOLDW's first 50 h): `ce` gold CE continued; `soft` forward KL on
+   the teacher's greedy repeat (= the transcript, so this is the soft-label
+   version of AZeroS); `opd` reverse KL on student samples, teacher = the frozen
+   decoder reading the transcript under the student's instruction
+   (`teacher_prompt=mirror`); `opd_anchor` = `opd` + 0.5 x gold CE. Scored by
+   `eval/launch_eval_step2.sh` (in-domain WER per source, zero-shot WER on 19
+   unseen FLEURS languages, zero-shot X->en speech translation with the
+   teacher audit's translate instruction) and `alignment_probe.py`.
 3. **Task-conditioned multilingual OPD**: an instruction mix (repeat, translate
    into each language, one generic), targets from the teacher, against the same
    mix trained offline at equal compute.
@@ -63,6 +68,34 @@ instruction-first templates for both the teacher (transcript) and the student
 for ASR an offline teacher-target arm is gold CE; the ASR arms separate hard vs
 soft labels and off- vs on-policy instead.
 
+**GOLDW** (artemis job 335828, 2x H200, 5 h 13 m). Trainer eval, 50 clips per
+language, the same clips on which phase-1 GOLD scored 1.0-3.0:
+
+| step (audio) | en | de | fr | es | it |
+|---|---|---|---|---|---|
+| 600 (50 h) | 0.128 | 0.167 | 0.172 | 0.132 | 0.160 |
+| 1,200 (100 h) | 0.108 | 0.147 | 0.471 | 0.115 | 0.138 |
+| 6,000 (500 h) | 0.091 | 0.118 | 0.132 | 0.077 | 0.104 |
+| 12,000 (1,000 h) | 0.083 | 0.102 | 0.134 | 0.065 | 0.092 |
+
+Training loss sat on the phase-1 plateau (~3.0) until ~26 h of audio and had
+crossed by ~32 h. The French spikes (1,200 and 2,400) are one runaway clip of
+50 each time: insertion rate 0.34 and length ratio 1.64 at step 1,200, with the
+eval loss still falling.
+
+**Alignment probe** (`alignment_probe.py`: audio-vs-text retrieval within one
+corpus, and per-token JSD between the decoder's next-token distributions given
+the audio and given the transcript, teacher-forced on the gold transcript):
+phase-1 GOLD scores R@1 0.03-0.07 at its best layer (chance 0.03) and JSD
+0.43-0.48 per token in all five languages; GOLDW-final scores R@1 0.96-0.99 and
+JSD 0.10-0.13. The probe separates an aligned model from an unaligned one.
+
+**Parity** (melt-eval vs the trainer's own eval, GOLDW-final, the trainer's 250
+clips from `eval_parity_spec.py`): WER en 0.081 / 0.083, de 0.100 / 0.102, fr
+0.134 / 0.134, es 0.070 / 0.065, it 0.085 / 0.092 (melt-eval / trainer); 37 of
+the 50 logged hypotheses identical, the rest differing as bf16 batch padding
+would. melt-eval's scorer and the trainer's normaliser agree exactly.
+
 **melt-eval on artemis** imports `melt` from a copy frozen at 7be90c7
 (2026-09-08) that predates `stack_factor` and Whisper windowing; it cannot load
 any phase-1 or phase-2 checkpoint (`fc1` shape mismatch). Run it with
@@ -82,7 +115,13 @@ leaves no log.
 DRY_RUN=1 bash projects/self-distill/launch_goldw.sh
 bash projects/self-distill/launch_goldw.sh
 bash projects/self-distill/launch_teacher_audit.sh
+SEED=43 ARM=opd WARM_START=/workspace/outputs/<GOLDW run> bash projects/self-distill/launch_step2.sh
+FORMAT=bare bash projects/self-distill/eval/launch_eval_step2.sh /mnt/scratch-artemis/giuseppe/melt-data/outputs/<GOLDW run>
 ```
+
+A mid-run `checkpoint-N` carries no processor or tokenizer: build them with
+`save_run_processor.py`, and give melt-eval `-M processor=`, `-T tokenizer=` and
+`-T format_config=` (without `-T tokenizer` it dies before the first sample).
 
 Outputs: GOLDW under `/mnt/scratch-artemis/giuseppe/melt-data/outputs/GOLDW-*`,
 the audit under `.../outputs/sd-teacher-audit/<run>/` (`summary.md`,
