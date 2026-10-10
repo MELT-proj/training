@@ -8,15 +8,19 @@
 #   ARM=soft        forward KL on the teacher's greedy repeat (off-policy, soft labels)
 #   ARM=opd         reverse KL on student samples (on-policy)
 #   ARM=azeros      CE on the teacher's greedy reply (off-policy, hard labels: AZeroS)
-#   ARM=<arm>_anchor  any distillation arm + GOLD_CE_WEIGHT x the gold CE (opd_anchor, ...)
+#   ARM=sift        AZeroS's own recipe (SIFT): the azeros loss with no instruction on
+#                   either path -- the teacher replies to the bare transcript, the
+#                   student hears {audio_token} alone. No anchor, no mix; the in-training
+#                   eval keeps the repeat instruction, so it measures zero-shot ASR.
+#   ARM=<arm>_anchor  any distillation arm but sift + GOLD_CE_WEIGHT x the gold CE (opd_anchor, ...)
 #
 # Step 3 (instruction mix): TRANSLATE_FRAC > 0 gives that share of utterances
 # a "translate into <language>" instruction (ST_TEMPLATE) instead of the repeat
 # one, for student and teacher alike (distill.translate_frac); the ce arm has
 # no gold for those and is refused. The run name then starts S3- and says mix<frac>.
 #
-# The teacher is the frozen decoder reading the transcript under the student's
-# own instruction (distill.teacher_prompt=mirror). The instruction is the one
+# Except for sift, the teacher is the frozen decoder reading the transcript under
+# the student's own instruction (distill.teacher_prompt=mirror). The instruction is the one
 # the teacher audit found the teacher reproduces exactly (README.md); with it
 # the teacher's greedy repeat is the transcript, so an offline teacher-target
 # CE arm would be the ce arm again.
@@ -29,7 +33,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "$REPO_ROOT"
 
-ARM="${ARM:?set ARM=ce|soft|opd|azeros, or a distillation arm with _anchor}"
+ARM="${ARM:?set ARM=ce|soft|opd|azeros|sift, or a distillation arm with _anchor}"
 WARM_START="${WARM_START:?set WARM_START to a GOLDW checkpoint path as the container sees it (/workspace/outputs/...)}"
 SITE="${SITE:-artemis}"
 SEED="${SEED:-42}"
@@ -53,6 +57,9 @@ DEFAULT_ST_TEMPLATE='Translate the following content into {tgt_lang}, and write 
 TEMPLATE="${TEMPLATE:-$DEFAULT_TEMPLATE}"
 ST_TEMPLATE="${ST_TEMPLATE:-$DEFAULT_ST_TEMPLATE}"
 TRANSLATE_FRAC="${TRANSLATE_FRAC:-0}"
+TEACHER_PROMPT=mirror
+VALIDATION_TEMPLATE="$TEMPLATE"
+ALIGNMENT_GAP=true
 export MELT_PARTITION="${MELT_PARTITION:-h200}"
 export MELT_QOS="${MELT_QOS:-gpu-h200}"
 export MELT_NODES="${MELT_NODES:-1}"
@@ -79,12 +86,20 @@ case "$BASE_ARM" in
     azeros)
         export MELT_TRAIN_MODULE=melt.training.train_self_distill
         ARM_OVERRIDES=(--distill.lmbda 0 --distill.loss ce --distill.temperature 0) ;;
+    sift)
+        [[ "$ARM" == sift ]] || { echo "ERROR: sift has no anchor variant: AZeroS trains on teacher replies alone" >&2; exit 1; }
+        (( MIX == 0 )) || { echo "ERROR: TRANSLATE_FRAC > 0 with ARM=sift: the bare teacher gets no instruction" >&2; exit 1; }
+        export MELT_TRAIN_MODULE=melt.training.train_self_distill
+        # The alignment gap would score a repeat-instructed student against a teacher
+        # replying to the bare transcript; eval_loss stays the gold CE instead.
+        TEACHER_PROMPT=bare; TEMPLATE='{audio_token}'; VALIDATION_TEMPLATE="$DEFAULT_TEMPLATE"; ALIGNMENT_GAP=false
+        ARM_OVERRIDES=(--distill.lmbda 0 --distill.loss ce --distill.temperature 0) ;;
     *) echo "ERROR: unknown ARM=$ARM" >&2; exit 1 ;;
 esac
 [[ "$ARM" != "$BASE_ARM" ]] && ARM_OVERRIDES+=(--distill.gold_ce_weight "$GOLD_CE_WEIGHT")
 if [[ "$MELT_TRAIN_MODULE" == melt.training.train_self_distill ]]; then
-    ARM_OVERRIDES+=(--distill.teacher_prompt mirror --distill.max_new_tokens "$MAX_NEW_TOKENS"
-                    --distill.top_p 1.0 --distill.eval_alignment_gap true --run.memory_preallocation false
+    ARM_OVERRIDES+=(--distill.teacher_prompt "$TEACHER_PROMPT" --distill.max_new_tokens "$MAX_NEW_TOKENS"
+                    --distill.top_p 1.0 --distill.eval_alignment_gap "$ALIGNMENT_GAP" --run.memory_preallocation false
                     --distill.translate_frac "$TRANSLATE_FRAC")
     # TRL is not in the image; .trl-overlay (pip --target trl==0.29.1) is, under the repo root.
     [[ -d .trl-overlay/trl ]] || { echo "ERROR: .trl-overlay/trl missing under $REPO_ROOT" >&2; exit 1; }
@@ -128,6 +143,7 @@ if (( MIX )); then
     TEMPLATE_OVERRIDES=(--data.prompt_template.asr "\"${TEMPLATE}\"" --data.prompt_template.st "\"${ST_TEMPLATE}\"")
 else
     STAGE=S2; PROMPT_TAG=repeatfirst
+    [[ "$TEACHER_PROMPT" == bare ]] && PROMPT_TAG=bare
     TEMPLATE_OVERRIDES=(--data.prompt_template "\"${TEMPLATE}\"")
 fi
 EXP_NAME="${EXP_NAME:-${STAGE}-${ARM}-from-${WARM_TAG}-${PROMPT_TAG}-bd${BATCH_DURATION}-lr$(echo "$ADAPTER_LR" | tr -d '-')-${MAX_STEPS}st-s${SEED}-${WORLD_SIZE}g}"
@@ -144,7 +160,7 @@ CMD=(
     --data.apply_chat_template true
     --data.prompt_template_selection custom
     "${TEMPLATE_OVERRIDES[@]}"
-    --data.validation_ds.prompt_template "\"${TEMPLATE}\""
+    --data.validation_ds.prompt_template "\"${VALIDATION_TEMPLATE}\""
     --data.train_ds.batch_duration "$BATCH_DURATION"
     --trainer.gradient_accumulation_steps 1
     --optimization.adapter_lr "$ADAPTER_LR"
