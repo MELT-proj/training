@@ -15,6 +15,24 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-10 — Claude (worker session, crossing) — ten crossing arms finished and whisper-qformer was cancelled; w2vb-conformer at 1e-3 is past its old failure step but has not left the loss plateau; the other two re-runs wait in the queue
+Context: status at 08:45 MN5 time, 2026-10-10. The 2,100 h crossing started on 2026-10-08.
+Finding:
+1. **Finished: ten arms.** Last validation WER in the training log (mean over the five languages, rounded; not the crossing's selection metric, which is scored later):
+
+| encoder | MLP | MoE | Conformer | Q-Former |
+|---|---|---|---|---|
+| Whisper large-v3 | 0.12 | 0.12 | 0.13 (LR 1e-3) | cancelled |
+| mHuBERT-147 | 0.30 | 0.31 | 0.37 | 1.19, unusable |
+| MMS-1b | 0.40 | 0.45 | re-run queued (1e-3) | re-run queued (1e-3) |
+| w2v-BERT 2.0 | 0.67 | 0.59 | re-run at 1e-3 under way | cancelled |
+
+2. **whisper-qformer was cancelled** at step ~64.5k on the PI's word (2026-10-09): WER 0.28 at its last eval after 0.18 at best, `grad_norm` inf in most late lines but a finite loss, so it never crashed at an eval. Its output dir and checkpoints are kept. mhubert-qformer is the only Q-Former that ran to its end (WER 0.9-1.4 throughout).
+3. **w2vb-conformer at 1e-3** (24.5k of 78,750 steps): `grad_norm` median 0.2-0.4, max 11 after step 3k, nothing above 100, no non-finite value; the 2e-3 run blew up at step 15.6k. The loss, however, has stayed at 3.27-3.30 since step 6k and the WER is 1.14-1.28 at the three evals. The 2e-3 run was on the same plateau (3.28 at 15k). So 1e-3 removes the blow-up so far and does not by itself make this cell learn. For scale, the w2v-BERT MLP cell left the plateau by 12k steps and the MMS MLP cell at ~42k. Cause not known.
+4. **Queue.** mms1b-conformer and mms1b-qformer, submitted 2026-10-09 13:19, are pending with SLURM's estimate of 2026-10-12 00:24 (the first of the three waited 13 h; the estimate is pessimistic, but the sixteen crossing jobs waited 6-9 h). A shorter time limit does not move it (`sbatch --test-only` at 54/36/30 h on one node and 41/24/18 h on two nodes gives the same start), and a fresh submission is estimated at ~2026-10-14 13:00. The queue is now the bottleneck, so the next batch should be decided before it is queued, not after these three report.
+5. **Cost.** ~1,540 GPU-h since 2026-10-08 (30.8 khours; `bsc_acct` still shows 825 of 1,752 because it lags about a day). About 440 GPU-h of that went to attention cells that failed or were cancelled (mhubert-qformer, which finished unusable, included) and 16 to the QK-norm smoke.
+Action needed: PI, as in the entries below: the Q-Former commit on PR #149 now or after the 1e-3 result; widening to the other Q-Former cells; the LR of mhubert-conformer. New: whether to queue the next batch now. Orchestrator: fold the ten finished arms into the timeline and 03 (WERs above; each cell's LR next to its number).
+
 ## 2026-10-09 — Claude (worker session, crossing) — QK-norm smoke on the Q-Former: at the unchanged 2e-3, `grad_norm` stays flat to step 9.4k where the unfixed run grew from 3k and passed 100 at 6.1k
 Context: the PI asked for a short smoke of the Q-Former patch (RMS-normalised q and k per head on all four Blip2 Q-Former attentions, self and cross; local commit `25da76a` on branch `qk-norm-qformer`, two tests that fail without it) before it goes on PR #149. Hand-submitted on `acc_debug`, so it is not in `arms.tsv`: the whisper-qformer row exactly as in the crossing (2 nodes, the 78,750-step schedule, LR 2e-3, warmup 3%); only the run name (`-smokeqk`), the evals (every 7,159 steps) and the saves (none) differ. The 2 h cap ended it at step ~9.4k.
 Finding:
