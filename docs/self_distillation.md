@@ -64,6 +64,28 @@ so the two arms differ only in the objective. The launcher sets
 TRL (the `distill` extra, pinned to 0.29.x because every TRL 1.x needs a newer
 `datasets` than the image has).
 
+## Instruction mix
+
+`distill.translate_frac` gives that share of utterances a translate
+instruction in place of the ASR one, into a language drawn from
+`distill.translate_targets` (never the utterance's own). The teacher reads the
+same instruction over the transcript, so the mix needs
+`distill.teacher_prompt: mirror` and a `data.prompt_template` mapping with an
+`st` entry naming `{tgt_lang}`:
+
+```yaml
+data:
+  prompt_template:
+    asr: "Repeat the following content exactly, word for word, and write nothing else.\n\n{audio_token}"
+    st: "Translate the following content into {tgt_lang}, and write nothing else.\n\n{audio_token}"
+```
+
+The draw is a hash of the utterance, so every arm, rank and epoch gives an
+utterance the same instruction, and an on-policy arm and an offline arm
+(`lmbda: 0`) of the same mix differ only in the objective. The gold-CE anchor
+(`distill.gold_ce_weight`) always uses the ASR prompt: translations have no
+gold.
+
 ## What is logged
 
 - `eval_<set>_loss` is replaced by the **alignment gap**: the per-token
@@ -78,6 +100,9 @@ TRL (the `distill` extra, pinned to 0.29.x because every TRL 1.x needs a newer
   response. `distill/teacher_logp` rising while `distill/response_len` falls is
   the signature of the student collapsing to generic text the teacher accepts
   regardless of the transcript.
+- With an instruction mix, `distill/translate_rows` is the share of utterances
+  given a translate instruction, and `distill/teacher_logp_translate` and
+  `distill/response_len_translate` are the same monitors on those rows alone.
 
 ## Known limits
 

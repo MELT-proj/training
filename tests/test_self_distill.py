@@ -33,6 +33,7 @@ from melt.training.config import trainer_args_dict
 from melt.training.self_distill import (
     MELTSelfDistillTrainer,
     SelfDistillConfig,
+    assign_instructions,
     check_adapter_only,
     check_adapter_only_gradients,
     distillation_loss,
@@ -180,11 +181,37 @@ class TestSelfDistillConfig:
     @pytest.mark.parametrize(
         "field,value",
         [("beta", 1.5), ("lmbda", -0.1), ("top_p", 0.0), ("loss", "kl"), ("teacher_prompt", "echo"),
-         ("gold_ce_weight", -0.5)],
+         ("gold_ce_weight", -0.5), ("translate_frac", 1.5), ("translate_targets", " , ")],
     )
     def test_out_of_range_values_are_refused(self, field, value):
         with pytest.raises(ValueError):
             SelfDistillConfig(**{field: value})
+
+    def test_a_translate_mix_needs_the_mirror_teacher(self):
+        with pytest.raises(ValueError, match="mirror"):
+            SelfDistillConfig(translate_frac=0.5)
+        cfg = SelfDistillConfig(translate_frac=0.5, teacher_prompt="mirror", translate_targets="EN, de")
+        assert cfg.targets == ("en", "de")
+
+
+class TestInstructionMix:
+    TEXTS = [f"utterance number {i} says something" for i in range(2000)]
+
+    def test_no_translation_keeps_every_task(self):
+        tasks, tgt = assign_instructions(self.TEXTS, ["asr"] * 2000, ["de"] * 2000, 0.0, ("en", "de", "fr"))
+        assert set(tasks) == {"asr"} and set(tgt) == {""}
+
+    def test_share_targets_and_determinism(self):
+        langs = ["de", "fr"] * 1000
+        tasks, tgt = assign_instructions(self.TEXTS, ["asr"] * 2000, langs, 0.3, ("en", "de", "fr", "es", "it"))
+        share = tasks.count("st") / len(tasks)
+        assert 0.25 < share < 0.35
+        # Never into the utterance's own language; every other target is used.
+        for lang, task, t in zip(langs, tasks, tgt):
+            assert (task == "st") == bool(t) and t != lang
+        assert {t for t in tgt if t} == {"en", "de", "fr", "es", "it"}
+        # The same utterance always gets the same instruction.
+        assert (tasks, tgt) == assign_instructions(self.TEXTS, ["asr"] * 2000, langs, 0.3, ("en", "de", "fr", "es", "it"))
 
 
 # ----------------------------------------------------------------------------
@@ -302,6 +329,17 @@ class TestRecordStats:
     def test_a_row_without_eos_is_truncated(self):
         stats = self._stats(_responses()[0])
         assert stats["truncated_frac"] == [0.5]
+
+    def test_translate_rows_get_their_own_monitor(self):
+        trainer = _bare_trainer(None, SelfDistillConfig())
+        response = torch.tensor([[20, EOS, PAD], [30, 31, EOS]])
+        mask = response_mask(response, torch.tensor([EOS]))
+        logits = torch.randn(2, 3, LIMIT)
+        trainer._record_stats(logits, logits, response, mask, True, torch.tensor([False, True]))
+        stats = trainer._distill_stats
+        assert stats["translate_rows"] == [0.5]
+        assert stats["response_len_translate"] == [3.0]
+        assert len(stats["teacher_logp_translate"]) == 1
 
 
 # ----------------------------------------------------------------------------
@@ -626,6 +664,21 @@ class TestTrainerEndToEnd:
             trainer.log(logs)
         assert logs["distill/gold_ce"] > 0
 
+    def test_training_step_with_translate_rows(self, tmp_path):
+        """The instruction-mix flag rides in the batch without reaching a forward."""
+        trainer = self._trainer(tmp_path, lmbda=1.0)
+        trainer.current_gradient_accumulation_steps = 2
+        batch = {**_batch(), "distill_translate": torch.tensor([False, True])}
+
+        loss = trainer.training_step(trainer.model, batch)
+
+        assert torch.isfinite(loss)
+        logs = {"loss": float(loss)}
+        with patch("transformers.Trainer.log"):
+            trainer.log(logs)
+        assert logs["distill/translate_rows"] == 0.5
+        assert "distill/teacher_logp_translate" in logs
+
     def test_memory_preallocation_is_refused(self, tmp_path):
         processor = SimpleNamespace(
             audio_token_id=AUDIO, audio_bos_token_id=AUDIO_BOS, audio_eos_token_id=AUDIO_EOS,
@@ -724,6 +777,31 @@ class TestPrompts:
             assert "Repeat the following content" in student
             assert student.replace(audio_block, text) == teacher
             assert "Repeat the following content" not in bare_teacher and text in bare_teacher
+
+    def test_a_translate_instruction_reaches_both_paths(self):
+        """Instruction mix: the st row asks both paths to translate, into the drawn language."""
+        from melt.training.self_distill import build_distill_prompts
+
+        processor = self._processor()
+        template = {
+            "asr": "Repeat the following content exactly, word for word, and write nothing else.\n\n{audio_token}",
+            "st": "Translate the following content into {tgt_lang}, and write nothing else.\n\n{audio_token}",
+        }
+        texts = ["hallo welt", "ein zweiter satz"]
+        out = build_distill_prompts(
+            processor, texts, ["asr", "st"], ["de", "de"], template, "mirror", tgt_langs=["", "fr"]
+        )
+        decode = processor.tokenizer.decode
+        audio_block = "<|audio_bos|><|audio|><|audio_eos|>"
+        rows = []
+        for i, text in enumerate(texts):
+            student = decode(out["student_prompt_input_ids"][i][out["student_prompt_attention_mask"][i].bool()])
+            teacher = decode(out["teacher_prompt_input_ids"][i][out["teacher_prompt_attention_mask"][i].bool()])
+            assert student.replace(audio_block, text) == teacher
+            rows.append(student)
+        assert "Repeat the following content" in rows[0]
+        assert "Translate the following content into French" in rows[1]
+        assert out["distill_translate"].tolist() == [False, True]
 
     def test_student_prompt_is_a_prefix_of_the_gold_training_sequence(self):
         """The rollout starts from exactly the context MA training conditions on."""

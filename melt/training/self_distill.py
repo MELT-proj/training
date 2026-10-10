@@ -31,6 +31,7 @@ original LLM).
 """
 
 import random
+import zlib
 from collections import defaultdict
 from dataclasses import dataclass, fields
 
@@ -46,7 +47,7 @@ from .data.audio.lhotse import (
     SpeechToTextDataset,
     get_train_dataloader_from_config,
 )
-from .data.audio.lhotse.helpers import _get_config_value, apply_chat_template_to_texts
+from .data.audio.lhotse.helpers import _get_config_value, apply_chat_template_to_texts, resolve_custom_template
 from .trainer import MELTTrainer
 
 
@@ -58,6 +59,9 @@ DISTILL_PROMPT_KEYS = (
     "student_prompt_attention_mask",
     "teacher_prompt_input_ids",
     "teacher_prompt_attention_mask",
+    # Bool per utterance: its distillation instruction is a translation
+    # (``distill.translate_frac``), for the per-task diagnostics.
+    "distill_translate",
 )
 
 # Keys of the standard (gold-transcript) training batch that the distillation
@@ -102,6 +106,17 @@ class SelfDistillConfig:
         gold_ce_weight: Weight of an added cross-entropy term on the gold
             transcript under the student prompt (the standard MA loss). ``0``
             leaves the objective pure distillation.
+        translate_frac: Share of utterances whose distillation instruction is
+            "translate into <language>" instead of the ASR one: the instruction
+            mix. The target is drawn from *translate_targets* minus the
+            utterance's own language, deterministically per utterance (see
+            ``assign_instructions``), and the teacher reads the same instruction
+            over the transcript, so this needs ``teacher_prompt="mirror"`` and a
+            ``data.prompt_template`` mapping whose ``st`` entry names
+            ``{tgt_lang}``. The gold-CE anchor stays on the ASR prompt. ``0``
+            keeps every instruction the ASR one.
+        translate_targets: Comma-separated ISO codes a translate instruction
+            may target.
     """
 
     lmbda: float = 1.0
@@ -113,6 +128,13 @@ class SelfDistillConfig:
     eval_alignment_gap: bool = True
     teacher_prompt: str = "bare"
     gold_ce_weight: float = 0.0
+    translate_frac: float = 0.0
+    translate_targets: str = "en,de,fr,es,it"
+
+    @property
+    def targets(self) -> tuple[str, ...]:
+        """``translate_targets`` as a tuple of lower-case ISO codes."""
+        return tuple(t.strip().lower() for t in self.translate_targets.split(",") if t.strip())
 
     def __post_init__(self):
         if self.loss not in ("jsd", "ce"):
@@ -121,6 +143,15 @@ class SelfDistillConfig:
             raise ValueError(f"distill.teacher_prompt must be 'bare' or 'mirror', got {self.teacher_prompt!r}")
         if self.gold_ce_weight < 0.0:
             raise ValueError(f"distill.gold_ce_weight must be >= 0, got {self.gold_ce_weight}")
+        if not 0.0 <= self.translate_frac <= 1.0:
+            raise ValueError(f"distill.translate_frac must be in [0, 1], got {self.translate_frac}")
+        if self.translate_frac > 0.0 and self.teacher_prompt != "mirror":
+            raise ValueError(
+                "distill.translate_frac > 0 needs distill.teacher_prompt=mirror: a bare teacher never "
+                "reads the translate instruction, so it would be scoring a different task."
+            )
+        if not self.targets:
+            raise ValueError(f"distill.translate_targets names no language: {self.translate_targets!r}")
         if not 0.0 <= self.lmbda <= 1.0:
             raise ValueError(f"distill.lmbda must be in [0, 1], got {self.lmbda}")
         if not 0.0 <= self.beta <= 1.0:
@@ -159,6 +190,41 @@ class SelfDistillConfig:
 # ----------------------------------------------------------------------------
 
 
+def assign_instructions(
+    texts: list[str], tasks: list[str], langs: list[str], translate_frac: float, targets: tuple[str, ...]
+) -> tuple[list[str], list[str]]:
+    """Draw each utterance's distillation instruction: its own task, or ``st`` into another language.
+
+    Deterministic in the utterance (a CRC of its language and transcript), so
+    every arm, rank, worker and epoch gives an utterance the same instruction:
+    the on-policy and offline arms of an instruction mix then differ only in
+    their objective.
+
+    Args:
+        texts: Transcripts, aligned with *tasks* and *langs*.
+        tasks: Task tags (kept for utterances that are not translated).
+        langs: Language codes of the utterances.
+        translate_frac: Share of utterances to translate.
+        targets: ISO codes a translation may target; the utterance's own
+            language is never one.
+
+    Returns:
+        ``(tasks, tgt_langs)``: ``"st"`` and a target code for translated
+        utterances, the original task and ``""`` for the rest.
+    """
+    out_tasks, tgt_langs = [], []
+    for text, task, lang in zip(texts, tasks, langs):
+        digest = zlib.crc32(f"{lang}\x00{text}".encode())
+        choices = [t for t in targets if t != (lang or "").lower()]
+        if choices and (digest % 1_000_000) / 1_000_000 < translate_frac:
+            out_tasks.append("st")
+            tgt_langs.append(choices[(digest // 1_000_000) % len(choices)])
+        else:
+            out_tasks.append(task)
+            tgt_langs.append("")
+    return out_tasks, tgt_langs
+
+
 def build_distill_prompts(
     processor,
     texts: list[str],
@@ -166,6 +232,7 @@ def build_distill_prompts(
     langs: list[str],
     student_prompt_template: str | dict[str, str],
     teacher_prompt: str = "bare",
+    tgt_langs: list[str] | None = None,
 ) -> dict[str, torch.Tensor]:
     """Tokenise the student and teacher generation prompts for one batch.
 
@@ -185,24 +252,29 @@ def build_distill_prompts(
         langs: Language codes, aligned with *texts*.
         student_prompt_template: The training ``data.prompt_template``.
         teacher_prompt: ``"bare"`` or ``"mirror"``, see ``SelfDistillConfig``.
+        tgt_langs: Target language per utterance for ``st`` instructions
+            (``assign_instructions``); ``None`` when nothing is translated.
 
     Returns:
-        The four ``DISTILL_PROMPT_KEYS`` tensors.
+        The ``DISTILL_PROMPT_KEYS`` tensors.
     """
     tokenizer = processor.tokenizer
+    if tgt_langs is None:
+        tgt_langs = [""] * len(texts)
     template_kwargs = {"prompt_template": student_prompt_template, "prompt_template_selection": "custom"}
     _, student_prompts = apply_chat_template_to_texts(
         texts, tasks, langs, tokenizer=tokenizer, audio_token=processor.audio_token, return_prompts=True,
-        **template_kwargs,
+        src_langs=langs, tgt_langs=tgt_langs, **template_kwargs,
     )
     if teacher_prompt == "mirror":
         # The student's template rendered per utterance with its transcript as the
         # "audio": same instruction, same language placeholders, text content.
         teacher_prompts = [
             apply_chat_template_to_texts(
-                [text], [task], [lang], tokenizer=tokenizer, audio_token=text, return_prompts=True, **template_kwargs
+                [text], [task], [lang], tokenizer=tokenizer, audio_token=text, return_prompts=True,
+                src_langs=[lang], tgt_langs=[tgt], **template_kwargs,
             )[1][0]
-            for text, task, lang in zip(texts, tasks, langs)
+            for text, task, lang, tgt in zip(texts, tasks, langs, tgt_langs)
         ]
     else:
         teacher_prompts = [
@@ -226,6 +298,7 @@ def build_distill_prompts(
         "student_prompt_attention_mask": student["attention_mask"],
         "teacher_prompt_input_ids": teacher["input_ids"],
         "teacher_prompt_attention_mask": teacher["attention_mask"],
+        "distill_translate": torch.tensor([bool(t) for t in tgt_langs], dtype=torch.bool),
     }
 
 
@@ -241,6 +314,19 @@ def _require_instruction_free_setup(config) -> None:
         )
 
 
+def _require_translate_template(prompt_template) -> None:
+    """An instruction mix needs an ``st`` template that names the target language."""
+    try:
+        template = resolve_custom_template(prompt_template, "st")
+    except ValueError as err:
+        raise ValueError(
+            "distill.translate_frac > 0 needs data.prompt_template to map 'st' to a translate "
+            f"instruction as well as 'asr' to the ASR one: {err}"
+        ) from err
+    if "{tgt_lang}" not in template:
+        raise ValueError(f"The 'st' prompt template must name the target as {{tgt_lang}}, got {template!r}")
+
+
 class SelfDistillDataset(SpeechToTextDataset):
     """``SpeechToTextDataset`` plus the student and teacher generation prompts.
 
@@ -250,10 +336,17 @@ class SelfDistillDataset(SpeechToTextDataset):
     captured there and turned into the two prompt tensors afterwards.
     """
 
-    def __init__(self, *args, teacher_prompt: str = "bare", **kwargs):
+    def __init__(
+        self, *args, teacher_prompt: str = "bare", translate_frac: float = 0.0,
+        translate_targets: tuple[str, ...] = (), **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         _require_instruction_free_setup(self.config)
+        if translate_frac > 0:
+            _require_translate_template(self.prompt_template)
         self.teacher_prompt = teacher_prompt
+        self.translate_frac = translate_frac
+        self.translate_targets = tuple(translate_targets)
         self._batch_meta: tuple[list[str], list[str], list[str]] | None = None
 
     def _apply_chat_template(self, texts, tasks, langs, src_langs=None, tgt_langs=None):
@@ -266,8 +359,13 @@ class SelfDistillDataset(SpeechToTextDataset):
         if batch is None:
             return None
         texts, tasks, langs = self._batch_meta
+        tgt_langs = None
+        if self.translate_frac > 0:
+            tasks, tgt_langs = assign_instructions(texts, tasks, langs, self.translate_frac, self.translate_targets)
         batch.update(
-            build_distill_prompts(self.processor, texts, tasks, langs, self.prompt_template, self.teacher_prompt)
+            build_distill_prompts(
+                self.processor, texts, tasks, langs, self.prompt_template, self.teacher_prompt, tgt_langs
+            )
         )
         return batch
 
@@ -280,22 +378,28 @@ class SelfDistillEvalCollator(MELTDataCollator):
     *training* template, so the metric scores the objective that was trained.
     """
 
-    def __init__(self, processor, config, student_prompt_template, is_train: bool = False, teacher_prompt: str = "bare"):
+    def __init__(
+        self, processor, config, student_prompt_template, is_train: bool = False, teacher_prompt: str = "bare",
+        translate_frac: float = 0.0, translate_targets: tuple[str, ...] = (),
+    ):
         super().__init__(processor=processor, config=config, is_train=is_train)
         self.student_prompt_template = student_prompt_template
         self.teacher_prompt = teacher_prompt
+        self.translate_frac = translate_frac
+        self.translate_targets = tuple(translate_targets)
 
     def __call__(self, items: list[dict]) -> dict:
         batch = super().__call__(items)
         valid = [it for it in items if not it.get("__invalid__", False)]
+        texts = [it["text"] for it in valid]
+        tasks = [it.get("task", "asr") for it in valid]
+        langs = [it.get("lang", "") for it in valid]
+        tgt_langs = None
+        if self.translate_frac > 0:
+            tasks, tgt_langs = assign_instructions(texts, tasks, langs, self.translate_frac, self.translate_targets)
         batch.update(
             build_distill_prompts(
-                self.processor,
-                [it["text"] for it in valid],
-                [it.get("task", "asr") for it in valid],
-                [it.get("lang", "") for it in valid],
-                self.student_prompt_template,
-                self.teacher_prompt,
+                self.processor, texts, tasks, langs, self.student_prompt_template, self.teacher_prompt, tgt_langs
             )
         )
         return batch
@@ -486,6 +590,8 @@ class MELTSelfDistillTrainer(MELTTrainer):
                 config=self._eval_collator.config,
                 student_prompt_template=_get_config_value(config.data, "prompt_template", None),
                 teacher_prompt=self.distill.teacher_prompt,
+                translate_frac=self.distill.translate_frac,
+                translate_targets=self.distill.targets,
             )
 
         logger.info(
@@ -507,6 +613,8 @@ class MELTSelfDistillTrainer(MELTTrainer):
                 return_labels=True,
                 return_langs=True,
                 teacher_prompt=self.distill.teacher_prompt,
+                translate_frac=self.distill.translate_frac,
+                translate_targets=self.distill.targets,
             )
         )
         dataloader = get_train_dataloader_from_config(
@@ -599,7 +707,7 @@ class MELTSelfDistillTrainer(MELTTrainer):
         response, mask = self._rollout(inputs, from_student=from_student)
         student, teacher = self._student_and_teacher_logits(model, inputs, response, mask)
         loss = distillation_loss(student, teacher, response, mask, self.distill)
-        self._record_stats(student, teacher, response, mask, from_student)
+        self._record_stats(student, teacher, response, mask, from_student, inputs.get("distill_translate"))
         if self.distill.gold_ce_weight > 0:
             gold_ce = self._gold_cross_entropy(inputs, gold)
             self._distill_stats["gold_ce"].append(gold_ce.item())
@@ -634,7 +742,7 @@ class MELTSelfDistillTrainer(MELTTrainer):
         return loss
 
     @torch.no_grad()
-    def _record_stats(self, student, teacher, response, mask, from_student: bool) -> None:
+    def _record_stats(self, student, teacher, response, mask, from_student: bool, translate=None) -> None:
         """Per-micro-batch diagnostics, averaged and reduced at log time.
 
         ``teacher_logp`` is the mean log-probability the teacher gives the
@@ -657,6 +765,16 @@ class MELTSelfDistillTrainer(MELTTrainer):
         stats["truncated_frac"].append((~has_eos).float().mean().item())
         stats["student_logp" if from_student else "student_logp_on_teacher"].append(student_logp.item())
         stats["teacher_logp" if from_student else "teacher_logp_on_teacher"].append(teacher_logp.item())
+        if translate is not None and translate.any():
+            # The same monitor restricted to translate instructions, which have
+            # no gold to fall back on; plus the share of rows they took.
+            rows = mask & translate.to(mask.device).unsqueeze(1)
+            t_rows = teacher[rows].float()
+            t_logp = (t_rows.gather(-1, response[rows].unsqueeze(-1)).squeeze(-1) - t_rows.logsumexp(-1)).mean()
+            stats["teacher_logp_translate" if from_student else "teacher_logp_translate_on_teacher"].append(t_logp.item())
+            stats["response_len_translate"].append(mask[translate.to(mask.device)].sum(dim=1).float().mean().item())
+        if translate is not None:
+            stats["translate_rows"].append(translate.float().mean().item())
 
     def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         """Add ``distill/*`` means, reduced across ranks, to training rows.
@@ -711,6 +829,7 @@ class MELTSelfDistillTrainer(MELTTrainer):
 
 __all__ = [
     "DISTILL_PROMPT_KEYS",
+    "assign_instructions",
     "MELTSelfDistillTrainer",
     "SelfDistillConfig",
     "SelfDistillDataset",
