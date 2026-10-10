@@ -107,6 +107,55 @@ Spanish-like text, Polish as German ("... die planen eine jährliche ... wächst
 die popularität" for "An increasingly more popular option for those planning a
 gap-year ..."). Up to 21% of utterances in an unseen language run away.
 
+**Step 2: continuations under the repeat instruction** (all from GOLDW-final,
+seed 43, 50 h; battery on A6000; probe under the repeat instruction with the
+mirror teacher, teacher-forced on gold, mean over five languages):
+
+| arm | in-domain WER | FLEURS WER, 5 trained | FLEURS CER, 19 unseen | X->en chrF trained / unseen | chrF vs source | NLL(gold given audio) | KL(audio \|\| text) |
+|---|---|---|---|---|---|---|---|
+| GOLDW-final (repeat prompt) | 0.106 | 0.082 | 0.684 | 24.4 / 21.4 | 86.5 | 0.348 | 1.341 |
+| `ce` | 0.108 | 0.081 | 0.713 | 24.3 / 21.2 | 86.4 | 0.345 | 1.365 |
+| `opd` | 0.121 | 0.083 | 0.994 | 24.3 / 22.4 | 86.2 | 0.373 | 1.253 |
+| `opd_anchor` | 0.116 | 0.082 | 0.935 | 24.3 / 21.5 | 86.3 | 0.362 | 1.259 |
+
+Continued CE is a null on every metric (its in-training 50-clip WER gain, 0.095
+-> 0.090, does not survive 4,500 utterances: read no trend into the 50-clip
+evals). When the teacher's target is the gold transcript, OPD is worse than CE
+everywhere and transfers nothing to translation. It does what reverse KL
+promises -- less student mass where the teacher has none (KL(audio || text)
+-8%) -- and pays in gold likelihood (+7%), which is what WER measures; the
+probe's JSD improves meanwhile, so JSD alone is not an alignment metric. The
+errors are systematic, language-model-flavoured substitutions ("in schweiß
+gebadet" -> "getränkt", dialect normalised, "duemilatrenta" -> "trecento e
+trenta"). The teacher is not their source: on gold prefixes its NLL is
+0.001-0.011 nats/token, i.e. one-hot. The working explanation is the student's
+own deviated prefixes, on which the teacher can only continue fluently, so the
+student learns to follow its prefix over the audio. The gold anchor (0.5 x CE)
+removes about a third of the damage. On unseen languages the OPD arms run away
+more (worst language 25-27% of utterances vs 19%).
+
+**Step 3: the instruction mix** (`TRANSLATE_FRAC=0.5`: half the utterances
+are distilled under "Translate the following content into {tgt_lang}, and
+write nothing else." with a target drawn from en/de/fr/es/it minus the source;
+the teacher reads the same instruction over the transcript; both arms keep the
+0.5 x gold-CE anchor on the repeat prompt; from GOLDW-final, seed 43, 50 h):
+
+| arm | in-domain WER | FLEURS CER, 19 unseen | X->en chrF / BLEU, 4 trained sources | X->en chrF / BLEU, 19 unseen sources | chrF vs source | NLL(gold given audio) |
+|---|---|---|---|---|---|---|
+| GOLDW-final | 0.106 | 0.684 | 24.4 / 0.1 | 21.4 / 0.9 | 86.5 | 0.348 |
+| `opd_anchor` (on-policy, reverse KL) | 0.127 | 0.948 | 53.4 / 22.7 | 42.3 / 14.1 | 26.4 | 0.373 |
+| `azeros_anchor` (offline, CE on the teacher's greedy reply) | **0.112** | **0.692** | **53.5 / 23.7** | **42.8 / 14.9** | 27.7 | 0.356 |
+
+From ASR data alone, both arms turn the speech LLM into a speech translator:
+X->en chrF 53 on the trained source languages (the text-only teacher reading
+the gold transcript scores 59-65) and 42 on 19 source languages the adapter
+never heard (Portuguese 60, Swedish 55, Danish 52-53, Polish 47). On-policy
+training adds nothing to it -- per-language chrF agrees within 1-2 points --
+and costs ASR: offline matches the translation at a third of the in-domain
+cost and keeps unseen-language ASR intact. The translation ability is already
+there at 1,000 steps (on-policy: 52.8 / 42.1). Single seed so far; seed-44
+replicas of both arms and an offline soft-label arm (`soft_anchor`) are running.
+
 **Parity** (melt-eval vs the trainer's own eval, GOLDW-final, the trainer's 250
 clips from `eval_parity_spec.py`): WER en 0.081 / 0.083, de 0.100 / 0.102, fr
 0.134 / 0.134, es 0.070 / 0.065, it 0.085 / 0.092 (melt-eval / trainer); 37 of
