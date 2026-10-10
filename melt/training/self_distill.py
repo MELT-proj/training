@@ -648,10 +648,13 @@ class MELTSelfDistillTrainer(MELTTrainer):
         student_logp = (s.gather(-1, tokens).squeeze(-1) - s.logsumexp(-1)).mean()
         teacher_logp = (t.gather(-1, tokens).squeeze(-1) - t.logsumexp(-1)).mean()
         lengths = mask.sum(dim=1).float()
+        # Truncated = no EOS. Not `lengths == response.shape[1]`: the longest
+        # row that did stop spans the whole width too, ending on its EOS.
+        has_eos = torch.isin(response, torch.tensor(self._eos_token_ids, device=response.device)).any(dim=1)
         stats = self._distill_stats
         stats["on_policy_frac"].append(float(from_student))
         stats["response_len"].append(lengths.mean().item())
-        stats["truncated_frac"].append((lengths == response.shape[1]).float().mean().item())
+        stats["truncated_frac"].append((~has_eos).float().mean().item())
         stats["student_logp" if from_student else "student_logp_on_teacher"].append(student_logp.item())
         stats["teacher_logp" if from_student else "teacher_logp_on_teacher"].append(teacher_logp.item())
 

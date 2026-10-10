@@ -99,7 +99,11 @@ for key, value in pairs:
 PY
 )
 
-WARM_TAG="$(basename "$(dirname "$WARM_START")" | cut -c1-5)-$(basename "$WARM_START")"
+# GOLDW-checkpoint-1200 for a mid-run checkpoint, GOLDW-final for a finished run's root.
+case "$(basename "$WARM_START")" in
+    checkpoint-*|warmstart-*) WARM_TAG="$(basename "$(dirname "$WARM_START")" | cut -c1-5)-$(basename "$WARM_START")" ;;
+    *) WARM_TAG="$(basename "$WARM_START" | cut -c1-5)-final" ;;
+esac
 EXP_NAME="${EXP_NAME:-S2-${ARM}-from-${WARM_TAG}-repeatfirst-bd${BATCH_DURATION}-lr$(echo "$ADAPTER_LR" | tr -d '-')-${MAX_STEPS}st-s${SEED}-${WORLD_SIZE}g}"
 
 CMD=(

@@ -285,6 +285,25 @@ class TestResponseMask:
         ]
 
 
+class TestRecordStats:
+    @staticmethod
+    def _stats(response):
+        trainer = _bare_trainer(None, SelfDistillConfig())
+        mask = response_mask(response, torch.tensor([EOS]))
+        logits = torch.randn(*response.shape, LIMIT)
+        trainer._record_stats(logits, logits, response, mask, from_student=True)
+        return trainer._distill_stats
+
+    def test_the_longest_row_ending_on_eos_is_not_truncated(self):
+        stats = self._stats(torch.tensor([[20, EOS, PAD], [30, 31, EOS]]))
+        assert stats["truncated_frac"] == [0.0]
+        assert stats["response_len"] == [2.5]
+
+    def test_a_row_without_eos_is_truncated(self):
+        stats = self._stats(_responses()[0])
+        assert stats["truncated_frac"] == [0.5]
+
+
 # ----------------------------------------------------------------------------
 # Claim 3: only the adapter learns
 # ----------------------------------------------------------------------------
