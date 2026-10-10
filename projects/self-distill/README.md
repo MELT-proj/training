@@ -45,6 +45,25 @@ continuations from aligned checkpoints.
 3. **Task-conditioned multilingual OPD**: an instruction mix (repeat, translate
    into each language, one generic), targets from the teacher, against the same
    mix trained offline at equal compute.
+4. **Claim hardening** (chosen after step 3; spoken QA left for later):
+   - *Seeds*: `azeros_anchor` and `opd_anchor` at seeds 44 and 45, with the
+     data order varied too (`-s44-d44`). Every earlier S2/S3 run, whatever its
+     `-s<seed>`, read data seed 42 (see "Running on artemis"): the first `-s44`
+     runs replicate `-s43` on the same batches and measure only numerical and
+     sampling noise.
+   - *AZeroS's own recipe* as the head-to-head: `ARM=sift`, the azeros loss with
+     no instruction on either path (teacher = the decoder replying to the bare
+     transcript, student = `{audio_token}` alone), no anchor, no mix, same warm
+     start, data and steps, seeds 43-45. The paper (Qwen2.5-7B-Instruct
+     teacher, projector-only training) gives no decoding settings or reply cap
+     and evaluates no speech translation; here the teacher decodes greedily
+     under the 448-token budget every arm has. Plus `azeros` with the mix but
+     without the anchor, so a gap to SIFT cannot be the gold CE's.
+   - *Translation into other languages*: FLEURS X->Y dev sets for de/fr/es/it
+     (trained targets) and nl/pt (targets never trained), 23 sources x 100 each
+     (melt-eval branch `claude/fleurs-x-to-y-st`), read against
+     `text_ceiling.py`: the frozen decoder translating the gold transcript under
+     the same instruction.
 
 ## Results so far
 
@@ -184,6 +203,13 @@ bash projects/self-distill/launch_teacher_audit.sh
 SEED=43 ARM=opd WARM_START=/workspace/outputs/<GOLDW run> bash projects/self-distill/launch_step2.sh
 FORMAT=bare bash projects/self-distill/eval/launch_eval_step2.sh /mnt/scratch-artemis/giuseppe/melt-data/outputs/<GOLDW run>
 ```
+
+The data seed must be on the command line: `MELT_SEED`, which `run_train.sh`
+turns into a `shard_seed` override, is not forwarded into the container
+(`bash/run_train_singularity.sbatch` has no `container_env MELT_SEED`), so a
+container run reads the YAML's `seed`/`shard_seed` (42) and logs `MELT_SEED=42`
+whatever the host set. `launch_step2.sh` passes `DATA_SEED` (default `SEED`) as
+`data.train_ds.seed` and `shard_seed`, and names the run `-s<seed>-d<data seed>`.
 
 A mid-run `checkpoint-N` carries no processor or tokenizer: build them with
 `save_run_processor.py`, and give melt-eval `-M processor=`, `-T tokenizer=` and

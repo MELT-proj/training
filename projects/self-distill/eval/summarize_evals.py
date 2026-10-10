@@ -32,14 +32,20 @@ SEEN = ("en", "de", "fr", "es", "it")
 
 
 def run_tag(model: str) -> str:
-    """Short run label: ``S3-opd_anchor``, ``S3-opd_anchor-s44``, ``GOLDW-final``, ``S3-opd_anchor@checkpoint-1000``."""
+    """Short run label: ``S3-opd_anchor``, ``S3-opd_anchor-s44-d44``, ``GOLDW-final``, ``S3-opd_anchor@checkpoint-1000``.
+
+    Runs named before the data seed reached the job (no ``-d<seed>``) all read
+    data seed 42, whatever their ``-s<seed>``.
+    """
     path = Path(model.split("//", 1)[-1])
     if path.name.startswith("checkpoint"):
         return f"{run_tag(str(path.parent))}@{path.name}"
     name = path.name
     if name.startswith(("S2-", "S3-")):
-        seed = re.search(r"-s(\d+)-\d+g$", name)
-        return name.split("-from-", 1)[0] + (f"-s{seed.group(1)}" if seed and seed.group(1) != "43" else "")
+        seeds = re.search(r"-s(\d+)(-d\d+)?-\d+g$", name)
+        if not seeds or (seeds.group(1) == "43" and not seeds.group(2)):
+            return name.split("-from-", 1)[0]
+        return name.split("-from-", 1)[0] + f"-s{seeds.group(1)}" + (seeds.group(2) or "")
     return name.split("-", 1)[0] + "-final"
 
 

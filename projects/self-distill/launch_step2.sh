@@ -37,6 +37,11 @@ ARM="${ARM:?set ARM=ce|soft|opd|azeros|sift, or a distillation arm with _anchor}
 WARM_START="${WARM_START:?set WARM_START to a GOLDW checkpoint path as the container sees it (/workspace/outputs/...)}"
 SITE="${SITE:-artemis}"
 SEED="${SEED:-42}"
+# The data order. MELT_SEED, which run_train.sh turns into a shard_seed override,
+# is not forwarded into the container, so every container run read the YAML's
+# seed and shard_seed (42) whatever SEED said: the S2/S3 runs named -s43 and -s44
+# drew the same batches. Set both on the command line; the name says -d<seed>.
+DATA_SEED="${DATA_SEED:-$SEED}"
 CONFIG="${CONFIG:-projects/ablation-campaign/ABL-MA-700-asr.yaml}"
 ENCODER="${ENCODER:-openai/whisper-large-v3}"
 DECODER="${DECODER:-Qwen/Qwen3.5-2B}"
@@ -146,7 +151,7 @@ else
     [[ "$TEACHER_PROMPT" == bare ]] && PROMPT_TAG=bare
     TEMPLATE_OVERRIDES=(--data.prompt_template "\"${TEMPLATE}\"")
 fi
-EXP_NAME="${EXP_NAME:-${STAGE}-${ARM}-from-${WARM_TAG}-${PROMPT_TAG}-bd${BATCH_DURATION}-lr$(echo "$ADAPTER_LR" | tr -d '-')-${MAX_STEPS}st-s${SEED}-${WORLD_SIZE}g}"
+EXP_NAME="${EXP_NAME:-${STAGE}-${ARM}-from-${WARM_TAG}-${PROMPT_TAG}-bd${BATCH_DURATION}-lr$(echo "$ADAPTER_LR" | tr -d '-')-${MAX_STEPS}st-s${SEED}-d${DATA_SEED}-${WORLD_SIZE}g}"
 
 CMD=(
     infra/runners/submit-container.sh "$SITE" config/accelerate/ddp.yaml
@@ -176,6 +181,8 @@ CMD=(
     --trainer.eval_on_start true
     --data.validation_ds.max_samples "$EVAL_SAMPLES"
     --trainer.seed "$SEED"
+    --data.train_ds.seed "$DATA_SEED"
+    --data.train_ds.shard_seed "$DATA_SEED"
     "${ARM_OVERRIDES[@]}"
     "$@"
 )
