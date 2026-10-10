@@ -7,7 +7,13 @@
 #   ARM=ce          standard MA (melt.training.train): CE on the gold transcript
 #   ARM=soft        forward KL on the teacher's greedy repeat (off-policy, soft labels)
 #   ARM=opd         reverse KL on student samples (on-policy)
-#   ARM=opd_anchor  opd + GOLD_CE_WEIGHT x the gold CE
+#   ARM=azeros      CE on the teacher's greedy reply (off-policy, hard labels: AZeroS)
+#   ARM=<arm>_anchor  any distillation arm + GOLD_CE_WEIGHT x the gold CE (opd_anchor, ...)
+#
+# Step 3 (instruction mix): TRANSLATE_FRAC > 0 gives that share of utterances
+# a "translate into <language>" instruction (ST_TEMPLATE) instead of the repeat
+# one, for student and teacher alike (distill.translate_frac); the ce arm has
+# no gold for those and is refused. The run name then starts S3- and says mix<frac>.
 #
 # The teacher is the frozen decoder reading the transcript under the student's
 # own instruction (distill.teacher_prompt=mirror). The instruction is the one
@@ -23,7 +29,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "$REPO_ROOT"
 
-ARM="${ARM:?set ARM=ce|soft|opd|opd_anchor}"
+ARM="${ARM:?set ARM=ce|soft|opd|azeros, or a distillation arm with _anchor}"
 WARM_START="${WARM_START:?set WARM_START to a GOLDW checkpoint path as the container sees it (/workspace/outputs/...)}"
 SITE="${SITE:-artemis}"
 SEED="${SEED:-42}"
@@ -41,6 +47,8 @@ GOLD_CE_WEIGHT="${GOLD_CE_WEIGHT:-0.5}"
 # Literal \n: the value is handed to OmegaConf as a YAML double-quoted scalar,
 # which turns them into the newlines the teacher audit tested.
 TEMPLATE="${TEMPLATE:-Repeat the following content exactly, word for word, and write nothing else.\\n\\n{audio_token}}"
+ST_TEMPLATE="${ST_TEMPLATE:-Translate the following content into {tgt_lang}, and write nothing else.\\n\\n{audio_token}}"
+TRANSLATE_FRAC="${TRANSLATE_FRAC:-0}"
 export MELT_PARTITION="${MELT_PARTITION:-h200}"
 export MELT_QOS="${MELT_QOS:-gpu-h200}"
 export MELT_NODES="${MELT_NODES:-1}"
@@ -49,8 +57,13 @@ export MELT_TIME="${MELT_TIME:-24:00:00}"
 export MELT_SEED="$SEED"
 WORLD_SIZE=$(( MELT_NODES * MELT_GPUS_PER_NODE ))
 
-case "$ARM" in
+MIX=0
+awk "BEGIN { exit !(${TRANSLATE_FRAC} > 0) }" && MIX=1
+BASE_ARM="${ARM%_anchor}"
+case "$BASE_ARM" in
     ce)
+        [[ "$ARM" == ce ]] || { echo "ERROR: ce has no anchor variant: it is the anchor" >&2; exit 1; }
+        (( MIX == 0 )) || { echo "ERROR: TRANSLATE_FRAC > 0 with ARM=ce: translations have no gold" >&2; exit 1; }
         export MELT_TRAIN_MODULE=melt.training.train
         ARM_OVERRIDES=() ;;
     soft)
@@ -59,15 +72,16 @@ case "$ARM" in
     opd)
         export MELT_TRAIN_MODULE=melt.training.train_self_distill
         ARM_OVERRIDES=(--distill.lmbda 1 --distill.loss jsd --distill.beta 1 --distill.temperature 1) ;;
-    opd_anchor)
+    azeros)
         export MELT_TRAIN_MODULE=melt.training.train_self_distill
-        ARM_OVERRIDES=(--distill.lmbda 1 --distill.loss jsd --distill.beta 1 --distill.temperature 1
-                       --distill.gold_ce_weight "$GOLD_CE_WEIGHT") ;;
+        ARM_OVERRIDES=(--distill.lmbda 0 --distill.loss ce --distill.temperature 0) ;;
     *) echo "ERROR: unknown ARM=$ARM" >&2; exit 1 ;;
 esac
+[[ "$ARM" != "$BASE_ARM" ]] && ARM_OVERRIDES+=(--distill.gold_ce_weight "$GOLD_CE_WEIGHT")
 if [[ "$MELT_TRAIN_MODULE" == melt.training.train_self_distill ]]; then
     ARM_OVERRIDES+=(--distill.teacher_prompt mirror --distill.max_new_tokens "$MAX_NEW_TOKENS"
-                    --distill.top_p 1.0 --distill.eval_alignment_gap true --run.memory_preallocation false)
+                    --distill.top_p 1.0 --distill.eval_alignment_gap true --run.memory_preallocation false
+                    --distill.translate_frac "$TRANSLATE_FRAC")
     # TRL is not in the image; .trl-overlay (pip --target trl==0.29.1) is, under the repo root.
     [[ -d .trl-overlay/trl ]] || { echo "ERROR: .trl-overlay/trl missing under $REPO_ROOT" >&2; exit 1; }
     export SINGULARITYENV_PYTHONPATH=/workspace/training/.trl-overlay
@@ -104,7 +118,15 @@ case "$(basename "$WARM_START")" in
     checkpoint-*|warmstart-*) WARM_TAG="$(basename "$(dirname "$WARM_START")" | cut -c1-5)-$(basename "$WARM_START")" ;;
     *) WARM_TAG="$(basename "$WARM_START" | cut -c1-5)-final" ;;
 esac
-EXP_NAME="${EXP_NAME:-S2-${ARM}-from-${WARM_TAG}-repeatfirst-bd${BATCH_DURATION}-lr$(echo "$ADAPTER_LR" | tr -d '-')-${MAX_STEPS}st-s${SEED}-${WORLD_SIZE}g}"
+if (( MIX )); then
+    STAGE=S3; PROMPT_TAG="mix$(echo "$TRANSLATE_FRAC" | tr -d '.')"
+    # The training template becomes a per-task mapping; eval stays on the repeat instruction.
+    TEMPLATE_OVERRIDES=(--data.prompt_template.asr "\"${TEMPLATE}\"" --data.prompt_template.st "\"${ST_TEMPLATE}\"")
+else
+    STAGE=S2; PROMPT_TAG=repeatfirst
+    TEMPLATE_OVERRIDES=(--data.prompt_template "\"${TEMPLATE}\"")
+fi
+EXP_NAME="${EXP_NAME:-${STAGE}-${ARM}-from-${WARM_TAG}-${PROMPT_TAG}-bd${BATCH_DURATION}-lr$(echo "$ADAPTER_LR" | tr -d '-')-${MAX_STEPS}st-s${SEED}-${WORLD_SIZE}g}"
 
 CMD=(
     infra/runners/submit-container.sh "$SITE" config/accelerate/ddp.yaml
@@ -117,7 +139,7 @@ CMD=(
     --model.encoder.eval_when_frozen true
     --data.apply_chat_template true
     --data.prompt_template_selection custom
-    --data.prompt_template "\"${TEMPLATE}\""
+    "${TEMPLATE_OVERRIDES[@]}"
     --data.validation_ds.prompt_template "\"${TEMPLATE}\""
     --data.train_ds.batch_duration "$BATCH_DURATION"
     --trainer.gradient_accumulation_steps 1
