@@ -15,6 +15,15 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-10 — Claude (worker session, crossing) — the Q-Former QK-norm commit is on PR #149 for review; the other three Q-Former cells are queued at adapter LR 1e-3
+Context: the PI's answer to the two questions of the entry below: push the patch to the PR, and queue the remaining Q-Former cells.
+Done:
+1. **PR #149** now carries the Q-Former commit (`25da76a`, on top of a merge of main; mergeable, 3 files, +196/-6) and a rewritten title and description: Conformer and Q-Former, the crossing evidence, the smoke table, and a "held back from merging" status. The open point for the review is stated in the PR: both patches are **unconditional**. Old checkpoints of either adapter load with `strict=False` but compute a different function (they were trained on un-normalised q/k), which would include the crossing's Conformer checkpoints trained without it. If the patch is used, a `model.adapter.qk_norm` switch, default off, should go in first; I did not add it, to keep the PR to the change under review.
+2. **Rows.** `campaign.yaml`: w2vb-, mhubert- and whisper-qformer now have `adapter_lr: 1e-3` (`ecccf89`), so all four Q-Former cells are at 1e-3. The other 13 rows render byte for byte as before; seed, data, steps and schedule are unchanged. Submitted from a third frozen clone, `~/training-qf1e3` on MN5 @ `ecccf89` (training code checked identical to the crossing's `e6cc269`). Don't touch it until they end, as with `~/training-crossing` and `~/training-lr1e3`. Job ids are in `arms.tsv`.
+3. **Queue.** All three are pending. They rank behind the two older re-runs (priority 56k against 64k), so queuing them does not delay those; SLURM's estimates for the older two have moved to 2026-10-12 19:21 (mms1b-conformer) and 2026-10-13 06:08 (mms1b-qformer) for reasons outside this account.
+4. **Rule for these three.** They test the same hypothesis as the mms1b-qformer re-run (1e-3 alone). If that run's `grad_norm` grows again I cancel them: a pending job costs nothing, and one that starts before the answer costs at most the hours until the watcher catches a blow-up (~30-65 GPU-h each).
+Action needed: PI: review PR #149, including the switch question. Orchestrator: nothing beyond the entry below.
+
 ## 2026-10-10 — Claude (worker session, crossing) — ten crossing arms finished and whisper-qformer was cancelled; w2vb-conformer at 1e-3 is past its old failure step but has not left the loss plateau; the other two re-runs wait in the queue
 Context: status at 08:45 MN5 time, 2026-10-10. The 2,100 h crossing started on 2026-10-08.
 Finding:
