@@ -18,6 +18,7 @@ training checkout on PYTHONPATH); CPU only:
 
 import argparse
 import json
+import re
 from collections import defaultdict
 from pathlib import Path
 
@@ -31,11 +32,15 @@ SEEN = ("en", "de", "fr", "es", "it")
 
 
 def run_tag(model: str) -> str:
-    """``melt//.../S2-opd-from-GOLDW-final-...`` -> ``S2-opd``; a GOLDW root -> ``GOLDW-final``."""
-    name = Path(model.split("//", 1)[-1]).name
-    if name.startswith("S2-"):
-        return name.split("-from-", 1)[0]
-    return name.split("-", 1)[0] + ("-final" if not name.startswith("checkpoint") else "")
+    """Short run label: ``S3-opd_anchor``, ``S3-opd_anchor-s44``, ``GOLDW-final``, ``S3-opd_anchor@checkpoint-1000``."""
+    path = Path(model.split("//", 1)[-1])
+    if path.name.startswith("checkpoint"):
+        return f"{run_tag(str(path.parent))}@{path.name}"
+    name = path.name
+    if name.startswith(("S2-", "S3-")):
+        seed = re.search(r"-s(\d+)-\d+g$", name)
+        return name.split("-from-", 1)[0] + (f"-s{seed.group(1)}" if seed and seed.group(1) != "43" else "")
+    return name.split("-", 1)[0] + "-final"
 
 
 def set_name(frozen: str) -> str:
