@@ -68,12 +68,16 @@ Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
     edits. `~/training` is safe to sync.
   - **Don't merge `yodas3-rest/`** into `yodas3/<lang>/train`. Jobs list their
     shards at start, so a merge while some are queued, or on a resume, gives
-    arms different data. The copy itself continues.
+    arms different data. The copy itself continues: de, fr and it are
+    complete. The four es streams dropped together (broken pipe on the
+    transfer node, 10-09 06:37) and were restarted 10-10.
   - All 16 arms are queued. For the Conformer cells, read `grad_norm`
     first: the warmup fix is proven only on Whisper, one seed, 9k steps.
-- **Second frozen clone on MN5: `~/training-lr1e3`** @ 55e3a6a, for the
-  three 1e-3 re-runs. Don't touch it until they end, same as
-  `~/training-crossing`.
+- **Frozen clones on MN5:** `~/training-crossing` @ e6cc269,
+  `~/training-lr1e3` @ 55e3a6a and `~/training-qf1e3` @ ecccf89. Each holds
+  queued or running crossing jobs (and their resumes). Don't sync to,
+  switch branches in or edit any of them until their jobs end. `~/training`
+  is free.
 - **Both attention adapters diverge at 2e-3** (2026-10-09, board 4182f9a).
   Conformer 2 of 4 despite warmup; Q-Former 4 of 4. The PI decides whether to
   cancel the two non-learning Q-Former jobs (w2vb, mms1b) and which fix to
@@ -364,6 +368,11 @@ assumed one (`03-audio-stack.md` §0).*
       warmup), ~2,830 GPU-h, 25 nodes if all start at once. **Three cells
       re-run at adapter LR 1e-3** (w2vb-conformer, mms1b-conformer,
       mms1b-qformer; PI, 2026-10-09). whisper-conformer was already at 1e-3.
+      **The other three Q-Former cells are queued at 1e-3 too** (PI,
+      2026-10-10, ecccf89), so the whole Q-Former column is at 1e-3.
+      whisper-qformer at 2e-3 was cancelled. **Ten arms have finished**
+      (WERs on board 303d12a). Queue estimates for the 1e-3 re-runs: 10-12 to
+      10-13 and later.
       *Outcome:* the audio stack — encoder, adapter, frame rate — ranked by
       the selection metric (`selection-metric/README.md`, PI 2026-09-23),
       which replaces the high/low-resource FLEURS split named here before.
@@ -393,8 +402,12 @@ assumed one (`03-audio-stack.md` §0).*
       test the LR first** (board b483fc6). w2vb-conformer, mms1b-conformer and
       mms1b-qformer re-run at adapter LR 1e-3 (55e3a6a), same seed, data,
       steps and schedule. QK-norm is held back (#149, plus a local Q-Former
-      patch). Still open: widen to the other Q-Former cells at 1e-3, and
-      re-run mhubert-conformer (healthy at 2e-3) at 1e-3 or keep it. Note
+      patch, since added to #149). The Q-Former column was widened to 1e-3 on
+      2026-10-10. Still open: re-run mhubert-conformer (healthy at 2e-3) at
+      1e-3, or keep it. **Before #149 can merge** it needs a
+      `model.adapter.qk_norm` switch, default off: as it stands the patch
+      makes old Conformer/Q-Former checkpoints, the crossing's included,
+      load with strict=False and compute a different function. Note
       that the crossing is no longer one recipe for all sixteen: report each
       cell's LR.
 - [ ] **Re-check every hour-weighted config for per-cut mux weights**
