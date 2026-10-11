@@ -463,7 +463,8 @@ class MELTQFormerAdapter(nn.Module):
                 cross_attention_frequency=1,
             )
         )
-        _add_qformer_qk_norm(self.qformer)
+        if _qk_norm_enabled(adapter_cfg):
+            _add_qformer_qk_norm(self.qformer)
 
         # Final projection to text decoder hidden size
         self.linear = nn.Linear(adapter_cfg.hidden_size, self.output_hidden_size)
@@ -583,6 +584,16 @@ def _conformer_layer_config(width: int, kernel_size: int, stride: int) -> Wav2Ve
     return config
 
 
+def _qk_norm_enabled(adapter_cfg) -> bool:
+    """Whether the adapter's attention takes RMS-normalised queries and keys (QK-norm).
+
+    Only an explicit ``True`` counts, and a config that does not carry the option, as
+    every checkpoint trained before it existed, means off: QK-norm changes the function
+    the adapter computes, so it must never switch on by default or by accident.
+    """
+    return adapter_cfg is not None and getattr(adapter_cfg, "qk_norm", False) is True
+
+
 class _HeadNormLinear(nn.Linear):
     """``nn.Linear`` whose output is RMS-normalised per attention head (QK-norm).
 
@@ -689,8 +700,9 @@ class MELTConformerAdapter(nn.Module):
         self.layers = nn.ModuleList(
             Wav2Vec2BertAdapterLayer(layer_config) for _ in range(num_adapter_layers)
         )
-        for layer in self.layers:
-            _add_qk_norm(layer)
+        if _qk_norm_enabled(adapter_config):
+            for layer in self.layers:
+                _add_qk_norm(layer)
 
         # Final projection to text decoder hidden size
         adapter_output_size = output_hidden_size

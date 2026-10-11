@@ -330,7 +330,7 @@ class TestAdapterOutputFeaturesShape:
         assert output_mask is None
 
     @staticmethod
-    def _real_qformer_adapter(window_size=15, downsample_rate=5, encoder_width=64):
+    def _real_qformer_adapter(window_size=15, downsample_rate=5, encoder_width=64, qk_norm=False):
         """A Q-Former adapter built from real configs, no hub access."""
         from transformers import GPT2Config, Wav2Vec2Config
 
@@ -344,6 +344,7 @@ class TestAdapterOutputFeaturesShape:
                 intermediate_size=64,
                 window_size=window_size,
                 downsample_rate=downsample_rate,
+                qk_norm=qk_norm,
             ),
             audio_encoder_config=Wav2Vec2Config(hidden_size=encoder_width),
             text_decoder_config=GPT2Config(n_embd=48),
@@ -411,12 +412,26 @@ class TestAdapterOutputFeaturesShape:
         assert torch.allclose(batched[:, :3], alone_masked, atol=1e-5)
         assert alone.shape == (1, 3, 48)
 
+    def test_qformer_is_the_plain_adapter_unless_qk_norm_is_asked_for(self):
+        """QK-norm changes the function the adapter computes, so a config that does not say
+        so, as every checkpoint trained before the option, must build the historical adapter."""
+        from transformers.models.blip_2.modeling_blip_2 import Blip2QFormerMultiHeadAttention
+
+        adapter = self._real_qformer_adapter()
+        attentions = [m for m in adapter.qformer.modules() if isinstance(m, Blip2QFormerMultiHeadAttention)]
+
+        assert len(attentions) == 4
+        for attn in attentions:
+            assert type(attn.query) is torch.nn.Linear
+            assert type(attn.key) is torch.nn.Linear
+        assert not any("norm_weight" in name for name in adapter.state_dict())
+
     def test_qformer_queries_and_keys_are_normalised_per_head_in_every_attention(self):
         """Self- and cross-attention alike; the values stay plain projections."""
         from melt.modeling.modeling_melt import _HeadNormLinear
         from transformers.models.blip_2.modeling_blip_2 import Blip2QFormerMultiHeadAttention
 
-        adapter = self._real_qformer_adapter()
+        adapter = self._real_qformer_adapter(qk_norm=True)
         attentions = [m for m in adapter.qformer.modules() if isinstance(m, Blip2QFormerMultiHeadAttention)]
 
         assert len(attentions) == 4  # 2 layers, each with self- and cross-attention
@@ -432,7 +447,7 @@ class TestAdapterOutputFeaturesShape:
         the projection weights or of the encoder features the keys read."""
         from transformers.models.blip_2.modeling_blip_2 import Blip2QFormerMultiHeadAttention
 
-        adapter = self._real_qformer_adapter()
+        adapter = self._real_qformer_adapter(qk_norm=True)
         cross = next(
             m
             for m in adapter.qformer.modules()
@@ -477,10 +492,7 @@ class TestAdapterOutputFeaturesShape:
         config.text_decoder_config = MagicMock()
         config.text_decoder_config.hidden_size = 1024
 
-        with (
-            patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()),
-            patch("melt.modeling.modeling_melt._add_qk_norm"),
-        ):
+        with patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
             adapter = MELTConformerAdapter(config)
 
         seq_len = 100
@@ -510,10 +522,7 @@ class TestAdapterOutputFeaturesShape:
         config.text_decoder_config = MagicMock()
         config.text_decoder_config.hidden_size = 1024
 
-        with (
-            patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()),
-            patch("melt.modeling.modeling_melt._add_qk_norm"),
-        ):
+        with patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
             adapter = MELTConformerAdapter(config)
 
         seq_len = 100
@@ -546,10 +555,7 @@ class TestAdapterOutputFeaturesShape:
         config.text_decoder_config = MagicMock()
         config.text_decoder_config.hidden_size = 2048
 
-        with (
-            patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()),
-            patch("melt.modeling.modeling_melt._add_qk_norm"),
-        ):
+        with patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
             adapter = MELTConformerAdapter(config)
 
         batch_size = 2
@@ -582,10 +588,7 @@ class TestAdapterOutputFeaturesShape:
         config.text_decoder_config = MagicMock()
         config.text_decoder_config.hidden_size = 1024
 
-        with (
-            patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()),
-            patch("melt.modeling.modeling_melt._add_qk_norm"),
-        ):
+        with patch("melt.modeling.modeling_melt.Wav2Vec2BertAdapterLayer", new=lambda cfg: torch.nn.Identity()):
             adapter = MELTConformerAdapter(config)
 
         batch_size = 2
@@ -879,16 +882,35 @@ class TestConformerAdapterLayers:
         ours = MELTConformerAdapter(config).layers[0]
         original = Wav2Vec2BertAdapterLayer(encoder)
 
-        assert {
-            k: tuple(v.shape) for k, v in ours.state_dict().items() if "norm_weight" not in k
-        } == {
+        assert {k: tuple(v.shape) for k, v in ours.state_dict().items()} == {
             k: tuple(v.shape) for k, v in original.state_dict().items()
         }
+
+    def test_the_layers_are_the_plain_ones_unless_qk_norm_is_asked_for(self):
+        """QK-norm changes the function the adapter computes, so a config that does not say
+        so, as every checkpoint trained before the option, must build the historical layer."""
+        adapter = _conformer_adapter(_tiny_encoder_config("whisper", 64))
+        attn = adapter.layers[0].self_attn
+
+        assert type(attn.linear_q) is torch.nn.Linear
+        assert type(attn.linear_k) is torch.nn.Linear
+        assert not any("norm_weight" in name for name in adapter.state_dict())
+
+    def test_qk_norm_normalises_queries_and_keys_and_leaves_the_values_plain(self):
+        from melt.modeling.modeling_melt import _HeadNormLinear
+
+        adapter = _conformer_adapter(_tiny_encoder_config("whisper", 64), qk_norm=True)
+        attn = adapter.layers[0].self_attn
+
+        assert isinstance(attn.linear_q, _HeadNormLinear)
+        assert isinstance(attn.linear_k, _HeadNormLinear)
+        assert attn.linear_q.head_size == attn.linear_k.head_size == attn.head_size
+        assert type(attn.linear_v) is torch.nn.Linear
 
     def test_the_attention_logits_do_not_follow_the_query_and_key_weights(self):
         """Unbounded logits saturate the softmax under full-LR Adam and overflow the backward
         in bf16 (board 2026-09-29): q and k must be normalised per head."""
-        adapter = _conformer_adapter(_tiny_encoder_config("whisper", 64)).eval()
+        adapter = _conformer_adapter(_tiny_encoder_config("whisper", 64), qk_norm=True).eval()
         attn = adapter.layers[0].self_attn
         x = torch.randn(2, 20, 64)
 

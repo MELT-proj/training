@@ -133,6 +133,12 @@ model:
     # feature axis before fc1, lowering the adapter's output frame rate by the
     # same factor. 1 = no stacking (the historical MLP behavior).
     stack_factor: 1
+    # Conformer and Q-Former only: RMS-normalise the query and key projections per
+    # attention head (QK-norm), which bounds the attention logits. false = the
+    # historical adapters. true changes the function the adapter computes, so a
+    # checkpoint only loads right with the value it was trained with; the value is
+    # saved in the model config, and a config without it means false.
+    qk_norm: false
     # MoE only: routed-expert FFN in place of the MLP's single fc pair.
     num_experts: 8
     num_experts_per_tok: 2
