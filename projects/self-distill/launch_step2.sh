@@ -12,7 +12,9 @@
 #                   either path -- the teacher replies to the bare transcript, the
 #                   student hears {audio_token} alone. No anchor, no mix; the in-training
 #                   eval keeps the repeat instruction, so it measures zero-shot ASR.
-#   ARM=<arm>_anchor  any distillation arm but sift + GOLD_CE_WEIGHT x the gold CE (opd_anchor, ...)
+#                   sift_anchor adds the gold CE on the *repeat* instruction while the
+#                   distillation prompt stays {audio_token} (distill.student_template).
+#   ARM=<arm>_anchor  any distillation arm + GOLD_CE_WEIGHT x the gold CE (opd_anchor, ...)
 #
 # Step 3 (instruction mix): TRANSLATE_FRAC > 0 gives that share of utterances
 # a "translate into <language>" instruction (ST_TEMPLATE) instead of the repeat
@@ -92,13 +94,18 @@ case "$BASE_ARM" in
         export MELT_TRAIN_MODULE=melt.training.train_self_distill
         ARM_OVERRIDES=(--distill.lmbda 0 --distill.loss ce --distill.temperature 0) ;;
     sift)
-        [[ "$ARM" == sift ]] || { echo "ERROR: sift has no anchor variant: AZeroS trains on teacher replies alone" >&2; exit 1; }
         (( MIX == 0 )) || { echo "ERROR: TRANSLATE_FRAC > 0 with ARM=sift: the bare teacher gets no instruction" >&2; exit 1; }
         export MELT_TRAIN_MODULE=melt.training.train_self_distill
         # The alignment gap would score a repeat-instructed student against a teacher
         # replying to the bare transcript; eval_loss stays the gold CE instead.
-        TEACHER_PROMPT=bare; TEMPLATE='{audio_token}'; VALIDATION_TEMPLATE="$DEFAULT_TEMPLATE"; ALIGNMENT_GAP=false
-        ARM_OVERRIDES=(--distill.lmbda 0 --distill.loss ce --distill.temperature 0) ;;
+        TEACHER_PROMPT=bare; ALIGNMENT_GAP=false
+        ARM_OVERRIDES=(--distill.lmbda 0 --distill.loss ce --distill.temperature 0)
+        if [[ "$ARM" == sift ]]; then
+            TEMPLATE='{audio_token}'; VALIDATION_TEMPLATE="$DEFAULT_TEMPLATE"
+        else
+            # The gold batch, hence the anchor, keeps TEMPLATE (the repeat instruction).
+            ARM_OVERRIDES+=(--distill.student_template '"{audio_token}"')
+        fi ;;
     *) echo "ERROR: unknown ARM=$ARM" >&2; exit 1 ;;
 esac
 [[ "$ARM" != "$BASE_ARM" ]] && ARM_OVERRIDES+=(--distill.gold_ce_weight "$GOLD_CE_WEIGHT")

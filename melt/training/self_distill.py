@@ -117,6 +117,13 @@ class SelfDistillConfig:
             keeps every instruction the ASR one.
         translate_targets: Comma-separated ISO codes a translate instruction
             may target.
+        student_template: The student's distillation prompt when it should
+            differ from ``data.prompt_template``, which then still builds the
+            gold batch (the anchor) and the eval prompt. ``"{audio_token}"``
+            with ``teacher_prompt="bare"`` and a gold-CE anchor is AZeroS's
+            instruction-free distillation with the anchor kept on the ASR
+            instruction. Empty uses ``data.prompt_template``. Not combinable with
+            the instruction mix, whose templates come from that mapping.
     """
 
     lmbda: float = 1.0
@@ -130,6 +137,7 @@ class SelfDistillConfig:
     gold_ce_weight: float = 0.0
     translate_frac: float = 0.0
     translate_targets: str = "en,de,fr,es,it"
+    student_template: str = ""
 
     @property
     def targets(self) -> tuple[str, ...]:
@@ -152,6 +160,13 @@ class SelfDistillConfig:
             )
         if not self.targets:
             raise ValueError(f"distill.translate_targets names no language: {self.translate_targets!r}")
+        if self.student_template and "{audio_token}" not in self.student_template:
+            raise ValueError(f"distill.student_template must contain {{audio_token}}, got {self.student_template!r}")
+        if self.student_template and self.translate_frac > 0.0:
+            raise ValueError(
+                "distill.student_template replaces the distillation prompt, but the instruction mix "
+                "draws its templates from data.prompt_template: set one or the other."
+            )
         if not 0.0 <= self.lmbda <= 1.0:
             raise ValueError(f"distill.lmbda must be in [0, 1], got {self.lmbda}")
         if not 0.0 <= self.beta <= 1.0:
@@ -338,7 +353,7 @@ class SelfDistillDataset(SpeechToTextDataset):
 
     def __init__(
         self, *args, teacher_prompt: str = "bare", translate_frac: float = 0.0,
-        translate_targets: tuple[str, ...] = (), **kwargs,
+        translate_targets: tuple[str, ...] = (), student_template: str | None = None, **kwargs,
     ):
         super().__init__(*args, **kwargs)
         _require_instruction_free_setup(self.config)
@@ -347,6 +362,8 @@ class SelfDistillDataset(SpeechToTextDataset):
         self.teacher_prompt = teacher_prompt
         self.translate_frac = translate_frac
         self.translate_targets = tuple(translate_targets)
+        # The distillation prompt; the parent's gold batch keeps self.prompt_template.
+        self.student_template = student_template or self.prompt_template
         self._batch_meta: tuple[list[str], list[str], list[str]] | None = None
 
     def _apply_chat_template(self, texts, tasks, langs, src_langs=None, tgt_langs=None):
@@ -364,7 +381,7 @@ class SelfDistillDataset(SpeechToTextDataset):
             tasks, tgt_langs = assign_instructions(texts, tasks, langs, self.translate_frac, self.translate_targets)
         batch.update(
             build_distill_prompts(
-                self.processor, texts, tasks, langs, self.prompt_template, self.teacher_prompt, tgt_langs
+                self.processor, texts, tasks, langs, self.student_template, self.teacher_prompt, tgt_langs
             )
         )
         return batch
@@ -588,7 +605,8 @@ class MELTSelfDistillTrainer(MELTTrainer):
             self._eval_collator = SelfDistillEvalCollator(
                 processor=processor,
                 config=self._eval_collator.config,
-                student_prompt_template=_get_config_value(config.data, "prompt_template", None),
+                student_prompt_template=self.distill.student_template
+                or _get_config_value(config.data, "prompt_template", None),
                 teacher_prompt=self.distill.teacher_prompt,
                 translate_frac=self.distill.translate_frac,
                 translate_targets=self.distill.targets,
@@ -615,6 +633,7 @@ class MELTSelfDistillTrainer(MELTTrainer):
                 teacher_prompt=self.distill.teacher_prompt,
                 translate_frac=self.distill.translate_frac,
                 translate_targets=self.distill.targets,
+                student_template=self.distill.student_template or None,
             )
         )
         dataloader = get_train_dataloader_from_config(

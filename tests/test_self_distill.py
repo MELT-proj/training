@@ -193,6 +193,13 @@ class TestSelfDistillConfig:
         cfg = SelfDistillConfig(translate_frac=0.5, teacher_prompt="mirror", translate_targets="EN, de")
         assert cfg.targets == ("en", "de")
 
+    def test_a_student_template_needs_the_audio_and_no_mix(self):
+        with pytest.raises(ValueError, match="audio_token"):
+            SelfDistillConfig(student_template="Say something.")
+        with pytest.raises(ValueError, match="instruction mix"):
+            SelfDistillConfig(student_template="{audio_token}", teacher_prompt="mirror", translate_frac=0.5)
+        SelfDistillConfig(student_template="{audio_token}", gold_ce_weight=0.5)
+
 
 class TestInstructionMix:
     TEXTS = [f"utterance number {i} says something" for i in range(2000)]
@@ -678,6 +685,26 @@ class TestTrainerEndToEnd:
             trainer.log(logs)
         assert logs["distill/translate_rows"] == 0.5
         assert "distill/teacher_logp_translate" in logs
+
+    @pytest.mark.parametrize("override", ["", "{audio_token}"])
+    def test_the_student_template_only_replaces_the_distillation_prompt(self, tmp_path, override):
+        """The train dataset distils on distill.student_template; its gold batch keeps data.prompt_template."""
+        trainer = self._trainer(tmp_path, lmbda=0.0, loss="ce", temperature=0.0, student_template=override)
+        trainer.config.data.prompt_template = "Repeat the following content.\n\n{audio_token}"
+        built = {}
+
+        def fake_dataset(**kwargs):
+            built.update(kwargs)
+            return SimpleNamespace()
+
+        with (
+            patch("melt.training.self_distill.SelfDistillDataset", side_effect=fake_dataset),
+            patch("melt.training.self_distill.FallbackDataset", side_effect=lambda d: d),
+            patch("melt.training.self_distill.get_train_dataloader_from_config", return_value="loader"),
+        ):
+            assert trainer.get_train_dataloader() == "loader"
+        assert built["config"].prompt_template.startswith("Repeat")
+        assert built["student_template"] == (override or None)
 
     def test_memory_preallocation_is_refused(self, tmp_path):
         processor = SimpleNamespace(
