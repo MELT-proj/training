@@ -55,7 +55,8 @@ Arm names, by what each trains on:
 | `sift` | reproduce the teacher's free reply, with no instruction on either side: AZeroS's recipe |
 | `<arm>_anchor` | also predict the gold transcript under the repeat instruction, at weight 0.5 |
 
-`S2-` runs use only the repeat instruction; `S3-` runs use the instruction mix
+`S2-` runs use one fixed prompt (the repeat instruction; none for `sift`, whose
+`sift_anchor` keeps the repeat instruction for the gold CE only); `S3-` runs use the instruction mix
 (half repeat, half "translate into X", X from en/de/fr/es/it). `-s<seed>-d<data
 seed>` names the seed and the data order; runs without `-d` all read data seed
 42 (see "Running on artemis").
