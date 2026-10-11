@@ -15,6 +15,22 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-11 — Claude (worker session, crossing) — 1e-3 is not a general fix: mms1b-conformer blew up at step 10.9k and whisper-qformer's gradient is growing from 2.9k; only w2vb-conformer (WER 0.94) and, so far, mms1b-qformer are stable
+Context: the four jobs that waited in the queue started overnight (about 06:10 MN5 time, 2026-10-11); readings at 08:15. All cells below run at adapter LR 1e-3, same seed, data and schedule as their 2e-3 runs.
+
+| cell | state | `grad_norm` | loss | last validation WER |
+|---|---|---|---|---|
+| w2vb-conformer | finished | stable: max 48, never above 100 | 1.6 at the end | 0.94 |
+| mms1b-conformer | running, 7% | blew up: first above 100 at step 10.9k, inf from 11.3k (at 2e-3: 6.2k) | 3.25, on the plateau | only the step-0 eval |
+| mms1b-qformer | running, 14% | stable to 11k: median 0.08 -> 0.48, max 44, none above 100 | 3.30, on the plateau | 1.21 |
+| w2vb-qformer | running, 5% | flat so far (step 3.6k) | 3.5 | only the step-0 eval |
+| whisper-qformer | running, 5% | first above 100 at step 2.9k (at 2e-3: 6.1k), 36 such lines in 3-4k, max 282 | 0.77 at 3-4k (at 2e-3: 0.89) | only the step-0 eval |
+| mhubert-qformer | finished (entry below) | first above 100 at 3.4k, non-finite from 29k | 3.29 | 1.85 |
+
+Reading: 1e-3 delayed the Conformer blow-up on mms1b (6.2k to 10.9k) and removed it on w2v-BERT, but brought the Q-Former growth forward on mHuBERT and on Whisper. One seed per cell, so this is a tendency, not a measurement; it is not a general fix for either adapter. The QK-norm smoke (Whisper Q-Former, 2e-3, flat to step 9.4k) is the only change so far that held through the window where its unfixed run grew. w2vb-conformer finishing at WER 0.94 means "stable" does not mean "learns": the w2v-BERT MLP and MoE cells reach 0.67 and 0.59.
+Cost: two running jobs are diverging (mms1b-conformer on 4 GPUs, whisper-qformer on 8), ~12 GPU-h per hour. Nothing is cancelled without the PI's word.
+Action needed: PI: cancel mms1b-conformer and whisper-qformer (both at 1e-3)? Keep mms1b-qformer and w2vb-qformer under watch. Route for the Q-Former (QK-norm on all four cells, switch in #149 first) and for mms1b-conformer (QK-norm, or a lower LR such as 5e-4, untested). Whether the watcher may `scancel` a diverging re-run itself. Orchestrator: 03 and the timeline say "whole Q-Former column at 1e-3"; the column is now one cell finished and failed, two diverging, two under way.
+
 ## 2026-10-10 — Claude (worker session, crossing) — mhubert-qformer at 1e-3 grew earlier and ended at WER 1.85, so 1e-3 alone is not a fix for the Q-Former; the alert reached me ten hours late and the job ran to its end (~165 GPU-h)
 Context: the first of the three Q-Former cells queued at 1e-3 started within an hour of submission (4 nodes) and finished at 22:06 MN5 time. The other two Q-Former cells, mms1b-conformer and mms1b-qformer are still pending.
 Finding:
