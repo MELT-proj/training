@@ -15,6 +15,107 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-11 — Claude (worker session, crossing) — qk_norm option added to PR #149 (off by default) and two QK-norm smokes queued; the watcher may now scancel a diverging re-run; correction: mms1b-qformer at 1e-3 had calmed down when it was cancelled
+Context: the PI's answers of 2026-10-11: add the `qk_norm` switch and run the smoke, then a QK-norm smoke on mms1b-conformer, and let the watcher cancel a diverging run by itself.
+Done:
+1. **Option.** `model.adapter.qk_norm` (commit `e1f4bdb` on PR #149): default false, a bool field of the adapter config, so a config or checkpoint from before the option means off; the Conformer and the Q-Former build the normalised q/k only when it is true, and a non-bool value is an error. 13 tests fail against the old always-on code and pass with it; 150 pass over the six affected test files. PR description rewritten (mergeable). The planner and the campaign rows do not know the option yet; the smokes pass `--model.adapter.qk_norm true` by hand.
+2. **Smokes** (hand-submitted on `acc_debug`, 2 h, not in `arms.tsv`; `~/training` on MN5 is on the PR branch for them, no job uses it). A: w2vb-qformer with QK-norm at 2e-3, whose unfixed run had gradient spikes from step 6k and exploded after 12k; a 2 h smoke reaches ~8-9k. B: mms1b-conformer with QK-norm at 2e-3, whose unfixed run blew up at 6.2k; one node reaches ~6k in 2 h, so it can only just touch the failure point and a flat result is weak evidence (the real cell under the watcher would be the better test). One `acc_debug` job at a time, so B goes in when A ends.
+3. **Watcher permission.** It now runs `scancel` itself on a watched, RUNNING job whose `grad_norm` is above 100 in 3+ of its last 2000 logged lines or non-finite in 3+ lines, logs to `autocancel.log`, and acts only on ids it was given. The rule reads the recent log, so a burst that calms down is not cancelled. Dry run on old logs: it would cancel whisper-qformer (1e-3) and neither the healthy runs nor mms1b-qformer (1e-3).
+4. **Correction on mms1b-qformer at 1e-3.** The entries below call it diverging. After its burst at step 12.5k (20 lines above 100 in 12-13k, max 406) it settled: no line above 100 from 13k to step 16.8k, where it was cancelled, median `grad_norm` 1.0-1.35, max 74, loss 3.27-3.31 on the plateau, WER 1.17. I had re-checked the job ids before the cancel, not the log, so the cancel rested on a reading ninety minutes old. The other two were diverging (mms1b-conformer non-finite in 3.4k lines; whisper-qformer above 100 in 1,882 of its last 2,000 lines). So the MMS Q-Former at 1e-3 is "a burst, then a bounded plateau that does not learn". Output dir and checkpoints are kept.
+Action needed: PI: none new; the smoke results follow. Orchestrator: the MMS Q-Former at 1e-3 was not shown to diverge, only to burst once and not to learn.
+
+## 2026-10-11 — Claude (worker session, crossing) — three diverging 1e-3 re-runs cancelled at the PI's word; mms1b-qformer's gradient started to grow at step 12.5k, so the lower LR only delays it
+Done (10:12 MN5 time): cancelled mms1b-conformer (step 18.2k of 157,500; non-finite since 11.3k), mms1b-qformer (16.8k of 78,750) and whisper-qformer (9.9k of 78,750). Output dirs and checkpoints are kept. They had used ~104 GPU-h (24 + 48 + 32); about 30 of it came in the ~1.5 h between the question and the PI's answer.
+Finding:
+1. **mms1b-qformer at 1e-3** was the clean read of the LR hypothesis. Its `grad_norm` median rose steadily (0.08 at 2-4k, 0.26 at 6-8k, 0.56 at 10-12k, 0.96 after 12k) and first passed 100 at step 12.5k (max 187), against 4-6k at 2e-3: delayed about 2.5 times, not prevented. Loss was still on the plateau (3.26-3.30).
+2. **The 1e-3 batch as a whole.** Q-Former growth appears in 3 of 4 cells (mhubert from 3.4k, whisper from 2.9k, mms1b from 12.5k); Conformer blow-up in mms1b (10.9k, at 2e-3 6.2k). Where the lower LR delays it (mms1b) it is by a factor ~2; on mHuBERT and Whisper it comes earlier than at 2e-3. The w2v-BERT cells are stable at 1e-3 and learn little (conformer WER 0.94). One seed per cell, so a tendency; the conclusion that 1e-3 is not a general fix for either adapter stands.
+3. **Still running:** w2vb-qformer at 1e-3 (9.2k of 78,750): `grad_norm` flat (median 0.09-0.10, max 0.6 after step 4k), loss 3.1-3.3 on the plateau, WER 1.16 at the first eval. Stable and not yet learning, like w2vb-conformer. Under watch.
+4. Cost of the six 1e-3 re-runs so far: ~470 GPU-h (two finished: ~330; three cancelled: ~104; w2vb-qformer so far: ~32).
+Action needed: PI, as in the entry below: the `qk_norm` switch in #149 plus one more smoke, and then QK-norm on the four Q-Former cells; for mms1b-conformer, QK-norm or a lower LR (5e-4, untested); whether the watcher may `scancel` a diverging re-run itself. Orchestrator: 03 and the timeline say "whole Q-Former column at LR 1e-3"; it is now one cell finished and failed, two cancelled, one running.
+
+## 2026-10-11 — Claude (worker session, crossing) — 1e-3 is not a general fix: mms1b-conformer blew up at step 10.9k and whisper-qformer's gradient is growing from 2.9k; only w2vb-conformer (WER 0.94) and, so far, mms1b-qformer are stable
+Context: the four jobs that waited in the queue started overnight (about 06:10 MN5 time, 2026-10-11); readings at 08:15. All cells below run at adapter LR 1e-3, same seed, data and schedule as their 2e-3 runs.
+
+| cell | state | `grad_norm` | loss | last validation WER |
+|---|---|---|---|---|
+| w2vb-conformer | finished | stable: max 48, never above 100 | 1.6 at the end | 0.94 |
+| mms1b-conformer | running, 7% | blew up: first above 100 at step 10.9k, inf from 11.3k (at 2e-3: 6.2k) | 3.25, on the plateau | only the step-0 eval |
+| mms1b-qformer | running, 14% | stable to 11k: median 0.08 -> 0.48, max 44, none above 100 | 3.30, on the plateau | 1.21 |
+| w2vb-qformer | running, 5% | flat so far (step 3.6k) | 3.5 | only the step-0 eval |
+| whisper-qformer | running, 5% | first above 100 at step 2.9k (at 2e-3: 6.1k), 36 such lines in 3-4k, max 282 | 0.77 at 3-4k (at 2e-3: 0.89) | only the step-0 eval |
+| mhubert-qformer | finished (entry below) | first above 100 at 3.4k, non-finite from 29k | 3.29 | 1.85 |
+
+Reading: 1e-3 delayed the Conformer blow-up on mms1b (6.2k to 10.9k) and removed it on w2v-BERT, but brought the Q-Former growth forward on mHuBERT and on Whisper. One seed per cell, so this is a tendency, not a measurement; it is not a general fix for either adapter. The QK-norm smoke (Whisper Q-Former, 2e-3, flat to step 9.4k) is the only change so far that held through the window where its unfixed run grew. w2vb-conformer finishing at WER 0.94 means "stable" does not mean "learns": the w2v-BERT MLP and MoE cells reach 0.67 and 0.59.
+Cost: two running jobs are diverging (mms1b-conformer on 4 GPUs, whisper-qformer on 8), ~12 GPU-h per hour. Nothing is cancelled without the PI's word.
+Action needed: PI: cancel mms1b-conformer and whisper-qformer (both at 1e-3)? Keep mms1b-qformer and w2vb-qformer under watch. Route for the Q-Former (QK-norm on all four cells, switch in #149 first) and for mms1b-conformer (QK-norm, or a lower LR such as 5e-4, untested). Whether the watcher may `scancel` a diverging re-run itself. Orchestrator: 03 and the timeline say "whole Q-Former column at 1e-3"; the column is now one cell finished and failed, two diverging, two under way.
+
+## 2026-10-10 — Claude (worker session, crossing) — mhubert-qformer at 1e-3 grew earlier and ended at WER 1.85, so 1e-3 alone is not a fix for the Q-Former; the alert reached me ten hours late and the job ran to its end (~165 GPU-h)
+Context: the first of the three Q-Former cells queued at 1e-3 started within an hour of submission (4 nodes) and finished at 22:06 MN5 time. The other two Q-Former cells, mms1b-conformer and mms1b-qformer are still pending.
+Finding:
+1. **mhubert-qformer, 1e-3 against 2e-3** (same seed, data, steps and schedule):
+
+| | 2e-3 | 1e-3 |
+|---|---|---|
+| first `grad_norm` above 100 | step ~20k | step ~3.4k |
+| best / final loss | 2.07 / 2.07 | 2.83 / 3.29 |
+| non-finite `grad_norm` | none (up to 2e15) | from step ~29k |
+| validation WER, best / last round | 0.94 / 1.19 | 0.99 / 1.85 |
+
+At the lower LR the growth starts six times earlier and the cell ends worse. Neither is usable. One encoder only; the pending mms1b-qformer re-run was meant as the clean read.
+2. **Process.** The watcher flagged it at step ~4.7k (11:26 MN5 time, `grad_norm` above 100 in 48 lines). An alert reaches the session only when a turn starts, so it was read ten hours later; the job ran its remaining 8.3 h on 16 GPUs (~134 of the ~165 GPU-h it cost). I had said I would cancel these cells if the 1e-3 runs showed growth again, but nothing acts on an alert while the session is idle. Proposed, not set up: a standing permission for the watcher to `scancel` a re-run itself when `grad_norm` passes 100 in 3+ lines, or periodic wake-ups of the session.
+3. **w2vb-conformer at 1e-3** (97% done at 22:07): stable all the way (max `grad_norm` 48 early, none above 100, no non-finite value), loss slowly down from 3.27 to 2.5, but the last validation WER is 0.96 (w2v-BERT MLP 0.67, MoE 0.59). So 1e-3 removes its blow-up and the cell learns very little.
+4. **Queue.** mms1b-conformer and mms1b-qformer are estimated to start 2026-10-13 05:10, the w2vb and whisper Q-Formers 2026-10-13 19:16. The estimates have moved before, and the mhubert job started within an hour, so any of them can start at any time.
+5. **Where the Q-Former stands.** 2e-3: 0 of 4 healthy. 1e-3: mhubert worse than 2e-3. QK-norm at 2e-3: the whisper smoke stayed flat to step 9.4k (entry of 2026-10-09). The pending 1e-3 Q-Former cells test a hypothesis that one encoder has already contradicted.
+Action needed: PI: (a) cancel or hold the pending Q-Former cells, and choose the route: QK-norm on all four (the `qk_norm` switch in #149 first) or more 1e-3 data; (b) whether the watcher may cancel a diverging re-run itself. Orchestrator: 03 and the timeline say "whole Q-Former column at 1e-3"; it is one cell finished and failed.
+
+## 2026-10-10 — Claude (worker session, crossing) — the Q-Former QK-norm commit is on PR #149 for review; the other three Q-Former cells are queued at adapter LR 1e-3
+Context: the PI's answer to the two questions of the entry below: push the patch to the PR, and queue the remaining Q-Former cells.
+Done:
+1. **PR #149** now carries the Q-Former commit (`25da76a`, on top of a merge of main; mergeable, 3 files, +196/-6) and a rewritten title and description: Conformer and Q-Former, the crossing evidence, the smoke table, and a "held back from merging" status. The open point for the review is stated in the PR: both patches are **unconditional**. Old checkpoints of either adapter load with `strict=False` but compute a different function (they were trained on un-normalised q/k), which would include the crossing's Conformer checkpoints trained without it. If the patch is used, a `model.adapter.qk_norm` switch, default off, should go in first; I did not add it, to keep the PR to the change under review.
+2. **Rows.** `campaign.yaml`: w2vb-, mhubert- and whisper-qformer now have `adapter_lr: 1e-3` (`ecccf89`), so all four Q-Former cells are at 1e-3. The other 13 rows render byte for byte as before; seed, data, steps and schedule are unchanged. Submitted from a third frozen clone, `~/training-qf1e3` on MN5 @ `ecccf89` (training code checked identical to the crossing's `e6cc269`). Don't touch it until they end, as with `~/training-crossing` and `~/training-lr1e3`. Job ids are in `arms.tsv`.
+3. **Queue.** All three are pending. They rank behind the two older re-runs (priority 56k against 64k), so queuing them does not delay those; SLURM's estimates for the older two have moved to 2026-10-12 19:21 (mms1b-conformer) and 2026-10-13 06:08 (mms1b-qformer) for reasons outside this account.
+4. **Rule for these three.** They test the same hypothesis as the mms1b-qformer re-run (1e-3 alone). If that run's `grad_norm` grows again I cancel them: a pending job costs nothing, and one that starts before the answer costs at most the hours until the watcher catches a blow-up (~30-65 GPU-h each).
+Action needed: PI: review PR #149, including the switch question. Orchestrator: nothing beyond the entry below.
+
+## 2026-10-10 — Claude (worker session, crossing) — ten crossing arms finished and whisper-qformer was cancelled; w2vb-conformer at 1e-3 is past its old failure step but has not left the loss plateau; the other two re-runs wait in the queue
+Context: status at 08:45 MN5 time, 2026-10-10. The 2,100 h crossing started on 2026-10-08.
+Finding:
+1. **Finished: ten arms.** Last validation WER in the training log (mean over the five languages, rounded; not the crossing's selection metric, which is scored later):
+
+| encoder | MLP | MoE | Conformer | Q-Former |
+|---|---|---|---|---|
+| Whisper large-v3 | 0.12 | 0.12 | 0.13 (LR 1e-3) | cancelled |
+| mHuBERT-147 | 0.30 | 0.31 | 0.37 | 1.19, unusable |
+| MMS-1b | 0.40 | 0.45 | re-run queued (1e-3) | re-run queued (1e-3) |
+| w2v-BERT 2.0 | 0.67 | 0.59 | re-run at 1e-3 under way | cancelled |
+
+2. **whisper-qformer was cancelled** at step ~64.5k on the PI's word (2026-10-09): WER 0.28 at its last eval after 0.18 at best, `grad_norm` inf in most late lines but a finite loss, so it never crashed at an eval. Its output dir and checkpoints are kept. mhubert-qformer is the only Q-Former that ran to its end (WER 0.9-1.4 throughout).
+3. **w2vb-conformer at 1e-3** (24.5k of 78,750 steps): `grad_norm` median 0.2-0.4, max 11 after step 3k, nothing above 100, no non-finite value; the 2e-3 run blew up at step 15.6k. The loss, however, has stayed at 3.27-3.30 since step 6k and the WER is 1.14-1.28 at the three evals. The 2e-3 run was on the same plateau (3.28 at 15k). So 1e-3 removes the blow-up so far and does not by itself make this cell learn. For scale, the w2v-BERT MLP cell left the plateau by 12k steps and the MMS MLP cell at ~42k. Cause not known.
+4. **Queue.** mms1b-conformer and mms1b-qformer, submitted 2026-10-09 13:19, are pending with SLURM's estimate of 2026-10-12 00:24 (the first of the three waited 13 h; the estimate is pessimistic, but the sixteen crossing jobs waited 6-9 h). A shorter time limit does not move it (`sbatch --test-only` at 54/36/30 h on one node and 41/24/18 h on two nodes gives the same start), and a fresh submission is estimated at ~2026-10-14 13:00. The queue is now the bottleneck, so the next batch should be decided before it is queued, not after these three report.
+5. **Cost.** ~1,540 GPU-h since 2026-10-08 (30.8 khours; `bsc_acct` still shows 825 of 1,752 because it lags about a day). About 440 GPU-h of that went to attention cells that failed or were cancelled (mhubert-qformer, which finished unusable, included) and 16 to the QK-norm smoke.
+Action needed: PI, as in the entries below: the Q-Former commit on PR #149 now or after the 1e-3 result; widening to the other Q-Former cells; the LR of mhubert-conformer. New: whether to queue the next batch now. Orchestrator: fold the ten finished arms into the timeline and 03 (WERs above; each cell's LR next to its number).
+
+## 2026-10-09 — Claude (worker session, crossing) — QK-norm smoke on the Q-Former: at the unchanged 2e-3, `grad_norm` stays flat to step 9.4k where the unfixed run grew from 3k and passed 100 at 6.1k
+Context: the PI asked for a short smoke of the Q-Former patch (RMS-normalised q and k per head on all four Blip2 Q-Former attentions, self and cross; local commit `25da76a` on branch `qk-norm-qformer`, two tests that fail without it) before it goes on PR #149. Hand-submitted on `acc_debug`, so it is not in `arms.tsv`: the whisper-qformer row exactly as in the crossing (2 nodes, the 78,750-step schedule, LR 2e-3, warmup 3%); only the run name (`-smokeqk`), the evals (every 7,159 steps) and the saves (none) differ. The 2 h cap ended it at step ~9.4k.
+Finding:
+1. `grad_norm` median 0.42-0.50 in every 1,000-step window from 2k to 9.4k, max 5.0 after step 1k (once, at 3-4k; 2.0 or less otherwise), nothing above 100, no inf/nan. The unfixed run of the same cell: median 3.1 at 3-4k, 14.7 at 5-6k, 31.5 at 6-7k, 389 at 7-8k; first value above 100 at step 6,082.
+2. The loss is lower than the unfixed run's in every window from step 1k (0.69 against 0.79 at 7-8k), and the mean validation WER at the 7,159 eval is 0.16 against 0.20.
+3. Not shown: one cell, one seed, 9.4k of 78,750 steps, and the unfixed run went non-finite only at step ~55k. It says that bounding q and k removes the growth at an unchanged LR; whether 1e-3 alone does the same is what the mms1b-qformer re-run answers (entry below), and whether either holds to the end is open.
+4. Consequence: the Q-Former (0 of 4 healthy at 2e-3, also at 700 h) has two candidate fixes. By the PI's rule a patch goes on all four Q-Former cells or on none. Nothing is pushed to PR #149.
+Housekeeping: MN5 `~/training` is back on `worktree-bridge-cse_01FG269t6XvP8zDaF9tog3oN` @ 44d0436 (it had been on the smoke branch); the smoke's output dir `...-smokeqk` holds no checkpoint. The three LR-1e-3 jobs were still pending at 14:46 MN5 time; the sixteen crossing jobs waited 6-9 h in the queue.
+Action needed: PI: the Q-Former commit on PR #149 now for review, or after the 1e-3 result. Orchestrator: none.
+
+## 2026-10-09 — Claude (worker session, crossing) — the PI chose the learning rate before QK-norm: w2vb-conformer, mms1b-conformer and mms1b-qformer are re-running at adapter LR 1e-3
+Context: the PI read the entry below together with a cell-by-cell status and objected to patching the architecture while some cells of the same adapter run fine (mhubert-conformer at 2e-3, whisper-conformer at 1e-3), noting that 2e-3 was tuned on the w2v-BERT + MLP screen only (03 §1b: "the recipe is w2v-BERT's best screen point"). The data agree with the first half and do not settle the second.
+Finding (logs at ~13:00 MN5 time, 2026-10-09):
+1. **Healthy:** the 8 MLP/MoE cells (`grad_norm` median 0.1-0.8, max <= 16); mhubert-conformer at 2e-3 (55%, WER 0.46, max `grad_norm` 17); whisper-conformer at 1e-3 (32%, WER 0.16, one early spike to 70). **Crashed (NaN weights, died at their next eval):** w2vb-conformer (blow-up at step ~15.6k) and mms1b-conformer (~6.2k); neither had left the loss plateau (3.3-3.4). **Unusable:** mhubert-qformer ran to the end with WER 0.9-1.4 at every eval; the w2vb and mms1b Q-Former jobs were cancelled at 9 h (not learning). **Degraded:** whisper-qformer learns (WER 0.18-0.21 against 0.14 for whisper-mlp) with `grad_norm` in the millions, and has been going non-finite since step ~55.2k. No code bug found in either adapter; the one real bug was the dropped `warmup_ratio` (7502bcb).
+2. **Not shown:** that a lower LR fixes the dead cells. whisper's 1e-3 is confounded with the encoder, mhubert survives at 2e-3, and no dead cell had run at a lower LR. The plateau alone is not the trigger either: mms1b-mlp sat on the same ~3.25 plateau for 42k steps at 2e-3 with `grad_norm` ~0.1.
+3. **Decision (PI):** test the LR first. QK-norm is held: the Q-Former patch exists only as a local commit, PR #149 is untouched. If 1e-3 fails it comes back for every cell of that adapter, not for the failing ones only.
+4. **Done:** `campaign.yaml` rows w2vb-conformer, mms1b-conformer, mms1b-qformer now `adapter_lr: 1e-3` (55e3a6a); the other 13 rows render byte for byte as before. Seed, data order, steps, warmup and decay are unchanged, so each re-run differs from its diverged run in the LR (and the `lr1e3` in the run name) alone. Submitted from a new detached clone, `~/training-lr1e3` on MN5 @ 55e3a6a, whose `melt/`, `config/`, `bash/`, `infra/` and planner are identical to the crossing's `e6cc269` (checked in the script). `~/training-crossing` and the shared `~/training` were not touched. Job ids are in `arms.tsv`.
+5. **How to read it:** same seed and data, so compare at the same steps. Passing = `grad_norm` flat past the old failure step (~15.6k, ~6.2k, and the Q-Former's first value above 100 at ~4.5k). That is a good sign, not a proof: whisper-qformer ran 55k steps before it went non-finite. Cost if all three run to the end ~360 GPU-h; a blow-up seen within 4 h costs <= ~32 GPU-h per 2-node job.
+Open: the 2 h QK-norm smoke on whisper-qformer (hand-submitted on `acc_debug`, not in `arms.tsv`) is still running from `~/training` on branch `qk-norm-qformer`; its output dir ends in `-smokeqk`.
+Action needed: PI, after the first hours: whether to widen to the other Q-Former cells (w2vb, mhubert, whisper) at 1e-3, and whether mhubert-conformer stays at 2e-3 (a mixed-LR Conformer row) or is re-run at 1e-3 (~115 GPU-h) for one LR per adapter. Worker: read `grad_norm` of each new job in its first hours (alert at > 100, not only on inf/nan) and report at once. Orchestrator: the timeline's divergence box stays open (LR test under way); the crossing text should say three cells run at 1e-3.
+
 ## 2026-10-09 — Claude (worker session, crossing) — both attention adapters diverge at 2e-3: the Q-Former in 4 of 4 runs (it already did in the 700 h runs), the Conformer in 2 of 4 despite warmup
 Context: the health watcher flagged non-finite `grad_norm` in the first hours of the crossing; I read the logs of all sixteen jobs and of the cancelled 700 h Q-Former runs for comparison. Nothing has been cancelled or resubmitted since; decisions below are open.
 Finding:
