@@ -15,6 +15,15 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-11 — Claude (worker session, crossing) — three diverging 1e-3 re-runs cancelled at the PI's word; mms1b-qformer's gradient started to grow at step 12.5k, so the lower LR only delays it
+Done (10:12 MN5 time): cancelled mms1b-conformer (step 18.2k of 157,500; non-finite since 11.3k), mms1b-qformer (16.8k of 78,750) and whisper-qformer (9.9k of 78,750). Output dirs and checkpoints are kept. They had used ~104 GPU-h (24 + 48 + 32); about 30 of it came in the ~1.5 h between the question and the PI's answer.
+Finding:
+1. **mms1b-qformer at 1e-3** was the clean read of the LR hypothesis. Its `grad_norm` median rose steadily (0.08 at 2-4k, 0.26 at 6-8k, 0.56 at 10-12k, 0.96 after 12k) and first passed 100 at step 12.5k (max 187), against 4-6k at 2e-3: delayed about 2.5 times, not prevented. Loss was still on the plateau (3.26-3.30).
+2. **The 1e-3 batch as a whole.** Q-Former growth appears in 3 of 4 cells (mhubert from 3.4k, whisper from 2.9k, mms1b from 12.5k); Conformer blow-up in mms1b (10.9k, at 2e-3 6.2k). Where the lower LR delays it (mms1b) it is by a factor ~2; on mHuBERT and Whisper it comes earlier than at 2e-3. The w2v-BERT cells are stable at 1e-3 and learn little (conformer WER 0.94). One seed per cell, so a tendency; the conclusion that 1e-3 is not a general fix for either adapter stands.
+3. **Still running:** w2vb-qformer at 1e-3 (9.2k of 78,750): `grad_norm` flat (median 0.09-0.10, max 0.6 after step 4k), loss 3.1-3.3 on the plateau, WER 1.16 at the first eval. Stable and not yet learning, like w2vb-conformer. Under watch.
+4. Cost of the six 1e-3 re-runs so far: ~470 GPU-h (two finished: ~330; three cancelled: ~104; w2vb-qformer so far: ~32).
+Action needed: PI, as in the entry below: the `qk_norm` switch in #149 plus one more smoke, and then QK-norm on the four Q-Former cells; for mms1b-conformer, QK-norm or a lower LR (5e-4, untested); whether the watcher may `scancel` a diverging re-run itself. Orchestrator: 03 and the timeline say "whole Q-Former column at LR 1e-3"; it is now one cell finished and failed, two cancelled, one running.
+
 ## 2026-10-11 — Claude (worker session, crossing) — 1e-3 is not a general fix: mms1b-conformer blew up at step 10.9k and whisper-qformer's gradient is growing from 2.9k; only w2vb-conformer (WER 0.94) and, so far, mms1b-qformer are stable
 Context: the four jobs that waited in the queue started overnight (about 06:10 MN5 time, 2026-10-11); readings at 08:15. All cells below run at adapter LR 1e-3, same seed, data and schedule as their 2e-3 runs.
 
