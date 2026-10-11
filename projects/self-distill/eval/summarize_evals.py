@@ -9,6 +9,9 @@ ST: chrF and BLEU per source language, recomputed with sacrebleu (melt-eval
 keys its ST metrics by target language only), the same seen/unseen means, and
 chrF against the *source* transcript: high means the model transcribed instead
 of translating, which is what an ASR-only model does with a translate request.
+A set with one source language and several targets (FLEURS en->X) is keyed by
+target language instead, since a source key would pool every target into one
+"en" bucket; "seen" is then the targets de/fr/es/it.
 
 Run where both ``inspect_ai`` and ``melt`` import (the melt-eval venv with the
 training checkout on PYTHONPATH); CPU only:
@@ -52,6 +55,16 @@ def run_tag(model: str) -> str:
 def set_name(frozen: str) -> str:
     path = Path(frozen)
     return path.parent.name if path.name == "frozen" else path.name
+
+
+def st_source(meta: dict) -> str:
+    """Source language of an ST sample (``lang`` is the target for ST, so it is only the fallback)."""
+    return meta.get("src_lang") or meta.get("lang") or "?"
+
+
+def st_target(meta: dict) -> str:
+    """Target language of an ST sample."""
+    return meta.get("tgt_lang") or meta.get("lang") or "?"
 
 
 def asr_scores(pairs: list[tuple[str, str]]) -> dict:
@@ -101,21 +114,28 @@ def summarize(path: str, norm: BasicTextNormalizer) -> dict:
     else:
         import sacrebleu
 
-        by_src = defaultdict(lambda: ([], [], []))
+        # One source language and several targets (FLEURS en->X) is keyed by target: a source key would
+        # pool every target into one "en" bucket. Every other set (X->en, X->Y) is keyed by source, as before.
+        metas = [s.metadata or {} for s in log.samples or []]
+        by_target = len({st_source(m) for m in metas}) == 1 and len({st_target(m) for m in metas}) > 1
+        lang_of = st_target if by_target else st_source
+        if by_target:
+            out["keyed_by"] = "tgt_lang"
+        by_lang = defaultdict(lambda: ([], [], []))
         for s in log.samples or []:
             meta = s.metadata or {}
-            hyps, refs, srcs = by_src[meta.get("src_lang") or meta.get("lang") or "?"]
+            hyps, refs, srcs = by_lang[lang_of(meta)]
             hyps.append((s.output.completion if s.output else "").strip())
             refs.append(str(s.target).strip())
             srcs.append(str(meta.get("source_text") or "").strip())
         out["lang"] = {
-            src: {
+            lang: {
                 "n": len(h),
                 "chrf": sacrebleu.corpus_chrf(h, [r]).score,
                 "bleu": sacrebleu.corpus_bleu(h, [r]).score,
                 "chrf_vs_source": sacrebleu.corpus_chrf(h, [x]).score if all(x) else float("nan"),
             }
-            for src, (h, r, x) in sorted(by_src.items())
+            for lang, (h, r, x) in sorted(by_lang.items())
         }
         for group, langs in (("seen", [l for l in out["lang"] if l in SEEN]), ("unseen", [l for l in out["lang"] if l not in SEEN])):
             for key in ("bleu", "chrf", "chrf_vs_source"):
@@ -138,10 +158,15 @@ def show(r: dict) -> None:
                 cells = " ".join(f"{k.split('/')[0]} {v['wer']:.3f}" for k, v in r["source"].items() if k.endswith("/" + src))
                 print(f"    {src}: {cells}")
     else:
+        by_tgt = r.get("keyed_by") == "tgt_lang"
+        kind = "chrF by target" if by_tgt else "chrF"
         langs = " ".join(f"{l} {v['chrf']:.1f}" for l, v in r["lang"].items() if l in SEEN)
-        print(f"{head} | chrF {langs} | seen chrF {r['seen_chrf']:.1f} BLEU {r['seen_bleu']:.1f}"
+        print(f"{head} | {kind} {langs} | seen chrF {r['seen_chrf']:.1f} BLEU {r['seen_bleu']:.1f}"
               f" vs-source {r['seen_chrf_vs_source']:.1f}"
               f" | unseen chrF {r['unseen_chrf']:.1f} BLEU {r['unseen_bleu']:.1f} vs-source {r['unseen_chrf_vs_source']:.1f}")
+        if by_tgt:
+            unseen = " ".join(f"{l} {v['chrf']:.1f}" for l, v in r["lang"].items() if l not in SEEN)
+            print(f"    unseen targets: {unseen}")
 
 
 def main() -> None:

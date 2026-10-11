@@ -6,13 +6,19 @@
 #   fleurs24-asr-dev     zero-shot ASR: 24 languages x 100, 19 never trained on
 #   fleurs24-st-xen-dev  zero-shot ST: 23 languages -> English x 100, translate instruction
 #
+# Not in the default list, pass it by name: fleurs24-st-enx-dev, English -> 23 languages
+# x 100. It runs with --no-score (melt-eval's pooled corpus_bleu refuses a set with several
+# target languages, after the whole generation); summarize_evals.py scores it per target.
+#
 # FORMAT picks the prompt file next to this script: repeatfirst (default, the
-# step-2 arms) or bare (GOLDW). The model directory must be a finished run's root
+# step-2 arms), bare (GOLDW) or sft-random (instruction drawn per sample from
+# TASK_TEMPLATES). The model directory must be a finished run's root
 # (it carries the processor and tokenizer). Run on artemis; the melt package
 # comes from this checkout, not from the melt-eval venv's stale copy.
 #
 #   FORMAT=bare bash projects/self-distill/eval/launch_eval_step2.sh /path/to/outputs/<GOLDW run>
 #   bash projects/self-distill/eval/launch_eval_step2.sh /path/to/outputs/<S2 run> fleurs24-st-xen-dev
+#   FORMAT=sft-random bash projects/self-distill/eval/launch_eval_step2.sh /path/to/outputs/<SFT run> fleurs24-st-enx-dev
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,8 +39,9 @@ export MELT_PARTITION="${MELT_PARTITION:-h100}" MELT_QOS="${MELT_QOS:-gpu-h100}"
 cd "$MELT_EVAL"
 for set in "${SETS[@]}"; do
     case "$set" in *-st-*) task=st ;; *) task=asr ;; esac
+    case "$set" in *-st-enx-*) noscore=(--no-score) ;; *) noscore=() ;; esac
     [[ -f "${EVAL_SETS}/${set}/frozen_set.json" ]] || { echo "ERROR: no frozen set ${EVAL_SETS}/${set}" >&2; exit 1; }
     infra/runners/submit_eval.sh artemis "$MODEL" "${EVAL_SETS}/${set}" \
         -T task_filter="$task" -T prompt_style=melt -T format_config="$FORMAT_FILE" \
-        -M batch_size="${BATCH_SIZE:-16}"
+        -M batch_size="${BATCH_SIZE:-16}" ${noscore[@]+"${noscore[@]}"}
 done
