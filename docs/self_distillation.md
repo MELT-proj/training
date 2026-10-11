@@ -86,6 +86,17 @@ utterance the same instruction, and an on-policy arm and an offline arm
 (`distill.gold_ce_weight`) always uses the ASR prompt: translations have no
 gold.
 
+## A distillation prompt of its own
+
+`distill.student_template` replaces `data.prompt_template` as the student's
+distillation prompt only; the gold batch (so the anchor) and the eval prompt
+keep `data.prompt_template`. With `"{audio_token}"`, `teacher_prompt: bare` and a
+gold-CE anchor, the student learns AZeroS's instruction-free targets while the
+anchor stays on the ASR instruction (`ARM=sift_anchor` in
+`projects/self-distill/launch_step2.sh`). It must contain `{audio_token}` and
+cannot be combined with the instruction mix, whose templates come from
+`data.prompt_template`.
+
 ## What is logged
 
 - `eval_<set>_loss` is replaced by the **alignment gap**: the per-token

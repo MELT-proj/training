@@ -6,6 +6,60 @@ AZeroS-style hard-label distillation (arXiv 2601.06086), for ASR and speech
 translation, across languages. The trainer is `melt.training.train_self_distill`
 (`melt/training/self_distill.py`, design notes in `docs/self_distillation.md`).
 
+## Where it stands (2026-10-11)
+
+Read this first; the sections below hold the evidence. All numbers are on dev
+sets, from the same aligned start, with 50 h of transcription-only data in
+en/de/fr/es/it per run.
+
+- **Setup.** Frozen Whisper-large-v3 encoder, a small MLP adapter (the only
+  thing that trains), frozen Qwen3.5-2B. The *teacher* is that same decoder
+  reading the transcript as text; the *student* is the full model hearing the
+  audio. The start, GOLDW-final, is standard training (predict the transcript)
+  on 1,000 h: in-domain WER 0.106, and asked to translate it just transcribes.
+- **The original hypothesis is not supported.** On-policy distillation (the
+  student writes its own answer, the teacher scores it token by token) never
+  beat offline imitation of the teacher's answers. With the repeat instruction
+  alone it hurts transcription (WER 0.106 -> 0.121, language-model-flavoured
+  substitutions); with the instruction mix it translates exactly like offline
+  imitation and transcribes worse (0.127 vs 0.112).
+- **What holds: translation transfers from transcription data alone.**
+  Distilling the decoder's own answers to "repeat" and "translate into X"
+  instructions turns the model into a speech translator: X->en chrF 24 -> 53
+  on the trained source languages and 21 -> 42 on 19 languages the adapter
+  never heard; into de/fr/es/it, and into nl/pt that were never targets, about
+  90% of what the decoder scores translating the gold transcript. The output
+  is in the requested language 80-97% of the time.
+- **Against AZeroS's own recipe** (no instruction anywhere: the student copies
+  the decoder's free reply to the bare transcript) translation is a tie, AZeroS
+  1-2.5 chrF ahead into de and nl, on two data seeds. AZeroS paraphrases instead
+  of transcribing, though: in-domain WER 0.160 against 0.11. Our mix keeps
+  transcription intact through its repeat half, not the gold-CE term, since
+  removing that term changes nothing. So far this is a trade-off, not a
+  strict win. AZeroS never evaluated speech translation, so the transfer itself
+  is new.
+- **Open.** `sift_anchor` (AZeroS plus the gold transcript under the repeat
+  instruction) decides whether the translate instructions matter or
+  "AZeroS plus transcription training" suffices. Also open: the last seed
+  replicas, test sets, spoken QA, and the encoder question (Whisper aligned
+  after ~30 h; w2v-BERT not even at 3,500 h; no further comparison).
+
+Arm names, by what each trains on:
+
+| arm | the student is trained to |
+|---|---|
+| `ce` | predict the gold transcript (standard training) |
+| `soft` | match the teacher's whole next-token distribution over the teacher's greedy answer (forward KL) |
+| `opd` | sample its own answer and match the teacher on it (reverse KL): on-policy distillation |
+| `azeros` | reproduce the teacher's greedy answer (cross-entropy): offline imitation |
+| `sift` | reproduce the teacher's free reply, with no instruction on either side: AZeroS's recipe |
+| `<arm>_anchor` | also predict the gold transcript under the repeat instruction, at weight 0.5 |
+
+`S2-` runs use only the repeat instruction; `S3-` runs use the instruction mix
+(half repeat, half "translate into X", X from en/de/fr/es/it). `-s<seed>-d<data
+seed>` names the seed and the data order; runs without `-d` all read data seed
+42 (see "Running on artemis").
+
 ## Why phase 2 exists
 
 Phase 1 (GOLD / AZEROS / SOFT / REVERSE / RELAY, w2v-BERT 2.0 + Qwen3.5-2B,
@@ -42,9 +96,9 @@ continuations from aligned checkpoints.
    `eval/launch_eval_step2.sh` (in-domain WER per source, zero-shot WER on 19
    unseen FLEURS languages, zero-shot X->en speech translation with the
    teacher audit's translate instruction) and `alignment_probe.py`.
-3. **Task-conditioned multilingual OPD**: an instruction mix (repeat, translate
-   into each language, one generic), targets from the teacher, against the same
-   mix trained offline at equal compute.
+3. **Task-conditioned multilingual OPD**: an instruction mix (repeat, or
+   translate into one of en/de/fr/es/it), targets from the teacher, against the
+   same mix trained offline at equal compute.
 4. **Claim hardening** (chosen after step 3; spoken QA left for later):
    - *Seeds*: `azeros_anchor` and `opd_anchor` at seeds 44 and 45, with the
      data order varied too (`-s44-d44`). Every earlier S2/S3 run, whatever its
@@ -58,7 +112,10 @@ continuations from aligned checkpoints.
      teacher, projector-only training) gives no decoding settings or reply cap
      and evaluates no speech translation; here the teacher decodes greedily
      under the 448-token budget every arm has. Plus `azeros` with the mix but
-     without the anchor, so a gap to SIFT cannot be the gold CE's.
+     without the anchor, so a gap to SIFT cannot be the gold CE's, and
+     `sift_anchor` (SIFT plus the gold CE under the repeat instruction,
+     `distill.student_template`), which gives SIFT the word-for-word
+     transcription signal the mix has in its repeat half.
    - *Translation into other languages*: FLEURS X->Y dev sets for de/fr/es/it
      (trained targets) and nl/pt (targets never trained), 23 sources x 100 each
      (melt-eval branch `claude/fleurs-x-to-y-st`), read against
@@ -172,8 +229,63 @@ never heard (Portuguese 60, Swedish 55, Danish 52-53, Polish 47). On-policy
 training adds nothing to it -- per-language chrF agrees within 1-2 points --
 and costs ASR: offline matches the translation at a third of the in-domain
 cost and keeps unseen-language ASR intact. The translation ability is already
-there at 1,000 steps (on-policy: 52.8 / 42.1). Single seed so far; seed-44
-replicas of both arms and an offline soft-label arm (`soft_anchor`) are running.
+there at 1,000 steps (on-policy: 52.8 / 42.1). Seeds, an offline soft-label
+arm and AZeroS's own recipe are in step 4.
+
+**Step 4: claim hardening.** Same start, data budget and battery, plus the
+FLEURS X->Y sets and the text-only ceiling. `d42`/`d44` is the data seed. Unseen
+means here leave out Irish (ga), which has no source transcript for the ceiling:
+18 unseen sources, so X->en reads 44.3 where the step-3 table reads 42.8.
+
+| arm | in-domain WER (without runaway loops) | FLEURS CER, 19 unseen | X->en chrF trained / 18 unseen | NLL(gold given audio) |
+|---|---|---|---|---|
+| GOLDW-final | 0.106 (0.102) | 0.684 | 24.4 / 21.8 | 0.348 |
+| `S3-azeros_anchor` d42 / d44 | 0.112 / 0.109 (0.107 / 0.105) | 0.692 / 0.692 | 53.5 / 44.3, 52.6 / 43.6 | 0.356 / 0.355 |
+| `S3-azeros` (no anchor) d42 | 0.113 (0.107) | 0.697 | 53.7 / 44.4 | 0.363 |
+| `S3-soft_anchor` d42 | 0.111 (0.107) | 0.760 | 53.4 / 43.4 | 0.357 |
+| `S3-opd_anchor` d42 | 0.127 (0.111) | 0.948 | 53.4 / 43.7 | 0.373 |
+| `S2-sift` (AZeroS) d42 / d44 | 0.160 / 0.159 (0.144 / 0.143) | 0.631 / 0.643 | 53.6 / 43.5, 53.7 / 43.5 | 0.486 / 0.482 |
+| text-only ceiling | - | - | 61.4 / 56.6 | - |
+
+X->Y chrF, trained sources / 18 unseen sources (nl and pt were never
+translation targets in training):
+
+| arm | ->en | ->de | ->fr | ->es | ->it | ->nl | ->pt |
+|---|---|---|---|---|---|---|---|
+| GOLDW-final | 24.4/21.8 | 20.4/24.4 | 25.7/26.6 | 25.6/27.8 | 24.9/28.0 | 22.7/24.5 | 26.2/27.2 |
+| `S3-azeros_anchor` d42 | 53.5/44.3 | 45.2/38.8 | 50.8/40.2 | 45.4/36.3 | 45.8/36.9 | 41.6/35.8 | 50.9/38.1 |
+| `S3-azeros_anchor` d44 | 52.6/43.6 | 45.0/38.7 | 50.6/39.8 | 44.9/36.3 | 45.4/36.6 | 40.2/35.9 | 50.6/37.9 |
+| `S3-opd_anchor` d42 | 53.4/43.7 | 46.4/37.8 | 50.4/39.3 | 45.6/35.9 | 46.7/36.8 | 41.8/35.0 | 50.8/37.4 |
+| `S2-sift` d42 | 53.6/43.5 | 46.8/38.7 | 51.0/40.4 | 45.4/36.3 | 46.2/37.1 | 42.6/36.5 | 50.8/37.7 |
+| `S2-sift` d44 | 53.7/43.5 | 46.7/38.8 | 50.8/40.5 | 45.8/36.2 | 46.5/37.1 | 42.7/36.8 | 50.9/37.6 |
+| text-only ceiling | 61.4/56.6 | 50.9/44.7 | 55.0/47.4 | 50.1/41.0 | 49.8/43.0 | 47.3/39.1 | 55.3/43.3 |
+
+- **Translation into other languages works, and the instruction generalises.**
+  Every distilled arm reaches about 90% of the ceiling on the trained sources,
+  for targets it never trained on (nl, pt) as much as for those it did. Which
+  language the output is in, read as the FLEURS translation of the same
+  sentence it matches best: the requested one 80-97% of the time for every
+  distilled arm, SIFT included. GOLDW, asked to translate, copies the source
+  91-98% of the time on the trained sources.
+- **AZeroS's recipe (`sift`) ties on translation and loses on transcription.**
+  Its in-domain errors are paraphrase ("ennuiant" for "angoissant") and a few
+  repetition loops; without the loops its WER is still 0.144. On unseen
+  languages it often answers the repeat instruction with a translation into a
+  trained language, which lowers CER without being transcription. Its teacher
+  replies are long (200-365 tokens per batch on average in the first logged
+  steps, 14-50% of them cut at 448), and it is generation-bound: 12 s/step on
+  H200, 44 s/step on the H100 node.
+- **The anchor is not what keeps transcription intact.** The mix without it
+  (`S3-azeros`) matches the anchored arm everywhere; the repeat half of the mix,
+  whose teacher answer is the transcript, does that job.
+- **On-policy (`opd_anchor`) still adds nothing.** Its extra in-domain WER is
+  mostly repetition loops (0.111 without them), and unseen-language CER rises
+  to 0.948. Soft labels (`soft_anchor`) add nothing over hard ones.
+- **Seed noise.** Changing the data seed moves translation by up to 1.4 chrF
+  (mostly under 0.5) and in-domain WER by 0.003. The first `-s44` runs (same data as `-s43`) agree with
+  `-s43` within 0.1-0.4 chrF, which is numerical and sampling noise only.
+- **Pending:** `sift_anchor` (d42), `S3-opd_anchor` d44/d45,
+  `S3-azeros_anchor` d45 and `S2-sift` d45.
 
 **Parity** (melt-eval vs the trainer's own eval, GOLDW-final, the trainer's 250
 clips from `eval_parity_spec.py`): WER en 0.081 / 0.083, de 0.100 / 0.102, fr
