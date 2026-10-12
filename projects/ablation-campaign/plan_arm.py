@@ -348,6 +348,10 @@ DEFAULT_QFORMER_DOWNSAMPLE = 5
 STACKING_ADAPTERS = ("mlp", "moe")
 STACK_FACTOR_IGNORING_ADAPTERS = ("conformer", "qformer")
 
+# Adapters with an attention whose query and key projections `qk_norm` can normalise;
+# the MLP and the MoE have none.
+QK_NORM_ADAPTERS = ("conformer", "qformer")
+
 
 def _slug(name: str, maxlen: int) -> str:
     base = name.split("/")[-1]
@@ -603,6 +607,13 @@ class ArmAxes:
     # EFFECTIVE value, like decoder_lora's `-lora` below, not only when overridden: this
     # is one half of an A/B and the two arms must not collide on one output directory.
     eval_when_frozen: str = ""
+    # qk_norm: RMS-normalise the query and key projections of the Conformer's and the
+    # Q-Former's attention, per head (model.adapter.qk_norm; MELTAdapterConfig says why).
+    # "" inherits the config's own value (every ABL-*.yaml omits the key, i.e. false, the
+    # historical adapters). It changes the function the adapter computes, so a true value
+    # is tagged into EXP_NAME as `qkn`; nothing is tagged when it is false, which keeps
+    # every existing name as it is. Refused on an adapter without attention.
+    qk_norm: str = ""
     # lr_scheduler: "" inherits the base config's own lr_scheduler_type.
     # Set to one of LR_SCHEDULERS to override it; warmup_stable_decay also
     # gets its lr_scheduler_kwargs composed here from the arm's own derived
@@ -845,6 +856,7 @@ def plan(args: ArmAxes) -> ArmPlan:
     # lora: block of their own.
     cfg_decoder_lora = bool(get(cfg, "model.lora.enabled"))
     cfg_eval_when_frozen = bool(get(cfg, "model.encoder.eval_when_frozen"))
+    cfg_qk_norm = bool(get(cfg, "model.adapter.qk_norm"))
     cfg_encoder_lr = get(cfg, "optimization.encoder_lr", DEFAULT_ENCODER_LR)
     cfg_decoder_lr = get(cfg, "optimization.decoder_lr", DEFAULT_DECODER_LR)
     cfg_adapter_lr = get(cfg, "optimization.adapter_lr", DEFAULT_ADAPTER_LR)
@@ -863,6 +875,13 @@ def plan(args: ArmAxes) -> ArmPlan:
     decoder_freeze = as_bool(args.decoder_freeze) if args.decoder_freeze else cfg_decoder_freeze
     decoder_lora = as_bool(args.decoder_lora) if args.decoder_lora else cfg_decoder_lora
     eval_when_frozen = as_bool(args.eval_when_frozen) if args.eval_when_frozen else cfg_eval_when_frozen
+    qk_norm = as_bool(args.qk_norm) if args.qk_norm else cfg_qk_norm
+    if qk_norm and adapter_effective not in QK_NORM_ADAPTERS:
+        die(
+            f"QK_NORM=true on the {adapter_effective!r} adapter, which has no attention to normalise "
+            f"(known: {', '.join(QK_NORM_ADAPTERS)}): the arm would be tagged with an architecture it "
+            "does not have."
+        )
     # The frame-rate route may derive a stack_factor; from here on `stack_factor_request`
     # is the one value the stack_factor logic below reads, whether a row typed it or the
     # rate derived it.
@@ -879,6 +898,8 @@ def plan(args: ArmAxes) -> ArmPlan:
 
     if args.eval_when_frozen and eval_when_frozen != cfg_eval_when_frozen:
         overrides += ["--model.encoder.eval_when_frozen", str(eval_when_frozen).lower()]
+    if args.qk_norm and qk_norm != cfg_qk_norm:
+        overrides += ["--model.adapter.qk_norm", str(qk_norm).lower()]
     if eval_when_frozen and not encoder_freeze:
         print(
             "WARNING: EVAL_WHEN_FROZEN=true but the encoder is not frozen "
@@ -1218,7 +1239,7 @@ def plan(args: ArmAxes) -> ArmPlan:
         f"{encoder_tag(encoder_effective)}{'F' if encoder_freeze else 'T'}"
         + ("-evalfrozen" if eval_when_frozen else ""),
         f"{decoder_tag(decoder_effective)}{'F' if decoder_freeze else 'T'}" + ("-lora" if decoder_lora else ""),
-        f"{adapter_effective}{'F' if adapter_freeze else 'T'}",
+        f"{adapter_effective}{'F' if adapter_freeze else 'T'}" + ("-qkn" if qk_norm else ""),
         *stack_factor_tags,
         *route.tags,
         *extra_tags,
@@ -1264,6 +1285,7 @@ def main() -> None:
     p.add_argument("--encoder", required=True)
     p.add_argument("--encoder-freeze", required=True)
     p.add_argument("--eval-when-frozen", required=True, help="empty string means: use the config's own value, no override. See MELTAudioEncoder.train()")
+    p.add_argument("--qk-norm", default="", help="empty string (the default) means: use the config's own value, no override. true normalises the Conformer's and the Q-Former's queries and keys per head, and tags `qkn` into EXP_NAME")
     p.add_argument("--lr-scheduler", required=True, help="empty string means: use the config's own lr_scheduler_type")
     p.add_argument("--warmup-ratio", required=True, help="empty string means: use the config's own warmup settings")
     p.add_argument("--max-audio-seq-len", required=True, help="empty string means: derive it from the encoder, else use the config's own value")
@@ -1294,6 +1316,7 @@ def main() -> None:
         encoder=args.encoder,
         encoder_freeze=args.encoder_freeze,
         eval_when_frozen=args.eval_when_frozen,
+        qk_norm=args.qk_norm,
         lr_scheduler=args.lr_scheduler,
         warmup_ratio=args.warmup_ratio,
         max_audio_seq_len=args.max_audio_seq_len,
