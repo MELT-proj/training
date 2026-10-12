@@ -68,7 +68,7 @@
 #   # artemis H200, a pair side by side: the gpu-h200 QOS caps a user at 4 GPUs, so 2 each, and
 #   # GRAD_ACCUM 16 keeps MN5's optimizer step (8 GPUs x 4 x 60 s). Checkpoints go to nyx scratch.
 #   SITE=artemis MELT_NODES=1 MELT_GPUS_PER_NODE=2 GRAD_ACCUM=16 MELT_PARTITION=h200 \
-#     MELT_QOS=gpu-h200 MELT_TIME=48:00:00 OUTPUT_DIR=/mnt/scratch-nyx/giuseppe/melt-data/outputs-sft \
+#     MELT_QOS=gpu-h200 MELT_TIME=48:00:00 OUTPUT_DIR=/mnt/scratch-nyx/giuseppe/melt/outputs-sft \
 #     INIT=sd MIX=hr5 bash projects/self-distill/sft/launch_sft.sh
 #
 #   # the smoke test: one eval and one save inside 40 steps
