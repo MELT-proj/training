@@ -906,14 +906,15 @@ arms:
   # 30%. The 2- and 4-node cells are scaled the same way and are not measured
   # on this data (board 2026-10-08).
   #
-  # adapter_lr (2026-10-10): 2e-3, the w2v-BERT + MLP screen's best point, for
-  # every row except the attention-adapter cells whose 2e-3 run diverged:
-  # whisper-conformer (1e-3 since 2026-09-29), w2vb-conformer and mms1b-conformer
-  # (1e-3 since 2026-10-09, PI) and all four Q-Former cells (mms1b since
-  # 2026-10-09, the other three since 2026-10-10, PI). The re-runs keep seed,
-  # data and steps, so only the LR differs from the diverged runs.
-  # mhubert-conformer stays at 2e-3 (healthy); re-running it at 1e-3 is open
-  # (board 2026-10-10).
+  # adapter_lr and qk_norm (2026-10-12): the recipe's LR is 2e-3, the w2v-BERT + MLP
+  # screen's best point. The attention adapters diverged at it (board 2026-10-09) and
+  # lowering it to 1e-3 only moved the growth earlier or later (board 2026-10-11), so
+  # the PI chose to bet on QK-norm (model.adapter.qk_norm) at 2e-3 and to test no
+  # further LR change: the four Q-Former cells and mms1b-conformer carry
+  # `qk_norm: true`. Cells that already finished keep what they ran with:
+  # whisper-conformer and w2vb-conformer 1e-3, mhubert-conformer 2e-3, all without
+  # QK-norm, so the Conformer column is not uniform; report each cell's LR and
+  # qk_norm next to its result.
 
   - id: MA-2100-crossing-w2vb-mlp
     stage: MA
@@ -970,7 +971,8 @@ arms:
     frame_rate_hz: 10
     lr_scheduler: warmup_stable_decay
     warmup_ratio: 0.03
-    adapter_lr: 1e-3          # PI 2026-10-10, was 2e-3: grad_norm grew without bound, no learning (board 2026-10-09)
+    adapter_lr: 2e-3
+    qk_norm: true             # PI 2026-10-12: QK-norm at the recipe LR; 2e-3 alone and 1e-3 both failed (board 2026-10-09, 2026-10-12)
     batch_duration: 75
     grad_accum_steps: 1
     nodes: 2                 # 75 x 1 x 8 = 600 s -- PI 2026-09-28, was 119h raw at nodes: 1
@@ -1003,14 +1005,15 @@ arms:
     frame_rate_hz: 10
     lr_scheduler: warmup_stable_decay
     warmup_ratio: 0.03
-    adapter_lr: 1e-3          # PI 2026-10-09, was 2e-3: diverged at step ~6.2k (board 2026-10-09)
+    adapter_lr: 2e-3
+    qk_norm: true             # PI 2026-10-12: QK-norm at the recipe LR; it blew up at 6.2k at 2e-3 and at 10.9k at 1e-3 (board 2026-10-09, 2026-10-11)
     batch_duration: 75
     grad_accum_steps: 1
     nodes: 1                 # 75 x 1 x 4 = 300 s
     eval_when_frozen: true
     seed: 42
     max_steps: 157500
-    time: "54:00:00"
+    time: "70:00:00"          # was 54: the 1e-3 run measured 0.85 it/s, ~52 h for 157,500 steps; acc_ehpc allows 72
 
   - id: MA-2100-crossing-mms1b-moe
     stage: MA
@@ -1038,7 +1041,8 @@ arms:
     frame_rate_hz: 10
     lr_scheduler: warmup_stable_decay
     warmup_ratio: 0.03
-    adapter_lr: 1e-3          # PI 2026-10-09, was 2e-3: grad_norm grew without bound from step ~4.5k (board 2026-10-09)
+    adapter_lr: 2e-3
+    qk_norm: true             # PI 2026-10-12: QK-norm at the recipe LR; 2e-3 alone and 1e-3 both failed (board 2026-10-09, 2026-10-11)
     batch_duration: 75
     grad_accum_steps: 1
     nodes: 2                 # 75 x 1 x 8 = 600 s -- PI 2026-09-28, was 104h raw at nodes: 1
@@ -1106,7 +1110,8 @@ arms:
     frame_rate_hz: 10
     lr_scheduler: warmup_stable_decay
     warmup_ratio: 0.03
-    adapter_lr: 1e-3          # PI 2026-10-10, was 2e-3: grad_norm grew without bound, WER 0.9-1.4 (board 2026-10-09)
+    adapter_lr: 2e-3
+    qk_norm: true             # PI 2026-10-12: QK-norm at the recipe LR; 2e-3 alone and 1e-3 both failed (board 2026-10-09, 2026-10-12)
     batch_duration: 75
     grad_accum_steps: 1
     nodes: 4                 # 75 x 1 x 16 = 1200 s -- PI 2026-09-28, was 146h raw at nodes: 1,
@@ -1176,7 +1181,8 @@ arms:
     frame_rate_hz: 10
     lr_scheduler: warmup_stable_decay
     warmup_ratio: 0.03
-    adapter_lr: 1e-3          # PI 2026-10-10, was 2e-3: grad_norm grew without bound, WER rose from 0.18 to 0.28 (board 2026-10-09)
+    adapter_lr: 2e-3
+    qk_norm: true             # PI 2026-10-12: QK-norm at the recipe LR; 2e-3 alone and 1e-3 both failed (board 2026-10-09, 2026-10-12)
     batch_duration: 75
     grad_accum_steps: 1
     nodes: 2                 # 75 x 1 x 8 = 600 s -- PI 2026-09-28, was 99h raw at nodes: 1

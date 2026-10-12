@@ -330,7 +330,7 @@ class TestAdapterOutputFeaturesShape:
         assert output_mask is None
 
     @staticmethod
-    def _real_qformer_adapter(window_size=15, downsample_rate=5, encoder_width=64):
+    def _real_qformer_adapter(window_size=15, downsample_rate=5, encoder_width=64, qk_norm=False):
         """A Q-Former adapter built from real configs, no hub access."""
         from transformers import GPT2Config, Wav2Vec2Config
 
@@ -344,6 +344,7 @@ class TestAdapterOutputFeaturesShape:
                 intermediate_size=64,
                 window_size=window_size,
                 downsample_rate=downsample_rate,
+                qk_norm=qk_norm,
             ),
             audio_encoder_config=Wav2Vec2Config(hidden_size=encoder_width),
             text_decoder_config=GPT2Config(n_embd=48),
@@ -410,6 +411,66 @@ class TestAdapterOutputFeaturesShape:
         )
         assert torch.allclose(batched[:, :3], alone_masked, atol=1e-5)
         assert alone.shape == (1, 3, 48)
+
+    def test_qformer_is_the_plain_adapter_unless_qk_norm_is_asked_for(self):
+        """QK-norm changes the function the adapter computes, so a config that does not say
+        so, as every checkpoint trained before the option, must build the historical adapter."""
+        from transformers.models.blip_2.modeling_blip_2 import Blip2QFormerMultiHeadAttention
+
+        adapter = self._real_qformer_adapter()
+        attentions = [m for m in adapter.qformer.modules() if isinstance(m, Blip2QFormerMultiHeadAttention)]
+
+        assert len(attentions) == 4
+        for attn in attentions:
+            assert type(attn.query) is torch.nn.Linear
+            assert type(attn.key) is torch.nn.Linear
+        assert not any("norm_weight" in name for name in adapter.state_dict())
+
+    def test_qformer_queries_and_keys_are_normalised_per_head_in_every_attention(self):
+        """Self- and cross-attention alike; the values stay plain projections."""
+        from melt.modeling.modeling_melt import _HeadNormLinear
+        from transformers.models.blip_2.modeling_blip_2 import Blip2QFormerMultiHeadAttention
+
+        adapter = self._real_qformer_adapter(qk_norm=True)
+        attentions = [m for m in adapter.qformer.modules() if isinstance(m, Blip2QFormerMultiHeadAttention)]
+
+        assert len(attentions) == 4  # 2 layers, each with self- and cross-attention
+        for attn in attentions:
+            assert isinstance(attn.query, _HeadNormLinear)
+            assert isinstance(attn.key, _HeadNormLinear)
+            assert attn.query.head_size == attn.key.head_size == attn.attention_head_size
+            assert type(attn.value) is torch.nn.Linear
+
+    def test_qformer_attention_logits_do_not_follow_the_query_and_key_weights(self):
+        """Unbounded logits made the gradient norm grow without bound once the learning rate
+        peaked (board 2026-10-09): q and k must be normalised per head, whatever the scale of
+        the projection weights or of the encoder features the keys read."""
+        from transformers.models.blip_2.modeling_blip_2 import Blip2QFormerMultiHeadAttention
+
+        adapter = self._real_qformer_adapter(qk_norm=True)
+        cross = next(
+            m
+            for m in adapter.qformer.modules()
+            if isinstance(m, Blip2QFormerMultiHeadAttention) and m.key.in_features == 64
+        )
+        queries = torch.randn(2, 3, 32)
+        frames = torch.randn(2, 15, 64)
+
+        def q_and_k_rms(frame_scale=1.0):
+            with torch.no_grad():
+                return [
+                    cross.query(queries).pow(2).mean().sqrt(),
+                    cross.key(frames * frame_scale).pow(2).mean().sqrt(),
+                ]
+
+        before = q_and_k_rms()
+        with torch.no_grad():
+            cross.query.weight.mul_(100)
+            cross.key.weight.mul_(100)
+        after = q_and_k_rms(frame_scale=100.0)  # and 100x larger encoder features
+
+        for b, a in zip(before, after):
+            assert a == pytest.approx(b, rel=0.1)
 
     def test_conformer_adapter_downsampling_single_layer(self):
         """Test Conformer adapter downsampling with a single layer."""
@@ -824,6 +885,47 @@ class TestConformerAdapterLayers:
         assert {k: tuple(v.shape) for k, v in ours.state_dict().items()} == {
             k: tuple(v.shape) for k, v in original.state_dict().items()
         }
+
+    def test_the_layers_are_the_plain_ones_unless_qk_norm_is_asked_for(self):
+        """QK-norm changes the function the adapter computes, so a config that does not say
+        so, as every checkpoint trained before the option, must build the historical layer."""
+        adapter = _conformer_adapter(_tiny_encoder_config("whisper", 64))
+        attn = adapter.layers[0].self_attn
+
+        assert type(attn.linear_q) is torch.nn.Linear
+        assert type(attn.linear_k) is torch.nn.Linear
+        assert not any("norm_weight" in name for name in adapter.state_dict())
+
+    def test_qk_norm_normalises_queries_and_keys_and_leaves_the_values_plain(self):
+        from melt.modeling.modeling_melt import _HeadNormLinear
+
+        adapter = _conformer_adapter(_tiny_encoder_config("whisper", 64), qk_norm=True)
+        attn = adapter.layers[0].self_attn
+
+        assert isinstance(attn.linear_q, _HeadNormLinear)
+        assert isinstance(attn.linear_k, _HeadNormLinear)
+        assert attn.linear_q.head_size == attn.linear_k.head_size == attn.head_size
+        assert type(attn.linear_v) is torch.nn.Linear
+
+    def test_the_attention_logits_do_not_follow_the_query_and_key_weights(self):
+        """Unbounded logits saturate the softmax under full-LR Adam and overflow the backward
+        in bf16 (board 2026-09-29): q and k must be normalised per head."""
+        adapter = _conformer_adapter(_tiny_encoder_config("whisper", 64), qk_norm=True).eval()
+        attn = adapter.layers[0].self_attn
+        x = torch.randn(2, 20, 64)
+
+        def q_and_k_rms():
+            with torch.no_grad():
+                return [getattr(attn, n)(x).pow(2).mean().sqrt() for n in ("linear_q", "linear_k")]
+
+        before = q_and_k_rms()
+        with torch.no_grad():
+            attn.linear_q.weight.mul_(100)
+            attn.linear_k.weight.mul_(100)
+        after = q_and_k_rms()
+
+        for b, a in zip(before, after):
+            assert a == pytest.approx(b, rel=0.1)
 
     def test_the_layers_attention_is_sdpa_whatever_the_encoder_runs(self):
         """Wav2Vec2BertSelfAttention has no flash path."""
