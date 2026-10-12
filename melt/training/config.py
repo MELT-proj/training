@@ -150,6 +150,13 @@ model:
     bias: none
 
   ckpt: null  # Path to checkpoint to resume from
+  # Cast every parameter to this dtype after loading, before training. float32
+  # gives a bf16 mixed-precision run fp32 master weights. Without it the loaded
+  # dtypes stay: transformers 5 loads `model.ckpt` with dtype="auto", so a bf16
+  # checkpoint trains in pure bf16 under DDP, where an AdamW update smaller
+  # than half a bf16 ulp of its weight rounds to nothing (at lr 2e-5, any
+  # weight above ~0.008 never moves). FSDP upcasts to fp32 on its own.
+  master_dtype: null
 
 # =============================================================================
 # Data Configuration

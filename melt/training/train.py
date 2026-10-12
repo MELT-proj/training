@@ -226,6 +226,16 @@ def prepare_model(
         logger.info("Unfreezing the decoder (overriding LoRA freeze)")
     _set_requires_grad(model.text_decoder, not decoder_freeze)
 
+    # See `model.master_dtype` in config.py: without it a bf16 checkpoint
+    # trains in pure bf16 under DDP.
+    master_dtype = model_cfg.get("master_dtype", None)
+    if master_dtype is not None:
+        dtype = getattr(torch, str(master_dtype), None)
+        if not isinstance(dtype, torch.dtype) or not dtype.is_floating_point:
+            raise ValueError(f"model.master_dtype={master_dtype!r} is not a torch floating-point dtype")
+        model = model.to(dtype)
+        logger.info(f"Parameters cast to {dtype} (model.master_dtype)")
+
     return model, last_checkpoint, config, processor
 
 
