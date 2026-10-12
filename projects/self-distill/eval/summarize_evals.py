@@ -13,10 +13,16 @@ A set with one source language and several targets (FLEURS en->X) is keyed by
 target language instead, since a source key would pool every target into one
 "en" bucket; "seen" is then the targets de/fr/es/it.
 
+With ``--lowercase``, ST hypotheses, references and source transcripts are lowercased
+before chrF, BLEU and chrF-vs-source. SFT trains on lowercased targets, so its models
+write lowercase, while FLEURS references are cased; without the flag that mismatch
+counts as errors. Use the flag for every row of an SFT comparison, step 0 included.
+ASR needs nothing: the normaliser already lowercases.
+
 Run where both ``inspect_ai`` and ``melt`` import (the melt-eval venv with the
 training checkout on PYTHONPATH); CPU only:
 
-    python projects/self-distill/eval/summarize_evals.py <file.eval> ... [--json out.json]
+    python projects/self-distill/eval/summarize_evals.py <file.eval> ... [--lowercase] [--json out.json]
 """
 
 import argparse
@@ -35,7 +41,8 @@ SEEN = ("en", "de", "fr", "es", "it")
 
 
 def run_tag(model: str) -> str:
-    """Short run label: ``S3-opd_anchor``, ``S3-opd_anchor-s44-d44``, ``GOLDW-final``, ``S3-opd_anchor@checkpoint-1000``.
+    """Short run label: ``S3-opd_anchor``, ``S3-opd_anchor-s44-d44``, ``GOLDW-final``, ``S3-opd_anchor@checkpoint-1000``,
+    ``SFT-HR5-from-goldw@checkpoint-718``.
 
     Runs named before the data seed reached the job (no ``-d<seed>``) all read
     data seed 42, whatever their ``-s<seed>``.
@@ -49,6 +56,8 @@ def run_tag(model: str) -> str:
         if not seeds or (seeds.group(1) == "43" and not seeds.group(2)):
             return name.split("-from-", 1)[0]
         return name.split("-from-", 1)[0] + f"-s{seeds.group(1)}" + (seeds.group(2) or "")
+    if name.startswith("SFT-"):
+        return name.split("-bd", 1)[0]
     return name.split("-", 1)[0] + "-final"
 
 
@@ -65,6 +74,11 @@ def st_source(meta: dict) -> str:
 def st_target(meta: dict) -> str:
     """Target language of an ST sample."""
     return meta.get("tgt_lang") or meta.get("lang") or "?"
+
+
+def fold_case(text: str, lowercase: bool) -> str:
+    """``text.lower()`` when ``lowercase``, the call that lowercases the SFT training targets."""
+    return text.lower() if lowercase else text
 
 
 def asr_scores(pairs: list[tuple[str, str]]) -> dict:
@@ -86,7 +100,7 @@ def mean(values: list[float]) -> float:
     return sum(values) / len(values) if values else float("nan")
 
 
-def summarize(path: str, norm: BasicTextNormalizer) -> dict:
+def summarize(path: str, norm: BasicTextNormalizer, lowercase: bool = False) -> dict:
     log = read_eval_log(path)
     args = log.eval.task_args or {}
     out = {
@@ -99,6 +113,8 @@ def summarize(path: str, norm: BasicTextNormalizer) -> dict:
         "task": args.get("task_filter"),
         "metrics": {m: v.value for sc in (log.results.scores if log.results else []) for m, v in sc.metrics.items()},
     }
+    if lowercase:
+        out["lowercase"] = True
     if out["task"] == "asr":
         by_lang, by_source = defaultdict(list), defaultdict(list)
         for s in log.samples or []:
@@ -125,9 +141,9 @@ def summarize(path: str, norm: BasicTextNormalizer) -> dict:
         for s in log.samples or []:
             meta = s.metadata or {}
             hyps, refs, srcs = by_lang[lang_of(meta)]
-            hyps.append((s.output.completion if s.output else "").strip())
-            refs.append(str(s.target).strip())
-            srcs.append(str(meta.get("source_text") or "").strip())
+            hyps.append(fold_case((s.output.completion if s.output else "").strip(), lowercase))
+            refs.append(fold_case(str(s.target).strip(), lowercase))
+            srcs.append(fold_case(str(meta.get("source_text") or "").strip(), lowercase))
         out["lang"] = {
             lang: {
                 "n": len(h),
@@ -145,6 +161,8 @@ def summarize(path: str, norm: BasicTextNormalizer) -> dict:
 
 def show(r: dict) -> None:
     head = f"{r['run']} | {r['set']} | format {r['format']}"
+    if r.get("lowercase"):
+        head += " [lowercase]"
     if r["status"] != "success":
         head += f" [{r['status']}, partial]"
     if r["task"] == "asr":
@@ -173,9 +191,10 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("logs", nargs="+")
     p.add_argument("--json", default=None)
+    p.add_argument("--lowercase", action="store_true", help="score ST case-insensitively (see above)")
     args = p.parse_args()
     norm = BasicTextNormalizer()
-    rows = [summarize(path, norm) for path in args.logs]
+    rows = [summarize(path, norm, args.lowercase) for path in args.logs]
     for r in sorted(rows, key=lambda r: (r["set"], r["run"], r["format"])):
         show(r)
     if args.json:
