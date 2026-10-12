@@ -6,7 +6,7 @@ AZeroS-style hard-label distillation (arXiv 2601.06086), for ASR and speech
 translation, across languages. The trainer is `melt.training.train_self_distill`
 (`melt/training/self_distill.py`, design notes in `docs/self_distillation.md`).
 
-## Where it stands (2026-10-11)
+## Where it stands (2026-10-12)
 
 Read this first; the sections below hold the evidence. All numbers are on dev
 sets, from the same aligned start, with 50 h of transcription-only data in
@@ -32,16 +32,25 @@ en/de/fr/es/it per run.
   is in the requested language 80-97% of the time.
 - **Against AZeroS's own recipe** (no instruction anywhere: the student copies
   the decoder's free reply to the bare transcript) translation is a tie, AZeroS
-  1-2.5 chrF ahead into de and nl, on two data seeds. AZeroS paraphrases instead
-  of transcribing, though: in-domain WER 0.160 against 0.11. Our mix keeps
-  transcription intact through its repeat half, not the gold-CE term, since
-  removing that term changes nothing. So far this is a trade-off, not a
-  strict win. AZeroS never evaluated speech translation, so the transfer itself
-  is new.
-- **Open.** `sift_anchor` (AZeroS plus the gold transcript under the repeat
-  instruction) decides whether the translate instructions matter or
-  "AZeroS plus transcription training" suffices. Also open: the last seed
-  replicas, test sets, spoken QA, and the encoder question (Whisper aligned
+  1-2.5 chrF ahead into de and nl, on three data seeds. AZeroS paraphrases
+  instead of transcribing, though: in-domain WER 0.160 / 0.159 / 0.180 against
+  0.112 / 0.109 / 0.110. Our mix keeps transcription intact through its repeat
+  half, not the gold-CE term, since removing that term changes nothing.
+  AZeroS never evaluated speech translation, so the transfer itself is new.
+- **Giving AZeroS the transcript as well does not get both.** `sift_anchor`
+  (AZeroS's recipe plus predicting the gold transcript under the repeat
+  instruction) transcribes well (in-domain WER 0.117) but, asked to translate
+  from a trained language, mostly transcribes: X->en chrF 35.8 against 53.5,
+  and its output scores 61 chrF against the *source* sentence (other distilled
+  arms: ~27). One seed, but the gap is ~18 chrF against ~1 of seed noise. The
+  explicit translate instructions are what give translation and transcription
+  together, so the self-distilled checkpoint carried forward is
+  `S3-azeros_anchor` d42.
+- **Next: does the alignment matter after standard fine-tuning?** Step 5
+  (below) fine-tunes the whole model on transcription and translation data
+  from the standard-aligned start (GOLDW-final) and from `S3-azeros_anchor`,
+  on five languages and on all 24 EU languages. Running since 2026-10-12.
+- **Open.** Test sets, spoken QA, and the encoder question (Whisper aligned
   after ~30 h; w2v-BERT not even at 3,500 h; no further comparison).
 
 Arm names, by what each trains on:
@@ -246,7 +255,16 @@ means here leave out Irish (ga), which has no source transcript for the ceiling:
 | `S3-soft_anchor` d42 | 0.111 (0.107) | 0.760 | 53.4 / 43.4 | 0.357 |
 | `S3-opd_anchor` d42 | 0.127 (0.111) | 0.948 | 53.4 / 43.7 | 0.373 |
 | `S2-sift` (AZeroS) d42 / d44 | 0.160 / 0.159 (0.144 / 0.143) | 0.631 / 0.643 | 53.6 / 43.5, 53.7 / 43.5 | 0.486 / 0.482 |
+| `S2-sift_anchor` d42 | 0.117 (0.109) | 0.810 | 35.8 / 38.2 | - |
 | text-only ceiling | - | - | 61.4 / 56.6 | - |
+
+All three data seeds (42 / 44 / 45), same columns:
+
+| arm | in-domain WER | FLEURS CER, 19 unseen | X->en chrF trained / 18 unseen |
+|---|---|---|---|
+| `S3-azeros_anchor` | 0.112 / 0.109 / 0.110 | 0.692 / 0.692 / 0.696 | 53.5 / 44.3, 52.6 / 43.6, 53.2 / 43.9 |
+| `S3-opd_anchor` | 0.127 / 0.120 / 0.118 | 0.948 / 0.956 / 0.980 | 53.4 / 43.7, 53.2 / 43.5, 53.6 / 43.5 |
+| `S2-sift` | 0.160 / 0.159 / 0.180 | 0.631 / 0.643 / 0.666 | 53.6 / 43.5, 53.7 / 43.5, 53.9 / 43.5 |
 
 X->Y chrF, trained sources / 18 unseen sources (nl and pt were never
 translation targets in training):
@@ -259,6 +277,7 @@ translation targets in training):
 | `S3-opd_anchor` d42 | 53.4/43.7 | 46.4/37.8 | 50.4/39.3 | 45.6/35.9 | 46.7/36.8 | 41.8/35.0 | 50.8/37.4 |
 | `S2-sift` d42 | 53.6/43.5 | 46.8/38.7 | 51.0/40.4 | 45.4/36.3 | 46.2/37.1 | 42.6/36.5 | 50.8/37.7 |
 | `S2-sift` d44 | 53.7/43.5 | 46.7/38.8 | 50.8/40.5 | 45.8/36.2 | 46.5/37.1 | 42.7/36.8 | 50.9/37.6 |
+| `S2-sift_anchor` d42 | 35.8/38.2 | 38.3/36.5 | 43.6/38.7 | 41.8/35.0 | 41.4/35.6 | 33.0/34.5 | 47.6/36.6 |
 | text-only ceiling | 61.4/56.6 | 50.9/44.7 | 55.0/47.4 | 50.1/41.0 | 49.8/43.0 | 47.3/39.1 | 55.3/43.3 |
 
 - **Translation into other languages works, and the instruction generalises.**
@@ -283,10 +302,15 @@ translation targets in training):
   mostly repetition loops (0.111 without them), and unseen-language CER rises
   to 0.948. Soft labels (`soft_anchor`) add nothing over hard ones.
 - **Seed noise.** Changing the data seed moves translation by up to 1.4 chrF
-  (mostly under 0.5) and in-domain WER by 0.003. The first `-s44` runs (same data as `-s43`) agree with
+  (mostly under 0.5) and in-domain WER by 0.003 (0.02 for SIFT, whose third
+  seed paraphrases more). The first `-s44` runs (same data as `-s43`) agree with
   `-s43` within 0.1-0.4 chrF, which is numerical and sampling noise only.
-- **Pending:** `sift_anchor` (d42), `S3-opd_anchor` d44/d45,
-  `S3-azeros_anchor` d45 and `S2-sift` d45.
+- **`sift_anchor` copies instead of translating.** The gold transcript under
+  the repeat instruction fixes SIFT's transcription (0.160 -> 0.117) but pulls
+  the translate requests toward transcription: on trained sources its X->en
+  output scores 61.0 chrF against the source sentence (SIFT 26.5, our mix
+  27.7), and every X->Y target loses 3-10 chrF against the other arms. Unseen
+  sources lose less (38.2 vs 43.5), and unseen-language CER rises to 0.810.
 
 **Parity** (melt-eval vs the trainer's own eval, GOLDW-final, the trainer's 250
 clips from `eval_parity_spec.py`): WER en 0.081 / 0.083, de 0.100 / 0.102, fr
@@ -300,6 +324,64 @@ any phase-1 or phase-2 checkpoint (`fc1` shape mismatch). Run it with
 `PYTHONPATH` pointing at the checkout that trained the checkpoint.
 `eval_parity_spec.py` pins melt-eval to the trainer's exact eval cuts (checked on
 phase-1 GOLD: 50/50 logged references reproduced).
+
+## Step 5: standard fine-tuning on top (running)
+
+Question: if the whole model is then fine-tuned on ordinary transcription and
+translation data, is it better to start from the standard-aligned checkpoint
+or from the self-distilled one? The two starts differ only in the adapter:
+**A** = GOLDW-final, **B** = `S3-azeros_anchor` d42.
+
+- **Design.** 2 starts x 2 data conditions, one seed (1337 on the command
+  line). Within a condition the two runs share config, seeds and world size,
+  so they see the same batches; only `model.ckpt` differs.
+  - HR5: ASR en/de/fr/es/it, X->en and en->X for de/fr/es/it, up to 600 h per
+    entry (an entry is one ASR language or one translation direction).
+  - EU24: ASR for all 24 EU languages and every X->en / en->X direction with
+    data, under a common cap (197.7 h) solved so the total matches HR5's.
+  - Both 6,132.6 h, one pass at 1,920 s of audio per optimizer step: 11,499
+    steps (batches come out ~85% full, so ~5,200 h are actually seen).
+- **Recipe.** Encoder, adapter and decoder all train (LRs 6e-6 / 2e-4 / 2e-5,
+  from SFT-v1.4.0), warmup-stable-decay with 5% warmup and a cosine decay over
+  the last fifth to 0.1x. Instructions are drawn at random from
+  `TASK_TEMPLATES`; the in-training validation pins one template per task.
+- **Precision.** Both starts load as bf16 (transformers 5 loads `model.ckpt`
+  with dtype="auto") and DDP does not upcast, so the first smoke test trained
+  in pure bf16: AdamW updates below half a bf16 ulp are lost, which at 2e-5
+  freezes every decoder weight above ~0.008 and nearly the whole encoder at
+  6e-6. `--model.master_dtype float32` (0e19639) keeps fp32 master weights;
+  compute stays bf16. A checkpoint is ~30 GB (fp32 weights and Adam state).
+- **Files.** `sft/build_sft_mix.py` renders `sft/SFT-HR5.yaml` and
+  `sft/SFT-EU24.yaml` from `sft/SFT-template.yaml`; `sft/launch_sft.sh` derives
+  the schedule (16 saves, 32 in-training evals) and submits. Evaluation uses
+  `eval/format-sft-random.yaml` (random templates, seeded per sample) on FLEURS
+  ASR (24 languages), X->en and en->X (23 each). SFT trains on lowercased
+  targets, so translation must be scored case-insensitively.
+- **Where.** HR5 pair on the artemis H200 node, 2 GPUs each with 16-step
+  accumulation (jobs started 2026-10-12, ~3.5 days with one resume at the
+  2-day limit); EU24 pair planned on MN5 (2 nodes each, 4-step accumulation).
+  Outputs under `/mnt/scratch-nyx/giuseppe/melt/outputs-sft/`.
+- **Smoke test** (MN5, EU24 from A, 40 steps, bf16): 6.7 s/step on 8 H100,
+  peak 36-47 GB per GPU, `shard_seed: 1337` on every leaf, the loss falling
+  from 1.0 to 0.75.
+
+Step 0, the two starts under the SFT evaluation format (FLEURS dev, 100 per
+language or direction; "other 19" = the EU languages outside en/de/fr/es/it,
+Irish included):
+
+| | A (GOLDW-final) | B (`S3-azeros_anchor`) |
+|---|---|---|
+| ASR WER, 5 trained languages | 0.081 | 0.083 |
+| ASR CER, other 19 | 0.582 | 0.565 |
+| X->en chrF, trained / other 19 | 24.3 / 21.0 | 37.9 / 38.8 |
+| en->X chrF, de/fr/es/it / other 19 | 27.3 / 19.1 | 50.1 / 38.3 |
+| en->X output in the requested language | 11-21% (copies the English) | 83-91% |
+| in-domain WER | 0.107 | 0.122 |
+
+Under random templates B's X->en sits well below its 53.5 under the repeat-first
+format of step 4. Unseen-language ASR depends strongly on whether the template
+names the language. The en->X targets do not share their English recordings, so
+compare A and B within a target.
 
 ## Running on artemis
 
