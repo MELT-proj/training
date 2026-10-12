@@ -48,3 +48,20 @@ def test_real_bool_fields_are_left_untouched(tmp_path):
 
     assert result["bf16"] is True
     assert result["do_train"] is False
+
+
+def test_train_py_only_keys_stay_out_of_training_arguments(tmp_path):
+    # overwrite_output_dir and ddp_gradient_as_bucket_view are read by train.py
+    # off the raw YAML; neither is a Seq2SeqTrainingArguments field.
+    cfg = get_default_config()
+    cli_cfg = OmegaConf.from_dotlist(
+        ["trainer.ddp_gradient_as_bucket_view=true", "trainer.bf16=false", f"trainer.output_dir={tmp_path}"]
+    )
+    cfg = OmegaConf.merge(cfg, cli_cfg)
+
+    result = trainer_args_dict(cfg)
+
+    assert "ddp_gradient_as_bucket_view" not in result
+    assert "overwrite_output_dir" not in result
+    assert cfg.trainer.ddp_gradient_as_bucket_view is True
+    Seq2SeqTrainingArguments(**result)

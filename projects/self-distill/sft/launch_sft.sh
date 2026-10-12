@@ -232,6 +232,9 @@ fi
 # dtype="auto"), and DDP does not upcast, so without it the run trains in pure bf16, where AdamW
 # updates at the encoder's 6e-6 and the decoder's 2e-5 mostly round to nothing (a 40-step smoke
 # test wrote optimizer state at 4 bytes per parameter). Autocast keeps the compute in bf16.
+# --trainer.ddp_gradient_as_bucket_view true: fp32 masters peak at 62.7 GiB per GPU at 60 s on
+# H200 (the HR5 pair, launched without it); sharing the gradients with DDP's buckets saves ~9.4
+# GiB, which is what lets the same recipe fit a 64 GB MN5 H100. The arithmetic is unchanged.
 CMD=(
     infra/runners/submit-container.sh "$SITE" config/accelerate/ddp.yaml
     --config "$CONFIG"
@@ -245,6 +248,7 @@ CMD=(
     --data.train_ds.batch_duration "$BATCH_DURATION"
     --trainer.gradient_accumulation_steps "$GRAD_ACCUM"
     --trainer.gradient_checkpointing true
+    --trainer.ddp_gradient_as_bucket_view true
     --trainer.max_steps "$MAX_STEPS"
     --trainer.lr_scheduler_kwargs.num_decay_steps "$DECAY_STEPS"
     --trainer.eval_steps "$EVAL_STEPS"

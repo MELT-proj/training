@@ -377,6 +377,12 @@ def main(cfg: DictConfig) -> None:
         compute_metrics=compute_metrics
     )
 
+    # See `trainer.ddp_gradient_as_bucket_view` in config.py. The Trainer wraps
+    # the model in DDP inside train(), so its DDP kwargs can still change here.
+    if cfg.trainer.get("ddp_gradient_as_bucket_view", False):
+        trainer.accelerator.ddp_handler.gradient_as_bucket_view = True
+        logger.info("DDP gradients are views into the allreduce buckets (trainer.ddp_gradient_as_bucket_view)")
+
     # Determine checkpoint to resume from.
     # - True  → pass through so HF Trainer auto-detects the last checkpoint in output_dir.
     # - str   → prepare_model already resolved it to the actual checkpoint path via

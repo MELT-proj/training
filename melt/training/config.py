@@ -297,6 +297,12 @@ trainer:
   dataloader_num_workers: 4
   remove_unused_columns: false
   ddp_find_unused_parameters: false
+  # DDP keeps a flat gradient buffer per bucket next to every parameter's .grad;
+  # true makes the .grad tensors views into those buckets, saving one copy of
+  # the gradients (4 bytes per trainable parameter in fp32: ~9.4 GiB for the
+  # 2.5 B Whisper + Qwen3.5-2B stack). Same arithmetic. Not a TrainingArguments
+  # field: train.py sets it on the accelerator's DDP kwargs.
+  ddp_gradient_as_bucket_view: false
   resume_from_checkpoint: null
 
 # =============================================================================
@@ -621,7 +627,7 @@ def trainer_args_dict(cfg: DictConfig) -> dict:
     # prepare_model() (train.py) reads it directly off the raw YAML instead,
     # so it still takes effect -- the warning below would otherwise be wrong
     # for the one key campaign YAMLs actually rely on.
-    dropped_keys = set(result.keys()) - valid_keys - {"overwrite_output_dir"}
+    dropped_keys = set(result.keys()) - valid_keys - {"overwrite_output_dir", "ddp_gradient_as_bucket_view"}
     if dropped_keys:
         logger.warning(
             "trainer_args_dict: dropping %d key(s) from the YAML `trainer:` block that "
