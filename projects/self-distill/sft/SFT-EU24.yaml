@@ -2247,6 +2247,19 @@ data:
     strict_text_field: true
     skip_text_field_mismatch: true
 
+    # Eval prompts are PINNED, not drawn at random like training's: one instruction per task, the
+    # same for every clip, eval step, run and data condition, so eval_<name>_loss and the WER/CER
+    # only move when the model does. validation_ds wins over the data-level keys
+    # (resolve_eval_data_config inherits a key only when validation_ds does not set it), so
+    # training keeps its random draw. Both strings are entries of TASK_TEMPLATES in
+    # melt/training/data/audio/lhotse/helpers.py (asr[1], st[1]), so training has seen them. {lang}
+    # is the clip's language for ASR and the TARGET language for ST (X->en reads "into English").
+    # Quoted: unquoted, the ": " and the braces would be read as YAML mapping syntax.
+    prompt_template_selection: custom
+    prompt_template:
+      asr: "Transcribe the following {lang} audio: {audio_token}"
+      st: "Translate the following audio into {lang}: {audio_token}"
+
     # Batch composition
     batch_size: 16
     batch_duration: null
