@@ -460,6 +460,16 @@ class MELTTrainer(Seq2SeqTrainer):
         )
         self._preallocation_done = False
 
+        # trainer.ddp_gradient_as_bucket_view (config.py). Trainer.__init__ has built
+        # the accelerator but train() has not wrapped the model in DDP yet, so the DDP
+        # kwargs can still change here; training_step makes zero_grad keep the views.
+        self._grad_bucket_view = bool(
+            config is not None and config.get("trainer", {}).get("ddp_gradient_as_bucket_view", False)
+        )
+        if self._grad_bucket_view:
+            self.accelerator.ddp_handler.gradient_as_bucket_view = True
+            logger.info("DDP gradients are views into the allreduce buckets (trainer.ddp_gradient_as_bucket_view)")
+
     # ------------------------------------------------------------------
     # Training entry point override: capture resume path for sampler
     # ------------------------------------------------------------------
@@ -1401,6 +1411,15 @@ class MELTTrainer(Seq2SeqTrainer):
         self._duration_tracker.update(durations, tasks, langs, src_langs, tgt_langs)
         if langs is not None:
             self._batch_cuts_history.append(len(langs))
+
+        if self._grad_bucket_view and not getattr(model, "_melt_zero_grad_in_place", False):
+            # Trainer clears gradients with model.zero_grad() after every optimizer step,
+            # which sets them to None: the next accumulation then builds fresh gradients
+            # beside DDP's buckets and the bucket views save nothing. Zeroing in place keeps
+            # .grad the bucket view. Every parameter gets a gradient on every step (DDP runs
+            # with find_unused_parameters=False), so AdamW sees the same updates.
+            model.zero_grad = functools.partial(torch.nn.Module.zero_grad, model, set_to_none=False)
+            model._melt_zero_grad_in_place = True
 
         if not self._preallocation_done:
             self._run_preallocation(model)

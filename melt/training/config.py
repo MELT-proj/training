@@ -298,10 +298,12 @@ trainer:
   remove_unused_columns: false
   ddp_find_unused_parameters: false
   # DDP keeps a flat gradient buffer per bucket next to every parameter's .grad;
-  # true makes the .grad tensors views into those buckets, saving one copy of
-  # the gradients (4 bytes per trainable parameter in fp32: ~9.4 GiB for the
-  # 2.5 B Whisper + Qwen3.5-2B stack). Same arithmetic. Not a TrainingArguments
-  # field: train.py sets it on the accelerator's DDP kwargs.
+  # true makes the .grad tensors views into those buckets and zeroes them in
+  # place between steps instead of freeing them (freed gradients come back as a
+  # second copy during accumulation), saving one copy of the gradients: 4 bytes
+  # per trainable parameter in fp32, ~9.4 GiB for the 2.5 B Whisper +
+  # Qwen3.5-2B stack. Same arithmetic. Not a TrainingArguments field:
+  # MELTTrainer applies it.
   ddp_gradient_as_bucket_view: false
   resume_from_checkpoint: null
 
