@@ -6,8 +6,13 @@
 # Only the adapter trains. The question it answers: can this replace the SFT step? Its scored
 # counterpart is SFT-EU24 (all three components, gold ASR + ST labels, from the same GOLDW-final).
 #
-#   ARM=azeros_anchor   offline CE on the teacher's greedy reply + 0.5 x gold CE on the repeat prompt (default)
-#   ARM=azeros          the same without the gold anchor
+#   ARM=azeros          offline CE on the frozen decoder's greedy reply to the repeat or translate instruction (default).
+#                       No gold label enters: the repeat half is gold in effect, because the teacher copies the
+#                       transcript exactly in 96-100% of FLEURS clips in all 24 languages (text_ceiling.py --task asr)
+#   ARM=azeros_anchor   the same + 0.5 x gold CE on the repeat prompt. The anchor runs a second forward and backward
+#                       over the batch and keeps both graphs alive: at BATCH_DURATION 120 it needed more than a 64 GB
+#                       H100 has (OOM in _gold_cross_entropy, 61.9 GB allocated; MN5 smoke test 47259527), so give it
+#                       a smaller batch
 #   ARM=ce              the matched control: the adapter alone on the gold transcript under the repeat
 #                       instruction (the standard MA loss, no mix) over the same data in the same order
 #
@@ -23,7 +28,7 @@
 #
 # Inputs (environment):
 #   HOURS              total hours of the rendered mix                       (default 2700)
-#   ARM, SITE          see above, and infra/runners/sites/<site>.sh          (defaults azeros_anchor, mn5)
+#   ARM, SITE          see above, and infra/runners/sites/<site>.sh          (defaults azeros, mn5)
 #   MELT_NODES, MELT_GPUS_PER_NODE   (defaults 2 and 4; pinned: SLURM_GPUS_ON_NODE lies on MN5's acc)
 #   BATCH_DURATION     seconds of audio per rank per step                    (default 120)
 #   ADAPTER_LR         peak adapter LR, WSD schedule as launch_step2.sh      (default 2e-4)
@@ -63,7 +68,7 @@ cd "$REPO_ROOT"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
-ARM="${ARM:-azeros_anchor}"
+ARM="${ARM:-azeros}"
 HOURS="${HOURS:-2700}"
 SITE="${SITE:-mn5}"
 SEED="${SEED:-1337}"
