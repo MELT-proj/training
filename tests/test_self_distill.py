@@ -39,6 +39,7 @@ from melt.training.self_distill import (
     distillation_loss,
     response_logits,
     response_mask,
+    terminated_rows,
 )
 from melt.training.train_self_distill import (
     _to_dotlist,
@@ -317,6 +318,57 @@ class TestResponseMask:
             [True, True, True, True],  # truncated at the budget: kept whole
             [True, False, False, False],
         ]
+
+
+class TestTerminatedRows:
+    def test_a_row_is_terminated_when_it_ended_on_an_eos(self):
+        response = torch.tensor([[5, EOS, PAD], [5, 6, 7], [EOS, PAD, PAD]])
+        assert terminated_rows(response, torch.tensor([EOS])).tolist() == [True, False, True]
+
+    def test_the_longest_row_ending_on_its_eos_is_terminated(self):
+        assert terminated_rows(torch.tensor([[20, EOS, PAD], [30, 31, EOS]]), torch.tensor([EOS])).tolist() == [True, True]
+
+
+class TestDropTruncated:
+    """distill.drop_truncated: rows cut at max_new_tokens stay out of the loss, and say so in the logs."""
+
+    @staticmethod
+    def _loss(distill, response, mask):
+        model = _tiny_model()  # in eval mode: no dropout, so the loss can be compared with a recomputation
+        trainer = _bare_trainer(model, distill)
+        with patch.object(trainer, "_rollout", return_value=(response, mask)):
+            loss = trainer.compute_loss(model, _batch())
+        return trainer, model, loss
+
+    def test_it_is_off_by_default(self):
+        assert SelfDistillConfig().drop_truncated is False
+
+    def test_the_cut_row_leaves_the_loss_and_the_stats_still_see_it(self):
+        response, mask = _responses()  # row 0 stops at EOS, row 1 runs to the budget
+        offline = {"lmbda": 0.0, "loss": "ce", "temperature": 0.0, "max_new_tokens": 5}
+        _, _, kept_all = self._loss(SelfDistillConfig(**offline), response, mask)
+        trainer, model, dropped = self._loss(SelfDistillConfig(drop_truncated=True, **offline), response, mask)
+
+        # The loss is the token mean over row 0 alone: the same value as a batch whose row 1 is masked out.
+        batch = _batch()
+        student = _student_logits(model, batch, response, mask)
+        expected = distillation_loss(student, student, response, mask & torch.tensor([[True], [False]]),
+                                     SelfDistillConfig(**offline))  # fmt: skip
+        torch.testing.assert_close(dropped, expected)
+        assert not torch.allclose(dropped, kept_all)
+        assert trainer._distill_stats["dropped_frac"] == [0.5]
+        assert trainer._distill_stats["truncated_frac"] == [0.5]  # the monitor describes the teacher's replies
+
+    def test_a_micro_batch_of_only_cut_replies_costs_nothing_and_still_backpropagates(self):
+        response = torch.tensor([[30, 31, 32, 33, 34], [40, 41, 42, 43, 44]])  # nobody emitted EOS
+        mask = response_mask(response, torch.tensor([EOS]))
+        distill = SelfDistillConfig(lmbda=0.0, loss="ce", temperature=0.0, max_new_tokens=5, drop_truncated=True)
+        trainer, model, loss = self._loss(distill, response, mask)
+
+        assert loss.item() == 0.0 and loss.requires_grad
+        loss.backward()  # DDP's gradient reduction must still find a graph on this rank
+        check_adapter_only_gradients(model)
+        assert trainer._distill_stats["dropped_frac"] == [1.0]
 
 
 class TestRecordStats:

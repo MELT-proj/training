@@ -117,6 +117,12 @@ class SelfDistillConfig:
             keeps every instruction the ASR one.
         translate_targets: Comma-separated ISO codes a translate instruction
             may target.
+        drop_truncated: Leave out of the loss the rows whose reply was cut at
+            ``max_new_tokens`` before an end-of-sequence token. A cut reply is
+            a transcript or translation longer than the cap, or a degenerate
+            loop, and either way the student would be trained on a target that
+            never stops. The share left out is logged as ``distill/dropped_frac``.
+            ``False`` keeps every row, as every earlier run did.
         student_template: The student's distillation prompt when it should
             differ from ``data.prompt_template``, which then still builds the
             gold batch (the anchor) and the eval prompt. ``"{audio_token}"``
@@ -137,6 +143,7 @@ class SelfDistillConfig:
     gold_ce_weight: float = 0.0
     translate_frac: float = 0.0
     translate_targets: str = "en,de,fr,es,it"
+    drop_truncated: bool = False
     student_template: str = ""
 
     @property
@@ -486,6 +493,11 @@ def response_mask(response: torch.Tensor, eos_token_ids: torch.Tensor) -> torch.
     return eos_before == 0
 
 
+def terminated_rows(response: torch.Tensor, eos_token_ids: torch.Tensor) -> torch.Tensor:
+    """``(batch,)`` bool: the rows of *response* that ended on an EOS; the rest were cut at ``max_new_tokens``."""
+    return torch.isin(response, eos_token_ids).any(dim=1)
+
+
 def response_logits(
     model: torch.nn.Module,
     prompt_ids: torch.Tensor,
@@ -725,7 +737,18 @@ class MELTSelfDistillTrainer(MELTTrainer):
         from_student = self._rng.random() < self.distill.lmbda
         response, mask = self._rollout(inputs, from_student=from_student)
         student, teacher = self._student_and_teacher_logits(model, inputs, response, mask)
-        loss = distillation_loss(student, teacher, response, mask, self.distill)
+        loss_mask = mask
+        if self.distill.drop_truncated:
+            ended = terminated_rows(response, torch.tensor(self._eos_token_ids, device=response.device))
+            loss_mask = mask & ended.unsqueeze(1)
+            self._distill_stats["dropped_frac"].append(1.0 - ended.float().mean().item())
+        if loss_mask.any():
+            loss = distillation_loss(student, teacher, response, loss_mask, self.distill)
+        else:
+            # Every reply of this micro-batch was cut: there is no target to learn from. A zero that still
+            # depends on the logits keeps the backward pass, and DDP's gradient reduction, running on every rank.
+            loss = student.sum() * 0.0
+        # The monitors describe the replies as the teacher wrote them, cut ones included.
         self._record_stats(student, teacher, response, mask, from_student, inputs.get("distill_translate"))
         if self.distill.gold_ce_weight > 0:
             gold_ce = self._gold_cross_entropy(inputs, gold)
