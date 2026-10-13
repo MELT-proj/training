@@ -33,6 +33,8 @@ directly from GitHub.
   adapter are not rounded to bf16 on the way; from scratch it is a cast after
   construction. Startup now logs the dtype of the trainable parameters. The two
   IFT-700 runs finished so far were unaffected: their stage-1 checkpoints were fp32.
+  `ABL-IFT-700.yaml` sets it to `float32`, as an IFT from any later DDP stage-1
+  checkpoint needs.
 
 ## [0.8.0] - 2026-09-12
 
