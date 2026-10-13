@@ -157,6 +157,20 @@ model:
 
   ckpt: null  # Path to checkpoint to resume from
 
+  # The dtype the parameters train in. null keeps what loading gives, which is not
+  # neutral: transformers 5 loads `model.ckpt` with dtype="auto", i.e. the
+  # checkpoint's top-level config.dtype -- the first parameter's, so the DECODER's --
+  # applied to the whole model. A checkpoint saved by a DDP run (decoder bf16 off the
+  # Hub, encoder and adapter fp32) therefore comes up all bf16, and DDP, unlike FSDP,
+  # never upcasts: AdamW then updates bf16 weights in place and an update below half
+  # a bf16 ulp of its weight rounds to nothing (at lr 2e-5, no weight above ~0.008
+  # moves, and norm weights near 1.0 never do). float32 gives a bf16 mixed-precision
+  # run fp32 master weights; compute stays bf16 under autocast. On the `model.ckpt`
+  # path it is handed to from_pretrained, so the fp32 encoder and adapter are not
+  # rounded to bf16 on the way (a cast afterwards would restore the dtype, not the
+  # bits); from scratch it is a cast after construction, which loses nothing.
+  master_dtype: null
+
 # =============================================================================
 # Data Configuration
 # =============================================================================

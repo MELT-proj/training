@@ -21,6 +21,18 @@ directly from GitHub.
   layer), broadcasts the learned queries to one copy per window, masks padded
   frames in cross-attention, and returns a prefix output mask instead of all
   ones.
+- `model.master_dtype` (default `null`: nothing changes) gives a run fp32 master
+  weights. transformers 5 loads `model.ckpt` with `dtype="auto"`, which applies the
+  checkpoint's top-level `config.dtype` to the whole model, and that is the decoder's:
+  a stage-1 run on DDP leaves a bf16 decoder (straight off the Hub) beside an fp32
+  encoder and adapter, so its checkpoint says `bfloat16`. A run started from it came
+  up all bf16 and, DDP never upcasting (FSDP does), trained in pure bf16, where an
+  AdamW update below half a bf16 ulp of its weight is lost: at lr 2e-5 nothing above
+  |w| of about 0.008 moves, which is about 65% of Llama-3.2-1B's decoder. On the
+  `model.ckpt` path the dtype is handed to `from_pretrained`, so the fp32 encoder and
+  adapter are not rounded to bf16 on the way; from scratch it is a cast after
+  construction. Startup now logs the dtype of the trainable parameters. The two
+  IFT-700 runs finished so far were unaffected: their stage-1 checkpoints were fp32.
 
 ## [0.8.0] - 2026-09-12
 
