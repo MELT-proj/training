@@ -20,11 +20,12 @@
 # Steps are DERIVED from its data.train_ds.total_hours, as in launch_sft.sh, so a run is one pass over
 # the mix whatever the world size and BATCH_DURATION:
 #
-#   max_steps = ceil(total_hours * 3600 / (BATCH_DURATION * world_size))      (no gradient accumulation)
+#   max_steps = ceil(total_hours * 3600 / (BATCH_DURATION * world_size * FILL))   (no gradient accumulation)
 #   num_decay_steps = max_steps // 5, save every max_steps // 8, eval every max_steps // 16
 #
-# Batches fill to less than BATCH_DURATION, so the audio a run really sees is the train_hours counter
-# in its log, a little under HOURS.
+# FILL is the share of BATCH_DURATION a batch really carries: MAX_ROWS caps the cuts of a batch of short
+# utterances, so it is below 1. The MN5 smoke test 47263566 measured 0.80 (6.86 h of audio in 60 steps of
+# 8 x 64 s). The audio a run really sees is the train_hours counter in its log.
 #
 # Inputs (environment):
 #   HOURS              total hours of the rendered mix                       (default 2700)
@@ -36,6 +37,7 @@
 #                      rows x longest reply x a 248k vocabulary and upcast to fp32 by accelerate: 4.76 GiB for 20 rows
 #                      of 257 tokens, which one looping reply in a batch of short utterances produces
 #   MAX_ROWS           most cuts in one micro-batch (data.train_ds.batch_size) (default 16): bounds that product
+#   FILL               share of BATCH_DURATION a batch carries, for the derived steps (default 0.8, see above)
 #   REPLY_BUDGET_FACTOR  the teacher's reply budget per micro-batch is min(MAX_NEW_TOKENS, factor x the longest content
 #                      in tokens + 32)                                        (default 3.5; 0 = the fixed MAX_NEW_TOKENS).
 #                      A reply is about as long as its content, up to ~3x for a translation into a finely split language
@@ -93,6 +95,7 @@ SITE="${SITE:-mn5}"
 SEED="${SEED:-1337}"
 BATCH_DURATION="${BATCH_DURATION:-64}"
 MAX_ROWS="${MAX_ROWS:-16}"
+FILL="${FILL:-0.8}"
 MAX_DURATION="${MAX_DURATION:-30}"
 DROP_TRUNCATED="${DROP_TRUNCATED:-1}"
 export MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-256}"
@@ -125,19 +128,19 @@ DEFAULT_GOLDW_RUN=GOLDW-700asr-whisperlargeF-qwen35_2bInsF-mlpT-sk5-bd150-ga1-ws
 WARM_START="${WARM_START:-/workspace/outputs/${DEFAULT_GOLDW_RUN}}"
 
 # The derived schedule, in exact rational arithmetic (total_hours is a rounded decimal).
-PLAN="$(python3 - "$CONFIG" "$BATCH_DURATION" "$WORLD_SIZE" <<'PY'
+PLAN="$(python3 - "$CONFIG" "$BATCH_DURATION" "$WORLD_SIZE" "$FILL" <<'PY'
 import math
 import sys
 from fractions import Fraction
 
 import yaml
 
-config, batch_duration, world_size = sys.argv[1], *(Fraction(a) for a in sys.argv[2:])
+config, batch_duration, world_size, fill = sys.argv[1], *(Fraction(a) for a in sys.argv[2:])
 with open(config) as f:
     hours = Fraction(str(yaml.safe_load(f)["data"]["train_ds"]["total_hours"]))
 if hours <= 0:
     sys.exit(f"{config}: data.train_ds.total_hours is {hours}; render it with build_sft_mix.py")
-print(float(hours), math.ceil(hours * 3600 / (batch_duration * world_size)))
+print(float(hours), math.ceil(hours * 3600 / (batch_duration * world_size * fill)))
 PY
 )" || die "could not derive max_steps from $CONFIG"
 read -r TOTAL_HOURS DERIVED_STEPS <<<"$PLAN"
