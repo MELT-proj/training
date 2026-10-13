@@ -67,11 +67,16 @@ TRANSLATE_FRAC="${TRANSLATE_FRAC:-0}"
 TEACHER_PROMPT=mirror
 VALIDATION_TEMPLATE="$TEMPLATE"
 ALIGNMENT_GAP=true
-export MELT_PARTITION="${MELT_PARTITION:-h200}"
-export MELT_QOS="${MELT_QOS:-gpu-h200}"
+# The scheduler defaults are artemis's (an H200 node); any other site takes its partition, QOS and
+# wall from its own site file and the caller (on MN5 an exported MELT_PARTITION=h200 would be passed
+# to sbatch as a partition that does not exist, and the default wall is the site's one hour).
+if [[ "$SITE" == artemis ]]; then
+    export MELT_PARTITION="${MELT_PARTITION:-h200}"
+    export MELT_QOS="${MELT_QOS:-gpu-h200}"
+    export MELT_TIME="${MELT_TIME:-24:00:00}"
+fi
 export MELT_NODES="${MELT_NODES:-1}"
 export MELT_GPUS_PER_NODE="${MELT_GPUS_PER_NODE:-2}"
-export MELT_TIME="${MELT_TIME:-24:00:00}"
 export MELT_SEED="$SEED"
 WORLD_SIZE=$(( MELT_NODES * MELT_GPUS_PER_NODE ))
 

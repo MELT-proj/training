@@ -805,27 +805,50 @@ def _wrapped(prefix: str, text: str) -> list[str]:
     return textwrap.wrap(text, width=110, initial_indent=prefix, subsequent_indent="#   ")
 
 
-def header_lines(name: str, intro: list[str], plans: list[Plan], wanted: set[str]) -> list[str]:
+def header_lines(
+    name: str,
+    intro: list[str],
+    plans: list[Plan],
+    wanted: set[str],
+    title: list[str] | None = None,
+    provenance: list[str] | None = None,
+    validation: list[str] | None = None,
+) -> list[str]:
     """The comment block at the top of a rendered config, carrying the total hours.
 
     ``wanted`` is every source the condition would read were nothing excluded; the sources
-    left out and the caveats listed are the ones that concern this condition.
+    left out and the caveats listed are the ones that concern this condition. ``title``,
+    ``provenance`` and ``validation`` replace the SFT wording of those paragraphs (the
+    self-distillation condition says something else); the defaults are the SFT text.
     """
     total = sum(p.hours for p in plans)
     used = {d.source.rel for p in plans for d in p.draws}
-    lines = [f"# {name} -- supervised fine-tuning of Whisper-large-v3 + MLP adapter (stack_factor 5) + Qwen3.5-2B,"]
-    lines += ["# all three components trainable.", "#"]
+    lines = (
+        list(title)
+        if title is not None
+        else [
+            f"# {name} -- supervised fine-tuning of Whisper-large-v3 + MLP adapter (stack_factor 5) + Qwen3.5-2B,",
+            "# all three components trainable.",
+        ]
+    )
+    lines += ["#"]
     lines += [f"# {line}" if line else "#" for line in intro]
     lines += [
         "#",
         f"# TOTAL HOURS: {total:,.1f} h over {len(plans)} entries (data.train_ds.total_hours). The launcher derives",
-        "# max_steps from it; HR5 and EU24 draw the same total, so they get the same compute.",
-        "#",
-        "# Rendered by projects/self-distill/sft/build_sft_mix.py from SFT-template.yaml. Both conditions are",
-        "# rendered together, because EU24's cap depends on HR5's total. Do not hand-edit: change the template",
-        "# or the script and render again. The script has read a sample of cuts from every source below and",
-        "# resolved each text_field the way the loader does; it refuses to render if one does not resolve.",
     ]
+    lines += (
+        list(provenance)
+        if provenance is not None
+        else [
+            "# max_steps from it; HR5 and EU24 draw the same total, so they get the same compute.",
+            "#",
+            "# Rendered by projects/self-distill/sft/build_sft_mix.py from SFT-template.yaml. Both conditions are",
+            "# rendered together, because EU24's cap depends on HR5's total. Do not hand-edit: change the template",
+            "# or the script and render again. The script has read a sample of cuts from every source below and",
+            "# resolved each text_field the way the loader does; it refuses to render if one does not resolve.",
+        ]
+    )
     left_out = [rel for rel in EXCLUDED if rel in wanted]
     if left_out:
         lines += ["#", "# Left out of the mix (build_sft_mix.EXCLUDED):"]
@@ -848,11 +871,17 @@ def header_lines(name: str, intro: list[str], plans: list[Plan], wanted: set[str
             "no filter on empty transcripts). 0.2-4.8% of their cuts have no transcript; the loader skips those "
             "(there is no text to mislabel) and their batch slots are wasted.",
         )
+    lines += (
+        list(validation)
+        if validation is not None
+        else [
+            "#",
+            "# Validation is the same in both conditions: 20 clips per named set from splits no training source",
+            "# reads. asr_hr is scored on FLEURS because CV22 has no Croatian and 38.6% of VoxPopuli hr",
+            "# validation cuts have no transcript (max_samples is applied before they are dropped).",
+        ]
+    )
     lines += [
-        "#",
-        "# Validation is the same in both conditions: 20 clips per named set from splits no training source",
-        "# reads. asr_hr is scored on FLEURS because CV22 has no Croatian and 38.6% of VoxPopuli hr",
-        "# validation cuts have no transcript (max_samples is applied before they are dropped).",
         "#",
         "# Hours are the unfiltered durations of the manifests, as everywhere else in this repo; the loader",
         "# then drops cuts outside [min_duration, max_duration].",
@@ -891,6 +920,9 @@ def render_config(
     eval_sets: list[EvalSet],
     measures: dict[str, Measure],
     wanted: set[str] | None = None,
+    title: list[str] | None = None,
+    provenance: list[str] | None = None,
+    validation: list[str] | None = None,
 ) -> str:
     """Splice one condition into the template.
 
@@ -902,7 +934,7 @@ def render_config(
     lines = template.splitlines()
     marker = lines.index("# @@HEADER@@")
     wanted = wanted if wanted is not None else {d.source.rel for p in plans for d in p.draws}
-    lines[marker : marker + 1] = header_lines(name, intro, plans, wanted)
+    lines[marker : marker + 1] = header_lines(name, intro, plans, wanted, title, provenance, validation)
     replace_block(lines, "train_ds", render_train_input_cfg(plans, group_w, leaf_w, cap_note))
     replace_block(lines, "validation_ds", render_validation_input_cfg(eval_sets, measures))
     _replace_scalar_in_section(lines, "run", "exp_name", name)
@@ -967,12 +999,103 @@ def distinct_hours(plans: list[Plan]) -> float:
     return sum(per_leaf.values())
 
 
+def sd24_intro(cap: float, total: float) -> list[str]:
+    """What the self-distillation condition is, for its header."""
+    return [
+        f"Self-distillation data: the 24 ASR entries of EU24 and nothing else ({total:,.1f} h). The student's audio",
+        "is paired with the frozen decoder's own reply to a repeat or a translate instruction over the transcript,",
+        "so no translation data is needed and the mix carries no ST entries. Every entry draws min(c, what it",
+        f"holds) with the common cap c = {cap:,.3f} h, solved by bisection so that the total is the requested",
+        "one; entries below c use all their data. Same corpus split inside an entry as HR5 and EU24.",
+    ]
+
+
+def sd24_title(name: str) -> list[str]:
+    """First lines of the self-distillation header."""
+    return [
+        f"# {name} -- Whisper-large-v3 + MLP adapter (stack_factor 5) + Qwen3.5-2B, adapter-only self-distillation:",
+        "# the encoder and the decoder (the teacher) stay frozen.",
+    ]
+
+
+SD24_PROVENANCE = [
+    "# max_steps from it (one pass over the mix).",
+    "#",
+    "# Rendered by projects/self-distill/sft/build_sft_mix.py --sd24-hours from SD-template.yaml. Do not hand-edit:",
+    "# change the template or the script and render again. The script has read a sample of cuts from every",
+    "# source below and resolved each text_field the way the loader does; it refuses to render if one does not.",
+]
+
+SD24_VALIDATION = [
+    "#",
+    "# Validation: ASR only, 20 clips per language from splits no training source reads (the asr_<lang> sets of",
+    "# the SFT conditions). The distillation trainer builds its teacher prompts from the transcript, so a",
+    "# translation set would put the translation where the transcript belongs. asr_hr is scored on FLEURS",
+    "# because CV22 has no Croatian and 38.6% of VoxPopuli hr validation cuts have no transcript.",
+]
+
+
+def render_sd24(args: argparse.Namespace, root: Path, hours: float) -> int:
+    """Render SD-EU24-<hours>h.yaml: the 24 ASR entries at *hours* in total, for the adapter-only run."""
+    entries = [e for e in eu24_entries() if e.task == "asr"]
+    eval_sets = [ev for ev in validation_sets() if ev.task == "asr"]
+    rels = sorted({s.rel for e in entries for s in e.sources} | {ev.rel for ev in eval_sets})
+    measures, hist_cache = measure_all(root, rels, args.hist_cache, args.cache, args.jobs, not args.no_measure)
+
+    cap = solve_common_cap(entry_availability(entries, measures), hours)
+    plans = plan_condition(entries, cap, measures)
+    total = sum(p.hours for p in plans)
+    name = f"SD-EU24-{hours:g}h"
+    print_table(f"{name} (ASR only, common cap c = {cap:,.4f} h)", plans, measures)
+    print(f"\n{name} total {total:,.3f} h (requested {hours:g} h), common cap c = {cap:,.4f} h")
+    print(f"Distinct audio, each leaf counted once at its largest draw: {distinct_hours(plans):,.1f} h")
+
+    if not args.skip_audit:
+        print("\nAuditing the text fields (a sample of cuts per source)...", flush=True)
+        results = [
+            audit_source(root, rel, tf, task, blank) for rel, tf, task, blank in audit_targets(entries, eval_sets)
+        ]
+        print_audit(results)
+        failed = [a for a in results if a.problems()]
+        if failed:
+            print(f"\n{len(failed)} source(s) failed the audit; nothing was written.", file=sys.stderr)
+            return 1
+
+    template_path = args.template or Path(__file__).with_name("SD-template.yaml")
+    wanted = {s.rel for e in eu24_entries(frozenset()) if e.task == "asr" for s in e.sources}
+    bins = measure_bins(plans, hist_cache, root)
+    text = render_config(
+        template_path.read_text(encoding="utf-8"),
+        name,
+        sd24_intro(cap, total),
+        plans,
+        f"Common cap c = {cap:,.4f} h.",
+        bins,
+        eval_sets,
+        measures,
+        wanted,
+        sd24_title(name),
+        SD24_PROVENANCE,
+        SD24_VALIDATION,
+    )
+    print(f"\n{name} bucket_duration_bins: {bins}")
+    if not args.dry_run:
+        (args.out_dir / f"{name}.yaml").write_text(text, encoding="utf-8")
+        print(f"Wrote {args.out_dir / (name + '.yaml')}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "--datasets-root", type=Path, default=None, help="LOCAL_DATASETS_DIR (default: from the environment)."
     )
-    parser.add_argument("--template", type=Path, default=Path(__file__).with_name("SFT-template.yaml"))
+    parser.add_argument(
+        "--template",
+        type=Path,
+        default=None,
+        help="Default: SFT-template.yaml next to this file, or SD-template.yaml with --sd24-hours.",
+    )
     parser.add_argument("--out-dir", type=Path, default=Path(__file__).parent)
     parser.add_argument(
         "--hist-cache",
@@ -994,6 +1117,14 @@ def main() -> int:
         action="store_true",
         help="Audit every candidate source, excluded ones included, print the table and stop.",
     )
+    parser.add_argument(
+        "--sd24-hours",
+        type=float,
+        default=None,
+        metavar="HOURS",
+        help="Render SD-EU24-<HOURS>h.yaml ALONE: the 24 ASR entries at this total (common cap solved), for the "
+        "adapter-only self-distillation run. HR5 and EU24 are not rendered.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Print the tables, write nothing.")
     args = parser.parse_args()
 
@@ -1013,6 +1144,9 @@ def main() -> int:
         candidates.append(("voxpopuli/hr/validation", TEXT_FIELDS["voxpopuli"], "asr", GENERIC_VOXPOPULI_MAX_BLANK))
         print_audit([audit_source(root, rel, tf, task, blank) for rel, tf, task, blank in candidates])
         return 0
+
+    if args.sd24_hours is not None:
+        return render_sd24(args, root, args.sd24_hours)
 
     hr5, eu24, eval_sets = hr5_entries(), eu24_entries(), validation_sets()
     rels = sorted({s.rel for e in hr5 + eu24 for s in e.sources} | {ev.rel for ev in eval_sets})
@@ -1051,7 +1185,7 @@ def main() -> int:
             )
             return 1
 
-    template = args.template.read_text(encoding="utf-8")
+    template = (args.template or Path(__file__).with_name("SFT-template.yaml")).read_text(encoding="utf-8")
     everything = frozenset()  # no exclusions: what each condition would read without EXCLUDED
     conditions = {
         "SFT-HR5": (hr5_plans, hr5_intro(), f"Cap {HR5_CAP_HOURS:g} h per entry.", hr5_entries(everything)),

@@ -9,6 +9,11 @@ vocabulary rules. chrF and BLEU per direction against the set's reference are
 the most a speech model distilled from this teacher could reach on that set,
 from the content side. Samples without ``source_text`` (FLEURS ga) are skipped.
 
+``--task asr`` does the same for an ASR frozen set: the content is the lower-cased
+reference transcript (the form the trainer feeds the teacher), the instruction is the
+repeat one, and the score is chrF plus the share of exact copies per language: the
+ceiling of the transcription rows of the instruction mix.
+
 Two steps, because the training image has no sacrebleu:
 
     # inside the training image (projects/self-distill/launch_script.sh); the frozen-set
@@ -30,9 +35,16 @@ REPEAT = "Repeat the following content exactly, word for word, and write nothing
 TRANSLATE = "Translate the following content into {tgt_lang}, and write nothing else.\n\n{audio_token}"
 
 
-def read_rows(set_dir: Path) -> list[dict]:
+def read_rows(set_dir: Path, task: str = "st") -> list[dict]:
     with open(set_dir / "manifest.jsonl", encoding="utf-8") as f:
         rows = [json.loads(line) for line in f]
+    if task == "asr":
+        # The content is the reference itself, lower-cased as SpeechToTextDataset does; no target language.
+        rows = [r for r in rows if r.get("task") == "asr" and str(r.get("target") or "").strip()]
+        return [
+            dict(r, source_text=str(r["target"]).strip().lower(), target=str(r["target"]).strip().lower(), tgt_lang="")
+            for r in rows
+        ]
     return [r for r in rows if r.get("task") == "st" and (r.get("source_text") or "").strip()]
 
 
@@ -58,7 +70,7 @@ def translate(model, processor, rows: list[dict], template: str, batch_size: int
         prompts = build_distill_prompts(
             processor,
             [r["source_text"].strip() for r in batch],
-            ["st"] * len(batch),
+            [r["task"] for r in batch],
             [r["src_lang"] for r in batch],
             {"asr": REPEAT, "st": template},
             teacher_prompt="mirror",
@@ -95,7 +107,7 @@ def generate(args: argparse.Namespace) -> None:
     start = time.time()
     with open(args.out, "w", encoding="utf-8") as out:
         for set_dir in map(Path, args.sets):
-            rows = read_rows(set_dir)
+            rows = read_rows(set_dir, args.task)
             hyps = translate(model, processor, rows, template, args.batch_size, args.max_new_tokens)
             for r, h in zip(rows, hyps):
                 record = {"set": set_dir.name, "sample_key": r["sample_key"], "src_lang": r["src_lang"]}
@@ -115,14 +127,24 @@ def score(args: argparse.Namespace) -> None:
             hyps.append(r["hyp"])
             refs.append(r["ref"])
     report = defaultdict(dict)
+    sources = defaultdict(set)
+    for name, src, _ in by_direction:
+        sources[name].add(src)
     for (name, src, tgt), (h, r) in sorted(by_direction.items()):
-        report[name][src] = {
+        # X->Y sets are keyed by the source language; a one-source set (en->X) by its target.
+        key = tgt if tgt and len(sources[name]) == 1 else src
+        if not tgt:  # a repeat set: how often the teacher returns the transcript unchanged
+            exact = sum(" ".join(a.lower().split()) == " ".join(b.lower().split()) for a, b in zip(h, r)) / len(h)
+            report[name][key] = {"n": len(h), "chrf": sacrebleu.corpus_chrf(h, [r]).score, "exact": exact}
+            print(f"{name} {src} repeat: n {len(h)} chrF {report[name][key]['chrf']:.1f} exact {exact:.0%}")
+            continue
+        report[name][key] = {
             "n": len(h),
             "chrf": sacrebleu.corpus_chrf(h, [r]).score,
             "bleu": sacrebleu.corpus_bleu(h, [r]).score,
         }
         print(
-            f"{name} {src}->{tgt}: n {len(h)} chrF {report[name][src]['chrf']:.1f} BLEU {report[name][src]['bleu']:.1f}"
+            f"{name} {src}->{tgt}: n {len(h)} chrF {report[name][key]['chrf']:.1f} BLEU {report[name][key]['bleu']:.1f}"
         )
     if args.json:
         Path(args.json).write_text(json.dumps(report, indent=1) + "\n")
@@ -138,6 +160,7 @@ def main() -> None:
     gen.add_argument(
         "--template", default=TRANSLATE, help="the student's translate instruction; literal \\n is a newline"
     )
+    gen.add_argument("--task", choices=("st", "asr"), default="st", help="st: translate; asr: repeat the transcript")
     gen.add_argument("--batch-size", type=int, default=64)
     gen.add_argument("--max-new-tokens", type=int, default=448)
     gen.set_defaults(func=generate)

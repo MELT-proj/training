@@ -466,6 +466,86 @@ def test_the_template_pins_the_recipe_the_study_asks_for():
     assert not any(model[part]["freeze"] for part in ("encoder", "decoder", "adapter"))
 
 
+def _flatten(node, prefix=""):
+    """A nested mapping as {dotted.key: value}, without the data blocks the builder fills in."""
+    out = {}
+    for key, value in node.items():
+        dotted = f"{prefix}{key}"
+        if isinstance(value, dict):
+            out.update(_flatten(value, dotted + "."))
+        else:
+            out[dotted] = value
+    return out
+
+
+def test_the_sd_template_differs_from_the_sft_template_only_where_the_recipe_does():
+    sft = yaml.safe_load((REPO_ROOT / "projects" / "self-distill" / "sft" / "SFT-template.yaml").read_text())
+    sd = yaml.safe_load((REPO_ROOT / "projects" / "self-distill" / "sft" / "SD-template.yaml").read_text())
+    a, b = _flatten(sft), _flatten(sd)
+    changed = {k for k in a.keys() | b.keys() if a.get(k, "<absent>") != b.get(k, "<absent>")}
+
+    assert changed == {
+        "run.exp_name",
+        "run.memory_preallocation",  # the distillation trainer refuses the preallocation pass
+        "model.encoder.freeze",  # only the adapter trains: the decoder is the teacher
+        "model.decoder.freeze",
+        "data.prompt_template_selection",  # one fixed instruction per task, not a random draw
+        "data.validation_ds.prompt_template.asr",  # a single repeat string, not the SFT per-task mapping
+        "data.validation_ds.prompt_template.st",
+        "data.validation_ds.prompt_template",
+    }
+    assert (b["model.encoder.freeze"], b["model.decoder.freeze"], b["model.adapter.freeze"]) == (True, True, False)
+    assert b["run.memory_preallocation"] is False and b["data.prompt_template_selection"] == "custom"
+    assert b["data.validation_ds.prompt_template"].startswith("Repeat the following content exactly")
+
+
+def test_the_sd_condition_is_the_asr_half_of_eu24_with_asr_validation_and_its_own_header():
+    entries = [e for e in bsm.eu24_entries() if e.task == "asr"]
+    assert [e.src for e in entries] == list(bsm.EU24) and {e.task for e in entries} == {"asr"}
+
+    toy = bsm.build_entries(("de", "ga"), (), ())
+    measures = _measures(toy)
+    eval_sets = [ev for ev in bsm.validation_sets() if ev.task == "asr"][:3]
+    for ev in eval_sets:
+        measures[ev.rel] = bsm.Measure(20.0, 14_000, 20.0)
+    plans = bsm.plan_condition(toy, 150.0, measures)
+    total = sum(p.hours for p in plans)
+    template = (REPO_ROOT / "projects" / "self-distill" / "sft" / "SD-template.yaml").read_text()
+    text = bsm.render_config(
+        template, "SD-TOY", bsm.sd24_intro(150.0, total), plans, "Cap note.", "[1.0, 2.0]", eval_sets, measures, None,
+        bsm.sd24_title("SD-TOY"), bsm.SD24_PROVENANCE, bsm.SD24_VALIDATION,
+    )  # fmt: skip
+    cfg = yaml.safe_load(text)
+
+    assert text.startswith("# SD-TOY -- ") and "adapter-only self-distillation" in text
+    assert "all three components trainable" not in text and "HR5 and EU24 draw the same total" not in text
+    assert "ASR only, 20 clips per language" in text
+    assert cfg["data"]["train_ds"]["total_hours"] == pytest.approx(total, abs=0.01)
+    assert {g["tags"]["task"] for g in cfg["data"]["train_ds"]["input_cfg"]} == {"asr"}
+    assert {v["tags"]["task"] for v in cfg["data"]["validation_ds"]["input_cfg"]} == {"asr"}
+
+
+def test_sd24_hours_renders_the_condition_alone_at_the_requested_total(tmp_path, monkeypatch, capsys):
+    entries = [e for e in bsm.eu24_entries() if e.task == "asr"]
+    measures = _measures(entries)
+    for ev in bsm.validation_sets():
+        measures[ev.rel] = bsm.Measure(20.0, 14_000, 20.0)
+    monkeypatch.setattr(bsm, "measure_all", lambda *a, **k: (measures, {}))
+    monkeypatch.setattr(bsm, "measure_bins", lambda *a, **k: "[1.0, 2.0]")
+    argv = ["build_sft_mix.py", "--datasets-root", str(tmp_path), "--out-dir", str(tmp_path), "--skip-audit",
+            "--sd24-hours", "500"]  # fmt: skip
+    monkeypatch.setattr(sys, "argv", argv)
+
+    assert bsm.main() == 0
+    assert sorted(f.name for f in tmp_path.iterdir()) == ["SD-EU24-500h.yaml"]  # HR5 and EU24 are not rendered
+    cfg = yaml.safe_load((tmp_path / "SD-EU24-500h.yaml").read_text())
+    assert cfg["run"]["exp_name"] == "SD-EU24-500h"
+    assert cfg["data"]["train_ds"]["total_hours"] == pytest.approx(500.0, abs=0.01)
+    assert len(cfg["data"]["train_ds"]["input_cfg"]) == 24 and len(cfg["data"]["validation_ds"]["input_cfg"]) == 24
+    assert (cfg["model"]["encoder"]["freeze"], cfg["model"]["decoder"]["freeze"]) == (True, True)
+    assert "common cap c" in capsys.readouterr().out
+
+
 def test_both_conditions_share_everything_but_the_mix():
     entries = bsm.build_entries(("de",), (), ())
     first, second = _render(entries, limit=100.0)[0], _render(entries, limit=50.0)[0]
