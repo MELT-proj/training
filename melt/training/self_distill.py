@@ -30,6 +30,7 @@ directly), or run with LoRA on the decoder (the teacher would no longer be the
 original LLM).
 """
 
+import math
 import random
 import zlib
 from collections import defaultdict
@@ -62,6 +63,9 @@ DISTILL_PROMPT_KEYS = (
     # Bool per utterance: its distillation instruction is a translation
     # (``distill.translate_frac``), for the per-task diagnostics.
     "distill_translate",
+    # Tokens of each utterance's content (its transcript) as the teacher reads it,
+    # for ``distill.reply_budget_factor``.
+    "teacher_content_tokens",
 )
 
 # Keys of the standard (gold-transcript) training batch that the distillation
@@ -123,6 +127,15 @@ class SelfDistillConfig:
             loop, and either way the student would be trained on a target that
             never stops. The share left out is logged as ``distill/dropped_frac``.
             ``False`` keeps every row, as every earlier run did.
+        reply_budget_factor: When positive, a micro-batch's teacher rollout stops at
+            ``min(max_new_tokens, ceil(factor x the longest content in the batch, in tokens)
+            + reply_budget_margin)``. A reply is about as long as its content, up to ~3x for a
+            translation into a language the tokenizer splits finely, so only a runaway reply
+            is cut. Without it a looping row in a batch of short utterances decodes to
+            ``max_new_tokens``, and the logits, padded to that length for every row, take
+            several GB (a 64 GB H100 ran out of memory on it). A reply cut this way is
+            truncated like any other (see ``drop_truncated``). ``0`` keeps the fixed budget.
+        reply_budget_margin: Tokens added to the scaled content length.
         student_template: The student's distillation prompt when it should
             differ from ``data.prompt_template``, which then still builds the
             gold batch (the anchor) and the eval prompt. ``"{audio_token}"``
@@ -144,6 +157,8 @@ class SelfDistillConfig:
     translate_frac: float = 0.0
     translate_targets: str = "en,de,fr,es,it"
     drop_truncated: bool = False
+    reply_budget_factor: float = 0.0
+    reply_budget_margin: int = 32
     student_template: str = ""
 
     @property
@@ -160,6 +175,11 @@ class SelfDistillConfig:
             raise ValueError(f"distill.gold_ce_weight must be >= 0, got {self.gold_ce_weight}")
         if not 0.0 <= self.translate_frac <= 1.0:
             raise ValueError(f"distill.translate_frac must be in [0, 1], got {self.translate_frac}")
+        if self.reply_budget_factor < 0.0 or self.reply_budget_margin < 0:
+            raise ValueError(
+                "distill.reply_budget_factor and distill.reply_budget_margin must be >= 0, got "
+                f"{self.reply_budget_factor} and {self.reply_budget_margin}"
+            )
         if self.translate_frac > 0.0 and self.teacher_prompt != "mirror":
             raise ValueError(
                 "distill.translate_frac > 0 needs distill.teacher_prompt=mirror: a bare teacher never "
@@ -321,6 +341,9 @@ def build_distill_prompts(
         "teacher_prompt_input_ids": teacher["input_ids"],
         "teacher_prompt_attention_mask": teacher["attention_mask"],
         "distill_translate": torch.tensor([bool(t) for t in tgt_langs], dtype=torch.bool),
+        "teacher_content_tokens": torch.tensor(
+            [len(ids) for ids in tokenizer(list(texts), add_special_tokens=False)["input_ids"]], dtype=torch.long
+        ),
     }
 
 
@@ -679,11 +702,21 @@ class MELTSelfDistillTrainer(MELTTrainer):
             kwargs.update(do_sample=True, temperature=self.distill.temperature, top_p=self.distill.top_p, top_k=0)
         return kwargs
 
+    def _reply_budget(self, inputs: dict) -> int:
+        """The teacher rollout's token budget for this micro-batch: ``max_new_tokens``, or less for short content."""
+        cap, factor = self.distill.max_new_tokens, self.distill.reply_budget_factor
+        content = inputs.get("teacher_content_tokens")
+        if factor <= 0.0 or content is None or content.numel() == 0:
+            return cap
+        return min(cap, math.ceil(factor * int(content.max())) + self.distill.reply_budget_margin)
+
     @torch.no_grad()
     def _rollout(self, inputs: dict, from_student: bool, greedy: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
         """Sample one response per utterance; return ``(ids, mask)``, pad ids where masked."""
         unwrapped = self.model
         gen_kwargs = self._generation_kwargs_for(greedy, unwrapped.text_decoder.get_output_embeddings().weight.shape[0])
+        if not from_student:
+            gen_kwargs["max_new_tokens"] = self._reply_budget(inputs)
         with self.accelerator.autocast():
             if from_student:
                 response = unwrapped.generate(

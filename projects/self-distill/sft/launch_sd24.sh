@@ -30,8 +30,15 @@
 #   HOURS              total hours of the rendered mix                       (default 2700)
 #   ARM, SITE          see above, and infra/runners/sites/<site>.sh          (defaults azeros, mn5)
 #   MELT_NODES, MELT_GPUS_PER_NODE   (defaults 2 and 4; pinned: SLURM_GPUS_ON_NODE lies on MN5's acc)
-#   BATCH_DURATION     seconds of audio per rank per step                    (default 80). 120 ran out of memory on a
-#                      64 GB H100 even without the anchor (MN5 smoke test 47260870: 60-65 GB peaks on the worst ranks)
+#   BATCH_DURATION     seconds of audio per rank per step                    (default 64). 120 and 80 ran out of memory
+#                      on a 64 GB H100 even without the anchor (MN5 smoke tests 47260870, 47262184: 61-65 GB peaks on the
+#                      worst ranks, 33-42 GB on the others). What is large is the student's logits, padded to
+#                      rows x longest reply x a 248k vocabulary and upcast to fp32 by accelerate: 4.76 GiB for 20 rows
+#                      of 257 tokens, which one looping reply in a batch of short utterances produces
+#   MAX_ROWS           most cuts in one micro-batch (data.train_ds.batch_size) (default 16): bounds that product
+#   REPLY_BUDGET_FACTOR  the teacher's reply budget per micro-batch is min(MAX_NEW_TOKENS, factor x the longest content
+#                      in tokens + 32)                                        (default 3.5; 0 = the fixed MAX_NEW_TOKENS).
+#                      A reply is about as long as its content, up to ~3x for a translation into a finely split language
 #   MAX_DURATION       the training loader's longest cut, seconds            (default 30, Whisper's window). The top
 #                      10% of the mix is cuts over ~28 s, up to 60 s; their replies hit the token cap, and one such
 #                      row makes every rank's rollout run to the cap (the step waits for the slowest rank)
@@ -43,9 +50,12 @@
 #   TRANSLATE_TARGETS  comma-separated ISO codes a translation may target    (default: the 22 EU languages but ga and mt:
 #                      the teacher translates into them at chrF 19 / 27 with 25% / 19% runaway replies on FLEURS, and
 #                      SFT-EU24 has no ga or mt translation data either; they stay sources and zero-shot targets)
-#   MASTER_DTYPE       model.master_dtype (default float32; "none" skips it). The warm start loads as pure
-#                      bf16 under DDP, where AdamW updates below half a bf16 ulp are lost -- and the WSD decay
-#                      takes the LR down to 0.1x. Autocast keeps the compute in bf16.
+#   MASTER_DTYPE, MASTER_DTYPE_SCOPE   model.master_dtype (default float32; "none" skips it) and which parameters it
+#                      covers (default trainable: the adapter alone). The warm start loads as pure bf16 under DDP, where
+#                      AdamW updates below half a bf16 ulp are lost -- and the WSD decay takes the LR down to 0.1x.
+#                      The frozen encoder and decoder stay bf16, as in every earlier run: 7 GB less memory, no cast of
+#                      their weights on every decoding step, and the very teacher B was distilled from. Autocast keeps
+#                      the compute in bf16.
 #   WARM_START         warm-start run root as the CONTAINER sees it          (default: GOLDW-final, "A")
 #   MELT_QOS, MELT_TIME  read by the site file. MELT_TIME has no default here (the site's is one hour); it
 #                      is required unless DRY_RUN=1.
@@ -81,15 +91,18 @@ ARM="${ARM:-azeros}"
 HOURS="${HOURS:-2700}"
 SITE="${SITE:-mn5}"
 SEED="${SEED:-1337}"
-BATCH_DURATION="${BATCH_DURATION:-80}"
+BATCH_DURATION="${BATCH_DURATION:-64}"
+MAX_ROWS="${MAX_ROWS:-16}"
 MAX_DURATION="${MAX_DURATION:-30}"
 DROP_TRUNCATED="${DROP_TRUNCATED:-1}"
 export MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-256}"
+REPLY_BUDGET_FACTOR="${REPLY_BUDGET_FACTOR:-3.5}"
 ADAPTER_LR="${ADAPTER_LR:-2e-4}"
 TRANSLATE_FRAC="${TRANSLATE_FRAC:-0.5}"
 TARGETS_NO_GA_MT="bg,cs,da,de,el,en,es,et,fi,fr,hr,hu,it,lt,lv,nl,pl,pt,ro,sk,sl,sv"
 TRANSLATE_TARGETS="${TRANSLATE_TARGETS:-$TARGETS_NO_GA_MT}"
 MASTER_DTYPE="${MASTER_DTYPE:-float32}"
+MASTER_DTYPE_SCOPE="${MASTER_DTYPE_SCOPE:-trainable}"
 EVAL_SAMPLES="${EVAL_SAMPLES:-20}"
 export MELT_NODES="${MELT_NODES:-2}"
 export MELT_GPUS_PER_NODE="${MELT_GPUS_PER_NODE:-4}"
@@ -176,8 +189,9 @@ else
     fi
 fi
 
-EXTRAS=("${RUN_DIR_ARGS[@]}" --data.train_ds.max_duration "$MAX_DURATION")
-[[ "$MASTER_DTYPE" == none ]] || EXTRAS+=(--model.master_dtype "$MASTER_DTYPE")
+EXTRAS=("${RUN_DIR_ARGS[@]}" --data.train_ds.max_duration "$MAX_DURATION" --data.train_ds.batch_size "$MAX_ROWS")
+[[ "$MASTER_DTYPE" == none ]] || EXTRAS+=(--model.master_dtype "$MASTER_DTYPE" --model.master_dtype_scope "$MASTER_DTYPE_SCOPE")
+[[ "$ARM" == ce ]] || EXTRAS+=(--distill.reply_budget_factor "$REPLY_BUDGET_FACTOR")
 [[ "$ARM" == ce || "$DROP_TRUNCATED" != 1 ]] || EXTRAS+=(--distill.drop_truncated true)
 # The value is quoted for YAML, as launch_step2.sh quotes the templates: a bare list of ISO codes is one
 # string to OmegaConf, but a single code such as "no" would become a boolean.
@@ -185,11 +199,11 @@ awk "BEGIN { exit !(${TRANSLATE_FRAC} > 0) }" && EXTRAS+=(--distill.translate_ta
 
 echo "[launch_sd24] ${EXP_NAME}"
 echo "[launch_sd24] arm:   ${ARM}, translate_frac ${TRANSLATE_FRAC}, targets ${TRANSLATE_TARGETS}"
-echo "[launch_sd24] data:  cuts up to ${MAX_DURATION} s; teacher replies up to ${MAX_NEW_TOKENS} tokens, cut ones $( [[ "$DROP_TRUNCATED" == 1 && "$ARM" != ce ]] && echo dropped || echo kept )"
+echo "[launch_sd24] data:  cuts up to ${MAX_DURATION} s, at most ${MAX_ROWS} per micro-batch; teacher replies up to ${MAX_NEW_TOKENS} tokens (budget ${REPLY_BUDGET_FACTOR} x content + 32), cut ones $( [[ "$DROP_TRUNCATED" == 1 && "$ARM" != ce ]] && echo dropped || echo kept )"
 echo "[launch_sd24] init:  ${WARM_START}"
 echo "[launch_sd24] mix:   ${CONFIG} (${TOTAL_HOURS} h)"
 echo "[launch_sd24] world: ${MELT_NODES} nodes x ${MELT_GPUS_PER_NODE} GPUs = ${WORLD_SIZE}; ${BATCH_DURATION} s per rank = $(( BATCH_DURATION * WORLD_SIZE )) s of audio per step"
-echo "[launch_sd24] steps: max ${MAX_STEPS} (decay $(( MAX_STEPS / 5 ))), eval every ${EVAL_STEPS}, save every ${SAVE_STEPS}; adapter LR ${ADAPTER_LR}; seed ${SEED}; master dtype ${MASTER_DTYPE}"
+echo "[launch_sd24] steps: max ${MAX_STEPS} (decay $(( MAX_STEPS / 5 ))), eval every ${EVAL_STEPS}, save every ${SAVE_STEPS}; adapter LR ${ADAPTER_LR}; seed ${SEED}; master dtype ${MASTER_DTYPE} (${MASTER_DTYPE_SCOPE})"
 
 export ARM TRANSLATE_FRAC SITE SEED BATCH_DURATION ADAPTER_LR EVAL_SAMPLES WARM_START
 export CONFIG

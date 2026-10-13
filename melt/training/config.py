@@ -157,6 +157,9 @@ model:
   # than half a bf16 ulp of its weight rounds to nothing (at lr 2e-5, any
   # weight above ~0.008 never moves). FSDP upcasts to fp32 on its own.
   master_dtype: null
+  # Which parameters master_dtype applies to: "all", or "trainable" (only those that require a gradient;
+  # a frozen backbone keeps its loaded dtype, as in an adapter-only run).
+  master_dtype_scope: all
 
 # =============================================================================
 # Data Configuration

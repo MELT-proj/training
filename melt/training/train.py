@@ -51,6 +51,33 @@ logger = get_logger(__name__)
 torch.set_float32_matmul_precision("high")
 
 
+def cast_master_weights(model: torch.nn.Module, master_dtype: str, scope: str = "all") -> torch.nn.Module:
+    """Cast the model's parameters to *master_dtype* (``model.master_dtype``).
+
+    Args:
+        model: The model, after its freeze flags are applied.
+        master_dtype: Name of a torch floating-point dtype, e.g. ``"float32"``.
+        scope: ``"all"`` casts every parameter. ``"trainable"`` casts only those that require a gradient,
+            which is all an optimizer needs fp32 masters for: a frozen backbone gains nothing from them and,
+            under autocast, pays for them with a cast of its weights on every use (every decoding step of
+            a frozen teacher) and with the memory of the second copy.
+
+    Returns:
+        The model, cast in place.
+    """
+    dtype = getattr(torch, str(master_dtype), None)
+    if not isinstance(dtype, torch.dtype) or not dtype.is_floating_point:
+        raise ValueError(f"model.master_dtype={master_dtype!r} is not a torch floating-point dtype")
+    if scope == "all":
+        return model.to(dtype)
+    if scope != "trainable":
+        raise ValueError(f"model.master_dtype_scope={scope!r} must be 'all' or 'trainable'")
+    for param in model.parameters():
+        if param.requires_grad:
+            param.data = param.data.to(dtype)
+    return model
+
+
 def prepare_model(
     cfg: DictConfig,
     targs: Seq2SeqTrainingArguments,
@@ -230,11 +257,9 @@ def prepare_model(
     # trains in pure bf16 under DDP.
     master_dtype = model_cfg.get("master_dtype", None)
     if master_dtype is not None:
-        dtype = getattr(torch, str(master_dtype), None)
-        if not isinstance(dtype, torch.dtype) or not dtype.is_floating_point:
-            raise ValueError(f"model.master_dtype={master_dtype!r} is not a torch floating-point dtype")
-        model = model.to(dtype)
-        logger.info(f"Parameters cast to {dtype} (model.master_dtype)")
+        scope = str(model_cfg.get("master_dtype_scope", "all"))
+        model = cast_master_weights(model, master_dtype, scope)
+        logger.info(f"Parameters cast to {master_dtype} (model.master_dtype, scope {scope})")
 
     return model, last_checkpoint, config, processor
 

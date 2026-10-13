@@ -182,7 +182,8 @@ class TestSelfDistillConfig:
     @pytest.mark.parametrize(
         "field,value",
         [("beta", 1.5), ("lmbda", -0.1), ("top_p", 0.0), ("loss", "kl"), ("teacher_prompt", "echo"),
-         ("gold_ce_weight", -0.5), ("translate_frac", 1.5), ("translate_targets", " , ")],
+         ("gold_ce_weight", -0.5), ("translate_frac", 1.5), ("translate_targets", " , "),
+         ("reply_budget_factor", -1.0), ("reply_budget_margin", -1)],
     )
     def test_out_of_range_values_are_refused(self, field, value):
         with pytest.raises(ValueError):
@@ -369,6 +370,39 @@ class TestDropTruncated:
         loss.backward()  # DDP's gradient reduction must still find a graph on this rank
         check_adapter_only_gradients(model)
         assert trainer._distill_stats["dropped_frac"] == [1.0]
+
+
+class TestReplyBudget:
+    """distill.reply_budget_factor: the teacher rollout's token budget follows the longest content of the batch."""
+
+    @staticmethod
+    def _budget(content, **distill):
+        trainer = _bare_trainer(None, SelfDistillConfig(max_new_tokens=256, **distill))
+        inputs = {} if content is None else {"teacher_content_tokens": torch.tensor(content)}
+        return trainer._reply_budget(inputs)
+
+    def test_off_by_default_the_budget_is_the_fixed_cap(self):
+        assert SelfDistillConfig().reply_budget_factor == 0.0
+        assert self._budget([10, 40]) == 256
+
+    def test_it_scales_the_longest_content_and_never_exceeds_the_cap(self):
+        assert self._budget([10, 40], reply_budget_factor=3.0, reply_budget_margin=32) == 3 * 40 + 32
+        assert self._budget([10, 40], reply_budget_factor=2.5, reply_budget_margin=0) == 100
+        assert self._budget([100, 200], reply_budget_factor=3.0) == 256  # 632 would pass the cap
+
+    def test_a_batch_without_content_lengths_keeps_the_cap(self):
+        assert self._budget(None, reply_budget_factor=3.0) == 256
+
+    def test_the_teacher_rollout_uses_the_budget_and_the_student_rollout_does_not(self):
+        model = _tiny_model()
+        trainer = _bare_trainer(model, SelfDistillConfig(max_new_tokens=6, reply_budget_factor=1.0, reply_budget_margin=0))
+        batch = {**_batch(), "teacher_content_tokens": torch.tensor([2, 3])}
+
+        teacher, _ = trainer._rollout(batch, from_student=False, greedy=True)
+        student, _ = trainer._rollout(batch, from_student=True, greedy=True)
+
+        assert teacher.shape[1] <= 3  # budget = longest content (3 tokens)
+        assert student.shape[1] <= 6  # the fixed cap
 
 
 class TestRecordStats:
@@ -836,6 +870,9 @@ class TestPrompts:
         # Left-padded, so a response appended to any row follows its last real token.
         assert out["teacher_prompt_attention_mask"][:, -1].all()
         assert out["student_prompt_attention_mask"][:, -1].all()
+        # The content length the reply budget scales: the transcript's own tokens, without the instruction.
+        expected = [len(processor.tokenizer(t, add_special_tokens=False)["input_ids"]) for t in texts]
+        assert out["teacher_content_tokens"].tolist() == expected and expected[0] < expected[1]
 
     def test_mirror_gives_the_teacher_the_student_instruction(self):
         """teacher_prompt='mirror': same instruction on both paths, transcript where the audio is."""
