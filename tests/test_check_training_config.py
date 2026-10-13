@@ -535,6 +535,26 @@ class TestTotals:
         assert report.status("H1") == ctc.SKIP
         assert report.status("H2") == ctc.SKIP
 
+    def test_a_missing_max_duration_means_no_upper_bound(self):
+        # No max_duration key reads as an infinite bound. The cache holds the
+        # histogram but no pre-filtered figure for it, so the filtered totals are
+        # derived from the histogram: the path that raised OverflowError.
+        report = ctc.Report(Path("cfg.yaml"))
+        # 1,000 cuts of 1 s and two of 500 s: an unbounded filter has to keep the long ones.
+        cache = {"/d/a": {"hours": 2000 / 3600, "cuts": 1002, "res": 0.01,
+                          "hist": {"100": 1000, "50000": 2}, "filtered": {}}}
+        leaves = [self._leaf("/d/a")]
+        split = {"total_hours": 2000 / 3600, "total_cuts": 1002}
+        ctc.check_totals(report, "train_ds", split, leaves, cache, {}, ("H1", "H2"))
+        assert report.status("H1") == ctc.PASS
+        assert report.status("H2") == ctc.PASS
+
+        unbounded = ctc.split_totals(leaves, cache, 0.0, float("inf"))
+        assert unbounded["cuts_filtered"] == 1002
+        assert unbounded["hours_filtered"] == pytest.approx(2000 / 3600)
+        # A finite bound still excludes them.
+        assert ctc.split_totals(leaves, cache, 0.0, 120.0)["cuts_filtered"] == 1000
+
 
 # ---------------------------------------------------------------------------
 # Bins
@@ -634,6 +654,26 @@ class TestBinChecks:
                               4, 0.05, 0.02, 2)
         assert report.status("C4") == ctc.FAIL or report.status("C4") == ctc.WARN
         assert any(f.check == "C4" for f in report.findings)
+
+    def test_a_missing_max_duration_leaves_the_histogram_unbounded(self):
+        report = ctc.Report(Path("cfg.yaml"))
+        leaf = ctc.Leaf(
+            where="train_ds", yaml_path="x", raw_path="/d/a", path="/d/a", leaf_tags={},
+            eff_tags={}, weight=None, has_weight=False, name=None, line=1,
+            group_yaml_path=None,
+        )
+        # A 40 s tail: with no upper bound it stays in the histogram and the top
+        # bin at 3 s is called out; a bound that dropped it would see nothing past 3 s.
+        hist = {100: 1000, 4000: 50}
+        cache = {"/d/a": {"hours": 1.0, "cuts": 1050,
+                          "hist": {str(k): v for k, v in hist.items()},
+                          "res": 0.01, "filtered": {}}}
+        split = self._split()
+        del split["max_duration"]
+        ctc.check_bins_values(report, "train_ds", split, [leaf], cache, {},
+                              4, 0.05, 0.02, 2)
+        finding = next(f for f in report.findings if f.check == "C4")
+        assert "longest 40.00 s" in finding.message
 
 
 # ---------------------------------------------------------------------------
@@ -1061,3 +1101,18 @@ trainer:
         config.write_text(text)
         assert self._run(monkeypatch, config, tmp_path) == 0
         assert self._run(monkeypatch, config, tmp_path, "--strict") == 1
+
+    def test_a_config_without_max_duration_is_measured_not_crashed(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        root, hours, cuts = self._build_tree(tmp_path)
+        config = tmp_path / "cfg.yaml"
+        text = self._config_text(root, total_hours=round(hours, 6), total_cuts=cuts, names=True)
+        config.write_text(text.replace("    max_duration: 30.0\n", ""))
+        assert "max_duration" not in config.read_text()
+        # The cold-cache run measures every source through a [0.5, inf) filter.
+        assert self._run(monkeypatch, config, tmp_path) == 0, capsys.readouterr().out
+        cache = json.loads((tmp_path / "cache.json").read_text())
+        assert cache
+        for entry in cache.values():
+            assert entry["filtered"]["0.5:inf"]["cuts"] == 4
