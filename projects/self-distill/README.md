@@ -388,14 +388,25 @@ en/de/fr/es/it, "other 19" = the remaining EU languages, Irish included):
 | en->X chrF, HR / other 19 | 28.9 / 20.0 | 51.2 / 39.0 | 49.9 / 32.1 | 50.7 / 33.2 |
 | en->X output in the requested language, HR / other | 21% / 11% | 90% / 82% | 94% / 69% | 95% / 71% |
 
-- **The head start is gone within ~380 nominal hours.** B's 13-22 chrF
-  advantage in translation shrinks to 0.1-1.1 chrF after 718 steps. What
-  remains is small but consistent: B is better into 18 of 23 targets
-  (two-sided sign test p = .01) and more often in the requested language
-  (15/4, p = .02); A is slightly better on ASR (7/16, p = .09).
-- **Fine-tuning on five languages costs the zero-shot targets.** Into targets
-  with no training data, both models drift toward it/de/es (Greek falls from
-  B's 36 chrF at step 0 to under 1).
+- **The head start is gone within ~380 nominal hours, in both conditions.**
+  B's 13-22 chrF advantage in translation shrinks to 0.1-1.1 chrF after 718
+  steps. A small edge lingers for a while (HR5 at 718: B better into 18 of 23
+  en->X targets, p = .01; EU24 at 1436-2154: B better on X->en, p = .03 and
+  .01) and is gone by step 2872, where every sign test has p > .2.
+- **At step 2872 the data condition decides, not the start** (A / B):
+
+  | | HR5 | EU24 |
+  |---|---|---|
+  | ASR WER, 5 HR languages | 0.071 / 0.067 | 0.072 / 0.072 |
+  | ASR CER, other 19 | 0.770 / 0.783 | 0.092 / 0.098 |
+  | X->en chrF, HR / other 19 | 58.7 / 46.6 vs 58.3 / 46.5 | 57.7 / 50.1 vs 57.9 / 49.9 |
+  | en->X chrF, HR / other 19 | 51.7 / 19.3 vs 51.6 / 19.0 | 51.7 / 41.2 vs 51.8 / 40.6 |
+  | en->X in the requested language, other 19 | 7% / 6% | 93% / 92% |
+
+  Fine-tuning on five languages erodes everything without data, for both
+  starts: translation into untrained targets collapses into the trained
+  languages (Greek falls from B's 36 chrF at step 0 to under 1) and
+  unseen-language ASR degrades. Training on all 24 holds them.
 - The fine-tuned models write lowercase (the loader lowercases targets) and
   Europarl-style tokenised spacing ("l ' archipelago"), which hurts BLEU, not
   chrF. Under random templates B's step-0 X->en sits well below its 53.5 under
