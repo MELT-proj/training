@@ -350,7 +350,15 @@ or from the self-distilled one? The two starts differ only in the adapter:
   in pure bf16: AdamW updates below half a bf16 ulp are lost, which at 2e-5
   freezes every decoder weight above ~0.008 and nearly the whole encoder at
   6e-6. `--model.master_dtype float32` (0e19639) keeps fp32 master weights;
-  compute stays bf16. A checkpoint is ~30 GB (fp32 weights and Adam state).
+  compute stays bf16. A checkpoint is 29 GB (fp32 weights and Adam state).
+  The warm starts still load through bf16 before the cast, so A and B start
+  from identical encoder and decoder weights and differ only in the adapter.
+- **Memory.** fp32 masters peak at 62.7 GiB per GPU at 60 s per micro-batch
+  (H200). That does not fit MN5's 64 GB H100s (EU24 batches carry more text
+  tokens). `--trainer.ddp_gradient_as_bucket_view true` (2e874c7, 2a26f33)
+  shares the gradients with DDP's buckets and zeroes them in place (Trainer's
+  `model.zero_grad()` would free them and the accumulation would allocate a
+  second copy): 49-54 GiB on MN5, same arithmetic.
 - **Files.** `sft/build_sft_mix.py` renders `sft/SFT-HR5.yaml` and
   `sft/SFT-EU24.yaml` from `sft/SFT-template.yaml`; `sft/launch_sft.sh` derives
   the schedule (16 saves, 32 in-training evals) and submits. Evaluation uses
@@ -358,30 +366,41 @@ or from the self-distilled one? The two starts differ only in the adapter:
   ASR (24 languages), X->en and en->X (23 each). SFT trains on lowercased
   targets, so translation must be scored case-insensitively.
 - **Where.** HR5 pair on the artemis H200 node, 2 GPUs each with 16-step
-  accumulation (jobs started 2026-10-12, ~3.5 days with one resume at the
-  2-day limit); EU24 pair planned on MN5 (2 nodes each, 4-step accumulation).
+  accumulation, ~19.5 s/step since 2026-10-12 14:20 UTC; each resumes once
+  after the 2-day limit (dependent jobs already queued). EU24 pair on MN5, 2
+  nodes each with 4-step accumulation, ~9.6 s/step since 2026-10-13 06:10 UTC.
   Outputs under `/mnt/scratch-nyx/giuseppe/melt/outputs-sft/`.
-- **Smoke test** (MN5, EU24 from A, 40 steps, bf16): 6.7 s/step on 8 H100,
-  peak 36-47 GB per GPU, `shard_seed: 1337` on every leaf, the loss falling
-  from 1.0 to 0.75.
+- **Scoring.** `eval/watch_sft_checkpoints.py` runs on nyx and scores each
+  scheduled checkpoint on artemis A6000s as it lands (`eval/launch_eval_sft.sh`,
+  bf16 as at step 0); `eval/pull_mn5_checkpoints.sh` copies the EU24 weights
+  over; `eval/render_sft_tables.sh` writes the tables to
+  `outputs-sft/scoring/summaries/tables.md`.
 
-Step 0, the two starts under the SFT evaluation format (FLEURS dev, 100 per
-language or direction; "other 19" = the EU languages outside en/de/fr/es/it,
-Irish included):
+The two starts at step 0 and after 718 steps of HR5 (FLEURS dev, 100 per
+language or direction, translation scored case-insensitively; HR =
+en/de/fr/es/it, "other 19" = the remaining EU languages, Irish included):
 
-| | A (GOLDW-final) | B (`S3-azeros_anchor`) |
-|---|---|---|
-| ASR WER, 5 trained languages | 0.081 | 0.083 |
-| ASR CER, other 19 | 0.582 | 0.565 |
-| X->en chrF, trained / other 19 | 24.3 / 21.0 | 37.9 / 38.8 |
-| en->X chrF, de/fr/es/it / other 19 | 27.3 / 19.1 | 50.1 / 38.3 |
-| en->X output in the requested language | 11-21% (copies the English) | 83-91% |
-| in-domain WER | 0.107 | 0.122 |
+| | step 0 A | step 0 B | 718 A | 718 B |
+|---|---|---|---|---|
+| ASR WER, 5 HR languages | 0.081 | 0.083 | 0.072 | 0.074 |
+| ASR CER, other 19 | 0.582 | 0.565 | 0.536 | 0.563 |
+| X->en chrF, HR / other 19 | 25.7 / 22.3 | 39.2 / 40.3 | 57.2 / 46.5 | 57.3 / 46.9 |
+| en->X chrF, HR / other 19 | 28.9 / 20.0 | 51.2 / 39.0 | 49.9 / 32.1 | 50.7 / 33.2 |
+| en->X output in the requested language, HR / other | 21% / 11% | 90% / 82% | 94% / 69% | 95% / 71% |
 
-Under random templates B's X->en sits well below its 53.5 under the repeat-first
-format of step 4. Unseen-language ASR depends strongly on whether the template
-names the language. The en->X targets do not share their English recordings, so
-compare A and B within a target.
+- **The head start is gone within ~380 nominal hours.** B's 13-22 chrF
+  advantage in translation shrinks to 0.1-1.1 chrF after 718 steps. What
+  remains is small but consistent: B is better into 18 of 23 targets
+  (two-sided sign test p = .01) and more often in the requested language
+  (15/4, p = .02); A is slightly better on ASR (7/16, p = .09).
+- **Fine-tuning on five languages costs the zero-shot targets.** Into targets
+  with no training data, both models drift toward it/de/es (Greek falls from
+  B's 36 chrF at step 0 to under 1).
+- The fine-tuned models write lowercase (the loader lowercases targets) and
+  Europarl-style tokenised spacing ("l ' archipelago"), which hurts BLEU, not
+  chrF. Under random templates B's step-0 X->en sits well below its 53.5 under
+  the repeat-first format of step 4. The en->X targets do not share their
+  English recordings, so compare A and B within a target.
 
 ## Running on artemis
 
