@@ -334,7 +334,13 @@ def main(cfg: DictConfig) -> None:
     # populate the directory that all four ranks were about to inspect, and a
     # fresh run with wandb enabled and overwrite_output_dir=false failed every
     # time. The check is about output from a *previous* run, so nothing of ours
-    # may land in that directory until it has passed.
+    # may land in that directory until it has passed -- on every rank. "After
+    # prepare_model" on the master is not enough: on two nodes the second
+    # node's ranks load a model.ckpt later, found the master's file and refused
+    # to start. The barrier waits for every rank's check (the process group is
+    # up: Seq2SeqTrainingArguments initialised it).
+    if is_distributed:
+        torch.distributed.barrier()
     if "wandb" in cfg.trainer.report_to and is_global_master:
         output_dir = cfg.trainer.output_dir
         os.makedirs(output_dir, exist_ok=True)
