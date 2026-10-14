@@ -325,7 +325,14 @@ any phase-1 or phase-2 checkpoint (`fc1` shape mismatch). Run it with
 `eval_parity_spec.py` pins melt-eval to the trainer's exact eval cuts (checked on
 phase-1 GOLD: 50/50 logged references reproduced).
 
-## Step 5: standard fine-tuning on top (running)
+## Step 5: standard fine-tuning on top (stopped 2026-10-13)
+
+**Stopped by decision on 2026-10-13**, after the step-2872 tables below: the
+self-distilled start's head start is gone by then, so the study moved to using
+self-distillation *instead of* the fine-tuning step (step 6). The HR5 pair and the
+EU24 run from the self-distilled start were cancelled (their outputs are kept); the
+EU24 run from the standard start (`SFT-EU24-from-goldw`) ran to its end and is the
+full-fine-tuning reference of step 6.
 
 Question: if the whole model is then fine-tuned on ordinary transcription and
 translation data, is it better to start from the standard-aligned checkpoint
@@ -412,6 +419,95 @@ en/de/fr/es/it, "other 19" = the remaining EU languages, Irish included):
   chrF. Under random templates B's step-0 X->en sits well below its 53.5 under
   the repeat-first format of step 4. The en->X targets do not share their
   English recordings, so compare A and B within a target.
+
+## Step 6: self-distillation instead of fine-tuning, over 24 languages (SD24)
+
+Question (2026-10-13): if the head start of step 5 does not survive fine-tuning, can
+modality alignment with self-distillation itself replace the fine-tuning step? Compared,
+all from the same standard-aligned start **A** (Whisper-large-v3, MLP adapter,
+Qwen3.5-2B):
+
+| arm | what trains | data / labels |
+|---|---|---|
+| A | adapter | 1,000 h of 5-language ASR, gold transcripts (the start) |
+| SFT-EU24 | encoder, adapter, decoder | 6,133 h, gold ASR and ST labels (step 5, from A) |
+| **SD24** | adapter | 2,700 h of ASR audio in 24 languages, offline instruction-mixed self-distillation |
+| CE24 (control) | adapter | the same audio in the same batches, gold-transcript CE, no teacher |
+
+and the SD24 recipe again with `utter-project/EuroLLM-1.7B-Instruct-2512` as the decoder.
+
+- **Data.** `sft/SD-EU24-2700h.yaml`, rendered by `sft/build_sft_mix.py --sd24-hours 2700`
+  with the same audited sources as the SFT mixes, ASR entries only (the translate rows are
+  made from the same audio). Nine languages (de, en, es, fr, hu, it, nl, pl, pt) draw 201.7 h
+  each, the other 15 use all their data once (fi 193.7, cs 160.3, ro 130.6, sv 110.3, sk 54.2,
+  bg 35.2, lv 30.5, da 29.0, lt 28.4, el 27.0, et 24.3, hr 21.2, sl 15.3, ga 12.7, mt 12.3 h):
+  a flat cap, not the beta=0.5 temperature of `config/train/SFT-v1.4.0.yaml`, which would give
+  English 34% and Irish and Maltese ~9 h each. The cap equals SFT-EU24's per-language ASR
+  audio (197.7 h), so the arms differ in method, not in language balance. Cuts up to 30 s.
+- **Recipe.** `sft/launch_sd24.sh` (wraps `launch_step2.sh`). Offline CE on the frozen
+  decoder's greedy reply to "repeat" or "translate into X" (translate share 0.25; targets the
+  22 EU languages without ga/mt for Qwen, which cannot translate into them: chrF 19 / 27 and
+  25% / 19% runaway replies), no gold anchor. Adapter LR 2e-4, WSD, 8 H100 x 64 s per step,
+  at most 16 cuts per micro-batch (batches carry ~80% of the budget), fp32 master weights
+  for the adapter only (`model.master_dtype_scope: trainable`; the frozen backbones stay
+  bf16), teacher replies capped at min(256, 3.5 x content + 32) tokens with the cut ones
+  dropped (`distill.reply_budget_factor`, `distill.drop_truncated`).
+- **Only half of the audio is transcription.** The repeat rows are the ASR rows: at a translate
+  share of 0.25 SD24 has ~2,000 h of them against SFT-EU24's 2,665 h of gold ASR audio.
+- **Teacher ceilings** (`text_ceiling.py`, FLEURS dev, 100 per language: the frozen decoder
+  reading the gold transcript; chrF, and the share of clips it copies exactly under the repeat
+  instruction). Qwen3.5-2B copies 99.5%, so for it the repeat half is gold in effect and the
+  anchor is redundant. EuroLLM-1.7B-Instruct translates much better into the small languages
+  but does not copy: it paraphrases, and the 2512 version adds explanations or refuses in ~13%
+  of clips. Its repeat rows therefore take the gold transcript (`distill.repeat_from_gold`) and
+  only the translate rows are the teacher's. The public EuroLLM-1.7B-Instruct scores a little
+  above the 2512 on translation.
+
+  | lang | X->en chrF: Qwen / Euro-1.7B / Euro-2512 | en->X chrF: Qwen / Euro-1.7B / Euro-2512 | exact copies %: Qwen / Euro-1.7B / Euro-2512 |
+  |---|---|---|---|
+  | bg | 61.7 / 65.6 / 64.0 | 52.0 / 62.9 / 54.8 | 100 / 10 / 33 |
+  | cs | 60.3 / 65.2 / 63.2 | 47.5 / 55.5 / 52.9 | 99 / 10 / 34 |
+  | da | 66.2 / 69.5 / 67.8 | 56.4 / 64.8 / 63.5 | 100 / 9 / 28 |
+  | de | 63.6 / 66.8 / 65.5 | 56.4 / 60.3 / 60.2 | 100 / 9 / 46 |
+  | el | 57.8 / 59.5 / 60.7 | 41.7 / 47.9 / 44.9 | 100 / 42 / 61 |
+  | es | 58.5 / 58.6 / 57.8 | 52.7 / 55.4 / 54.4 | 100 / 22 / 38 |
+  | et | 47.9 / 58.6 / 49.5 | 34.7 / 56.3 / 51.7 | 99 / 14 / 52 |
+  | fi | 50.8 / 55.6 / 50.6 | 41.8 / 54.0 / 49.0 | 99 / 27 / 40 |
+  | fr | 63.4 / 65.5 / 64.5 | 62.2 / 67.9 / 65.2 | 100 / 32 / 61 |
+  | ga | - / - / - | 19.3 / 40.7 / 37.7 | 96 / 9 / 1 |
+  | hr | 59.3 / 60.9 / 53.7 | 50.7 / 53.3 / 43.4 | 100 / 3 / 35 |
+  | hu | 52.9 / 54.8 / 53.3 | 40.9 / 49.6 / 47.4 | 99 / 17 / 55 |
+  | it | 60.4 / 62.8 / 61.4 | 54.0 / 57.8 / 56.2 | 100 / 28 / 46 |
+  | lt | 51.0 / 55.3 / 50.9 | 40.6 / 52.8 / 49.2 | 100 / 29 / 36 |
+  | lv | 50.1 / 56.6 / 49.9 | 35.4 / 50.7 / 48.3 | 100 / 12 / 45 |
+  | mt | 54.6 / 57.2 / 61.2 | 26.5 / 56.1 / 49.4 | 99 / 14 / 44 |
+  | nl | 55.6 / 58.3 / 57.6 | 51.9 / 54.8 / 53.5 | 100 / 37 / 60 |
+  | pl | 54.0 / 57.2 / 55.7 | 44.1 / 50.5 / 48.1 | 99 / 8 / 43 |
+  | pt | 64.5 / 64.0 / 62.0 | 61.1 / 66.7 / 63.7 | 100 / 28 / 54 |
+  | ro | 62.3 / 66.8 / 65.2 | 53.7 / 62.5 / 60.1 | 99 / 6 / 44 |
+  | sk | 56.5 / 64.9 / 61.2 | 45.7 / 58.5 / 55.1 | 100 / 6 / 32 |
+  | sl | 54.3 / 59.2 / 55.6 | 44.5 / 55.2 / 51.7 | 99 / 7 / 27 |
+  | sv | 62.9 / 68.7 / 67.3 | 56.0 / 65.3 / 61.3 | 100 / 31 / 52 |
+  | mean | 57.7 / 61.4 / 59.0 | 46.5 / 56.5 / 53.1 | 99.5 / 20 / 43 |
+
+  (X->en: 22 languages, no Irish source text in FLEURS. Mean en->X over the ten lower-resource
+  targets bg, el, et, ga, hr, lt, lv, mt, sk, sl: 39.1 / 53.4 / 48.6.)
+- **What the MN5 smoke tests found** (2 nodes x 4 H100, 64 GB; `acc_debug`, 60 steps):
+  120 s per rank ran out of memory with the gold anchor (a second graph over the batch) and
+  without it. What is large is the student's logits, padded to rows x longest reply x a 248k
+  vocabulary and upcast to fp32: 4.76 GiB for 20 rows of 257 tokens, which one looping reply in
+  a batch of short utterances produces. Cuts over 28 s (the top 10% of the mix, up to 60 s)
+  also ran every rank's decoding to the 448-token cap. With the cap, the reply budget, the row
+  limit and bf16 backbones: **4.4 s/step, 20-31 GB per GPU**, 1.3% of rows dropped as cut. The
+  control runs at ~1.5 s/step. The dataloader needs ~20 min to deliver its first batch on MN5.
+- **Runs** (2026-10-14, MN5 `acc_ehpc`, 2 nodes each, from the frozen clone
+  `~/training-sd24-qwen` @ 07f84c2): SD24 Qwen `47281435` (~29 h, ~232 GPU-h) and CE24 control
+  `47281436` (~10 h, ~79 GPU-h). EuroLLM: the alignment start (the GOLDW recipe with the new
+  decoder, artemis `336423`) first, then SD24 with `REPEAT_FROM_GOLD=1` and all 24 languages as
+  translate targets.
+- **Scoring** with `eval/launch_eval_sft.sh` on the FLEURS-24 dev sets, each model under its own
+  training prompt (`eval/format-repeatfirst.yaml` for SD24 and CE24, `eval/format-sft-random.yaml`
+  for SFT-EU24) and the shared ones. Results: not in yet.
 
 ## Running on artemis
 
