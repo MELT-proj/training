@@ -145,6 +145,17 @@ DECODER_PROFILES = {
         "pad_token": "</s>",
         "chat_template_config": "chatml",
     },
+    # The 2512 refresh of the 1.7B Instruct (a private repo, utter-project, rev e8faa77e), read from its
+    # downloaded config.json / tokenizer_config.json / chat_template.jinja (2026-10-14): the same Llama
+    # architecture and 128,000-token vocabulary as the entry above, the same special tokens (<|im_end|> id 4
+    # is the stop token, </s> id 2 the pad), a plain ChatML template with no default system turn. It
+    # differs in rope_theta 1e6 (was 1e4), a 32,768-token context, and a generation_config whose
+    # eos_token_id is [4, 2].
+    "utter-project/EuroLLM-1.7B-Instruct-2512": {
+        "eos_token": "<|im_end|>",
+        "pad_token": "</s>",
+        "chat_template_config": "chatml",
+    },
     # The Base half of the pair does NOT share Instruct's vocabulary --
     # verified (2026-09-18): base's tokenizer.json has only 3 added tokens
     # (<unk>, <s>, </s>), no "<|im_start|>"/"<|im_end|>" at all, unlike the

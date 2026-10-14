@@ -20,6 +20,7 @@ Two steps, because the training image has no sacrebleu:
     # directories must be visible there, e.g. copied under the outputs
     python projects/self-distill/text_ceiling.py generate --ckpt /workspace/outputs/<GOLDW run> \\
         --sets /workspace/outputs/sd-text-ceiling/sets/* --out /workspace/outputs/sd-text-ceiling/dev.jsonl
+    # or, for a decoder without a MELT checkpoint: --decoder utter-project/EuroLLM-1.7B-Instruct
     # anywhere sacrebleu imports (the melt-eval venv); scored as summarize_evals.py scores the speech runs
     python projects/self-distill/text_ceiling.py score .../dev.jsonl --json .../dev.json
 """
@@ -97,12 +98,54 @@ def translate(model, processor, rows: list[dict], template: str, batch_size: int
     return out
 
 
-def generate(args: argparse.Namespace) -> None:
-    from alignment_probe import load_checkpoint
-    from omegaconf import OmegaConf
+def load_decoder_only(name: str):
+    """A bare causal LM as the teacher, with just enough of a processor for ``build_distill_prompts``.
 
-    ckpt = Path(args.ckpt)
-    model, processor = load_checkpoint(ckpt, OmegaConf.load(ckpt / "resolved_config.json"))
+    For a decoder that has no MELT checkpoint yet (a candidate teacher): the weights come from the local
+    Hugging Face cache, the end and pad tokens follow ``plan_arm.DECODER_PROFILES`` when it lists the decoder
+    (that is what MELT would set on the tokenizer), and the audio tokens are ids past the vocabulary, so
+    nothing is suppressed and no student prompt is ever run.
+    """
+    import sys
+    from types import SimpleNamespace
+
+    import torch
+
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ablation-campaign"))
+    from plan_arm import DECODER_PROFILES
+
+    tokenizer = AutoTokenizer.from_pretrained(name, local_files_only=True)
+    profile = DECODER_PROFILES.get(name, {})
+    if profile.get("eos_token"):
+        tokenizer.eos_token = profile["eos_token"]
+    if profile.get("pad_token"):
+        tokenizer.pad_token = profile["pad_token"]
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    lm = AutoModelForCausalLM.from_pretrained(name, dtype=torch.bfloat16, local_files_only=True).cuda().eval()
+    first = len(tokenizer)
+    processor = SimpleNamespace(
+        tokenizer=tokenizer,
+        audio_token="<|audio|>",
+        audio_token_id=first,
+        audio_bos_token_id=first + 1,
+        audio_eos_token_id=first + 2,
+        _surround_bos_eos_mm_tokens=lambda prompt: prompt,
+    )
+    return SimpleNamespace(text_decoder=lm), processor
+
+
+def generate(args: argparse.Namespace) -> None:
+    if args.decoder:
+        model, processor = load_decoder_only(args.decoder)
+    else:
+        from alignment_probe import load_checkpoint
+        from omegaconf import OmegaConf
+
+        ckpt = Path(args.ckpt)
+        model, processor = load_checkpoint(ckpt, OmegaConf.load(ckpt / "resolved_config.json"))
     template = args.template.replace("\\n", "\n")
     start = time.time()
     with open(args.out, "w", encoding="utf-8") as out:
@@ -154,7 +197,11 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
     gen = sub.add_parser("generate", help="greedy text-only translations, one JSON line per sample")
-    gen.add_argument("--ckpt", required=True, help="a finished run's root (weights, processor, resolved_config.json)")
+    source = gen.add_mutually_exclusive_group(required=True)
+    source.add_argument("--ckpt", help="a finished run's root (weights, processor, resolved_config.json)")
+    source.add_argument(
+        "--decoder", help="a Hugging Face decoder id in the local cache, as a bare teacher (no MELT model)"
+    )
     gen.add_argument("--sets", nargs="+", required=True, help="melt-eval frozen-set directories (manifest.jsonl)")
     gen.add_argument("--out", required=True, help="samples JSONL")
     gen.add_argument(
