@@ -29,6 +29,57 @@ Fondue is 10–30K depending on the backbone, and Raclette is ~1.4K
 (Llama-class) to ~4K (Qwen-class). Spend the rest on seed replicates and
 ladder points; unspent hours vanish on 11-30.
 
+**Position on 2026-10-14:** 868 of 1,752 khours used (50%), **~44,000 GPU-h
+remaining**. The re-planned weeks below add up to ~19K GPU-h with a
+Llama-class Fondue and ~34K with a Qwen-class one. Compute is not the
+constraint any more; wall clock and queue waits are.
+
+---
+
+## Re-plan of 2026-10-14
+
+The attention-adapter divergence (weeks 3–4) and the PI's travel put the
+campaign 1–2 weeks behind the original weeks 4–6. Nothing is dropped. The
+slip is absorbed by these changes, which are the reason weeks 5 onward look
+different from the original:
+
+1. **The encoder is decided on the crossing as it stands.** Whisper scores
+   0.14–0.16 against mHuBERT's 0.26 and worse (board 2026-10-13), far
+   outside the seed noise. The non-Whisper QK-norm cells finish for the
+   paper's table only.
+2. **The adapter is chosen provisionally and confirmed in parallel.** The
+   Whisper cells are within 0.02 of each other on one seed each. Seed
+   replicates of the top two run alongside the backbone arms (data seed now
+   really changes, `fea165a`); the final adapter is called at the 10-23 gate.
+3. **The backbone and regime studies run together**, as week 4 already
+   assumed (regime factors independent of the stack).
+4. **Runs are reused, not repeated.** The Llama-1B-Instruct backbone MA arm
+   is also the recipe confirmation and the regime study's base MA
+   checkpoint. The 2,100 h crossing cell with the chosen Whisper adapter is
+   the regime study's "long MA, ASR only" checkpoint.
+5. **The freeze is split in two.** **MA freeze Thu 10-29** (everything Fondue's
+   MA reads: backbone, stack, prompt, language set, mixture, MA budget, MA
+   batch and LR, filters, FLEURS in/out). **IFT freeze Wed 11-04** (regime,
+   decoder LR from Raclette, ASR:ST mix, IFT mixture, cadence). The IFT
+   decisions are made while Fondue's MA runs; none of them changes MA.
+6. **Evaluation and short runs go to artemis** (2 jobs per user per QOS):
+   selection-metric and IFT evals, COMET, the ratio study's 100 h and 300 h
+   MA runs, and testing the bf16 fix.
+
+What it costs: Fondue's IFT starts ~11-05 instead of ~10-31 and ends ~11-15
+(Llama, 8 nodes) or ~11-19 (Qwen, 16 nodes, with queue gaps between the
+3-day resume segments), against the 11-25 submission cut-off. A Qwen-class
+Fondue has ~6 days of buffer, so `06-fondue.md` §6's "stop at the last
+checkpoint" becomes a likely outcome, not a remote one. **A second week of
+slip is not recoverable** without dropping Raclette or the ratio study.
+
+**Proposed defaults, PI to confirm** (the weeks below are written on them):
+(a) Whisper-large-v3 is the encoder; the provisional adapter is the PI's
+pick on 10-14. (b) Backbone MA arms at 700 h/lang, as `02-backbones.md` §1
+specifies. (c) The two-part freeze above. (d) The crossing cell is reused as
+the regime study's long-MA checkpoint. (e) `min_lr_scale` (wire or delete)
+and FLEURS in/out of the Fondue pool are decided by the MA freeze.
+
 Cost anchors used below (measured unless marked): MA arm at 700 h/lang
 ≈ 30 GPU-h; IFT arm at 700 h/lang, Llama-1B ≈ 80–100 GPU-h; Qwen-2B IFT
 unmeasured at the real topology, expected several times more.
@@ -57,33 +108,40 @@ Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
 - **Two pre-existing test failures on `main`** (sdpa propagation into
   `Wav2Vec2BertConfig`; all of `test_processing_melt.py`), likely
   transformers version skew. Not blocking any week.
-- **The week-3 crossing render waits on the crossing-prep item** (week 3
-  Track B). All its PI decisions were made on 2026-09-26 (`03-audio-stack.md`
-  §1b).
-- **Crossing in flight; MN5 constraints until the last crossing job ends**
-  (2026-10-08, board d91c0e1).
-  - **Don't touch `~/training-crossing`** on MN5. It's a frozen clone at
-    e6cc269 that the 12 queued arms (and any resume) bind as
-    /workspace/training when they start: no sync, no branch switch, no
-    edits. `~/training` is safe to sync.
-  - **Don't merge `yodas3-rest/`** into `yodas3/<lang>/train`. Jobs list their
-    shards at start, so a merge while some are queued, or on a resume, gives
-    arms different data. The copy itself continues: de, fr and it are
-    complete. The four es streams dropped together (broken pipe on the
-    transfer node, 10-09 06:37) and were restarted 10-10.
-  - All 16 arms are queued. For the Conformer cells, read `grad_norm`
-    first: the warmup fix is proven only on Whisper, one seed, 9k steps.
+- **No IFT can be submitted until the bf16 fix is on `main`** (target Fri
+  10-16; owned by the session that found it). transformers 5 reloads every
+  DDP MA checkpoint since 09-11, the crossing's included, with an all-bf16
+  decoder, and DDP never upcasts, so most decoder updates at 2e-5 round to
+  zero. Fix: pass `dtype=float32` to `from_pretrained` on the `model.ckpt`
+  path. Every IFT box below slips day for day if it is late. Check
+  `optimizer.pt` (8 bytes per trainable parameter, not 4) on the first
+  checkpoint of the first IFT.
+- **Crossing: 15 of 16 cells finished; mms1b-conformer runs until ~10-15
+  evening.** The four QK-norm Q-Former cells finished 10-13/14 and are not
+  yet scored. Until the last crossing job ends:
+  - **Don't merge `yodas3-rest/`** into `yodas3/<lang>/train`; a resume would
+    list different shards. de, fr and it copies are complete; es restarted
+    10-10. Verify all four against nyx before the merge.
 - **Frozen clones on MN5:** `~/training-crossing` @ e6cc269,
-  `~/training-lr1e3` @ 55e3a6a and `~/training-qf1e3` @ ecccf89. Each holds
-  queued or running crossing jobs (and their resumes). Don't sync to,
-  switch branches in or edit any of them until their jobs end. `~/training`
-  is free.
-- **Both attention adapters diverge at 2e-3** (2026-10-09, board 4182f9a).
-  Conformer 2 of 4 despite warmup; Q-Former 4 of 4. The PI decides whether to
-  cancel the two non-learning Q-Former jobs (w2vb, mms1b) and which fix to
-  take (week 3 Track B). No new crossing submissions until then. The 8
-  MLP/MoE cells and the 2 live Conformer cells continue. The trainer still
-  has no non-finite-gradient abort.
+  `~/training-lr1e3` @ 55e3a6a, `~/training-qf1e3` @ ecccf89,
+  `~/training-qkn` @ 93209ca, `~/training-eval` @ ad9171c, `~/eval` (melt-eval
+  `selection-metric-sets` @ fa5a961), and the self-distillation line's
+  `~/training-sd-sft` and `~/training-sd24-qwen` @ 07f84c2. Queued jobs bind
+  their clone when they *start*: no sync, branch switch or edit until their
+  jobs end. `~/training` is free.
+- **Seed replicates before 2026-10-13 never changed the data order**: the
+  container wrapper did not forward `MELT_SEED`, so every "seed 43..53" run
+  read data order 42 (fixed on `main`, `fea165a`). The screen's noise floors
+  (Whisper 0.0045, w2v-BERT 0.035) and step 0b's 0.002 are numerical noise
+  only. New replicates must be submitted from a clone at or after `fea165a`.
+- **Multi-node start from a checkpoint** failed on the second node (output
+  directory already written); fixed on `main` (`b37823b`), not yet run on a
+  real multi-node job. Raclette and Fondue's IFT depend on it: the resume
+  chain test (week 6) is that first run.
+- **Known and accepted, for the paper's methods section:** training targets
+  are lowercased (`dataset.py:237`), so "punctuated text" keeps punctuation
+  but not case; Llama's chat template stamps the render date into the system
+  message (not pinned), so it drifts across days.
 - **FLEURS shard duplication on MN5's indexed tree** (78 leaves, af_za..fr_fr).
   The PI has a dry-run-by-default `~/fleurs_dedupe.sh`, not yet run.
   `fleurs24-asr-dev` on MN5 was frozen from the doubled tree; re-freeze it
@@ -94,7 +152,8 @@ Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
   the configs misstate what ran. *Measured since:* every cosine arm logged
   end-of-run LR at 1e-11..1e-9, and the cosine Whisper arm went flat over
   its second half where its WSD twin kept improving (board 2026-09-22).
-  **PI decides** whether to wire it or delete it.
+  **PI decides** whether to wire it or delete it, **by the MA freeze
+  (10-29)**: Fondue's schedule reads it.
 
 ---
 
@@ -351,6 +410,9 @@ audio-stack crossing moves here from week 4, and the backbone MA arms move
 to week 4, so the six decoders are compared on a chosen stack rather than an
 assumed one (`03-audio-stack.md` §0).*
 
+*Re-plan 2026-10-14: the open boxes of weeks 1-4 are carried into the weeks
+below, where they are ticked; they stay here unticked as the record.*
+
 ### Track A — GPU
 - [ ] **Recipe confirmation at 700 h/lang**: MA then IFT on
       Llama-3.2-1B-Instruct with the chosen recipe, current regime (adapter
@@ -368,11 +430,13 @@ assumed one (`03-audio-stack.md` §0).*
       warmup), ~2,830 GPU-h, 25 nodes if all start at once. **Three cells
       re-run at adapter LR 1e-3** (w2vb-conformer, mms1b-conformer,
       mms1b-qformer; PI, 2026-10-09). whisper-conformer was already at 1e-3.
-      **The other three Q-Former cells are queued at 1e-3 too** (PI,
-      2026-10-10, ecccf89), so the whole Q-Former column is at 1e-3.
-      whisper-qformer at 2e-3 was cancelled. **Ten arms have finished**
-      (WERs on board 303d12a). Queue estimates for the 1e-3 re-runs: 10-12 to
-      10-13 and later.
+      The 1e-3 re-runs did not fix the attention cells; **the Q-Former column
+      and mms1b-conformer re-ran with QK-norm at 2e-3** (PI, 2026-10-12,
+      `~/training-qkn` @ 93209ca; #149 merged as ad9171c). **15 of 16 have
+      finished**; mms1b-conformer ends ~10-15. Eleven are scored (board
+      2026-10-13): Whisper 0.136-0.157, mHuBERT 0.26-0.39, MMS-1b 0.43-0.44,
+      w2v-BERT 0.52-0.92. Report each cell's adapter LR and `qk_norm`: the
+      Conformer column is not one recipe.
       *Outcome:* the audio stack — encoder, adapter, frame rate — ranked by
       the selection metric (`selection-metric/README.md`, PI 2026-09-23),
       which replaces the high/low-resource FLEURS split named here before.
@@ -387,7 +451,7 @@ assumed one (`03-audio-stack.md` §0).*
       one selection-metric eval on a smoke checkpoint for each untested
       encoder; then sixteen `campaign.yaml` rows at the PI's recipe.
       Cold-agent prompt handed to the PI 2026-09-26.
-- [ ] **Attention-adapter divergence: diagnose and fix** (added 2026-09-29;
+- [x] **Attention-adapter divergence: diagnose and fix** (added 2026-09-29;
       reopened and widened 2026-10-09, board 4182f9a). Warmup is not enough:
       with it, w2vb-conformer diverged at ~15.6k steps and mms1b-conformer
       at ~6.2k (`grad_norm` jumps to 1e11, then nan, loss 0).
@@ -410,6 +474,12 @@ assumed one (`03-audio-stack.md` §0).*
       load with strict=False and compute a different function. Note
       that the crossing is no longer one recipe for all sixteen: report each
       cell's LR.
+      *Closed 2026-10-14:* LR 1e-3 fixed no Q-Former cell and one Conformer
+      cell blew up at it (board 2026-10-11). PI, 2026-10-12: QK-norm at the
+      recipe LR, no further LR tests. #149 merged with `model.adapter.qk_norm`
+      off by default (ad9171c). The five QK-norm cells passed every earlier
+      failure point without a `grad_norm` above 100. The trainer still has no
+      non-finite-gradient abort; the worker's watcher covers it.
 - [ ] **Re-check every hour-weighted config for per-cut mux weights**
       (added 2026-10-08, after #151). The ladder renders (`05`), the IFT
       config and the Fondue/raclette drafts were weighted as hour shares
@@ -461,123 +531,178 @@ audio stacks, regime fraction.
 
 ---
 
-## Week 5 — Mon 2026-10-12 to Sun 2026-10-18
+## Week 5 — Mon 2026-10-12 to Sun 2026-10-18 (re-planned 2026-10-14)
 
-**Gate (Sunday 10-18): backbone decision and regime decision.** Criteria in
-`02-backbones.md` §4 and `04-regime.md` §4.
+**Decisions this week:** encoder and provisional adapter (Wed 10-14, PI).
+No gate on Sunday: the backbone and regime gates move to Fri 10-23.
 
 ### Track A — GPU
-- [ ] **IFT for the six backbones** (`02-backbones.md`), moved from week 4.
-      Llama ~100 GPU-h each, Qwen and EuroLLM per their measured rates,
-      20–46 h wall each. *This week is tight:* if the queue will not turn
-      six IFTs around before Sunday, IFT only the three leading backbones on
-      the MA-stage signal and carry the rest into week 6, rather than
-      shortening the runs.
-- [ ] Evaluate the backbone IFTs: in-domain, FLEURS-24, cascade oracle,
-      text-ability retention. Second seed on the two leading backbones.
+- [ ] **Score the five QK-norm cells** as each finishes (selection metric,
+      ~1.2 GPU-h a cell; mms1b-conformer ~10-15 evening). Smoke the
+      `qk_norm=true` eval path on one checkpoint first.
+- [ ] **Stack call, provisional** (PI, Wed 10-14): Whisper-large-v3 and one
+      of its adapters (MLP 0.157, MoE 0.143, Conformer at 1e-3 0.136,
+      Q-Former with QK-norm once scored). Recorded in `03` §2 as provisional.
+- [ ] **Seed replicates of the top two Whisper cells** at 2,100 h/lang
+      (~350 GPU-h, ~40 h wall), from a clone at or after `fea165a` so the
+      data order really changes. Submit Thu 10-15. They give the crossing its
+      first real noise floor and settle the adapter on 10-23.
+- [ ] **MA arms for all six backbones** (`02-backbones.md`), carried from
+      week 4: 700 h/lang on Whisper + the provisional adapter, all six in the
+      queue at once on Thu 10-15. The `llama1b-ins` arm is also the recipe
+      confirmation (week 3) and the regime study's base MA checkpoint.
+      *Outcome:* MA-stage WER per backbone, in-domain and FLEURS-24.
+- [ ] **Regime MA checkpoints** (`04-regime.md` §3), the three the backbone
+      arm does not give: ASR+ST at 700 h/lang and at 2,100 h/lang (new), and
+      ASR at 2,100 h/lang (the crossing cell with the provisional adapter,
+      reused). Submit Thu 10-15.
 - [ ] **MA runs at 100 and 300 h/lang** for the ratio study (`04-regime.md`
-      §6), full schedules each, not checkpoints of the 700 h run. ~20 GPU-h,
-      and independent of the regime decision so they can go early.
-- [ ] **R9 and R10**, the decoder-frozen regime runs (`04-regime.md` §3),
-      if not already queued in week 4.
-- [ ] **Whisper size ladder** (`03-audio-stack.md` §2b; PI, 2026-10-01):
-      whisper-tiny, -base, -small and -medium encoders, each with the adapter
-      that wins the week-3 crossing, on the crossing recipe, one seed each.
-      Queued after the backbone MA arms. Est. under ~750 GPU-h for four,
-      since each is cheaper than a large-v3 arm.
-      *Outcome:* how the selection metric and the cost per step change with
-      encoder size, so that compute can be saved if a smaller encoder holds up.
-- [ ] Q-Former arms of the week-3 crossing, if the fix landed late.
+      §6), full schedules each. On artemis (H100 or H200), Thu 10-15.
+- [ ] **First IFTs**, as soon as the bf16 fix is on `main` and their MA
+      checkpoints land (from Sat 10-17): the six backbone IFTs and the ten
+      regime runs R1-R10, all on Llama-3.2-1B-Instruct for the regime study.
+      Check `optimizer.pt` size on the first checkpoint of the first one.
+      If the queue will not turn six backbone IFTs around by 10-22, IFT the
+      three leading backbones on the MA-stage signal first; never shorten
+      the runs.
+- [ ] **Whisper size ladder** (`03-audio-stack.md` §2b), tiny/base/small/
+      medium with the provisional adapter, on the crossing recipe, one seed
+      each (< ~750 GPU-h). Last in priority this week; submit Fri 10-16 if
+      its prep is done. If it lands by 10-29 it can still inform Fondue's
+      encoder cost.
 
 ### Track B — preparation
-- [ ] **Per-task budgets in `build_campaign_config.py`** and the ratio IFT
-      renders: ASR at 600, 400 and 0 h/lang with ST fixed at 700
-      (`04-regime.md` §6).
-- [ ] Ladder configs final; mixed-tier, repetition and Russian probe configs.
-- [ ] Raclette config final (batch on the order of one audio hour per step,
-      three LR points, big-run topology).
-- [ ] Off-boarding plan written (`06-fondue.md` §7): what leaves MN5, where it
-      lands, who verifies.
+- [ ] **bf16 fix on `main`** (target Fri 10-16): `dtype=float32` at
+      `from_pretrained` on the `model.ckpt` path, tested on artemis. Blocks
+      every IFT.
+- [ ] **Re-check every hour-weighted config for per-cut mux weights**,
+      carried from week 3: the IFT config first (needed by Sat 10-17), then
+      the ladder renders and the Fondue/raclette drafts (by 10-23).
+- [ ] **MA config on ASR+ST** for the regime study's factor C, at 700 and
+      2,100 h/lang. Needed Thu 10-15.
+- [ ] **Whisper size ladder prep**, carried from week 4: stage whisper-tiny/
+      -base/-small/-medium on MN5 via `mn5transfer`; add tiny and base to
+      `plan_arm.py` `ENCODER_WINDOW_FRAMES`; one offline-load smoke per size.
+- [ ] **Evaluation on artemis works with current code**: melt-eval generation
+      with the training checkout first on `PYTHONPATH` (the shared venv's
+      `melt` is stale), the selection metric and the IFT eval battery
+      (in-domain, FLEURS-24, X→en, cascade oracle, text retention). From here
+      on IFT evals run on artemis by default.
+- [ ] **Eyeball 20 Qwen hypotheses** for a leaked think block, carried from
+      week 1. Needed only if Qwen leads after the backbone MAs.
 
 ---
 
 ## Week 6 — Mon 2026-10-19 to Sun 2026-10-25
 
-**Gate (Sunday 10-25): Fondue configuration frozen.** After this date findings
-go into the paper as ablations, not into Fondue.
+**Gate (Fri 10-23): backbone, regime and final adapter.** Criteria in
+`02-backbones.md` §4 and `04-regime.md` §4; the adapter on the replicate pair.
 
 ### Track A — GPU
-- [ ] **Winning stack × winning backbone** confirmation, MA plus IFT.
-- [ ] **Raclette** (`06-fondue.md` §4): three LR points at ~25K h on the
-      big-run batch and topology. Choose LR on loss at matched steps and
-      FLEURS-24 dev CER.
-- [ ] Seed replicates for the headline backbone pair.
-- [ ] **MA prompt sweep on the winning combination** (moved from week 2,
-      PI 2026-09-26): audio-only vs verbatim vs verbatim+LID, on the chosen
-      encoder × adapter × backbone, scored on the selection metric. The
-      question is whether naming the language improves multilingual ability.
-      The LID arm is scored both with and without the language tag at
-      inference; melt-eval does not support that yet, so build it in week 5.
-      Queue it Monday 10-19: for a prompt change to reach Fondue it has to
-      land before the 10-25 freeze. `01-interface-recipe.md` §3.
-- [ ] **MA:IFT ratio sweep under the winning regime** (`04-regime.md` §6):
-      IFT from the 0/100/300/700 h MA points, plus the zero-IFT evaluation
-      probe. Queue on Monday; feeds Fondue's "MA data budget and stage
-      split" row before the freeze if the queue allows, otherwise the
-      default holds.
+- [ ] Remaining backbone and regime IFTs in the queue by Mon 10-19.
+- [ ] **Evaluate the backbone and regime IFTs** on artemis as they land:
+      in-domain, FLEURS-24, X→en, cascade oracle, text-ability retention.
+- [ ] **Second seed on the two leading backbones** (IFT), submitted on the
+      MA-stage signal by Tue 10-20 so it lands before the gate.
+- [ ] **IFT for the top two audio stacks** (the replicate pair), carried from
+      week 4: does the MA ranking survive IFT. ~200 GPU-h.
+- [ ] **MA:IFT ratio sweep under the winning regime** (`04-regime.md` §6),
+      submitted Sat 10-24: IFT from the 0/100/300/700 h MA points, plus the
+      zero-IFT probe. Read Tue 10-27.
+- [ ] **MA prompt sweep on the winning combination** (verbatim, verbatim+LID;
+      `01-interface-recipe.md` §3), submitted Sat 10-24. MA at 700 h is
+      ~13 h wall; read by Tue 10-27, before the MA freeze.
+- [ ] **Ladder MA tiers 10, 30, 100** on the winning backbone and stack,
+      submitted Sat 10-24 (they need only the backbone and the stack).
+- [ ] **Winning stack × winning backbone confirmation**, MA plus IFT. If the
+      adapter called on 10-23 is the provisional one, the winning backbone's
+      own arms are the confirmation and this box is ticked on the gate.
+      Otherwise submit it Sat 10-24 so it lands before the MA freeze.
 
 ### Track B — preparation
-- [ ] Fill the decision table in `06-fondue.md` §3 and mark it frozen.
-- [ ] Fondue launch scripts and resume chain (`--dependency=afterany`) tested
-      on a short run.
+- [ ] **Fondue dry run at full scale on MN5**, carried from week 3, by Fri
+      10-23: config resolves, dataloader builds, bucket bins on the full
+      distribution, startup time, exposure audit, host-RAM trace. A failure
+      here moves the MA freeze.
+- [ ] **MA throughput at 8 vs 16 nodes** on the Fondue MA config (short
+      runs). If flat, Fondue's MA runs on 16 nodes.
+- [ ] **Resume chain tested on a short 2-node run from a checkpoint**
+      (`--dependency=afterany`): also the first real test of `b37823b`.
+      Needed before Raclette (10-27).
+- [ ] **Quantify FLEURS in or out of the Fondue pool**, carried from week 2,
+      so the PI can make that call by 10-29.
+- [ ] **Per-task budgets in `build_campaign_config.py`** and the ratio IFT
+      renders (ASR at 600/400/0 h/lang, ST fixed at 700; `04-regime.md` §6).
+      Needed by Sat 10-24.
+- [ ] **melt-eval: score the LID prompt with and without the tag** at
+      inference. Needed by 10-26.
+- [ ] **Ladder tier configs** (min(tier, available) per language), carried
+      from week 3; mixed-tier, repetition and Russian probe configs.
+- [ ] Raclette config final once the backbone and regime are known (batch on
+      the order of one audio hour per step, three LR points, topology).
 
 ---
 
 ## Week 7 — Mon 2026-10-26 to Sun 2026-11-01
 
+**Gate (Thu 10-29): MA freeze.** The MA rows of `06-fondue.md` §3 are filled
+and frozen: backbone, stack, prompt, language set, mixture, MA data budget
+and stage split, MA batch and LR, filters, FLEURS in/out, `min_lr_scale`.
+
 ### Track A — GPU
-- [ ] **Fondue MA starts** (Monday). ~5 days on 8 nodes at the measured MA
-      rate if MA uses the full ASR pool; less if the ladder showed MA
-      saturating earlier, or not at all if the ratio sweep says so
-      (`06-fondue.md` §3, decision "MA data budget and stage split").
-- [ ] **Ratio sweep, runner-up regime**, the two points P0 and P3
-      (`04-regime.md` §6): the interaction check. First thing to cut if the
-      queue is tight and the winning backbone is Qwen-class.
-- [ ] **Ladder tiers 10, 30, 100**: MA plus IFT each, on the winning
-      backbone and stack (`05-language-ladder.md`).
+- [ ] **Raclette** (`06-fondue.md` §4), submitted Tue 10-27 after the ratio
+      sweep is read: three LR points at ~25K h on the Fondue IFT batch and
+      topology (24 nodes if all three run at once). Read by Tue 11-03.
+- [ ] **Fondue MA submitted Thu 10-29**: ~5 days on 8 nodes, less on 16 if
+      the scaling check was flat. Chain of 3-day segments.
+- [ ] **Ladder IFT tiers 10, 30, 100** under the winning regime.
+- [ ] **Ratio sweep, runner-up regime** (P0 and P3, `04-regime.md` §6). First
+      to drop if the queue is tight and the backbone is Qwen-class.
 
 ### Track B — preparation
-- [ ] Copy finished arms' weights, logs and eval outputs off MN5 as they
-      complete (rolling, not at the end).
+- [ ] Fill the MA rows of `06-fondue.md` §3 and mark them frozen (10-29).
+- [ ] **Off-boarding plan** (`06-fondue.md` §7), carried from week 5: what
+      leaves MN5, where it lands, who verifies. Copying starts this week,
+      rolling, as arms finish.
 - [ ] Ladder analysis notebook: curve fitting, family pooling.
 
 ---
 
 ## Week 8 — Mon 2026-11-02 to Sun 2026-11-08
 
+**Gate (Wed 11-04): IFT freeze.** The IFT rows of `06-fondue.md` §3: regime,
+decoder LR (Raclette), ASR:ST allocation, IFT mixture, checkpoint and eval
+cadence, topology.
+
 ### Track A — GPU
-- [ ] **Fondue IFT starts** as soon as MA finishes.
+- [ ] **Fondue IFT starts** when MA ends (~11-05). Llama-class: ~8 days on 8
+      nodes. Qwen-class: 16 nodes from the start (~11.5 days).
 - [ ] **Ladder tiers 300 and 700**, the two mixed-tier runs, the repetition
       probe (two runs), the Russian probe (two runs).
 
 ### Track B — preparation
-- [ ] First ladder fits with tiers 10–100; check the functional form.
-- [ ] Draft the efficiency figure from the audio-stack results.
+- [ ] Fill the IFT rows of `06-fondue.md` §3 and mark them frozen (11-04).
+- [ ] First ladder fits with tiers 10-100; check the functional form.
+- [ ] Draft the efficiency figure from the audio-stack results, with the
+      Whisper window-padding ratio per corpus (carried from week 2) and the
+      efficiency instrumentation (week 3, PR #135).
 
 ---
 
 ## Weeks 9–10 — Mon 2026-11-09 to Sun 2026-11-22
 
 ### Track A — GPU
-- [ ] Fondue IFT continues; Llama-class finishes around 11-10, Qwen-class
-      would not finish (see the contingency in `06-fondue.md` §6).
-- [ ] Seed replicates and any missing ladder points, filling spare capacity.
+- [ ] Fondue IFT continues: Llama-class ends ~11-15, Qwen-class ~11-19
+      (resume queue gaps included). If it is not done by 11-23, apply
+      `06-fondue.md` §6: stop at the last checkpoint.
+- [ ] Seed replicates and any missing ladder points, filling spare capacity
+      without delaying a Fondue resume.
 - [ ] In-training evals of every arm complete on MN5.
 
 ### Track B — preparation
 - [ ] Off-board everything not yet copied. Sync all offline W&B runs.
 - [ ] Ladder fits final; Fondue's intermediate checkpoints evaluated on the
-      FLEURS-24 dev subset.
+      FLEURS-24 dev subset (artemis).
 
 ---
 

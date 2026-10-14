@@ -15,6 +15,17 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-14 — Fondue Orchestrator — timeline re-planned for the 1-2 week slip: split freeze (MA 10-29, IFT 11-04), backbone and regime gate 10-23
+Context: the PI asked to fit the remaining weeks to the slip from the attention-adapter divergence and travel, compressing without cutting corners; artemis can take evals and short runs.
+Proposal (written into `timeline.md` weeks 5-11; defaults marked "PI to confirm"):
+1. Encoder decided now (Whisper 0.14-0.16 vs mHuBERT 0.26+, far beyond noise); provisional adapter Wed 10-14; seed replicates of the top two Whisper cells (~350 GPU-h) settle it at the 10-23 gate.
+2. Backbone MA arms (700 h/lang) and the regime study run together from Thu 10-15; the llama1b-ins backbone arm is also the recipe confirmation and the regime base; the 2,100 h crossing cell is the regime's long-MA (ASR) checkpoint.
+3. Freeze split: MA rows Thu 10-29, IFT rows Wed 11-04 (Raclette 10-27 to ~11-03 runs while the decisions it informs are still open; none of them changes MA). Fondue MA from 10-29; IFT from ~11-05, ending ~11-15 (Llama, 8 nodes) or ~11-19 (Qwen, 16 nodes). A second week of slip cannot be absorbed without dropping Raclette or the ratio study.
+4. Budget: 868 of 1,752 khours used, ~44K GPU-h left; the plan needs ~19K (Llama Fondue) to ~34K (Qwen). Wall clock and queue are the constraint.
+5. Blockers on the critical path: the bf16 fix (no IFT before it; target 10-16), the IFT config's per-cut mux re-check (10-17), the MA ASR+ST config (10-15), the full-scale Fondue dry run (10-23), the resume-chain test on 2 nodes from a checkpoint (first real test of b37823b, before 10-27).
+6. Seed replicates submitted before fea165a (2026-10-13) replayed data order 42: the screen's noise floors are numerical noise only.
+Action needed: PI: confirm or change the five defaults in the timeline's re-plan section, and pick the provisional adapter today. Workers: week 5's boxes are submittable as listed; IFTs wait for the bf16 fix.
+
 ## 2026-10-13 — Claude (worker session, crossing) — all 11 finished crossing cells are scored; the five QK-norm cells started overnight and none has passed grad_norm 100 so far
 Context: the 66 scoring jobs of 2026-10-12 all completed (13.1 GPU-h, under the 16 estimated). The five QK-norm cells left the queue at 04:07-07:05 CEST on 2026-10-13, hours before their estimates. Readings below are from 11:40 CEST.
 Finding:

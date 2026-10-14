@@ -100,6 +100,9 @@ Checkpoint cadence bounds a failure's cost; keep two checkpoints.
 
 ## 3. Decision table — freeze on 2026-10-25
 
+*Re-plan 2026-10-14 (`timeline.md`, PI to confirm): the freeze is split.
+The MA rows freeze Thu 2026-10-29, the IFT rows Wed 2026-11-04.*
+
 | decision | options | informed by | status |
 |---|---|---|---|
 | backbone | week-5 winner | `02-backbones.md` §4, plus the Qwen throughput | open |
