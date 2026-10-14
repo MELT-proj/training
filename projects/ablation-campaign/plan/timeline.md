@@ -128,7 +128,7 @@ Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
   `~/training-qkn` @ 93209ca, `~/training-eval` @ ad9171c, `~/eval` (melt-eval
   `selection-metric-sets` @ fa5a961), and the self-distillation line's
   `~/training-sd-sft`, `~/training-sd24-qwen` @ 07f84c2 and
-  `~/training-sd24-eurollm` @ 29247d4. Queued jobs bind
+  `~/training-sd24-eurollm` @ 29247d4, `~/training-sd24-sift` @ 89c4413. Queued jobs bind
   their clone when they *start*: no sync, branch switch or edit until their
   jobs end. `~/training` is free.
 - **Seed replicates before 2026-10-13 never changed the data order**: the
