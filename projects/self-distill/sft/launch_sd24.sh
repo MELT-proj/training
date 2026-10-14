@@ -15,6 +15,12 @@
 #                       a smaller batch
 #   ARM=ce              the matched control: the adapter alone on the gold transcript under the repeat
 #                       instruction (the standard MA loss, no mix) over the same data in the same order
+#   ARM=sift            "SD-SIFT24": AZeroS's own recipe (launch_step2.sh ARM=sift) on the same data: no instruction on
+#                       either path. The teacher is the frozen decoder replying freely to the bare transcript, the
+#                       student hears {audio_token} alone, no mix, no anchor. The reply is a discussion, not a copy
+#                       of the content, so the content-scaled budget and the drop of cut replies (below) are off by
+#                       default: a cut reply is the usual case and stays in the loss. Generation-bound: every
+#                       micro-batch decodes to MAX_NEW_TOKENS (step 4: 12 s/step on an H200 at 448 tokens)
 #
 # The data is projects/self-distill/sft/SD-EU24-<HOURS>h.yaml (build_sft_mix.py --sd24-hours <HOURS>).
 # Steps are DERIVED from its data.train_ds.total_hours, as in launch_sft.sh, so a run is one pass over
@@ -107,10 +113,11 @@ BATCH_DURATION="${BATCH_DURATION:-64}"
 MAX_ROWS="${MAX_ROWS:-16}"
 FILL="${FILL:-0.8}"
 MAX_DURATION="${MAX_DURATION:-30}"
-DROP_TRUNCATED="${DROP_TRUNCATED:-1}"
+if [[ "$ARM" == sift ]]; then DEFAULT_DROP_TRUNCATED=0 DEFAULT_BUDGET_FACTOR=0; else DEFAULT_DROP_TRUNCATED=1 DEFAULT_BUDGET_FACTOR=3.5; fi
+DROP_TRUNCATED="${DROP_TRUNCATED:-$DEFAULT_DROP_TRUNCATED}"
 REPEAT_FROM_GOLD="${REPEAT_FROM_GOLD:-0}"
 export MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-256}"
-REPLY_BUDGET_FACTOR="${REPLY_BUDGET_FACTOR:-3.5}"
+REPLY_BUDGET_FACTOR="${REPLY_BUDGET_FACTOR:-$DEFAULT_BUDGET_FACTOR}"
 ADAPTER_LR="${ADAPTER_LR:-2e-4}"
 TRANSLATE_FRAC="${TRANSLATE_FRAC:-0.25}"
 TARGETS_NO_GA_MT="bg,cs,da,de,el,en,es,et,fi,fr,hr,hu,it,lt,lv,nl,pl,pt,ro,sk,sl,sv"
@@ -125,7 +132,10 @@ WORLD_SIZE=$(( MELT_NODES * MELT_GPUS_PER_NODE ))
 case "$ARM" in
     azeros|azeros_anchor) ;;
     ce) TRANSLATE_FRAC=0 ;;
-    *) die "unknown ARM=$ARM (azeros|azeros_anchor|ce)" ;;
+    sift)
+        TRANSLATE_FRAC=0
+        [[ "$REPEAT_FROM_GOLD" != 1 ]] || die "REPEAT_FROM_GOLD=1 with ARM=sift: there are no repeat rows, the teacher replies to the bare transcript" ;;
+    *) die "unknown ARM=$ARM (azeros|azeros_anchor|ce|sift)" ;;
 esac
 if [[ -z "${MELT_TIME:-}" ]]; then
     [[ "${DRY_RUN:-0}" == "1" ]] || die "set MELT_TIME (HH:MM:SS); the site default is one hour"
@@ -166,7 +176,9 @@ STEPS_TAG=""
 [[ "$MAX_STEPS" == "$DERIVED_STEPS" ]] || STEPS_TAG="-st${MAX_STEPS}"
 MIX_TAG=""
 awk "BEGIN { exit !(${TRANSLATE_FRAC} > 0) }" && MIX_TAG="-mix$(echo "$TRANSLATE_FRAC" | tr -d '.')"
-export EXP_NAME="${EXP_NAME:-SD24-${ARM}-from-${INIT_TAG}${MIX_TAG}-${HOURS}h-bd${BATCH_DURATION}-${WORLD_SIZE}g-s${SEED}${STEPS_TAG}}"
+RUN_PREFIX="SD24-${ARM}"
+[[ "$ARM" != sift ]] || RUN_PREFIX="SD-SIFT24"
+export EXP_NAME="${EXP_NAME:-${RUN_PREFIX}-from-${INIT_TAG}${MIX_TAG}-${HOURS}h-bd${BATCH_DURATION}-${WORLD_SIZE}g-s${SEED}${STEPS_TAG}}"
 
 # The warm start and the run directory must be where the container will look: the site's OUTPUT_DIR on
 # the host. Checked here so a typo costs a second, not a queue wait.
@@ -219,7 +231,10 @@ awk "BEGIN { exit !(${TRANSLATE_FRAC} > 0) }" && EXTRAS+=(--distill.translate_ta
 echo "[launch_sd24] ${EXP_NAME}"
 echo "[launch_sd24] arm:   ${ARM}, translate_frac ${TRANSLATE_FRAC}, targets ${TRANSLATE_TARGETS}"
 echo "[launch_sd24] data:  cuts up to ${MAX_DURATION} s, at most ${MAX_ROWS} per micro-batch"
-[[ "$ARM" == ce ]] || echo "[launch_sd24] teacher: replies up to ${MAX_NEW_TOKENS} tokens (budget ${REPLY_BUDGET_FACTOR} x content + 32), cut ones $( [[ "$DROP_TRUNCATED" == 1 ]] && echo dropped || echo kept )"
+BUDGET_TEXT="budget ${REPLY_BUDGET_FACTOR} x content + 32"
+awk "BEGIN { exit !(${REPLY_BUDGET_FACTOR} > 0) }" || BUDGET_TEXT="fixed budget"
+[[ "$ARM" == ce ]] || echo "[launch_sd24] teacher: replies up to ${MAX_NEW_TOKENS} tokens (${BUDGET_TEXT}), cut ones $( [[ "$DROP_TRUNCATED" == 1 ]] && echo dropped || echo kept )"
+[[ "$ARM" != sift ]] || echo "[launch_sd24] sift: no instruction on either path; the teacher replies to the bare transcript, the student hears the audio alone"
 [[ "$ARM" == ce || "$REPEAT_FROM_GOLD" != 1 ]] || echo "[launch_sd24] repeat rows: the gold transcript is the reply; the teacher answers the translate rows only"
 echo "[launch_sd24] init:  ${WARM_START}"
 echo "[launch_sd24] mix:   ${CONFIG} (${TOTAL_HOURS} h)"
