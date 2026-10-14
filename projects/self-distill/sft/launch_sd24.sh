@@ -51,6 +51,11 @@
 #   REPLY_BUDGET_FACTOR  the teacher's reply budget per micro-batch is min(MAX_NEW_TOKENS, factor x the longest content
 #                      in tokens + 32)                                        (default 3.5; 0 = the fixed MAX_NEW_TOKENS).
 #                      A reply is about as long as its content, up to ~3x for a translation into a finely split language
+#   ROLLOUT_LOOKAHEAD  decode the teacher's replies for this many consecutive micro-batches in one call
+#                      (distill.rollout_lookahead; default 1 = each micro-batch alone). Greedy decoding is bound by the
+#                      latency of a token, not by the number of rows, so for ARM=sift, whose replies run to the cap in
+#                      every micro-batch, 4 should cost about a quarter of the decoding time. Needs the fixed budget
+#                      (REPLY_BUDGET_FACTOR=0) and no REPEAT_FROM_GOLD; a resume skips up to LOOKAHEAD-1 micro-batches per rank
 #   MAX_DURATION       the training loader's longest cut, seconds            (default 30, Whisper's window). The top
 #                      10% of the mix is cuts over ~28 s, up to 60 s; their replies hit the token cap, and one such
 #                      row makes every rank's rollout run to the cap (the step waits for the slowest rank)
@@ -116,6 +121,7 @@ MAX_DURATION="${MAX_DURATION:-30}"
 if [[ "$ARM" == sift ]]; then DEFAULT_DROP_TRUNCATED=0 DEFAULT_BUDGET_FACTOR=0; else DEFAULT_DROP_TRUNCATED=1 DEFAULT_BUDGET_FACTOR=3.5; fi
 DROP_TRUNCATED="${DROP_TRUNCATED:-$DEFAULT_DROP_TRUNCATED}"
 REPEAT_FROM_GOLD="${REPEAT_FROM_GOLD:-0}"
+ROLLOUT_LOOKAHEAD="${ROLLOUT_LOOKAHEAD:-1}"
 export MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-256}"
 REPLY_BUDGET_FACTOR="${REPLY_BUDGET_FACTOR:-$DEFAULT_BUDGET_FACTOR}"
 ADAPTER_LR="${ADAPTER_LR:-2e-4}"
@@ -137,6 +143,11 @@ case "$ARM" in
         [[ "$REPEAT_FROM_GOLD" != 1 ]] || die "REPEAT_FROM_GOLD=1 with ARM=sift: there are no repeat rows, the teacher replies to the bare transcript" ;;
     *) die "unknown ARM=$ARM (azeros|azeros_anchor|ce|sift)" ;;
 esac
+if (( ROLLOUT_LOOKAHEAD > 1 )); then
+    [[ "$ARM" != ce ]] || die "ROLLOUT_LOOKAHEAD=$ROLLOUT_LOOKAHEAD with ARM=ce: the control has no teacher"
+    [[ "$REPEAT_FROM_GOLD" != 1 ]] || die "ROLLOUT_LOOKAHEAD=$ROLLOUT_LOOKAHEAD with REPEAT_FROM_GOLD=1: not combinable"
+    awk "BEGIN { exit !(${REPLY_BUDGET_FACTOR} > 0) }" && die "ROLLOUT_LOOKAHEAD=$ROLLOUT_LOOKAHEAD needs the fixed budget: REPLY_BUDGET_FACTOR=0, not ${REPLY_BUDGET_FACTOR}"
+fi
 if [[ -z "${MELT_TIME:-}" ]]; then
     [[ "${DRY_RUN:-0}" == "1" ]] || die "set MELT_TIME (HH:MM:SS); the site default is one hour"
     echo "[DRY_RUN] WARNING: MELT_TIME is unset: a real submit refuses to run without it" >&2
@@ -220,6 +231,7 @@ EXTRAS=("${RUN_DIR_ARGS[@]}" --data.train_ds.max_duration "$MAX_DURATION" --data
 [[ "$MASTER_DTYPE" == none ]] || EXTRAS+=(--model.master_dtype "$MASTER_DTYPE" --model.master_dtype_scope "$MASTER_DTYPE_SCOPE")
 [[ "$ARM" == ce ]] || EXTRAS+=(--distill.reply_budget_factor "$REPLY_BUDGET_FACTOR")
 [[ "$ARM" == ce || "$DROP_TRUNCATED" != 1 ]] || EXTRAS+=(--distill.drop_truncated true)
+(( ROLLOUT_LOOKAHEAD == 1 )) || EXTRAS+=(--distill.rollout_lookahead "$ROLLOUT_LOOKAHEAD")
 if [[ "$ARM" != ce && "$REPEAT_FROM_GOLD" == 1 ]]; then
     EXTRAS+=(--distill.repeat_from_gold true)
     export ALIGNMENT_GAP=false  # the gap scores the teacher's own reply to the repeat instruction
@@ -234,6 +246,7 @@ echo "[launch_sd24] data:  cuts up to ${MAX_DURATION} s, at most ${MAX_ROWS} per
 BUDGET_TEXT="budget ${REPLY_BUDGET_FACTOR} x content + 32"
 awk "BEGIN { exit !(${REPLY_BUDGET_FACTOR} > 0) }" || BUDGET_TEXT="fixed budget"
 [[ "$ARM" == ce ]] || echo "[launch_sd24] teacher: replies up to ${MAX_NEW_TOKENS} tokens (${BUDGET_TEXT}), cut ones $( [[ "$DROP_TRUNCATED" == 1 ]] && echo dropped || echo kept )"
+(( ROLLOUT_LOOKAHEAD == 1 )) || echo "[launch_sd24] lookahead: the teacher decodes ${ROLLOUT_LOOKAHEAD} micro-batches per call"
 [[ "$ARM" != sift ]] || echo "[launch_sd24] sift: no instruction on either path; the teacher replies to the bare transcript, the student hears the audio alone"
 [[ "$ARM" == ce || "$REPEAT_FROM_GOLD" != 1 ]] || echo "[launch_sd24] repeat rows: the gold transcript is the reply; the teacher answers the translate rows only"
 echo "[launch_sd24] init:  ${WARM_START}"

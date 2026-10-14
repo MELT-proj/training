@@ -18,7 +18,7 @@ fails here rather than at submission.
 
 import contextlib
 import random
-from collections import defaultdict
+from collections import defaultdict, deque
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -158,6 +158,7 @@ def _bare_trainer(model, distill: SelfDistillConfig) -> MELTSelfDistillTrainer:
     trainer._pad_token_id = PAD
     trainer._rng = random.Random(0)
     trainer._distill_stats = defaultdict(list)
+    trainer._decoded_ahead = deque()
     return trainer
 
 
@@ -195,6 +196,16 @@ class TestSelfDistillConfig:
         with pytest.raises(ValueError, match="lmbda=0"):
             SelfDistillConfig(repeat_from_gold=True, lmbda=0.5)
         SelfDistillConfig(repeat_from_gold=True, lmbda=0.0, loss="ce")
+
+    def test_rollout_lookahead_is_off_by_default_and_needs_a_fixed_offline_teacher(self):
+        assert SelfDistillConfig().rollout_lookahead == 1
+        offline = {"lmbda": 0.0, "loss": "ce"}
+        SelfDistillConfig(rollout_lookahead=4, **offline)
+        with pytest.raises(ValueError, match="rollout_lookahead must be >= 1"):
+            SelfDistillConfig(rollout_lookahead=0, **offline)
+        for bad in ({"lmbda": 0.5, "loss": "jsd"}, {**offline, "reply_budget_factor": 3.5}, {**offline, "repeat_from_gold": True}):
+            with pytest.raises(ValueError, match="rollout_lookahead > 1"):
+                SelfDistillConfig(rollout_lookahead=2, **bad)
 
     def test_a_translate_mix_needs_the_mirror_teacher(self):
         with pytest.raises(ValueError, match="mirror"):
@@ -519,6 +530,104 @@ class TestRepeatFromGold:
         assert torch.isfinite(loss) and loss.requires_grad
         loss.backward()
         check_adapter_only_gradients(model)
+
+
+class TestRolloutLookahead:
+    """distill.rollout_lookahead: the teacher decodes several micro-batches in one call; each gets its own share."""
+
+    CPU = torch.device("cpu")
+
+    @staticmethod
+    def _trainer(lookahead=2, max_new_tokens=6):
+        model = _tiny_model()
+        config = SelfDistillConfig(
+            lmbda=0.0, loss="ce", temperature=0.0, max_new_tokens=max_new_tokens, rollout_lookahead=lookahead
+        )
+        trainer = _bare_trainer(model, config)
+        trainer.model_accepts_loss_kwargs = False  # what HF's batch counting reads
+        trainer.compute_loss_func = None
+        return model, trainer
+
+    @staticmethod
+    def _other_batch():
+        """Three rows and a longer prompt than ``_batch()``'s: the group has to be padded to the widest."""
+        ids, mask = _left_pad([[BOS, 5, 21, 22, 6, 7], [BOS, 5, 9, 23, 24, 25, 26, 27, 28, 29, 30, 6, 7], [BOS, 6]])
+        return {**_batch(), "teacher_prompt_input_ids": ids, "teacher_prompt_attention_mask": mask}
+
+    def test_decoding_together_returns_what_each_batch_gets_alone(self):
+        _, trainer = self._trainer()
+        a, b = _batch(), self._other_batch()
+        alone = [trainer._rollout(dict(x), from_student=False) for x in (a, b)]
+        group = [dict(a), dict(b)]
+        trainer._decode_together(group, self.CPU)
+        for batch, (response, mask) in zip(group, alone):
+            assert torch.equal(batch["precomputed_response"], response)
+            assert torch.equal(batch["precomputed_mask"], mask)
+
+    def test_each_batch_is_cut_to_its_own_longest_reply(self):
+        """Row replies of different lengths in one call: padded after the stop token, trimmed per micro-batch."""
+        model, trainer = self._trainer(max_new_tokens=5)
+        group = [_batch(), self._other_batch()]  # 2 rows, then 3 rows
+        width = max(b["teacher_prompt_input_ids"].shape[1] for b in group)
+        replies = torch.tensor([[20, EOS, PAD, PAD, PAD], [21, 22, EOS, PAD, PAD], [23, 24, 25, 26, 27], [28, EOS, PAD, PAD, PAD], [29, 30, 31, EOS, PAD]])
+        out = torch.cat([torch.full((5, width), BOS), replies], dim=1)
+        with patch.object(model.text_decoder, "generate", return_value=out) as generate:
+            trainer._decode_together(group, self.CPU)
+        assert generate.call_args.kwargs["input_ids"].shape == (5, width)
+        first, second = group
+        assert first["precomputed_response"].tolist() == [[20, EOS, PAD], [21, 22, EOS]]
+        assert first["precomputed_mask"].tolist() == [[True, True, False], [True, True, True]]
+        # the second micro-batch has a reply that ran to the budget, so it keeps all five columns
+        assert second["precomputed_response"].shape == (3, 5)
+        assert second["precomputed_mask"].sum(dim=1).tolist() == [5, 2, 4]
+
+    def test_the_rollout_hands_back_the_precomputed_reply_without_decoding(self):
+        model, trainer = self._trainer()
+        batch = _batch()
+        trainer._decode_together([batch], self.CPU)
+        expected = batch["precomputed_response"].clone()
+        with patch.object(model.text_decoder, "generate", side_effect=AssertionError("decoded again")):
+            response, mask = trainer._rollout(batch, from_student=False)
+        assert torch.equal(response, expected) and "precomputed_response" not in batch
+        assert mask.shape == response.shape
+
+    def test_the_loss_is_the_same_with_precomputed_replies(self):
+        model, trainer = self._trainer()
+        plain = trainer.compute_loss(model, _batch())
+        batch = _batch()
+        trainer._decode_together([batch], self.CPU)
+        with patch.object(model.text_decoder, "generate", side_effect=AssertionError("decoded again")):
+            ahead = trainer.compute_loss(model, batch)
+        torch.testing.assert_close(plain, ahead)
+
+    def test_batches_are_served_in_order_and_decoded_lookahead_at_a_time(self):
+        _, trainer = self._trainer(lookahead=2)
+        batches = [_batch(0), self._other_batch(), _batch(1), self._other_batch()]
+        decoded = []
+        original = trainer._decode_together
+        trainer._decode_together = lambda group, device: (decoded.append(len(group)), original(group, device))
+        iterator, served = iter(batches), []
+        for _ in range(5):
+            got, num_items = trainer.get_batch_samples(iterator, 1, self.CPU)
+            assert num_items is None
+            served.append(got)
+        assert decoded == [2, 2]  # four micro-batches, two calls; the fifth call finds the loader empty
+        assert [len(got) for got in served] == [1, 1, 1, 1, 0]
+        assert [got[0] for got in served[:4]] == batches
+        assert all("precomputed_response" in got[0] for got in served[:4])
+
+    def test_a_short_loader_is_decoded_and_then_ends(self):
+        _, trainer = self._trainer(lookahead=4)
+        iterator = iter([_batch(), self._other_batch(), _batch(1)])
+        sizes = [len(trainer.get_batch_samples(iterator, 1, self.CPU)[0]) for _ in range(4)]
+        assert sizes == [1, 1, 1, 0]
+
+    def test_with_no_lookahead_the_batches_pass_through_undecoded(self):
+        _, trainer = self._trainer(lookahead=1)
+        trainer._decode_together = lambda *a: pytest.fail("decoded")
+        batches = [_batch(), _batch(1)]
+        got, _ = trainer.get_batch_samples(iter(batches), 2, self.CPU)
+        assert got == batches and not trainer._decoded_ahead
 
 
 class TestRecordStats:

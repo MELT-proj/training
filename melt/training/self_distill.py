@@ -33,7 +33,7 @@ original LLM).
 import math
 import random
 import zlib
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass, fields
 
 import torch
@@ -148,6 +148,15 @@ class SelfDistillConfig:
             or a refusal for 57% of them) would otherwise teach the student those replies. Needs
             ``lmbda=0``: a gold reply is not a student sample. Training rollouts only; the
             alignment-gap evaluation still scores the teacher's own greedy reply.
+        rollout_lookahead: Decode the teacher's replies for this many consecutive micro-batches in one
+            ``generate`` call (their rows side by side), then train on them one micro-batch per step.
+            Greedy decoding is bound by the latency of a token, not by the number of rows, so a free-form
+            reply budget (AZeroS's recipe, where every micro-batch decodes to ``max_new_tokens``) costs
+            about ``1 / rollout_lookahead`` as much, with the same replies up to batch-composition noise.
+            Needs ``lmbda=0`` (a student rollout depends on the weights of the step it feeds), the fixed
+            budget (``reply_budget_factor=0``) and no ``repeat_from_gold``. The sampler state a checkpoint
+            stores is up to ``rollout_lookahead - 1`` micro-batches per rank ahead of the training, which a
+            resume skips. ``1`` decodes each micro-batch on its own.
         student_template: The student's distillation prompt when it should
             differ from ``data.prompt_template``, which then still builds the
             gold batch (the anchor) and the eval prompt. ``"{audio_token}"``
@@ -172,6 +181,7 @@ class SelfDistillConfig:
     repeat_from_gold: bool = False
     reply_budget_factor: float = 0.0
     reply_budget_margin: int = 32
+    rollout_lookahead: int = 1
     student_template: str = ""
 
     @property
@@ -194,6 +204,17 @@ class SelfDistillConfig:
             raise ValueError(
                 "distill.reply_budget_factor and distill.reply_budget_margin must be >= 0, got "
                 f"{self.reply_budget_factor} and {self.reply_budget_margin}"
+            )
+        if self.rollout_lookahead < 1:
+            raise ValueError(f"distill.rollout_lookahead must be >= 1, got {self.rollout_lookahead}")
+        if self.rollout_lookahead > 1 and (
+            self.lmbda != 0.0 or self.reply_budget_factor != 0.0 or self.repeat_from_gold
+        ):
+            raise ValueError(
+                "distill.rollout_lookahead > 1 decodes the teacher's replies ahead of the step that trains on "
+                "them: it needs distill.lmbda=0 (a student rollout depends on the current weights), the fixed "
+                "budget (distill.reply_budget_factor=0, a scaled one is per micro-batch) and no "
+                "distill.repeat_from_gold."
             )
         if self.translate_frac > 0.0 and self.teacher_prompt != "mirror":
             raise ValueError(
@@ -680,6 +701,7 @@ class MELTSelfDistillTrainer(MELTTrainer):
         self._eos_token_ids = sorted({int(e) for e in eos if e is not None})
         self._pad_token_id = processor.tokenizer.pad_token_id
         self._rng = random.Random(int(args.seed))
+        self._decoded_ahead: deque[dict] = deque()
         self._gradients_checked = False
         self._distill_stats: dict[str, list[float]] = defaultdict(list)
 
@@ -728,6 +750,55 @@ class MELTSelfDistillTrainer(MELTTrainer):
         if self._lhotse_resume_from is not None:
             self._restore_sampler_state(dataloader)
         return dataloader
+
+    def get_batch_samples(self, epoch_iterator, num_batches: int, device: torch.device) -> tuple[list, None]:
+        """The parent's prefetch, with the teacher's replies decoded ``distill.rollout_lookahead`` batches at a time.
+
+        Every ``rollout_lookahead``-th call pulls that many micro-batches (times ``num_batches``) from the
+        loader, decodes their replies in one ``generate`` call and queues them; the calls in between serve the
+        queue. An exhausted loader returns what is left, then an empty list, which ends the epoch.
+        """
+        lookahead = self.distill.rollout_lookahead
+        if lookahead <= 1:
+            return super().get_batch_samples(epoch_iterator, num_batches, device)
+        if len(self._decoded_ahead) < num_batches:
+            fetched, _ = super().get_batch_samples(epoch_iterator, lookahead * num_batches, device)
+            if fetched:
+                self._decode_together(fetched, device)
+                self._decoded_ahead.extend(fetched)
+        # compute_loss ignores num_items_in_batch (model_accepts_loss_kwargs is False).
+        return [self._decoded_ahead.popleft() for _ in range(min(num_batches, len(self._decoded_ahead)))], None
+
+    @torch.no_grad()
+    def _decode_together(self, batches: list[dict], device: torch.device) -> None:
+        """Decode the teacher's replies for *batches* in one ``generate`` call; store each micro-batch's share in it.
+
+        Each batch gets ``precomputed_response`` and ``precomputed_mask``, cut to its own longest reply, which is
+        the shape a call on that batch alone returns; ``_rollout`` hands them back instead of decoding.
+        """
+        width = max(b["teacher_prompt_input_ids"].shape[1] for b in batches)
+
+        def left_pad(key: str, value: int) -> torch.Tensor:
+            rows = [F.pad(b[key], (width - b[key].shape[1], 0), value=value) for b in batches]
+            return torch.cat(rows).to(device)
+
+        prompt_ids = left_pad("teacher_prompt_input_ids", self._pad_token_id)
+        prompt_mask = left_pad("teacher_prompt_attention_mask", 0)
+        vocab = self.model.text_decoder.get_output_embeddings().weight.shape[0]
+        with self.accelerator.autocast():
+            out = self.model.text_decoder.generate(
+                input_ids=prompt_ids, attention_mask=prompt_mask, **self._generation_kwargs_for(False, vocab)
+            )
+        response = out[:, width:]
+        mask = response_mask(response, torch.tensor(self._eos_token_ids, device=response.device))
+        response = response.masked_fill(~mask, self._pad_token_id)
+        start = 0
+        for batch in batches:
+            rows = slice(start, start + batch["teacher_prompt_input_ids"].shape[0])
+            start = rows.stop
+            longest = max(int(mask[rows].sum(dim=1).max()), 1)
+            batch["precomputed_response"] = response[rows, :longest]
+            batch["precomputed_mask"] = mask[rows, :longest]
 
     # -- rollouts ------------------------------------------------------------
 
@@ -801,6 +872,8 @@ class MELTSelfDistillTrainer(MELTTrainer):
     @torch.no_grad()
     def _rollout(self, inputs: dict, from_student: bool, greedy: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
         """Sample one response per utterance; return ``(ids, mask)``, pad ids where masked."""
+        if not from_student and "precomputed_response" in inputs:
+            return inputs.pop("precomputed_response"), inputs.pop("precomputed_mask")
         unwrapped = self.model
         gen_kwargs = self._generation_kwargs_for(greedy, unwrapped.text_decoder.get_output_embeddings().weight.shape[0])
         if not from_student:
