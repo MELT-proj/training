@@ -433,8 +433,9 @@ Qwen3.5-2B):
 | SFT-EU24 | encoder, adapter, decoder | 6,133 h, gold ASR and ST labels (step 5, from A) |
 | **SD24** | adapter | 2,700 h of ASR audio in 24 languages, offline instruction-mixed self-distillation |
 | CE24 (control) | adapter | the same audio in the same batches, gold-transcript CE, no teacher |
+| **SD-SIFT24** | adapter | the same audio, AZeroS's recipe (step 4's `sift`): no instruction on either path, the student copies the decoder's free reply to the bare transcript |
 
-and the SD24 recipe again with `utter-project/EuroLLM-1.7B-Instruct-2512` as the decoder.
+and the SD24 and SD-SIFT24 recipes again with `utter-project/EuroLLM-1.7B-Instruct-2512` as the decoder.
 
 - **Data.** `sft/SD-EU24-2700h.yaml`, rendered by `sft/build_sft_mix.py --sd24-hours 2700`
   with the same audited sources as the SFT mixes, ASR entries only (the translate rows are
@@ -454,6 +455,21 @@ and the SD24 recipe again with `utter-project/EuroLLM-1.7B-Instruct-2512` as the
   dropped (`distill.reply_budget_factor`, `distill.drop_truncated`).
 - **Only half of the audio is transcription.** The repeat rows are the ASR rows: at a translate
   share of 0.25 SD24 has ~2,000 h of them against SFT-EU24's 2,665 h of gold ASR audio.
+- **SD-SIFT24** (added 2026-10-14): `ARM=sift sft/launch_sd24.sh`, the same data, batch, schedule and
+  adapter-only setting as SD24, with AZeroS's targets instead of the instruction mix: the teacher is the
+  decoder replying greedily to the bare transcript (`distill.teacher_prompt=bare`, chat template, no
+  instruction), the student hears `{audio_token}` alone, no mix, no anchor. A free reply is a discussion,
+  not a copy of the content, so the content-scaled budget and the drop of cut replies are off: every reply
+  runs to the 256-token cap or stops on its own, and a cut one stays in the loss. Names: `SD-SIFT24-from-<init>-...`.
+  **It is generation-bound**: the MN5 smoke test measured 8.07 s/step at a cap of 256 against SD24's
+  3.95 (replies average ~190-250 tokens and 48-94% of the rows of a micro-batch are cut at the cap, so every
+  micro-batch decodes the full 256 tokens), i.e. ~53 h and ~430 GPU-h per run. `distill.rollout_lookahead`
+  (`ROLLOUT_LOOKAHEAD`) decodes the replies of several micro-batches in one `generate` call: greedy decoding is
+  limited by the latency of a token, not by the number of rows. With 4 the same smoke test ran at
+  **3.0 s/step** (~20 h, ~165 GPU-h per run); the replies match the plain run step by step (mean reply length
+  223.3 vs 223.2 tokens over the first 40 steps, mean |difference| 2.2 tokens; cut share 0.73 vs 0.72) and the
+  peak memory is the same (60.7 of 65.2 GB, the activations and the 248k-vocabulary logits of full-length replies:
+  SD24 peaks at 20-31 GB). The lookahead is off by default and does not change the SD24 runs.
 - **Teacher ceilings** (`text_ceiling.py`, FLEURS dev, 100 per language: the frozen decoder
   reading the gold transcript; chrF, and the share of clips it copies exactly under the repeat
   instruction). Qwen3.5-2B copies 99.5%, so for it the repeat half is gold in effect and the
