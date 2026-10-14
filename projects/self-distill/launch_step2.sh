@@ -66,7 +66,7 @@ ST_TEMPLATE="${ST_TEMPLATE:-$DEFAULT_ST_TEMPLATE}"
 TRANSLATE_FRAC="${TRANSLATE_FRAC:-0}"
 TEACHER_PROMPT=mirror
 VALIDATION_TEMPLATE="$TEMPLATE"
-ALIGNMENT_GAP=true
+ALIGNMENT_GAP="${ALIGNMENT_GAP:-true}"
 # The scheduler defaults are artemis's (an H200 node); any other site takes its partition, QOS and
 # wall from its own site file and the caller (on MN5 an exported MELT_PARTITION=h200 would be passed
 # to sbatch as a partition that does not exist, and the default wall is the site's one hour).

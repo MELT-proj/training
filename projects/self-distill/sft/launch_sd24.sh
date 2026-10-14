@@ -38,6 +38,10 @@
 #                      of 257 tokens, which one looping reply in a batch of short utterances produces
 #   MAX_ROWS           most cuts in one micro-batch (data.train_ds.batch_size) (default 16): bounds that product
 #   FILL               share of BATCH_DURATION a batch carries, for the derived steps (default 0.8, see above)
+#   REPEAT_FROM_GOLD   1: the repeat rows take the gold transcript as their reply and only the translate rows the teacher's
+#                      (distill.repeat_from_gold; also switches the alignment-gap evaluation off). For a teacher that does not
+#                      copy its input: EuroLLM-1.7B-Instruct(-2512) answers the repeat instruction with a paraphrase, an
+#                      explanation or a refusal for 57-80% of FLEURS clips, Qwen3.5-2B copies 99.5%   (default 0)
 #   REPLY_BUDGET_FACTOR  the teacher's reply budget per micro-batch is min(MAX_NEW_TOKENS, factor x the longest content
 #                      in tokens + 32)                                        (default 3.5; 0 = the fixed MAX_NEW_TOKENS).
 #                      A reply is about as long as its content, up to ~3x for a translation into a finely split language
@@ -48,7 +52,9 @@
 #   DROP_TRUNCATED     1: replies cut at MAX_NEW_TOKENS stay out of the loss (distill.drop_truncated); they are
 #                      a transcript or translation longer than the budget, or a degenerate loop     (default 1)
 #   ADAPTER_LR         peak adapter LR, WSD schedule as launch_step2.sh      (default 2e-4)
-#   TRANSLATE_FRAC     share of utterances given a translate instruction     (default 0.5; 0 for ARM=ce)
+#   TRANSLATE_FRAC     share of utterances given a translate instruction     (default 0.25; 0 for ARM=ce). Only the
+#                      repeat rows are transcription rows, so this trades ASR audio for translation audio; 0.5 was
+#                      the value of every five-language run, which got chrF 53 from ~6 h of X->en rows
 #   TRANSLATE_TARGETS  comma-separated ISO codes a translation may target    (default: the 22 EU languages but ga and mt:
 #                      the teacher translates into them at chrF 19 / 27 with 25% / 19% runaway replies on FLEURS, and
 #                      SFT-EU24 has no ga or mt translation data either; they stay sources and zero-shot targets)
@@ -58,7 +64,11 @@
 #                      The frozen encoder and decoder stay bf16, as in every earlier run: 7 GB less memory, no cast of
 #                      their weights on every decoding step, and the very teacher B was distilled from. Autocast keeps
 #                      the compute in bf16.
-#   WARM_START         warm-start run root as the CONTAINER sees it          (default: GOLDW-final, "A")
+#   WARM_START, INIT_TAG   warm-start run root as the CONTAINER sees it, and its word in the run name
+#                      (default: GOLDW-final, "A", the Qwen3.5-2B alignment start)
+#   DECODER, ENCODER   the stack the warm start was made with (default Qwen/Qwen3.5-2B + openai/whisper-large-v3);
+#                      launch_step2.sh reads them, and plan_arm.DECODER_PROFILES must list the decoder. The adapter is
+#                      tied to its decoder's embedding space, so a different decoder needs its own warm start.
 #   MELT_QOS, MELT_TIME  read by the site file. MELT_TIME has no default here (the site's is one hour); it
 #                      is required unless DRY_RUN=1.
 #   SEED               trainer seed, data seed and shard seed                (default 1337)
@@ -98,10 +108,11 @@ MAX_ROWS="${MAX_ROWS:-16}"
 FILL="${FILL:-0.8}"
 MAX_DURATION="${MAX_DURATION:-30}"
 DROP_TRUNCATED="${DROP_TRUNCATED:-1}"
+REPEAT_FROM_GOLD="${REPEAT_FROM_GOLD:-0}"
 export MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-256}"
 REPLY_BUDGET_FACTOR="${REPLY_BUDGET_FACTOR:-3.5}"
 ADAPTER_LR="${ADAPTER_LR:-2e-4}"
-TRANSLATE_FRAC="${TRANSLATE_FRAC:-0.5}"
+TRANSLATE_FRAC="${TRANSLATE_FRAC:-0.25}"
 TARGETS_NO_GA_MT="bg,cs,da,de,el,en,es,et,fi,fr,hr,hu,it,lt,lv,nl,pl,pt,ro,sk,sl,sv"
 TRANSLATE_TARGETS="${TRANSLATE_TARGETS:-$TARGETS_NO_GA_MT}"
 MASTER_DTYPE="${MASTER_DTYPE:-float32}"
@@ -126,6 +137,7 @@ CONFIG="projects/self-distill/sft/SD-EU24-${HOURS}h.yaml"
 
 DEFAULT_GOLDW_RUN=GOLDW-700asr-whisperlargeF-qwen35_2bInsF-mlpT-sk5-bd150-ga1-wsd-wus0p03-lr1e3-1000h-s42-2g
 WARM_START="${WARM_START:-/workspace/outputs/${DEFAULT_GOLDW_RUN}}"
+INIT_TAG="${INIT_TAG:-GOLDW-final}"
 
 # The derived schedule, in exact rational arithmetic (total_hours is a rounded decimal).
 PLAN="$(python3 - "$CONFIG" "$BATCH_DURATION" "$WORLD_SIZE" "$FILL" <<'PY'
@@ -154,7 +166,7 @@ STEPS_TAG=""
 [[ "$MAX_STEPS" == "$DERIVED_STEPS" ]] || STEPS_TAG="-st${MAX_STEPS}"
 MIX_TAG=""
 awk "BEGIN { exit !(${TRANSLATE_FRAC} > 0) }" && MIX_TAG="-mix$(echo "$TRANSLATE_FRAC" | tr -d '.')"
-export EXP_NAME="${EXP_NAME:-SD24-${ARM}-from-GOLDW-final${MIX_TAG}-${HOURS}h-bd${BATCH_DURATION}-${WORLD_SIZE}g-s${SEED}${STEPS_TAG}}"
+export EXP_NAME="${EXP_NAME:-SD24-${ARM}-from-${INIT_TAG}${MIX_TAG}-${HOURS}h-bd${BATCH_DURATION}-${WORLD_SIZE}g-s${SEED}${STEPS_TAG}}"
 
 # The warm start and the run directory must be where the container will look: the site's OUTPUT_DIR on
 # the host. Checked here so a typo costs a second, not a queue wait.
@@ -196,13 +208,19 @@ EXTRAS=("${RUN_DIR_ARGS[@]}" --data.train_ds.max_duration "$MAX_DURATION" --data
 [[ "$MASTER_DTYPE" == none ]] || EXTRAS+=(--model.master_dtype "$MASTER_DTYPE" --model.master_dtype_scope "$MASTER_DTYPE_SCOPE")
 [[ "$ARM" == ce ]] || EXTRAS+=(--distill.reply_budget_factor "$REPLY_BUDGET_FACTOR")
 [[ "$ARM" == ce || "$DROP_TRUNCATED" != 1 ]] || EXTRAS+=(--distill.drop_truncated true)
+if [[ "$ARM" != ce && "$REPEAT_FROM_GOLD" == 1 ]]; then
+    EXTRAS+=(--distill.repeat_from_gold true)
+    export ALIGNMENT_GAP=false  # the gap scores the teacher's own reply to the repeat instruction
+fi
 # The value is quoted for YAML, as launch_step2.sh quotes the templates: a bare list of ISO codes is one
 # string to OmegaConf, but a single code such as "no" would become a boolean.
 awk "BEGIN { exit !(${TRANSLATE_FRAC} > 0) }" && EXTRAS+=(--distill.translate_targets "\"${TRANSLATE_TARGETS}\"")
 
 echo "[launch_sd24] ${EXP_NAME}"
 echo "[launch_sd24] arm:   ${ARM}, translate_frac ${TRANSLATE_FRAC}, targets ${TRANSLATE_TARGETS}"
-echo "[launch_sd24] data:  cuts up to ${MAX_DURATION} s, at most ${MAX_ROWS} per micro-batch; teacher replies up to ${MAX_NEW_TOKENS} tokens (budget ${REPLY_BUDGET_FACTOR} x content + 32), cut ones $( [[ "$DROP_TRUNCATED" == 1 && "$ARM" != ce ]] && echo dropped || echo kept )"
+echo "[launch_sd24] data:  cuts up to ${MAX_DURATION} s, at most ${MAX_ROWS} per micro-batch"
+[[ "$ARM" == ce ]] || echo "[launch_sd24] teacher: replies up to ${MAX_NEW_TOKENS} tokens (budget ${REPLY_BUDGET_FACTOR} x content + 32), cut ones $( [[ "$DROP_TRUNCATED" == 1 ]] && echo dropped || echo kept )"
+[[ "$ARM" == ce || "$REPEAT_FROM_GOLD" != 1 ]] || echo "[launch_sd24] repeat rows: the gold transcript is the reply; the teacher answers the translate rows only"
 echo "[launch_sd24] init:  ${WARM_START}"
 echo "[launch_sd24] mix:   ${CONFIG} (${TOTAL_HOURS} h)"
 echo "[launch_sd24] world: ${MELT_NODES} nodes x ${MELT_GPUS_PER_NODE} GPUs = ${WORLD_SIZE}; ${BATCH_DURATION} s per rank = $(( BATCH_DURATION * WORLD_SIZE )) s of audio per step"

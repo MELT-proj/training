@@ -33,6 +33,7 @@ from melt.training.config import trainer_args_dict
 from melt.training.self_distill import (
     MELTSelfDistillTrainer,
     SelfDistillConfig,
+    _gold_replies,
     assign_instructions,
     check_adapter_only,
     check_adapter_only_gradients,
@@ -188,6 +189,12 @@ class TestSelfDistillConfig:
     def test_out_of_range_values_are_refused(self, field, value):
         with pytest.raises(ValueError):
             SelfDistillConfig(**{field: value})
+
+    def test_repeat_from_gold_is_off_by_default_and_needs_an_offline_target(self):
+        assert SelfDistillConfig().repeat_from_gold is False
+        with pytest.raises(ValueError, match="lmbda=0"):
+            SelfDistillConfig(repeat_from_gold=True, lmbda=0.5)
+        SelfDistillConfig(repeat_from_gold=True, lmbda=0.0, loss="ce")
 
     def test_a_translate_mix_needs_the_mirror_teacher(self):
         with pytest.raises(ValueError, match="mirror"):
@@ -403,6 +410,104 @@ class TestReplyBudget:
 
         assert teacher.shape[1] <= 3  # budget = longest content (3 tokens)
         assert student.shape[1] <= 6  # the fixed cap
+
+
+class _StubTokenizer:
+    """One id per character, one id for the stop string; ``glue_first_char`` breaks the prompt boundary."""
+
+    eos_token, eos_token_id, pad_token_id = "<e>", 9, 0
+
+    def __init__(self, glue_first_char: bool = False):
+        self.glue_first_char = glue_first_char
+
+    def __call__(self, strings, add_special_tokens=False):
+        def encode(text):
+            stopped = text.endswith(self.eos_token)
+            ids = [ord(c) for c in (text[: -len(self.eos_token)] if stopped else text)]
+            ids += [self.eos_token_id] if stopped else []
+            if self.glue_first_char and stopped:  # the joint tokenisation merges across the boundary
+                ids[0] += 100
+            return ids
+
+        return {"input_ids": [encode(s) for s in strings]}
+
+
+class TestGoldReplies:
+    def test_the_reply_is_what_follows_the_prompt_in_the_joint_tokenisation(self):
+        ids, length = _gold_replies(_StubTokenizer(), ["ab", "cd"], ["x", "yz"])
+        assert length.tolist() == [2, 3]
+        assert ids.tolist() == [[ord("x"), 9, 0], [ord("y"), ord("z"), 9]]
+
+    def test_a_tokenisation_that_does_not_continue_the_prompt_is_refused(self):
+        with pytest.raises(ValueError, match="does not continue the prompt"):
+            _gold_replies(_StubTokenizer(glue_first_char=True), ["abcd"], ["xyz"])
+
+
+class TestRepeatFromGold:
+    """distill.repeat_from_gold: translate rows keep the teacher's reply, repeat rows take the transcript."""
+
+    @staticmethod
+    def _trainer(**distill):
+        model = _tiny_model()
+        config = SelfDistillConfig(lmbda=0.0, loss="ce", temperature=0.0, max_new_tokens=6, **distill)
+        return model, _bare_trainer(model, config)
+
+    @staticmethod
+    def _batch(translate, gold_ids=None, gold_len=None):
+        gold_ids = torch.tensor([[20, 21, EOS, PAD], [30, 31, 32, EOS]]) if gold_ids is None else gold_ids
+        gold_len = torch.tensor([3, 4]) if gold_len is None else gold_len
+        return {
+            **_batch(),
+            "distill_translate": torch.tensor(translate),
+            "teacher_content_tokens": torch.tensor([2, 3]),
+            "teacher_gold_ids": gold_ids,
+            "teacher_gold_len": gold_len,
+        }
+
+    def test_a_repeat_row_is_the_gold_reply_and_a_translate_row_is_the_teachers(self):
+        model, trainer = self._trainer(repeat_from_gold=True)
+        batch = self._batch([False, True])
+        response, mask = trainer._rollout(batch, from_student=False)
+
+        assert response[0, :3].tolist() == [20, 21, EOS] and mask[0].tolist()[:3] == [True] * 3
+        assert not mask[0, 3:].any() and (response[0, 3:] == PAD).all()
+        # row 1 is what the teacher writes for it with the flag off
+        _, plain = self._trainer()
+        reference, ref_mask = plain._rollout(batch, from_student=False)
+        n = int(ref_mask[1].sum())
+        assert n >= 1 and mask[1, :n].all()
+        assert response[1, :n].tolist() == reference[1, :n].tolist()
+
+    def test_a_batch_of_repeat_rows_never_decodes(self):
+        model, trainer = self._trainer(repeat_from_gold=True)
+        with patch.object(model.text_decoder, "generate", side_effect=AssertionError("decoded")):
+            response, mask = trainer._rollout(self._batch([False, False]), from_student=False)
+        assert response.tolist() == [[20, 21, EOS, PAD], [30, 31, 32, EOS]] and mask.sum().item() == 7
+
+    def test_a_gold_reply_longer_than_the_budget_is_cut_and_counts_as_truncated(self):
+        model, trainer = self._trainer(repeat_from_gold=True)
+        gold = torch.tensor([[11, 12, 13, 14, 15, 16, 17, EOS], [30, 31, 32, EOS, PAD, PAD, PAD, PAD]])
+        batch = self._batch([False, False], gold_ids=gold, gold_len=torch.tensor([8, 4]))
+        response, mask = trainer._rollout(batch, from_student=False)
+
+        assert response.shape[1] == 6 and mask[0].all()  # cut at max_new_tokens, no stop token
+        assert terminated_rows(response, torch.tensor([EOS])).tolist() == [False, True]
+
+    def test_the_evaluation_rollout_keeps_the_teachers_own_reply(self):
+        model, trainer = self._trainer(repeat_from_gold=True)
+        _, plain = self._trainer()
+        batch = self._batch([False, False])
+        torch.testing.assert_close(
+            trainer._rollout(batch, from_student=False, greedy=True)[0],
+            plain._rollout(batch, from_student=False, greedy=True)[0],
+        )
+
+    def test_the_loss_reads_the_gold_rows(self):
+        model, trainer = self._trainer(repeat_from_gold=True)
+        loss = trainer.compute_loss(model, self._batch([False, True]))
+        assert torch.isfinite(loss) and loss.requires_grad
+        loss.backward()
+        check_adapter_only_gradients(model)
 
 
 class TestRecordStats:
@@ -873,6 +978,21 @@ class TestPrompts:
         # The content length the reply budget scales: the transcript's own tokens, without the instruction.
         expected = [len(processor.tokenizer(t, add_special_tokens=False)["input_ids"]) for t in texts]
         assert out["teacher_content_tokens"].tolist() == expected and expected[0] < expected[1]
+
+    def test_the_gold_reply_is_the_transcript_ending_on_the_stop_token(self):
+        from melt.training.self_distill import build_distill_prompts
+
+        processor = self._processor()
+        tokenizer = processor.tokenizer
+        texts = ["hello world", "a much longer second transcript to force padding"]
+        out = build_distill_prompts(processor, texts, ["asr", "asr"], ["en", "en"], "{audio_token}")
+
+        for i, text in enumerate(texts):
+            reply = out["teacher_gold_ids"][i, : out["teacher_gold_len"][i]].tolist()
+            assert tokenizer.decode(reply) == text + tokenizer.eos_token
+            assert reply[-1] == tokenizer.eos_token_id
+        assert out["teacher_gold_ids"].shape == (2, int(out["teacher_gold_len"].max()))
+        assert out["teacher_gold_len"][0] < out["teacher_gold_len"][1]
 
     def test_mirror_gives_the_teacher_the_student_instruction(self):
         """teacher_prompt='mirror': same instruction on both paths, transcript where the audio is."""

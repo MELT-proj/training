@@ -66,6 +66,10 @@ DISTILL_PROMPT_KEYS = (
     # Tokens of each utterance's content (its transcript) as the teacher reads it,
     # for ``distill.reply_budget_factor``.
     "teacher_content_tokens",
+    # The reply the instruction asks for when it is "repeat": the transcript, tokenised in context and
+    # ending on the stop token, right-padded, with each row's length (``distill.repeat_from_gold``).
+    "teacher_gold_ids",
+    "teacher_gold_len",
 )
 
 # Keys of the standard (gold-transcript) training batch that the distillation
@@ -136,6 +140,14 @@ class SelfDistillConfig:
             several GB (a 64 GB H100 ran out of memory on it). A reply cut this way is
             truncated like any other (see ``drop_truncated``). ``0`` keeps the fixed budget.
         reply_budget_margin: Tokens added to the scaled content length.
+        repeat_from_gold: Rows whose instruction is "repeat" (not a translation) take the gold
+            transcript, followed by the stop token, as their reply instead of the teacher's
+            greedy one; translate rows keep the teacher's. A transcript is what "repeat" means, and
+            Qwen3.5-2B returns it for 99.5% of FLEURS clips, so for it nothing changes. A teacher
+            that does not copy (EuroLLM-1.7B-Instruct-2512 returns a paraphrase, an explanation
+            or a refusal for 57% of them) would otherwise teach the student those replies. Needs
+            ``lmbda=0``: a gold reply is not a student sample. Training rollouts only; the
+            alignment-gap evaluation still scores the teacher's own greedy reply.
         student_template: The student's distillation prompt when it should
             differ from ``data.prompt_template``, which then still builds the
             gold batch (the anchor) and the eval prompt. ``"{audio_token}"``
@@ -157,6 +169,7 @@ class SelfDistillConfig:
     translate_frac: float = 0.0
     translate_targets: str = "en,de,fr,es,it"
     drop_truncated: bool = False
+    repeat_from_gold: bool = False
     reply_budget_factor: float = 0.0
     reply_budget_margin: int = 32
     student_template: str = ""
@@ -175,6 +188,8 @@ class SelfDistillConfig:
             raise ValueError(f"distill.gold_ce_weight must be >= 0, got {self.gold_ce_weight}")
         if not 0.0 <= self.translate_frac <= 1.0:
             raise ValueError(f"distill.translate_frac must be in [0, 1], got {self.translate_frac}")
+        if self.repeat_from_gold and self.lmbda != 0.0:
+            raise ValueError("distill.repeat_from_gold needs distill.lmbda=0: a gold reply is not a student sample")
         if self.reply_budget_factor < 0.0 or self.reply_budget_margin < 0:
             raise ValueError(
                 "distill.reply_budget_factor and distill.reply_budget_margin must be >= 0, got "
@@ -267,6 +282,31 @@ def assign_instructions(
     return out_tasks, tgt_langs
 
 
+def _gold_replies(tokenizer, teacher_prompts: list[str], texts: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
+    """The transcript as a model that read the templated conversation would write it: ids and lengths.
+
+    Tokenised in context (prompt + transcript + stop token, then the prompt's own ids cut off), not alone: a
+    sentencepiece tokenizer puts a dummy prefix space on a lone string, so its first token would be one the
+    chat-tuned decoder never writes after the assistant header. The reply ends on the stop token.
+    """
+    stop = tokenizer.eos_token
+    prompt_ids = tokenizer(teacher_prompts, add_special_tokens=False)["input_ids"]
+    full_ids = tokenizer([p + t + stop for p, t in zip(teacher_prompts, texts)], add_special_tokens=False)["input_ids"]
+    replies = []
+    for prompt, full in zip(prompt_ids, full_ids):
+        if full[: len(prompt)] != prompt or full[-1] != tokenizer.eos_token_id:
+            raise ValueError(
+                "The tokenisation of prompt + transcript + stop token does not continue the prompt's own ids "
+                "and end on the stop token, so the gold reply cannot be cut out of it."
+            )
+        replies.append(full[len(prompt) :])
+    pad = 0 if tokenizer.pad_token_id is None else tokenizer.pad_token_id
+    ids = torch.full((len(replies), max(len(r) for r in replies)), pad, dtype=torch.long)
+    for i, reply in enumerate(replies):
+        ids[i, : len(reply)] = torch.tensor(reply)
+    return ids, torch.tensor([len(r) for r in replies], dtype=torch.long)
+
+
 def build_distill_prompts(
     processor,
     texts: list[str],
@@ -328,6 +368,7 @@ def build_distill_prompts(
             )
             for text in texts
         ]
+    gold_ids, gold_len = _gold_replies(tokenizer, teacher_prompts, texts)
     student = tokenizer(
         [processor._surround_bos_eos_mm_tokens(p) for p in student_prompts],
         padding=True,
@@ -341,6 +382,8 @@ def build_distill_prompts(
         "teacher_prompt_input_ids": teacher["input_ids"],
         "teacher_prompt_attention_mask": teacher["attention_mask"],
         "distill_translate": torch.tensor([bool(t) for t in tgt_langs], dtype=torch.bool),
+        "teacher_gold_ids": gold_ids,
+        "teacher_gold_len": gold_len,
         "teacher_content_tokens": torch.tensor(
             [len(ids) for ids in tokenizer(list(texts), add_special_tokens=False)["input_ids"]], dtype=torch.long
         ),
@@ -710,6 +753,47 @@ class MELTSelfDistillTrainer(MELTTrainer):
             return cap
         return min(cap, math.ceil(factor * int(content.max())) + self.distill.reply_budget_margin)
 
+    def _gold_and_teacher_responses(self, inputs: dict, gen_kwargs: dict) -> tuple[torch.Tensor, torch.Tensor]:
+        """Replies for ``distill.repeat_from_gold``: the teacher's for translate rows, the transcript for the rest.
+
+        Only the translate rows are decoded, so the batch's decoding length follows their content alone. A gold
+        reply longer than ``max_new_tokens`` is cut there without its stop token, so it counts as truncated.
+        """
+        unwrapped = self.model
+        translate = inputs["distill_translate"].to(torch.bool)
+        device = translate.device
+        cap = self.distill.max_new_tokens
+        eos_ids = torch.tensor(self._eos_token_ids, device=device)
+        generated = gen_mask = None
+        rows = translate.nonzero(as_tuple=True)[0]
+        if rows.numel() > 0:
+            prompt = inputs["teacher_prompt_input_ids"][rows]
+            budget = self._reply_budget({"teacher_content_tokens": inputs["teacher_content_tokens"][rows]})
+            out = unwrapped.text_decoder.generate(
+                input_ids=prompt,
+                attention_mask=inputs["teacher_prompt_attention_mask"][rows],
+                **{**gen_kwargs, "max_new_tokens": budget},
+            )
+            generated = out[:, prompt.shape[1] :]
+            gen_mask = response_mask(generated, eos_ids)
+            generated = generated.masked_fill(~gen_mask, self._pad_token_id)
+        gold_rows = (~translate).nonzero(as_tuple=True)[0]
+        gold_len = inputs["teacher_gold_len"].clamp(max=cap)
+        width = max(
+            0 if generated is None else generated.shape[1],
+            int(gold_len[gold_rows].max()) if gold_rows.numel() > 0 else 0,
+        )
+        response = torch.full((translate.shape[0], width), self._pad_token_id, dtype=torch.long, device=device)
+        mask = torch.zeros_like(response, dtype=torch.bool)
+        for i in gold_rows.tolist():
+            n = int(gold_len[i])
+            response[i, :n] = inputs["teacher_gold_ids"][i, :n]
+            mask[i, :n] = True
+        if generated is not None:
+            response[rows, : generated.shape[1]] = generated
+            mask[rows, : generated.shape[1]] = gen_mask
+        return response, mask
+
     @torch.no_grad()
     def _rollout(self, inputs: dict, from_student: bool, greedy: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
         """Sample one response per utterance; return ``(ids, mask)``, pad ids where masked."""
@@ -726,6 +810,8 @@ class MELTSelfDistillTrainer(MELTTrainer):
                     features_attention_mask=inputs.get("features_attention_mask"),
                     **gen_kwargs,
                 )
+            elif self.distill.repeat_from_gold and not greedy and "teacher_gold_ids" in inputs:
+                return self._gold_and_teacher_responses(inputs, gen_kwargs)
             else:
                 prompt_ids = inputs["teacher_prompt_input_ids"]
                 response = unwrapped.text_decoder.generate(
