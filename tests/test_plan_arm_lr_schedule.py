@@ -53,7 +53,9 @@ def test_wsd_derives_its_decay_tail_from_this_arms_own_steps():
     kwargs = json.loads(_value(plan, "--trainer.lr_scheduler_kwargs"))
 
     assert kwargs["num_decay_steps"] == round(0.2 * plan.steps)
-    assert kwargs["min_lr_ratio"] == 0.1
+    # The floor comes from optimization.min_lr_scale (melt/training/config.py),
+    # so a config can change it without a second, disagreeing copy here.
+    assert "min_lr_ratio" not in kwargs
     assert kwargs["decay_type"] == "cosine"
 
 

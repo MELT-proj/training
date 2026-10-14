@@ -23,6 +23,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -645,6 +646,65 @@ def trainer_args_dict(cfg: DictConfig) -> dict:
         )
     result = {k: v for k, v in result.items() if k in valid_keys}
 
+    return _apply_min_lr_scale(result, cfg)
+
+
+# Where each decaying scheduler takes its LR floor, as a fraction of the peak.
+# `cosine` has no floor in transformers, so it is run as `cosine_with_min_lr`,
+# which is the same curve rescaled to end at the floor instead of at zero.
+_MIN_LR_KWARG = {
+    "cosine_with_min_lr": "min_lr_rate",
+    "warmup_stable_decay": "min_lr_ratio",
+}
+_NO_DECAY_SCHEDULERS = {"constant", "constant_with_warmup"}
+
+
+def _apply_min_lr_scale(result: dict, cfg: DictConfig) -> dict:
+    """Make ``optimization.min_lr_scale`` the LR every schedule ends at.
+
+    The final learning rate of every parameter group is ``min_lr_scale`` times
+    that group's peak LR. ``cosine`` becomes ``cosine_with_min_lr``;
+    ``warmup_stable_decay`` gets ``min_lr_ratio``. A scheduler that cannot
+    floor (``linear``, ...) with a non-zero scale is an error, not a silent
+    decay to zero, and so is a floor passed in ``lr_scheduler_kwargs`` that
+    disagrees with ``min_lr_scale``.
+    """
+    scale = OmegaConf.select(cfg, "optimization.min_lr_scale")
+    sched = result.get("lr_scheduler_type")
+    if scale is None or sched is None or str(sched) in _NO_DECAY_SCHEDULERS:
+        return result
+    scale = float(scale)
+    sched = str(sched)
+    if sched == "cosine":
+        sched = "cosine_with_min_lr"
+    if sched not in _MIN_LR_KWARG:
+        if scale == 0.0:
+            return result
+        raise ValueError(
+            f"optimization.min_lr_scale={scale} but lr_scheduler_type {sched!r} has no "
+            f"LR floor. Use one of {sorted(['cosine', *_MIN_LR_KWARG])}, or set "
+            "optimization.min_lr_scale: 0 to decay to zero."
+        )
+
+    kwargs = result.get("lr_scheduler_kwargs") or {}
+    if isinstance(kwargs, str):
+        kwargs = json.loads(kwargs)
+    kwargs = dict(kwargs)
+    key = _MIN_LR_KWARG[sched]
+    if "min_lr" in kwargs:
+        raise ValueError(
+            "lr_scheduler_kwargs sets an absolute `min_lr`; the floor is "
+            "optimization.min_lr_scale (a fraction of each group's peak LR)."
+        )
+    if key in kwargs and float(kwargs[key]) != scale:
+        raise ValueError(
+            f"lr_scheduler_kwargs.{key}={kwargs[key]} disagrees with "
+            f"optimization.min_lr_scale={scale}; set the floor in one place only."
+        )
+    kwargs[key] = scale
+    result["lr_scheduler_type"] = sched
+    result["lr_scheduler_kwargs"] = kwargs
+    logger.info("LR schedule %s ends at %g x peak LR (optimization.min_lr_scale).", sched, scale)
     return result
 
 
