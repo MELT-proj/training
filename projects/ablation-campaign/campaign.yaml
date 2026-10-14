@@ -1189,3 +1189,38 @@ arms:
     seed: 42
     max_steps: 78750
     time: "39:00:00"
+
+  # Seed replicates of the two best Whisper crossing cells (timeline week 5): the original rows with seed 43, which changes the
+  # data order (MELT_SEED, forwarded into the container since fea165a) and trainer.seed. Nothing else differs.
+  - id: MA-2100-crossing-whisper-conformer-s43
+    stage: MA
+    config: ABL-MA-2100-asr.yaml
+    encoder: openai/whisper-large-v3
+    adapter: conformer
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 1e-3          # as the original row
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    seed: 43
+    max_steps: 157500
+    time: "52:00:00"
+
+  - id: MA-2100-crossing-whisper-moe-s43
+    stage: MA
+    config: ABL-MA-2100-asr.yaml
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    ddp_find_unused_parameters: true   # the router can leave an expert unused in a small batch (see plan_arm.py's ArmAxes)
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    seed: 43
+    max_steps: 157500
+    time: "55:00:00"
