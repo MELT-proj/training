@@ -559,9 +559,13 @@ def response_mask(response: torch.Tensor, eos_token_ids: torch.Tensor) -> torch.
     return eos_before == 0
 
 
-def terminated_rows(response: torch.Tensor, eos_token_ids: torch.Tensor) -> torch.Tensor:
-    """``(batch,)`` bool: the rows of *response* that ended on an EOS; the rest were cut at ``max_new_tokens``."""
-    return torch.isin(response, eos_token_ids).any(dim=1)
+def terminated_rows(response: torch.Tensor, mask: torch.Tensor, eos_token_ids: torch.Tensor) -> torch.Tensor:
+    """``(batch,)`` bool: the rows of *response* that ended on an EOS; the rest were cut at ``max_new_tokens``.
+
+    Only positions inside *mask* count: a decoder whose pad token is also one of its stop tokens (EuroLLM's
+    ``</s>``) would otherwise make every row that is padded out to the batch width look terminated.
+    """
+    return (torch.isin(response, eos_token_ids) & mask).any(dim=1)
 
 
 def response_logits(
@@ -858,7 +862,7 @@ class MELTSelfDistillTrainer(MELTTrainer):
         student, teacher = self._student_and_teacher_logits(model, inputs, response, mask)
         loss_mask = mask
         if self.distill.drop_truncated:
-            ended = terminated_rows(response, torch.tensor(self._eos_token_ids, device=response.device))
+            ended = terminated_rows(response, mask, torch.tensor(self._eos_token_ids, device=response.device))
             loss_mask = mask & ended.unsqueeze(1)
             self._distill_stats["dropped_frac"].append(1.0 - ended.float().mean().item())
         if loss_mask.any():
@@ -919,7 +923,7 @@ class MELTSelfDistillTrainer(MELTTrainer):
         lengths = mask.sum(dim=1).float()
         # Truncated = no EOS. Not `lengths == response.shape[1]`: the longest
         # row that did stop spans the whole width too, ending on its EOS.
-        has_eos = torch.isin(response, torch.tensor(self._eos_token_ids, device=response.device)).any(dim=1)
+        has_eos = terminated_rows(response, mask, torch.tensor(self._eos_token_ids, device=response.device))
         stats = self._distill_stats
         stats["on_policy_frac"].append(float(from_student))
         stats["response_len"].append(lengths.mean().item())

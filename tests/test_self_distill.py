@@ -331,10 +331,21 @@ class TestResponseMask:
 class TestTerminatedRows:
     def test_a_row_is_terminated_when_it_ended_on_an_eos(self):
         response = torch.tensor([[5, EOS, PAD], [5, 6, 7], [EOS, PAD, PAD]])
-        assert terminated_rows(response, torch.tensor([EOS])).tolist() == [True, False, True]
+        mask = response_mask(response, torch.tensor([EOS]))
+        assert terminated_rows(response, mask, torch.tensor([EOS])).tolist() == [True, False, True]
 
     def test_the_longest_row_ending_on_its_eos_is_terminated(self):
-        assert terminated_rows(torch.tensor([[20, EOS, PAD], [30, 31, EOS]]), torch.tensor([EOS])).tolist() == [True, True]
+        response = torch.tensor([[20, EOS, PAD], [30, 31, EOS]])
+        mask = response_mask(response, torch.tensor([EOS]))
+        assert terminated_rows(response, mask, torch.tensor([EOS])).tolist() == [True, True]
+
+    def test_a_pad_that_is_also_a_stop_token_does_not_terminate_a_cut_row(self):
+        stops = torch.tensor([EOS, PAD])  # EuroLLM: </s> pads and stops
+        response = torch.tensor([[7, 8, 9, 5], [7, 8, PAD, PAD]])  # row 0 cut at the budget; row 1 is padded out
+        mask = torch.tensor([[True, True, True, True], [True, True, False, False]])
+        # row 1 is also cut (its mask holds no stop token), although its padding is one
+        assert terminated_rows(response, mask, stops).tolist() == [False, False]
+        assert torch.isin(response, stops).any(dim=1).tolist() == [False, True]  # the unmasked check gets it wrong
 
 
 class TestDropTruncated:
@@ -491,7 +502,7 @@ class TestRepeatFromGold:
         response, mask = trainer._rollout(batch, from_student=False)
 
         assert response.shape[1] == 6 and mask[0].all()  # cut at max_new_tokens, no stop token
-        assert terminated_rows(response, torch.tensor([EOS])).tolist() == [False, True]
+        assert terminated_rows(response, mask, torch.tensor([EOS])).tolist() == [False, True]
 
     def test_the_evaluation_rollout_keeps_the_teachers_own_reply(self):
         model, trainer = self._trainer(repeat_from_gold=True)
