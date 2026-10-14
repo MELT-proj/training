@@ -516,15 +516,18 @@ and the SD24 and SD-SIFT24 recipes again with `utter-project/EuroLLM-1.7B-Instru
   also ran every rank's decoding to the 448-token cap. With the cap, the reply budget, the row
   limit and bf16 backbones: **4.4 s/step, 20-31 GB per GPU**, 1.3% of rows dropped as cut. The
   control runs at ~1.5 s/step. The dataloader needs ~20 min to deliver its first batch on MN5.
-- **Runs** (2026-10-14, MN5 `acc_ehpc`, 2 nodes each, from the frozen clone
-  `~/training-sd24-qwen` @ 07f84c2): SD24 Qwen `47281435` (~29 h, ~232 GPU-h) and CE24 control
-  `47281436` (~10 h, ~79 GPU-h). EuroLLM: the alignment start (the GOLDW recipe with the new
-  decoder, artemis `336423`) first, then SD24 with `REPEAT_FROM_GOLD=1` and all 24 languages as
-  translate targets.
+- **Runs** (2026-10-14, MN5 `acc_ehpc`, 2 nodes x 4 H100 each, one frozen clone per recipe):
+  from `~/training-sd24-qwen` @ 07f84c2, SD24 Qwen `47281435` (3.95 s/step, ~27 h, ~215 GPU-h) and the CE24
+  control `47281436` (1.43 s/step, finished in 9.4 h, ~75 GPU-h); from `~/training-sd24-eurollm` @ 29247d4,
+  SD24 EuroLLM `47292248` (after the alignment start A', the GOLDW recipe with the new decoder, artemis `336423`;
+  `REPEAT_FROM_GOLD=1`, all 24 languages as translate targets; ~4.0 s/step, ~28 h); from
+  `~/training-sd24-sift` @ 89c4413, SD-SIFT24 Qwen `47304307` (3.0 s/step, ~21 h, ~166 GPU-h) and EuroLLM
+  `47304558` (2.3 s/step, ~17 h, ~136 GPU-h), both with `ROLLOUT_LOOKAHEAD=4`.
 - **Scoring.** `eval/score_sd24_run.sh <run>` pulls a finished run from MN5 and scores it on the
   FLEURS-24 dev sets (X->en, en->X, ASR) under both prompt formats: `eval/format-repeatfirst.yaml`
   (the SD24 / CE24 training instructions) and `eval/format-sft-random.yaml` (the random templates
-  SFT-EU24 was trained and scored with).
+  SFT-EU24 was trained and scored with). `eval/collect_sd24_scores.py` collates every model of this step
+  (A, SFT-EU24, CE24, SD24, SD-SIFT24, and the EuroLLM start and runs) into one table, both formats.
 - **Reference: SFT-EU24 from A, final** (full fine-tuning, FLEURS dev, lower-cased scoring, random
   templates; A at step 0 in brackets). ASR WER on en/de/fr/es/it 0.063 (0.081), WER on the other 19
   languages 0.179 (1.007), CER 0.075 (0.582); X->en chrF 59.8 on de/fr/es/it and 53.2 on the other
