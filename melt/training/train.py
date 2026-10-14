@@ -18,6 +18,7 @@ Usage:
 
 import json
 import os
+from collections import Counter
 from pathlib import Path
 
 import torch
@@ -51,6 +52,17 @@ logger = get_logger(__name__)
 torch.set_float32_matmul_precision("high")
 
 
+def _master_dtype(model_cfg: DictConfig) -> torch.dtype | None:
+    """Return ``model.master_dtype`` as a ``torch.dtype``; ``None`` keeps what loading gives."""
+    value = model_cfg.get("master_dtype", None)
+    if value is None:
+        return None
+    dtype = getattr(torch, str(value), None)
+    if not isinstance(dtype, torch.dtype) or not dtype.is_floating_point:
+        raise ValueError(f"model.master_dtype={value!r} is not a torch floating-point dtype (e.g. float32)")
+    return dtype
+
+
 def prepare_model(
     cfg: DictConfig,
     targs: Seq2SeqTrainingArguments,
@@ -61,7 +73,8 @@ def prepare_model(
     When ``model.ckpt`` is set in the config, the model config and processor
     are loaded from the checkpoint directory (which must contain
     ``config.json`` and ``preprocessor_config.json``).  Otherwise they are
-    built from scratch using the training config.
+    built from scratch using the training config.  ``model.master_dtype``, when
+    set, is the dtype the parameters train in (see ``config.py``).
 
     Args:
         cfg: Training configuration (OmegaConf DictConfig).
@@ -76,6 +89,8 @@ def prepare_model(
     encoder_cfg = model_cfg.encoder
     decoder_cfg = model_cfg.decoder
     adapter_cfg = model_cfg.adapter
+    # Resolved first, so a typo fails before the model is loaded rather than after.
+    master_dtype = _master_dtype(model_cfg)
 
     # Detect last checkpoint
     last_checkpoint = None
@@ -154,10 +169,23 @@ def prepare_model(
             )
 
         processor = MELTProcessor.from_pretrained(ckpt_dir)
-        model = MELTForCausalLM.from_pretrained(ckpt_dir, config=config)
+
+        # Without `model.master_dtype` the model comes up in whatever dtype="auto"
+        # resolves to: the checkpoint's top-level config.dtype, applied to every
+        # parameter. That is the decoder's dtype (the first parameter), so a
+        # stage-1 checkpoint from a DDP run -- bf16 decoder, fp32 encoder and
+        # adapter -- loads all bf16, rounding the fp32 halves on the way in.
+        # Asking for the dtype here, rather than casting after loading, is what
+        # keeps those fp32 weights exact.
+        load_kwargs = {} if master_dtype is None else {"dtype": master_dtype}
+        model = MELTForCausalLM.from_pretrained(ckpt_dir, config=config, **load_kwargs)
     else:
         config = prepare_melt_config(cfg, processor)
         model = MELTForCausalLM(config, load_backbones=True)
+        if master_dtype is not None:
+            # The backbones arrive in their Hub dtype (bf16 for Llama and Qwen,
+            # fp16 for Whisper); widening is exact, so this loses nothing.
+            model = model.to(master_dtype)
 
     logger.info("Tied model weights:")
     for tied_pair in find_tied_parameters(model):
@@ -225,6 +253,16 @@ def prepare_model(
     elif lora_enabled:
         logger.info("Unfreezing the decoder (overriding LoRA freeze)")
     _set_requires_grad(model.text_decoder, not decoder_freeze)
+
+    # The dtype of what the optimizer will actually update decides whether small
+    # steps survive (see `model.master_dtype` in config.py), and until now it was
+    # visible only as the size of the first optimizer.pt. Reported, not corrected:
+    # whether to train in bf16 is the operator's call.
+    trainable = Counter()
+    for param in model.parameters():
+        if param.requires_grad:
+            trainable[str(param.dtype).removeprefix("torch.")] += param.numel()
+    logger.info("Trainable parameter dtypes: " + (", ".join(f"{k}: {n:,}" for k, n in trainable.items()) or "none"))
 
     return model, last_checkpoint, config, processor
 

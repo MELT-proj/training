@@ -617,6 +617,18 @@ YAML and pushed onto the checkpoint's sub-config, since a checkpoint's
 `config.json` records no attention implementation and falling back to sdpa
 costs ~12x on generation (#86).
 
+`model.master_dtype: float32` is set in the YAML, and a stage-1 checkpoint written
+by a later DDP run needs it. transformers 5 takes the dtype to load from the
+checkpoint's top-level `config.dtype`, which is the decoder's (bf16, straight off
+the Hub), and applies it to the whole model; DDP does not upcast, so without the
+key the decoder would train in pure bf16 and every AdamW update below half a bf16
+ulp of its weight would be lost (at lr 2e-5 nothing above |w| of about 0.008 moves,
+about 65% of Llama-3.2-1B's decoder). The key is handed to `from_pretrained`, so the
+fp32 encoder and adapter keep their bits. The `-md60` checkpoint above is already
+fp32, so for it the key changes nothing; the memory figures below are for fp32
+masters. The `Trainable parameter dtypes:` line at startup says what a run is
+actually training in.
+
 Stage 2's `batch_duration` drops to 120 (from stage 1's 150/180) because a
 trainable 1.24 B decoder adds fp32 gradients (~4.9 GB) and AdamW's two
 moments (~9.9 GB) on top of the resident model -- resident state that does
