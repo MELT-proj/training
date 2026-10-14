@@ -15,6 +15,15 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-14 — Claude (worker session, crossing) — the four finished QK-norm Q-Former cells are scored: QK-norm made them stable, and the Q-Former is still the weakest adapter on every encoder
+Context: with the PI's go the `qk_norm=true` eval path passed a 20-sample smoke (whisper-qformer, WER 0.122), then the 24 scoring jobs ran (25 jobs, 4.8 GPU-h, all completed within about an hour). Same eval code as for the first 11 cells (training main `ad9171c` on `PYTHONPATH` in the v3 image).
+Finding:
+1. **Training.** whisper-, mhubert-, w2vb- and mms1b-qformer finished (24.0, 14.1, 26.9 and 24.0 h; ~825 GPU-h) with no non-finite `grad_norm` and none above 100 over the whole run (max 43-69); their unfixed counterparts all failed. mms1b-conformer (QK-norm) is at step ~105k of 157,500, validation WER 0.40 and falling; ETA 10-15 ~03:00 CEST (my tqdm-based ETAs have been off by -16 to +6 h), its scoring is a separate batch.
+2. **Scores** (lower is better; QK-norm on, adapter LR 2e-3): whisper-qformer 0.177, mhubert-qformer 0.423, w2vb-qformer 0.827, mms1b-qformer 0.912. Against the MLP and MoE cells of the same encoder the Q-Former is last on all four: +0.02 to +0.04 on Whisper (ID 0.078 against 0.061-0.065, OOD-related 0.67 against 0.50-0.61), +0.15 on mHuBERT, +0.30 on w2v-BERT, +0.48 on MMS-1b. The two encoders whose Q-Former sat longest on the WER plateau (w2v-BERT, MMS-1b) end near 1.0 (ID medians 0.67 and 0.79).
+3. **Ranking of the 15 scored cells** (one seed each): whisper-conformer 0.136 (1e-3), whisper-moe 0.143, whisper-mlp 0.157, whisper-qformer 0.177, mhubert-mlp 0.260, mhubert-moe 0.269, mhubert-conformer 0.385, mhubert-qformer 0.423, mms1b-mlp 0.425, mms1b-moe 0.438, w2vb-moe 0.517, w2vb-mlp 0.530, w2vb-qformer 0.827, mms1b-qformer 0.912, w2vb-conformer 0.922 (1e-3). The Conformer column still mixes LR and qk_norm (whisper- and w2vb-conformer at 1e-3 without QK-norm, mhubert-conformer at 2e-3 without, mms1b-conformer at 2e-3 with).
+4. **For the provisional Whisper adapter:** by score the order is Conformer (1e-3), MoE, MLP, Q-Former; the first three are within 0.021 on one seed each, the Q-Former is 0.04 behind the best. Robustness differs: MLP and MoE trained stably in all 8 cells at 2e-3; the Conformer ran at 1e-3 on Whisper and diverged at 2e-3 on 2 of 4 encoders; the Q-Former needed QK-norm to train at all.
+Action needed: PI: the provisional adapter pick (timeline week 5) can use this table. Orchestrator: nothing beyond the numbers; mms1b-conformer's scoring is a batch the PI names when the run ends. Raw output: `selection-metric/scores/crossing-2100-qknorm-2026-10-14.txt`.
+
 ## 2026-10-14 — Fondue Orchestrator — timeline re-planned for the 1-2 week slip: split freeze (MA 10-29, IFT 11-04), backbone and regime gate 10-23
 Context: the PI asked to fit the remaining weeks to the slip from the attention-adapter divergence and travel, compressing without cutting corners; artemis can take evals and short runs.
 Proposal (written into `timeline.md` weeks 5-11; defaults marked "PI to confirm"):
