@@ -505,9 +505,16 @@ and the SD24 recipe again with `utter-project/EuroLLM-1.7B-Instruct-2512` as the
   `47281436` (~10 h, ~79 GPU-h). EuroLLM: the alignment start (the GOLDW recipe with the new
   decoder, artemis `336423`) first, then SD24 with `REPEAT_FROM_GOLD=1` and all 24 languages as
   translate targets.
-- **Scoring** with `eval/launch_eval_sft.sh` on the FLEURS-24 dev sets, each model under its own
-  training prompt (`eval/format-repeatfirst.yaml` for SD24 and CE24, `eval/format-sft-random.yaml`
-  for SFT-EU24) and the shared ones. Results: not in yet.
+- **Scoring.** `eval/score_sd24_run.sh <run>` pulls a finished run from MN5 and scores it on the
+  FLEURS-24 dev sets (X->en, en->X, ASR) under both prompt formats: `eval/format-repeatfirst.yaml`
+  (the SD24 / CE24 training instructions) and `eval/format-sft-random.yaml` (the random templates
+  SFT-EU24 was trained and scored with).
+- **Reference: SFT-EU24 from A, final** (full fine-tuning, FLEURS dev, lower-cased scoring, random
+  templates; A at step 0 in brackets). ASR WER on en/de/fr/es/it 0.063 (0.081), WER on the other 19
+  languages 0.179 (1.007), CER 0.075 (0.582); X->en chrF 59.8 on de/fr/es/it and 53.2 on the other
+  sources (25.7 / 22.3); en->X chrF 54.1 and 40.7 (28.9 / 20.0). In-domain WER (sd-dev-per-source)
+  de .113, en .092, es .067, fr .098, it .135 (A: .125 .087 .068 .104 .148).
+- **Results for SD24, CE24 and the EuroLLM run:** not in yet.
 
 ## Running on artemis
 
