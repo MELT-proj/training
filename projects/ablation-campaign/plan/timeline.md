@@ -73,7 +73,12 @@ Fondue has ~6 days of buffer, so `06-fondue.md` §6's "stop at the last
 checkpoint" becomes a likely outcome, not a remote one. **A second week of
 slip is not recoverable** without dropping Raclette or the ratio study.
 
-**Proposed defaults, PI to confirm** (the weeks below are written on them):
+**PI decisions of 10-14:** all five defaults below are accepted. Encoder
+Whisper-large-v3; provisional adapter **MoE** (the Conformer stays open
+until its QK-norm behaviour is known; final call on 10-23). `min_lr_scale`
+is wired (PR #154), not deleted.
+
+**Defaults** (the weeks below are written on them):
 (a) Whisper-large-v3 is the encoder; the provisional adapter is the PI's
 pick on 10-14. (b) Backbone MA arms at 700 h/lang, as `02-backbones.md` §1
 specifies. (c) The two-part freeze above. (d) The crossing cell is reused as
@@ -108,14 +113,10 @@ Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
 - **Two pre-existing test failures on `main`** (sdpa propagation into
   `Wav2Vec2BertConfig`; all of `test_processing_melt.py`), likely
   transformers version skew. Not blocking any week.
-- **No IFT can be submitted until the bf16 fix is on `main`** (target Fri
-  10-16; owned by the session that found it). transformers 5 reloads every
-  DDP MA checkpoint since 09-11, the crossing's included, with an all-bf16
-  decoder, and DDP never upcasts, so most decoder updates at 2e-5 round to
-  zero. Fix: pass `dtype=float32` to `from_pretrained` on the `model.ckpt`
-  path. Every IFT box below slips day for day if it is late. Check
-  `optimizer.pt` (8 bytes per trainable parameter, not 4) on the first
-  checkpoint of the first IFT.
+- **bf16 fix merged** (PR #153, `6fc8228`, 10-14): `model.master_dtype`
+  loads `model.ckpt` in fp32. IFTs must run from a clone at or after it.
+  Still check `optimizer.pt` (8 bytes per trainable parameter, not 4) on the
+  first checkpoint of the first IFT.
 - **Crossing: 15 of 16 cells finished; mms1b-conformer runs until ~10-15
   evening.** The four QK-norm Q-Former cells finished 10-13/14 and are not
   yet scored. Until the last crossing job ends:
@@ -126,7 +127,8 @@ Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
   `~/training-lr1e3` @ 55e3a6a, `~/training-qf1e3` @ ecccf89,
   `~/training-qkn` @ 93209ca, `~/training-eval` @ ad9171c, `~/eval` (melt-eval
   `selection-metric-sets` @ fa5a961), and the self-distillation line's
-  `~/training-sd-sft` and `~/training-sd24-qwen` @ 07f84c2. Queued jobs bind
+  `~/training-sd-sft`, `~/training-sd24-qwen` @ 07f84c2 and
+  `~/training-sd24-eurollm` @ 29247d4. Queued jobs bind
   their clone when they *start*: no sync, branch switch or edit until their
   jobs end. `~/training` is free.
 - **Seed replicates before 2026-10-13 never changed the data order**: the
@@ -146,14 +148,17 @@ Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
   The PI has a dry-run-by-default `~/fleurs_dedupe.sh`, not yet run.
   `fleurs24-asr-dev` on MN5 was frozen from the doubled tree; re-freeze it
   after cleanup. Check the selection-metric FLEURS set as well.
-- **`optimization.min_lr_scale` is a dead config key** — set in every
+- **`optimization.min_lr_scale` is being wired** (PR #154, PI decision
+  10-14): every decaying schedule ends at scale x peak; cosine runs become
+  `cosine_with_min_lr`. New backbone/regime MA and all IFTs run with it; the
+  crossing seed replicates must not (they keep the originals' schedule).
+  History: it was a dead config key — set in every
   campaign and SFT config, read by no code, so every cosine run decayed to
   zero rather than to 10% of peak. Comparisons between arms are unaffected;
   the configs misstate what ran. *Measured since:* every cosine arm logged
   end-of-run LR at 1e-11..1e-9, and the cosine Whisper arm went flat over
   its second half where its WSD twin kept improving (board 2026-09-22).
-  **PI decides** whether to wire it or delete it, **by the MA freeze
-  (10-29)**: Fondue's schedule reads it.
+  Its value (0.1 today) is still settled by the MA freeze (10-29).
 
 ---
 
@@ -572,7 +577,7 @@ No gate on Sunday: the backbone and regime gates move to Fri 10-23.
       encoder cost.
 
 ### Track B — preparation
-- [ ] **bf16 fix on `main`** (target Fri 10-16): `dtype=float32` at
+- [x] **bf16 fix on `main`** (merged 10-14, PR #153): `dtype=float32` at
       `from_pretrained` on the `model.ckpt` path, tested on artemis. Blocks
       every IFT.
 - [ ] **Re-check every hour-weighted config for per-cut mux weights**,
