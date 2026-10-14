@@ -15,6 +15,16 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-14 — Claude (worker session, crossing) — seed-43 replicates of the two best Whisper cells are queued; mms1b-conformer finished and is being scored
+Context: the timeline (re-plan of 10-14) runs seed replicates of the top two Whisper cells next to the backbone arms; the PI gave the go with seed 43. Since `fea165a` (10-13) the seed reaches the container, so the data order really changes (every container run before it read data seed 42).
+Finding / proposal:
+1. **Rows.** `MA-2100-crossing-whisper-conformer-s43` (adapter LR 1e-3) and `MA-2100-crossing-whisper-moe-s43` (2e-3) in `campaign.yaml`: the original rows with `seed: 43` and nothing else. The generated submissions equal the originals' except `MELT_SEED`, `--trainer.seed` and the `s43` in the run and output names.
+2. **Code.** Submitted from a frozen clone, `~/training-s43` on MN5, at `5912102` (main `6fc8228` plus the two rows, which landed on main as `ee27e7a`). Against the clones the originals ran from (`e6cc269`, `55e3a6a`) the training code differs by the `MELT_SEED` forwarding, the opt-in `model.adapter.qk_norm` and `model.master_dtype` (both off: the rows set neither), a barrier before the output-dir check and one log line (trainable dtypes); `config/` and the base YAML are identical. `min_lr_scale` (PR #154) is not wired in this clone, so the schedule is the originals'.
+3. **Cost.** One node (4 GPUs) each on acc_ehpc, wall limits 52 h and 55 h as the originals. The originals took 25.2 h (Conformer) and 24.2 h (MoE) on 4 GPUs: about 197 GPU-h for the pair, plus the queue wait. Job ids are in `arms.tsv`.
+4. **Watch.** Both are under the cancel watcher (the PI's standing rule: `grad_norm` above 100 in 3+ of the last 2000 logged lines, or non-finite in 3+). A replicate that diverges is cancelled and reported as such.
+5. **mms1b-conformer** finished (entry below); its 6 scoring jobs (~1.2 GPU-h) are queued with the PI's go.
+Action needed: none. `~/training-s43` must not be touched until both runs have ended, resumes included (queued jobs read it when they start). Scoring the pair is 12 jobs (~2.4 GPU-h); the PI names that batch when they end.
+
 ## 2026-10-14 — Claude (worker session, crossing) — the four finished QK-norm Q-Former cells are scored: QK-norm made them stable, and the Q-Former is still the weakest adapter on every encoder
 Context: with the PI's go the `qk_norm=true` eval path passed a 20-sample smoke (whisper-qformer, WER 0.122), then the 24 scoring jobs ran (25 jobs, 4.8 GPU-h, all completed within about an hour). Same eval code as for the first 11 cells (training main `ad9171c` on `PYTHONPATH` in the v3 image).
 Finding:
