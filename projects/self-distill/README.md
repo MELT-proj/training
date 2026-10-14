@@ -533,7 +533,22 @@ and the SD24 and SD-SIFT24 recipes again with `utter-project/EuroLLM-1.7B-Instru
   languages 0.179 (1.007), CER 0.075 (0.582); X->en chrF 59.8 on de/fr/es/it and 53.2 on the other
   sources (25.7 / 22.3); en->X chrF 54.1 and 40.7 (28.9 / 20.0). In-domain WER (sd-dev-per-source)
   de .113, en .092, es .067, fr .098, it .135 (A: .125 .087 .068 .104 .148).
-- **Results for SD24, CE24 and the EuroLLM run:** not in yet.
+<!-- sd24-results:start -->
+- **Results so far** (FLEURS dev, 100 per language or direction, lower-cased scoring; HR4 = de/fr/es/it, HR5 adds en; `eval/collect_sd24_scores.py`; `repeatfirst` = the SD24 / CE24 training instructions, `sft-random` = the random task templates):
+
+| model | prompts | WER HR5 | WER other-19 | CER other-19 | X->en HR4 | X->en other | en->X HR4 | en->X other | in target lang. HR4 | in target lang. other |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A | repeatfirst | 0.082 | 1.204 | 0.684 | 25.7 | 22.7 | 29.9 | 18.8 | 23% | 5% |
+| A | sft-random | 0.081 | 1.007 | 0.582 | 25.7 | 22.3 | 28.9 | 20.0 | 21% | 11% |
+| SFT-EU24 | repeatfirst | 0.065 | 0.179 | 0.075 | 59.7 | 53.6 | 54.1 | 40.5 | 93% | 84% |
+| SFT-EU24 | sft-random | 0.063 | 0.179 | 0.075 | 59.8 | 53.2 | 54.1 | 40.7 | 93% | 84% |
+| CE24 | repeatfirst | 0.068 | 0.232 | 0.096 | 25.9 | 18.4 | 23.7 | 17.7 | 1% | 0% |
+| CE24 | sft-random | 0.068 | 0.241 | 0.104 | 26.0 | 18.4 | 30.0 | 21.4 | 23% | 15% |
+| A-EuroLLM | repeatfirst | 0.089 | 1.283 | 0.786 | 25.6 | 22.3 | 23.4 | 17.5 | 1% | 0% |
+| A-EuroLLM | sft-random | 0.087 | 1.199 | 0.736 | 26.3 | 23.8 | 23.7 | 17.6 | 2% | 1% |
+
+CE24 (adapter only, gold transcripts, no teacher) reaches most of SFT-EU24's multilingual ASR (WER 0.232 on the other 19 languages against 0.179, from A's 1.204) but does not translate: asked to, it transcribes (1% of its en->X outputs are in the requested language under the translate instruction; chrF stays at A's level). Whatever translation SD24 and SD-SIFT24 show therefore comes from the teacher's replies. SFT-EU24 scores the same under both prompt formats. SD24, SD-SIFT24 and the EuroLLM runs: not in yet.
+<!-- sd24-results:end -->
 
 ## Running on artemis
 
