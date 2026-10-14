@@ -117,9 +117,10 @@ Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
   loads `model.ckpt` in fp32. IFTs must run from a clone at or after it.
   Still check `optimizer.pt` (8 bytes per trainable parameter, not 4) on the
   first checkpoint of the first IFT.
-- **Crossing: 15 of 16 cells finished; mms1b-conformer runs until ~10-15
-  evening.** The four QK-norm Q-Former cells finished 10-13/14 and are not
-  yet scored. Until the last crossing job ends:
+- **Crossing: all 16 cells finished** (mms1b-conformer last, 10-14; all
+  five QK-norm cells stable end to end). 15 scored, mms1b-conformer scoring
+  submitted. The seed-43 replicates of whisper-conformer and whisper-moe
+  read the same 2,100 h data, so until **they** end (resumes included):
   - **Don't merge `yodas3-rest/`** into `yodas3/<lang>/train`; a resume would
     list different shards. de, fr and it copies are complete; es restarted
     10-10. Verify all four against nyx before the merge.
@@ -128,7 +129,8 @@ Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
   `~/training-qkn` @ 93209ca, `~/training-eval` @ ad9171c, `~/eval` (melt-eval
   `selection-metric-sets` @ fa5a961), and the self-distillation line's
   `~/training-sd-sft`, `~/training-sd24-qwen` @ 07f84c2 and
-  `~/training-sd24-eurollm` @ 29247d4, `~/training-sd24-sift` @ 89c4413. Queued jobs bind
+  `~/training-sd24-eurollm` @ 29247d4, `~/training-sd24-sift` @ 89c4413,
+  and the crossing replicates' `~/training-s43` @ 5912102. Queued jobs bind
   their clone when they *start*: no sync, branch switch or edit until their
   jobs end. `~/training` is free.
 - **Seed replicates before 2026-10-13 never changed the data order**: the
@@ -545,12 +547,13 @@ No gate on Sunday: the backbone and regime gates move to Fri 10-23.
 - [ ] **Score the five QK-norm cells** as each finishes (selection metric,
       ~1.2 GPU-h a cell; mms1b-conformer ~10-15 evening). Smoke the
       `qk_norm=true` eval path on one checkpoint first.
-- [ ] **Stack call, provisional** (PI, Wed 10-14): Whisper-large-v3 and one
-      of its adapters (MLP 0.157, MoE 0.143, Conformer at 1e-3 0.136,
-      Q-Former with QK-norm once scored). Recorded in `03` §2 as provisional.
+- [x] **Stack call, provisional** (PI, Wed 10-14): Whisper-large-v3 + **MoE**
+      (MLP 0.157, MoE 0.143, Conformer at 1e-3 0.136, Q-Former with QK-norm
+      0.177). Conformer left open for 10-23. Recorded in `03` §2.
 - [ ] **Seed replicates of the top two Whisper cells** at 2,100 h/lang
-      (~350 GPU-h, ~40 h wall), from a clone at or after `fea165a` so the
-      data order really changes. Submit Thu 10-15. They give the crossing its
+      (~197 GPU-h measured, ~25 h wall each), from a clone at or after
+      `fea165a` so the data order really changes. **Submitted 10-14** (seed
+      43, clone `~/training-s43`, pre-#154 schedule), queued. They give the crossing its
       first real noise floor and settle the adapter on 10-23.
 - [ ] **MA arms for all six backbones** (`02-backbones.md`), carried from
       week 4: 700 h/lang on Whisper + the provisional adapter, all six in the

@@ -167,6 +167,15 @@ three Q-Former cells followed (cc44348), so the whole Q-Former column runs at
 longer one recipe for all sixteen arms. Report each cell's LR next to its
 result.
 
+*Amended 2026-10-14:* LR 1e-3 left no Q-Former cell stable, so the PI
+(2026-10-12) moved the Q-Former column and mms1b-conformer to **QK-norm at
+2e-3**. All five ran stable end to end. Q-Former scores: whisper 0.177,
+mhubert 0.423, w2vb 0.827, mms1b 0.912, last on every encoder
+(`selection-metric/scores/crossing-2100-qknorm-2026-10-14.txt`).
+**Provisional stack (PI, 2026-10-14): Whisper-large-v3 + MoE** (0.143);
+whisper-conformer (0.136, 1e-3) stays open until the seed-43 replicates of
+both give a noise floor, final call 10-23.
+
 **Revised (PI, 2026-10-02): 2,100 h per language, 10,500 h total, counted
 in absolute hours.** This supersedes the five-epoch decision above. The
 budget is now stated as training hours per language and in total, not as
