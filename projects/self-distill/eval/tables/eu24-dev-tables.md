@@ -18,7 +18,7 @@ Per-language tables for every column: `eu24-dev-report.md`.
   "5 trained" = en de es fr it.
 - **Selection metric** (Table 6): `projects/ablation-campaign/selection-metric/score.py`, applied to its own frozen sets re-built on artemis from the
   de-duplicated shar tree (`selection-id-{en,de,es,fr,it}`, `selection-fleurs26-dev200`; specs on melt-eval branch `selection-metric-sets`).
-- **Not in the tables yet:** SD24 on EuroLLM (training run still going).
+- **Models.** Qwen3.5-2B decoder: A (aligned start), SFT-EU24 (full fine-tune, reference), CE24 (adapter, gold CE), SD24 (adapter, instruction-mixed SD), SD-SIFT24 (adapter, AZeroS). EuroLLM-1.7B-Instruct-2512 decoder: A' (start), SD24, SD-SIFT24.
 
 **Table 1. ASR on FLEURS dev, % (macro-average over the languages of each group; lower is better)**
 
@@ -30,6 +30,7 @@ Per-language tables for every column: `eu24-dev-report.md`.
 | Qwen3.5-2B | SD24 (adapter, self-distilled) | 20.9 | 7.7 | 15.7 | 32.2 | 6.7 | 9.0 | 3.4 | 5.4 | 14.5 |
 | Qwen3.5-2B | SD-SIFT24 (adapter, AZeroS) | 28.9 | 10.5 | 22.7 | 44.1 | 9.5 | 13.8 | 4.0 | 9.4 | 22.5 |
 | EuroLLM-1.7B-Instruct-2512 | A' (start) | 103.4 | 29.6 | 132.1 | 134.8 | 8.9 | 63.2 | 13.0 | 80.7 | 85.5 |
+| EuroLLM-1.7B-Instruct-2512 | SD24 (adapter, self-distilled) | 26.3 | 8.2 | 17.7 | 42.5 | 7.5 | 14.4 | 3.9 | 7.6 | 24.8 |
 | EuroLLM-1.7B-Instruct-2512 | SD-SIFT24 (adapter, AZeroS) | 73.6 | 36.4 | 53.7 | 108.2 | 39.6 | 54.1 | 29.9 | 38.2 | 78.2 |
 
 **Table 2. chrF++ on FLEURS dev, lowercased (macro-average over directions; higher is better)**
@@ -42,6 +43,7 @@ Per-language tables for every column: `eu24-dev-report.md`.
 | Qwen3.5-2B | SD24 (adapter, self-distilled) | 48.3 | 56.2 | 50.6 | 42.9 | 42.0 | 50.8 | 42.3 | 37.0 |
 | Qwen3.5-2B | SD-SIFT24 (adapter, AZeroS) | 49.0 | 55.8 | 51.5 | 44.0 | 41.4 | 50.9 | 42.2 | 35.8 |
 | EuroLLM-1.7B-Instruct-2512 | A' (start) | 18.8 | 21.0 | 18.8 | 17.6 | 15.4 | 19.2 | 15.7 | 13.1 |
+| EuroLLM-1.7B-Instruct-2512 | SD24 (adapter, self-distilled) | 46.7 | 53.2 | 49.9 | 41.3 | 44.3 | 51.1 | 43.5 | 41.0 |
 | EuroLLM-1.7B-Instruct-2512 | SD-SIFT24 (adapter, AZeroS) | 45.5 | 52.9 | 48.6 | 39.8 | 42.1 | 50.0 | 41.3 | 38.3 |
 
 **Table 3. spBLEU on FLEURS dev, lowercased (macro-average over directions; higher is better)**
@@ -54,6 +56,7 @@ Per-language tables for every column: `eu24-dev-report.md`.
 | Qwen3.5-2B | SD24 (adapter, self-distilled) | 25.4 | 33.2 | 27.5 | 20.1 | 20.0 | 28.4 | 20.1 | 15.4 |
 | Qwen3.5-2B | SD-SIFT24 (adapter, AZeroS) | 26.2 | 32.9 | 28.2 | 21.5 | 19.5 | 28.3 | 20.4 | 14.3 |
 | EuroLLM-1.7B-Instruct-2512 | A' (start) | 1.3 | 1.6 | 1.4 | 1.1 | 1.3 | 1.8 | 1.1 | 1.1 |
+| EuroLLM-1.7B-Instruct-2512 | SD24 (adapter, self-distilled) | 22.3 | 28.5 | 25.3 | 17.2 | 23.3 | 29.1 | 23.2 | 20.2 |
 | EuroLLM-1.7B-Instruct-2512 | SD-SIFT24 (adapter, AZeroS) | 20.7 | 27.6 | 23.0 | 15.6 | 21.1 | 27.7 | 20.8 | 17.8 |
 
 **Table 4. The same two metrics, cased (all 23 directions)**
@@ -66,6 +69,7 @@ Per-language tables for every column: `eu24-dev-report.md`.
 | Qwen3.5-2B | SD24 (adapter, self-distilled) | 47.4 | 41.3 | 23.6 | 19.3 | 0% / 1% |
 | Qwen3.5-2B | SD-SIFT24 (adapter, AZeroS) | 48.0 | 40.8 | 24.3 | 18.8 | 0% / 3% |
 | EuroLLM-1.7B-Instruct-2512 | A' (start) | 17.6 | 14.5 | 0.4 | 0.4 | 97% / 99% |
+| EuroLLM-1.7B-Instruct-2512 | SD24 (adapter, self-distilled) | 45.6 | 43.5 | 20.4 | 22.3 | 2% / 6% |
 | EuroLLM-1.7B-Instruct-2512 | SD-SIFT24 (adapter, AZeroS) | 44.3 | 41.2 | 18.9 | 20.1 | 7% / 17% |
 
 **Table 5. Same models under the random task templates instead of the repeat-first prompts (lowercased; repeat-first → random)**
@@ -77,6 +81,7 @@ Per-language tables for every column: `eu24-dev-report.md`.
 | Qwen3.5-2B | SD24 (adapter, self-distilled) | 20.9 → 24.0 | 48.3 → 38.2 | 42.0 → 41.0 | 25.4 → 17.0 | 20.0 → 19.4 |
 | Qwen3.5-2B | SD-SIFT24 (adapter, AZeroS) | 28.9 → 250.0 | 49.0 → 48.8 | 41.4 → 41.3 | 26.2 → 25.2 | 19.5 → 19.2 |
 | EuroLLM-1.7B-Instruct-2512 | A' (start) | 103.4 → 96.8 | 18.8 → 20.3 | 15.4 → 15.5 | 1.3 → 2.2 | 1.3 → 1.4 |
+| EuroLLM-1.7B-Instruct-2512 | SD24 (adapter, self-distilled) | 26.3 → 65.2 | 46.7 → 34.7 | 44.3 → 35.3 | 22.3 → 13.0 | 23.3 → 16.8 |
 | EuroLLM-1.7B-Instruct-2512 | SD-SIFT24 (adapter, AZeroS) | 73.6 → 305.8 | 45.5 → 35.0 | 42.1 → 32.8 | 20.7 → 10.1 | 21.1 → 10.2 |
 
 **Table 6. The campaign's selection metric (single ranking score; lower is better)**
@@ -89,6 +94,7 @@ Per-language tables for every column: `eu24-dev-report.md`.
 | Qwen3.5-2B | SD24 (adapter, self-distilled) | **0.043** | 0.059 | 0.031 | 0.049 | 0.062 | 0.498 | 8/3000 / 39/5171 |
 | Qwen3.5-2B | SD-SIFT24 (adapter, AZeroS) | **0.056** | 0.072 | 0.037 | 0.075 | 0.118 | 0.481 | 8/3000 / 72/5171 |
 | EuroLLM-1.7B-Instruct-2512 | A' (start) | **0.149** | 0.066 | 0.052 | 0.531 | 0.809 | 1.000 | 9/3000 / 544/5171 |
+| EuroLLM-1.7B-Instruct-2512 | SD24 (adapter, self-distilled) | **0.053** | 0.069 | 0.039 | 0.059 | 0.109 | 0.447 | 9/3000 / 85/5171 |
 | EuroLLM-1.7B-Instruct-2512 | SD-SIFT24 (adapter, AZeroS) | **0.301** | 0.474 | 0.210 | 0.239 | 0.490 | 0.771 | 388/3000 / 499/5171 |
 
 score = (1.0 ID + 1.5 OOD-train + 0.6 OOD-related) / 3.1; each group is the median over its languages of corpus CER clipped at 1. *reported only, not in the score (OOD-latin: the other 12 Latin-script EU languages; OOD-script: bg el ru uk, of which ru and uk were never trained).
