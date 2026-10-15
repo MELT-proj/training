@@ -258,7 +258,7 @@ TEMPLATE_SELECTION_TAGS = {"with_language": "lid", "without_language": "nolid"}
 LR_SCHEDULERS = ("cosine", "linear", "constant_with_warmup", "warmup_stable_decay")
 LR_SCHEDULER_TAGS = {"warmup_stable_decay": "wsd"}
 WSD_DECAY_FRACTION = 0.2   # decay over the last 20% of steps
-WSD_MIN_LR_RATIO = 0.1     # decay to 0.1x peak, not to zero
+# The floor (0.1x peak) is optimization.min_lr_scale, applied in melt/training/config.py.
 WSD_DECAY_TYPE = "cosine"
 
 # Encoders that demand an exact input length, and the frame count they demand.
@@ -1191,7 +1191,6 @@ def plan(args: ArmAxes) -> ArmPlan:
             json.dumps(
                 {
                     "num_decay_steps": round(WSD_DECAY_FRACTION * steps),
-                    "min_lr_ratio": WSD_MIN_LR_RATIO,
                     "decay_type": WSD_DECAY_TYPE,
                 }
             ),
