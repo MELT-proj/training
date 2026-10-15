@@ -15,6 +15,14 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-15 — Claude (worker session, backbones) — the six backbone MA arms are submitted (PI go, no Qwen smoke)
+Context: the PI said go on the plan below, without the optional Qwen smoke.
+Finding / proposal:
+1. **Frozen clone** `~/training-backbones` on MN5 at `c1fa740` (main). Queued jobs bind it when they start: no sync, checkout or edit until all six end. Its `arms.tsv` is dirty with the six rows; they are copied to `main` with this entry.
+2. **Jobs** (acc_ehpc, 1 node x 4 GPUs, all PENDING on priority at 10:05Z): llama1b-ins 47324428 (12 h), llama1b-base 47324429 (12 h), qwen35-2b-ins 47324430 (26 h), qwen35-2b-base 47324431 (26 h), eurollm1.7b-ins 47324432 (14 h), eurollm1.7b-base 47324433 (14 h).
+3. **To check when they start:** `world_size 4` in each `[run_train] starting` line; `grad_norm` finite in the first hours; for Qwen, peak memory and `train_hours/total` (bd 25 x 3 is unmeasured); the first checkpoint of llama1b-ins loads (it is the regime study's base MA checkpoint); `optimizer.pt`/LR floor ends at 0.1 x peak.
+Action needed: none from the PI. Worker: read the first logs once they start; score with the selection metric as they finish.
+
 ## 2026-10-15 — Claude (worker session, backbones) — the six backbone MA rows are written and dry-run; nothing is submitted, waiting for the PI's go
 Context: PI decision of 10-14 (Whisper-large-v3 + MoE, crossing recipe, 700 h/lang, six decoders). `min_lr_scale` (PR #154) is already on `main`, so the rows run with it (WSD now ends at 0.1 x the adapter peak).
 Finding / proposal:
