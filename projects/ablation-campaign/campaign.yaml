@@ -1225,6 +1225,62 @@ arms:
     max_steps: 157500
     time: "55:00:00"
 
+  # QK-norm on the whole Conformer column (PI, 2026-10-15, for the paper's table). The Conformer had run with QK-norm on
+  # MMS-1b only (MA-2100-crossing-mms1b-conformer above); these are the other three encoders at the same setting: qk_norm at the
+  # recipe LR of 2e-3. Nodes, steps, seed and data order are the original Conformer rows'. The originals stay as scored results
+  # (whisper 1e-3, w2vb 1e-3, mhubert 2e-3, none with QK-norm); the `-qkn` tag in the run name keeps the output dirs apart.
+  - id: MA-2100-crossing-whisper-conformer-qkn
+    stage: MA
+    config: ABL-MA-2100-asr.yaml
+    encoder: openai/whisper-large-v3
+    adapter: conformer
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    qk_norm: true
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    seed: 42
+    max_steps: 157500
+    time: "52:00:00"
+
+  - id: MA-2100-crossing-mhubert-conformer-qkn
+    stage: MA
+    config: ABL-MA-2100-asr.yaml
+    encoder: utter-project/mHuBERT-147
+    adapter: conformer
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    qk_norm: true
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 2                 # 75 x 1 x 8 = 600 s, as the original row
+    eval_when_frozen: true
+    seed: 42
+    max_steps: 78750
+    time: "38:00:00"
+
+  - id: MA-2100-crossing-w2vb-conformer-qkn
+    stage: MA
+    config: ABL-MA-2100-asr.yaml
+    adapter: conformer
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    qk_norm: true
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 2                 # 75 x 1 x 8 = 600 s, as the original row
+    eval_when_frozen: true
+    seed: 42
+    max_steps: 78750
+    time: "46:00:00"          # the 1e-3 original took 20.7 h; room for the 1.8x slowdown the seed-43 replicates showed
+
   # Backbone study (plan/02-backbones.md, timeline week 5): the six decoders of the 2x3 grid on the stack the PI chose on 2026-10-14
   # (Whisper-large-v3 + MoE, crossing recipe), ASR-only MA at 700 h/lang. Each row is MA-2100-crossing-whisper-moe with the
   # data budget changed (ABL-MA-700-whisper-asr.yaml: the same builder, per-cut weights, no yodas3 top-up) and nothing else, bar
