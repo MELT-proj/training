@@ -15,6 +15,15 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-15 — Claude (worker session, crossing) — mms1b-conformer with QK-norm scores 0.254: 0.17 better than MMS-1b's MLP, 5th of the 16 crossing cells
+Context: the last crossing cell. Its 6 scoring jobs ran with the PI's go, with the same eval code as the other 15 (training main `ad9171c` on `PYTHONPATH` in the v3 image). Raw output and the 16-cell ranking: `selection-metric/scores/crossing-2100-mms1b-conformer-2026-10-15.txt`.
+Finding:
+1. **Score** (lower is better; QK-norm on, adapter LR 2e-3, one seed): 0.254 (ID 0.113, OOD-train 0.093, OOD-related 0.889). On MMS-1b the MLP is 0.425 and the MoE 0.438, so the Conformer is 0.17-0.18 ahead; its ID and OOD-train medians are 2.2x and 3.6x lower than the MLP's (0.113 against 0.249, 0.093 against 0.335), while OOD-related stays high (0.889 against 0.943).
+2. **Ranking of the 16 cells:** the four Whisper cells first (conformer 0.136, moe 0.143, mlp 0.157, qformer 0.177), then mms1b-conformer 0.254, mhubert-mlp 0.260, mhubert-moe 0.269, and the rest in the order of the 10-14 entry. It is the best cell that is not on Whisper.
+3. **The Conformer, encoder by encoder** (the column still mixes LR and QK-norm): best on Whisper (0.136 at 1e-3, no QK-norm; 0.007 ahead of the MoE, one seed) and on MMS-1b (0.254, QK-norm); behind the MLP and MoE on mHuBERT (0.385 against 0.260 and 0.269; 2e-3, no QK-norm); never learned on w2v-BERT (0.922; 1e-3, no QK-norm).
+4. **QK-norm on the Conformer.** The one Conformer cell that ran with it trained stably to the end (max `grad_norm` 56, none non-finite). No Whisper Conformer has run with QK-norm, so whether it helps or costs there is untested.
+Action needed: PI / orchestrator: the timeline keeps the Conformer open until its QK-norm behaviour is known (final adapter call 10-23); this is one encoder's worth of that. Nothing is queued for a Whisper Conformer with QK-norm; whether to run one is the PI's call.
+
 ## 2026-10-15 — Claude (worker session, backbones) — the six backbone MA arms are submitted (PI go, no Qwen smoke)
 Context: the PI said go on the plan below, without the optional Qwen smoke.
 Finding / proposal:
