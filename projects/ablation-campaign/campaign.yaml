@@ -1224,3 +1224,122 @@ arms:
     seed: 43
     max_steps: 157500
     time: "55:00:00"
+
+  # Backbone study (plan/02-backbones.md, timeline week 5): the six decoders of the 2x3 grid on the stack the PI chose on 2026-10-14
+  # (Whisper-large-v3 + MoE, crossing recipe), ASR-only MA at 700 h/lang. Each row is MA-2100-crossing-whisper-moe with the
+  # data budget changed (ABL-MA-700-whisper-asr.yaml: the same builder, per-cut weights, no yodas3 top-up) and nothing else, bar
+  # the decoder. max_steps = 1.25 x the estimate (42,000 at 300 s x 3,500 h), the crossing's fill rule; realised hours are read
+  # from the first run's log. The old MA-700-* rows (w2v-BERT + MLP) are superseded and untouched. Base arms borrow their
+  # instruct sibling's chat template (plan_arm DECODER_PROFILES). MA-700-backbone-llama1b-ins is also the regime study's base
+  # MA checkpoint and the recipe confirmation.
+  - id: MA-700-backbone-llama1b-ins
+    stage: MA
+    config: ABL-MA-700-whisper-asr.yaml
+    decoder: meta-llama/Llama-3.2-1B-Instruct
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    ddp_find_unused_parameters: true   # the router can leave an expert unused in a small batch (see plan_arm.py's ArmAxes)
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    seed: 42
+    max_steps: 52500
+    time: "12:00:00"
+
+  - id: MA-700-backbone-llama1b-base
+    stage: MA
+    config: ABL-MA-700-whisper-asr.yaml
+    decoder: meta-llama/Llama-3.2-1B
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    ddp_find_unused_parameters: true
+    nodes: 1
+    seed: 42
+    max_steps: 52500
+    time: "12:00:00"
+
+  # Qwen3.5-2B: a smaller micro-batch with accumulation, so the effective batch stays 300 s. The 50 Hz MA arm needed
+  # batch_duration 30 at 50 Hz; at 10 Hz 25 s is ~1/4 of that arm's tokens per micro-batch. Unmeasured at this stack.
+  - id: MA-700-backbone-qwen35-2b-ins
+    stage: MA
+    config: ABL-MA-700-whisper-asr.yaml
+    decoder: Qwen/Qwen3.5-2B
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 25
+    grad_accum_steps: 3      # 25 x 3 x 4 = 300 s
+    gradient_checkpointing: false
+    ddp_find_unused_parameters: true
+    nodes: 1
+    seed: 42
+    max_steps: 52500
+    time: "26:00:00"
+
+  - id: MA-700-backbone-qwen35-2b-base
+    stage: MA
+    config: ABL-MA-700-whisper-asr.yaml
+    decoder: Qwen/Qwen3.5-2B-Base
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 25
+    grad_accum_steps: 3      # 25 x 3 x 4 = 300 s
+    gradient_checkpointing: false
+    ddp_find_unused_parameters: true
+    nodes: 1
+    seed: 42
+    max_steps: 52500
+    time: "26:00:00"
+
+  - id: MA-700-backbone-eurollm1.7b-ins
+    stage: MA
+    config: ABL-MA-700-whisper-asr.yaml
+    decoder: utter-project/EuroLLM-1.7B-Instruct
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    ddp_find_unused_parameters: true
+    nodes: 1
+    seed: 42
+    max_steps: 52500
+    time: "14:00:00"
+
+  - id: MA-700-backbone-eurollm1.7b-base
+    stage: MA
+    config: ABL-MA-700-whisper-asr.yaml
+    decoder: utter-project/EuroLLM-1.7B
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    ddp_find_unused_parameters: true
+    nodes: 1
+    seed: 42
+    max_steps: 52500
+    time: "14:00:00"

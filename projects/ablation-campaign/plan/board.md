@@ -15,6 +15,16 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-15 — Claude (worker session, backbones) — the six backbone MA rows are written and dry-run; nothing is submitted, waiting for the PI's go
+Context: PI decision of 10-14 (Whisper-large-v3 + MoE, crossing recipe, 700 h/lang, six decoders). `min_lr_scale` (PR #154) is already on `main`, so the rows run with it (WSD now ends at 0.1 x the adapter peak).
+Finding / proposal:
+1. **Rows.** `MA-700-backbone-{llama1b-ins,llama1b-base,qwen35-2b-ins,qwen35-2b-base,eurollm1.7b-ins,eurollm1.7b-base}` in `campaign.yaml`: the `MA-2100-crossing-whisper-moe` row with the decoder changed, `max_steps` 52,500 (1.25 x 42,000, the crossing's fill rule) and the new config below. `campaign.py plan` renders all 73 rows; 160 plan_arm/builder tests pass in the nyx container. The old `MA-700-*` rows (w2v-BERT + MLP) are untouched.
+2. **New config `ABL-MA-700-whisper-asr.yaml`.** `ABL-MA-700-asr.yaml` carries hour-share weights (pre-10-08) and bins measured for another draw, so I did not reuse it. This one is rendered with the builder over the 2,100 h config (`--budget-hours 700`, no top-up, `--weights cuts`, bins re-measured on the draw): Italian's four-corpus mix at 700.3 h per language, 3,500 h in all, 20% of the audio per language. `check_training_config.py` fails the same four checks as on the 2,100 h config (W3, H1, H2, B3: it measures whole sources, not the draw).
+3. **Batch.** Effective 300 s as in the crossing. Llama and EuroLLM: `batch_duration 75`, 1 node, no accumulation. Qwen3.5-2B: `batch_duration 25` x `grad_accum 3` (the 50 Hz Qwen MA arm needed 30; at 10 Hz 25 s carries ~1/4 of that arm's tokens per micro-batch). **Unmeasured**; fill at 25 s may be below the 79.9% measured at 75 s, so Qwen may see fewer hours than the others at equal steps (read `train_hours/total` in its log).
+4. **Cost.** Measured: Whisper+MoE+Llama-1B at 2,100 h took 24.2 h on 4 GPUs for 157,500 steps = 0.553 s/step, so 8.1 h, ~32 GPU-h per Llama arm. Extrapolated: EuroLLM (24 layers) ~9.5 h, ~38 GPU-h; Qwen (hybrid, 3 micro-batches, 248K vocab) ~17.5 h, ~70 GPU-h. Six arms ~280 GPU-h. Walltimes requested: 12 h Llama, 14 h EuroLLM, 26 h Qwen.
+5. **MN5 staged (listed, not loaded):** all 35 Shar leaves of the config present with `.idx` sidecars; whisper-large-v3 and the six decoders in `hf_cache` (Qwen3.5-2B and -Base show 2 weight files); `melt_cuda126.sif` -> `melt_cuda126_tf5.sif`. Qwen base needs no template borrowing (its own is byte-identical to Instruct's, 02 §3.1); the other two base arms borrow.
+Action needed: PI: go / no-go. On go I create `~/training-backbones` on MN5 at the validated commit and submit the six from it. Optional: a short `acc_debug` smoke of the Qwen row first, to measure its memory and fill.
+
 ## 2026-10-14 — Claude (worker session, crossing) — seed-43 replicates of the two best Whisper cells are queued; mms1b-conformer finished and is being scored
 Context: the timeline (re-plan of 10-14) runs seed replicates of the top two Whisper cells next to the backbone arms; the PI gave the go with seed 43. Since `fea165a` (10-13) the seed reaches the container, so the data order really changes (every container run before it read data seed 42).
 Finding / proposal:
