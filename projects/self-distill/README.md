@@ -522,7 +522,7 @@ and the SD24 and SD-SIFT24 recipes again with `utter-project/EuroLLM-1.7B-Instru
   SD24 EuroLLM `47292248` (after the alignment start A', the GOLDW recipe with the new decoder, artemis `336423`;
   `REPEAT_FROM_GOLD=1`, all 24 languages as translate targets; ~4.0 s/step, ~28 h); from
   `~/training-sd24-sift` @ 89c4413, SD-SIFT24 Qwen `47304307` (3.0 s/step, ~21 h, ~166 GPU-h) and EuroLLM
-  `47304558` (2.3 s/step, ~17 h, ~136 GPU-h), both with `ROLLOUT_LOOKAHEAD=4`.
+  `47304558` (2.3 s/step, finished in 15.9 h, ~127 GPU-h), both with `ROLLOUT_LOOKAHEAD=4`.
 - **Scoring.** `eval/score_sd24_run.sh <run>` pulls a finished run from MN5 and scores it on the
   FLEURS-24 dev sets (X->en, en->X, ASR) under both prompt formats: `eval/format-repeatfirst.yaml`
   (the SD24 / CE24 training instructions) and `eval/format-sft-random.yaml` (the random templates
@@ -544,10 +544,20 @@ and the SD24 and SD-SIFT24 recipes again with `utter-project/EuroLLM-1.7B-Instru
 | SFT-EU24 | sft-random | 0.063 | 0.179 | 0.075 | 59.8 | 53.2 | 54.1 | 40.7 | 93% | 84% |
 | CE24 | repeatfirst | 0.068 | 0.232 | 0.096 | 25.9 | 18.4 | 23.7 | 17.7 | 1% | 0% |
 | CE24 | sft-random | 0.068 | 0.241 | 0.104 | 26.0 | 18.4 | 30.0 | 21.4 | 23% | 15% |
+| SD24 | repeatfirst | 0.067 | 0.247 | 0.105 | 58.9 | 48.8 | 53.8 | 43.0 | 95% | 94% |
+| SD24 | sft-random | 0.073 | 0.284 | 0.134 | 46.1 | 39.7 | 53.4 | 42.0 | 94% | 91% |
 | A-EuroLLM | repeatfirst | 0.089 | 1.283 | 0.786 | 25.6 | 22.3 | 23.4 | 17.5 | 1% | 0% |
 | A-EuroLLM | sft-random | 0.087 | 1.199 | 0.736 | 26.3 | 23.8 | 23.7 | 17.6 | 2% | 1% |
+| SD-SIFT24-EuroLLM | repeatfirst | 0.396 | 0.826 | 0.598 | 54.4 | 46.4 | 52.9 | 43.5 | 94% | 84% |
+| SD-SIFT24-EuroLLM | sft-random | 3.052 | 3.059 | 2.497 | 44.4 | 35.9 | 46.0 | 33.6 | 83% | 63% |
 
-CE24 (adapter only, gold transcripts, no teacher) reaches most of SFT-EU24's multilingual ASR (WER 0.232 on the other 19 languages against 0.179, from A's 1.204) but does not translate: asked to, it transcribes (1% of its en->X outputs are in the requested language under the translate instruction; chrF stays at A's level). Whatever translation SD24 and SD-SIFT24 show therefore comes from the teacher's replies. SFT-EU24 scores the same under both prompt formats. SD24, SD-SIFT24 and the EuroLLM runs: not in yet.
+CE24 (adapter only, gold transcripts, no teacher) reaches most of SFT-EU24's multilingual ASR (WER 0.232 on the other 19 languages against 0.179, from A's 1.204) but does not translate: asked to, it transcribes (1% of its en->X outputs are in the requested language under the translate instruction; chrF stays at A's level). Whatever translation SD24 and SD-SIFT24 show therefore comes from the teacher's replies.
+
+**SD24 (Qwen), under its own instructions.** ASR matches SFT-EU24 on the five trained languages (WER 0.067 against 0.065, inside the 0.003 noise floor), and translation on de/fr/es/it is within 0.8 chrF of the full fine-tune in both directions. Averaged over all languages it reaches 52.0 chrF X->en (90% of Qwen's own text-only ceiling of 57.7; SFT-EU24 56.2) and 44.9 en->X (97% of 46.5; SFT-EU24 42.9). It trails on X->en from the other 19 languages (48.8 against 53.6; et -11.6, mt -10.5, fi -8.1, hu -7.6, lv -7.4) and on the targets SFT-EU24 had CoVoST2 data for (et -18.7, lv -16.9, sl -12.2, sv -8.1). It leads where SFT-EU24 had no translation data: into bg 50.3 against 19.8 and el 39.5 against 16.5, and into ga 22.4 and mt 27.1, which sit at Qwen's text-only ceiling (19.3 and 26.5) although neither was a translate target. Its CER gap to SFT-EU24 on the other 19 languages (0.105 against 0.075) is ga and mt (0.56 and 0.30 against 0.33 and 0.11).
+
+**SD24 is tied to its instructions.** It was distilled on one instruction pair. Scored under the six random task templates SFT-EU24 trained on, its X->en chrF falls from 58.9 / 48.8 to 46.1 / 39.7 (HR4 / other), and the copy score against the source rises from 26 to 51; en->X holds (53.4 / 42.0). SFT-EU24, trained on those templates, scores the same under both formats (59.7 / 53.6 and 59.8 / 53.2 X->en). A position test on X->en (HR4 / other): the training wording placed after the audio 57.0 / 46.9 (`eval/format-st-sdtext-after.yaml`); another wording before the audio 56.3 / 46.5 (`format-st-before.yaml`); another wording after it 52.9 / 43.0 (`format-st-after.yaml`). Position alone costs about 2 chrF, wording about 2.5, both together 6. The random mix is lower than any single template tested, so the four templates not tested alone are much worse (about 42 on average, by subtraction). Distilling with several paraphrased instructions is the obvious fix and has not been run.
+
+**SD-SIFT24 on EuroLLM-1.7B-Instruct-2512 (start A-EuroLLM), under the repeat-first prompt.** Translation is strong: 49.4 chrF X->en (84% of the text-only ceiling of 59.0) and 45.1 en->X (85% of 53.1; ga 35.4 against 37.7, mt 38.4 against 49.4), with 94% / 84% of the en->X outputs in the requested language. ASR is not reliable: WER 0.396 on the five trained languages (A-EuroLLM 0.089), almost all of it from clips where the model repeats the transcript until the token cap (hypothesis past twice the reference length in en 7%, de 9%, fr 2%, es 1%, it 3% of clips); without those clips WER is 0.10-0.165. Under the random task templates it breaks: WER 3.05, 52% of the ASR clips run past twice the reference length (a German output read repeats the instruction and the role name "assistant"), X->en 44.4 / 35.9. The student never saw an instruction in training, and most of the teacher's free replies were cut at the 256-token cap and stayed in the loss without a stop (72% in the EuroLLM smoke test), which is the likely cause of the runaways; not tested. Qwen SD-SIFT24 and the EuroLLM SD24 run: not in yet.
 <!-- sd24-results:end -->
 
 ## Running on artemis
