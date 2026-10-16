@@ -34,6 +34,14 @@ Finding:
 4. **QK-norm on the Conformer.** The one Conformer cell that ran with it trained stably to the end (max `grad_norm` 56, none non-finite). No Whisper Conformer has run with QK-norm, so whether it helps or costs there is untested.
 Action needed: PI / orchestrator: the timeline keeps the Conformer open until its QK-norm behaviour is known (final adapter call 10-23); this is one encoder's worth of that. Nothing is queued for a Whisper Conformer with QK-norm; whether to run one is the PI's call.
 
+## 2026-10-16 — Claude (worker session, backbones) — two Llama arms timed out 360 steps short, EuroLLM-Base had a tokenizer bug (PR #155); resumes and a restart are queued
+Context: first look at the six backbone MA arms, 20 h after submission. PI approved the resumes, the Qwen resumes and a PR for the EuroLLM-Base fix.
+Finding / proposal:
+1. **My walltimes were short.** The Llama arms ran ~0.82 s/step, not the 0.55 extrapolated from the 2,100 h crossing (shorter cuts, more cuts per batch), and hit the 12 h limit at step 52,140 of 52,500, in the decay tail with no final weights (last checkpoint 47,730). EuroLLM-Instruct finished in 12 h 06 min of its 14 h. Realised hours at step 52,140: 3,741 of 3,500 planned, so 1.25 x the estimate overshoots by ~7% on this mix. Qwen (bd 25 x 3) runs 2.4-2.6 s/step: 52,500 steps need ~36 h against its 26 h limit; it will time out around step 36,500 and needs a ~11 h resume each.
+2. **EuroLLM-1.7B (base) trained on nothing.** The vocabulary holds `<|im_start|>` at id 3, but only the Instruct tokenizer registers it as an added token; on the base it splits into ten text pieces, `mask_non_assistant_tokens` never finds the assistant span, and the first eval died in `ZeroDivisionError` (every reference empty). Fix: PR #155 (`borrow_chat_template` registers the source's added tokens that the template uses and that sit at the same id; vocabulary size unchanged, render equals Instruct's token for token). Llama base is unaffected. The crashed dir was renamed `...-crashed47324433` (it held `resolved_config.json` only).
+3. **Submitted.** Llama-ins and Llama-base resumes from checkpoint-47,730 (`--resume --time 02:00:00`, clone `~/training-backbones`); EuroLLM-Base restarted from scratch from a new frozen clone `~/training-backbones-eb` at the PR branch commit `aa63c11` (14 h limit; Instruct needed 12 h 06, so it is tight). Job ids are in `arms.tsv`. `~/training-backbones` stays frozen until the Qwen jobs and their resumes end.
+Action needed: PI: review/merge #155. Worker: resume both Qwen arms when they time out (~Oct 16 evening); check EuroLLM-Base's first eval is non-degenerate; then score all six.
+
 ## 2026-10-15 — Claude (worker session, backbones) — the six backbone MA arms are submitted (PI go, no Qwen smoke)
 Context: the PI said go on the plan below, without the optional Qwen smoke.
 Finding / proposal:
