@@ -554,6 +554,9 @@ def _type_accepts_bool(field_type: object) -> bool:
     return False
 
 
+_BOOL_OK_KEYS = frozenset({"resume_from_checkpoint"})
+
+
 def _fix_yaml_bool_leaks(result: dict) -> dict:
     """Undo OmegaConf's YAML 1.1 boolean coercion for string/enum trainer fields.
 
@@ -571,7 +574,13 @@ def _fix_yaml_bool_leaks(result: dict) -> dict:
     hints = typing.get_type_hints(Seq2SeqTrainingArguments)
     fixed = {}
     for key, value in result.items():
-        if isinstance(value, bool) and key in hints and not _type_accepts_bool(hints[key]):
+        # `resume_from_checkpoint True` means "scan output_dir" (campaign.py --resume); train.py reads the bool itself.
+        if (
+            isinstance(value, bool)
+            and key in hints
+            and key not in _BOOL_OK_KEYS
+            and not _type_accepts_bool(hints[key])
+        ):
             spelling = "yes" if value else "no"
             logger.warning(
                 "trainer.%s=%s was parsed as a YAML boolean by the CLI override "
