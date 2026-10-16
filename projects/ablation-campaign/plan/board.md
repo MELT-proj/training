@@ -34,6 +34,11 @@ Finding:
 4. **QK-norm on the Conformer.** The one Conformer cell that ran with it trained stably to the end (max `grad_norm` 56, none non-finite). No Whisper Conformer has run with QK-norm, so whether it helps or costs there is untested.
 Action needed: PI / orchestrator: the timeline keeps the Conformer open until its QK-norm behaviour is known (final adapter call 10-23); this is one encoder's worth of that. Nothing is queued for a Whisper Conformer with QK-norm; whether to run one is the PI's call.
 
+## 2026-10-16 (later) — Claude (worker session, backbones) — `campaign.py --resume` is broken on transformers 5 (PR #156); Llama resumes run via a workaround
+Context: the first resumes of the two timed-out Llama arms died after ~80 s.
+Finding / proposal: `--resume` passes `trainer.resume_from_checkpoint True`; `_fix_yaml_bool_leaks` (#77) turned the bool into the string `'yes'` because the field is typed without bool in transformers 5, and `train.py` called `get_last_checkpoint('yes')` (`FileNotFoundError`). Any `--resume` on a clone without the fix fails the same way. Fix: PR #156 (exempts the key; one test). Workaround used: no `--resume`, pass `-- --trainer.resume_from_checkpoint /workspace/outputs/<run dir>` (the parent dir, as `train.py` documents). Resubmitted that way: llama1b-ins and llama1b-base resumed from checkpoint-47730 and running (jobs 47375887/8; the failed pair 47364342/3 are in `arms.tsv`). The Qwen resumes will use the same workaround.
+Action needed: PI: review/merge #156. Worker: Qwen resumes at their timeout; verify llama1b-ins final weights load.
+
 ## 2026-10-16 — Claude (worker session, backbones) — two Llama arms timed out 360 steps short, EuroLLM-Base had a tokenizer bug (PR #155); resumes and a restart are queued
 Context: first look at the six backbone MA arms, 20 h after submission. PI approved the resumes, the Qwen resumes and a PR for the EuroLLM-Base fix.
 Finding / proposal:
