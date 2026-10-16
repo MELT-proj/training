@@ -16,9 +16,27 @@ from melt.training.setup import borrow_chat_template
 INSTRUCT_TEMPLATE = "{% for m in messages %}<|start_header_id|>{{ m['role'] }}<|end_header_id|>\n\n{{ m['content'] }}<|eot_id|>{% endfor %}"
 
 
+class _FakeAddedToken:
+    def __init__(self, content):
+        self.content = content
+
+
 class _FakeTokenizer:
-    def __init__(self, chat_template=None):
+    def __init__(self, chat_template=None, vocab=None, added=None):
         self.chat_template = chat_template
+        self._vocab = dict(vocab or {})
+        self.added_tokens_decoder = {self._vocab[c]: _FakeAddedToken(c) for c in (added or [])}
+
+    @property
+    def added_tokens_encoder(self):
+        return {t.content: i for i, t in self.added_tokens_decoder.items()}
+
+    def get_vocab(self):
+        return dict(self._vocab)
+
+    def add_tokens(self, tokens):
+        for token in tokens:
+            self.added_tokens_decoder[self._vocab[token.content]] = token
 
 
 @pytest.fixture
@@ -95,3 +113,27 @@ class TestBorrowChatTemplate:
 
         with pytest.raises(ValueError, match="no chat template either"):
             borrow_chat_template(base, "empty", "base")
+
+
+class TestTemplateMarkerTokens:
+    TEMPLATE = "{% for m in messages %}<|im_start|>{{ m['role'] }}\n{{ m['content'] }}<|im_end|>\n{% endfor %}"
+    VOCAB = {"<|im_start|>": 3, "<|im_end|>": 4, "<extra_id_0>": 5}
+
+    def test_markers_in_the_vocabulary_are_registered_as_added_tokens(self, fake_hub):
+        # EuroLLM-1.7B holds <|im_start|> at id 3 but only the Instruct tokenizer registers it; unregistered it splits into
+        # text pieces, the assistant span is never found and the arm trains on empty targets.
+        fake_hub["instruct"] = _FakeTokenizer(self.TEMPLATE, self.VOCAB, added=list(self.VOCAB))
+        base = _FakeTokenizer(None, self.VOCAB)
+
+        borrow_chat_template(base, "instruct", "base")
+
+        assert set(base.added_tokens_encoder) == {"<|im_start|>", "<|im_end|>"}  # <extra_id_0> is not in the template
+        assert base.get_vocab() == self.VOCAB  # no row added
+
+    def test_a_token_at_another_id_is_left_alone(self, fake_hub):
+        fake_hub["instruct"] = _FakeTokenizer(self.TEMPLATE, self.VOCAB, added=list(self.VOCAB))
+        base = _FakeTokenizer(None, {"<|im_start|>": 9, "<|im_end|>": 4})
+
+        borrow_chat_template(base, "instruct", "base")
+
+        assert set(base.added_tokens_encoder) == {"<|im_end|>"}
