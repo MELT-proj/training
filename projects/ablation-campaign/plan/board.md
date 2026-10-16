@@ -34,6 +34,14 @@ Finding:
 4. **QK-norm on the Conformer.** The one Conformer cell that ran with it trained stably to the end (max `grad_norm` 56, none non-finite). No Whisper Conformer has run with QK-norm, so whether it helps or costs there is untested.
 Action needed: PI / orchestrator: the timeline keeps the Conformer open until its QK-norm behaviour is known (final adapter call 10-23); this is one encoder's worth of that. Nothing is queued for a Whisper Conformer with QK-norm; whether to run one is the PI's call.
 
+## 2026-10-16 (evening) — Claude (worker session, backbones) — Qwen arms timed out at step ~36,900 and are resumed; both Llama arms finished
+Context: scheduled check after the Qwen 26 h limit.
+Finding / proposal:
+1. **Llama-ins and Llama-base finished** (resumes from checkpoint-47730, ~1 h 10 min each); `llama1b-ins` has `model.safetensors` and `checkpoint-52500`. Load test pending.
+2. **Qwen-ins and Qwen-base timed out** at 26 h, step ~36,900 of 52,500 (2.5 s/step), last checkpoint 33,411. Resumed with the `resume_from_checkpoint` workaround (PR #156 not merged), `--time 16:00:00` (19,100 steps x 2.5 s = ~13.3 h plus startup). Ledger rows are in `arms.tsv`.
+3. **EuroLLM-Base** (restart) is at 9 h 12 min and healthy; Instruct took 12 h 06, so it should end inside its 14 h.
+Action needed: PI: merge #156. Worker: score the Llama/EuroLLM-Instruct arms; load-test llama1b-ins.
+
 ## 2026-10-16 (later) — Claude (worker session, backbones) — `campaign.py --resume` is broken on transformers 5 (PR #156); Llama resumes run via a workaround
 Context: the first resumes of the two timed-out Llama arms died after ~80 s.
 Finding / proposal: `--resume` passes `trainer.resume_from_checkpoint True`; `_fix_yaml_bool_leaks` (#77) turned the bool into the string `'yes'` because the field is typed without bool in transformers 5, and `train.py` called `get_last_checkpoint('yes')` (`FileNotFoundError`). Any `--resume` on a clone without the fix fails the same way. Fix: PR #156 (exempts the key; one test). Workaround used: no `--resume`, pass `-- --trainer.resume_from_checkpoint /workspace/outputs/<run dir>` (the parent dir, as `train.py` documents). Resubmitted that way: llama1b-ins and llama1b-base resumed from checkpoint-47730 and running (jobs 47375887/8; the failed pair 47364342/3 are in `arms.tsv`). The Qwen resumes will use the same workaround.
