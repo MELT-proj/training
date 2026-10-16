@@ -1,0 +1,15 @@
+# Apertus 1.5 report, Table 35: "Audio evaluation of the released Apertus 8B and 70B checkpoints against open audio models".
+# Section "Multilingual Speech Recognition (FLEURS, WER, lower is better)"; WER in percent, copied by hand from the table
+# as the PI supplied it (screenshot, 2026-10-16). Parameters row: 8B, 70B, 7B, 7B, 7B.
+# The table does not say which FLEURS split was scored or which text normaliser was used. Its caption says all models decode
+# greedily (Qwen2-Audio with the repetition penalty 1.1 of its generation config) and use each task's output cap.
+# Best per row in the paper (bold): English Kimi-Audio, German and French and Italian Qwen2.5-Omni, Spanish Apertus 70B,
+# Polish Apertus 8B, Ukrainian Apertus 70B.
+language,Apertus-1.5-8B,Apertus-1.5-70B,Qwen2.5-Omni-7B,Qwen2-Audio-7B,Kimi-Audio-7B
+English,15.2,14.1,7.4,8.4,4.4
+German,16.2,17.8,8.3,16.8,23.7
+French,22.2,21.0,10.6,13.8,17.7
+Italian,7.6,7.3,6.8,12.1,13.1
+Spanish,8.7,7.9,8.0,11.5,14.9
+Polish,43.9,44.7,87.1,98.6,65.3
+Ukrainian,34.9,31.4,57.6,99.3,108.2

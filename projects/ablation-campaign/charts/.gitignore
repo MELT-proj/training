@@ -1,0 +1,3 @@
+# the writer lock and the temporary files master.py renames over the master (never commit either)
+.results_master.lock
+.*.tmp-*

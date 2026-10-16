@@ -12,3 +12,12 @@
 # newest-first, so a union merge would interleave two entries into nonsense
 # instead of failing loudly and asking a human.
 projects/ablation-campaign/arms.tsv merge=union
+
+# The master results table (projects/ablation-campaign/charts) is a wide CSV: one row per model, one column per
+# measurement. Git's line merge turns two branches that each add a column into a whole-file conflict, so the
+# repository merges it cell by cell with charts/master.py (install the driver once per clone:
+# `python3 projects/ablation-campaign/charts/master.py install-git-driver`; the setting is shared by every worktree
+# of the clone). Without the driver git falls back to the line merge and `master.py validate` says so.
+projects/ablation-campaign/charts/results_master.csv merge=melt-master
+# Its changelog is append-only, one independent line per write, like arms.tsv above: union is exactly right.
+projects/ablation-campaign/charts/results_changelog.csv merge=union
