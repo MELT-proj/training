@@ -15,6 +15,25 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-16 — Claude (worker session, crossing) — seed-43 replicates scored: a second seed costs the Whisper cells 0.016 each and keeps Conformer 0.007 ahead of MoE; QK-norm makes the w2v-BERT Conformer learn (0.92 to 0.63) and leaves mHuBERT's alone (0.385 to 0.376)
+Context: scoring of the five runs of the 10-14/10-15 batch, on the PI's go of 10-16. Four are scored here; the Whisper QK-norm Conformer is still training, ends tonight, and its score follows. Same metric, sets and eval code as the 16 cells (training `715b426` on `PYTHONPATH`; `melt/` differs from `ad9171c` only in training-only files). Raw output and the ranking regenerated over 20 runs, the 16 old rows unchanged: `selection-metric/scores/crossing-2100-replicates-conformer-qknorm-2026-10-16.txt`.
+Finding:
+1. **Seed spread on Whisper** (second run = same row, seed 43, so the data order differs):
+
+| | seed 42 | seed 43 | change | ID / OOD-train / OOD-related, seed 42 | same, seed 43 |
+|---|---|---|---|---|---|
+| Conformer (1e-3) | 0.1364 | 0.1526 | +0.0162 | .0605 / .0401 / .5037 | .0631 / .0448 / .5714 |
+| MoE (2e-3) | 0.1429 | 0.1596 | +0.0167 | .0610 / .0423 / .5309 | .0623 / .0432 / .6130 |
+
+   Both lose about 0.016, and 0.013-0.016 of it is the OOD-related median (pt, ro, nl, da, sv); ID and OOD-train move by 0.005 CER at most. The order holds on both seeds (Conformer ahead by 0.0065 and by 0.0070), but the seed shift is 2.4 times that gap, and ID alone is a tie on both seeds. The gap sits in OOD-related (0.027 and 0.042 in the Conformer's favour). With the MLP (0.157, one seed) the Whisper adapters and both replicates fall in one band, 0.136-0.160; only the Q-Former (0.177, one seed) is outside it. The trainer's own final eval (its validation sets, mean CER over the five languages) has MoE ahead in-domain: 0.0550 for both MoE seeds against 0.0602 and 0.0616 for the Conformer; the selection sets' ID median has them tied. Both replicates share seed 43 and one rack (point 3), so the seed effect and a run-environment effect cannot be told apart here.
+2. **QK-norm on the other encoders** (adapter LR 2e-3, seed 42, same nodes and steps as the original rows):
+   - mHuBERT: 0.3759 against 0.3847 without; inside the seed spread. Still 0.11 behind its MLP (0.260) and MoE (0.269).
+   - w2v-BERT: 0.6289 against 0.9215. The original ran at 1e-3 and never learned (ID 0.757); with QK-norm at 2e-3 it learns (ID 0.422) but trails the MLP (0.530) and MoE (0.517), mostly on OOD-train (0.618 against 0.41-0.44).
+   - With MMS-1b (0.254, against 0.425 and 0.438), the QK-norm Conformer column wins by 0.17-0.18 on MMS-1b and loses by 0.10-0.12 on mHuBERT and w2v-BERT; Whisper's cell is pending. The Conformer's rank against MLP and MoE depends on the encoder.
+3. **Correction to the 10-15 entry on the replicates' cost and end.** The projection of ~45 h each and ~360 GPU-h was too pessimistic: the pace recovered from 0.85-1.0 it/s to about 1.4 on the same nodes. Both replicates ended on Fri 10-16 (Conformer 35.2 h, 140.7 GPU-h; MoE 36.4 h, 145.5 GPU-h): 286 GPU-h for the pair, against 197 for the originals (25.2 h and 24.2 h). They still took 1.4-1.5 times the originals' wall time at the same topology, and both ran on rack as03r3, which no earlier crossing run used. The QK-norm cells moved less (mHuBERT 17.5 h against 14.1 h for its original, w2v-BERT 20.0 h against 20.7 h, both on 2 nodes, with the QK-norm switch on). So the wall time of one cell varies by up to 1.5 times between submissions, more than the gap between adapters (MLP and MoE take the same time), and a run's SLURM GPU-h is not an architecture cost. The four runs cost 586 GPU-h; the cost-axis table gets them, with the Whisper QK-norm cell, after tonight.
+4. **Holds:** no queued or running job reads `~/training-s43` any more (the replicates ended; their scoring ran from `~/training-qkc`). `~/training-qkc` and `~/eval` stay untouched, and `yodas3-rest/` stays unmerged, until the Whisper QK-norm Conformer has ended and its six scoring jobs have run.
+Action needed: orchestrator: the replicate line in `timeline.md` (~360 GPU-h, ends late Fri or early Sat, scored Sat) is out of date: both ended and were scored on Fri 10-16, 286 GPU-h. The 10-23 adapter call has the replicate pair now; the Whisper QK-norm Conformer is the last input, due tonight and scored a few hours after. PI: nothing.
+
 ## 2026-10-15 — Claude (worker session, crossing) — Whisper size ladder dropped; QK-norm Conformer cells queued for the other three encoders; the replicates cost ~360 GPU-h, not 197; cost axis started
 Context: the PI's instructions in the crossing worker session on 10-15, after the mms1b-conformer score.
 Finding / proposal:
