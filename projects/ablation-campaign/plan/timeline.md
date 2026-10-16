@@ -130,7 +130,10 @@ Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
   `selection-metric-sets` @ fa5a961), and the self-distillation line's
   `~/training-sd-sft`, `~/training-sd24-qwen` @ 07f84c2 and
   `~/training-sd24-eurollm` @ 29247d4, `~/training-sd24-sift` @ 89c4413,
-  and the crossing replicates' `~/training-s43` @ 5912102. Queued jobs bind
+  the crossing replicates' `~/training-s43` @ 5912102, the QK-norm
+  Conformer cells' `~/training-qkc` @ 715b426, and the backbone arms'
+  `~/training-backbones` and `~/training-backbones-eb` @ aa63c11 (until
+  the Qwen resumes end). Queued jobs bind
   their clone when they *start*: no sync, branch switch or edit until their
   jobs end. `~/training` is free.
 - **Seed replicates before 2026-10-13 never changed the data order**: the
@@ -527,7 +530,7 @@ audio stacks, regime fraction.
       encoder, and that assumption is stated in `04-regime.md`.
 
 ### Track B — preparation
-- [ ] **Whisper size ladder prep** (`03` §2b): stage whisper-tiny/-base/
+- [ ] ~~**Whisper size ladder prep**~~ dropped 10-15 (PI). (`03` §2b): stage whisper-tiny/-base/
       -small/-medium in MN5's hf_cache via `mn5transfer`; add tiny and base
       to `plan_arm.py` `ENCODER_WINDOW_FRAMES`; one offline-load `acc_debug`
       smoke per size; render the four rows once the crossing names its
@@ -544,22 +547,31 @@ audio stacks, regime fraction.
 No gate on Sunday: the backbone and regime gates move to Fri 10-23.
 
 ### Track A — GPU
-- [ ] **Score the five QK-norm cells** as each finishes (selection metric,
-      ~1.2 GPU-h a cell; mms1b-conformer ~10-15 evening). Smoke the
-      `qk_norm=true` eval path on one checkpoint first.
+- [x] **Score the five QK-norm cells** (done 10-15): Q-Former whisper 0.177,
+      mhubert 0.423, w2vb 0.827, mms1b 0.912; mms1b-conformer 0.254, the
+      best MMS-1b cell.
+- [ ] **QK-norm Conformer on Whisper, mHuBERT, w2v-BERT** at 2e-3 (PI
+      10-15, so the Conformer column is one recipe). Queued 10-15 from
+      `~/training-qkc` (pre-#154 schedule), ~380-680 GPU-h; scoring 18 jobs
+      with a named go. The Whisper cell feeds the 10-23 adapter call.
 - [x] **Stack call, provisional** (PI, Wed 10-14): Whisper-large-v3 + **MoE**
       (MLP 0.157, MoE 0.143, Conformer at 1e-3 0.136, Q-Former with QK-norm
       0.177). Conformer left open for 10-23. Recorded in `03` §2.
 - [ ] **Seed replicates of the top two Whisper cells** at 2,100 h/lang
-      (~197 GPU-h measured, ~25 h wall each), from a clone at or after
-      `fea165a` so the data order really changes. **Submitted 10-14** (seed
-      43, clone `~/training-s43`, pre-#154 schedule), queued. They give the crossing its
+      from a clone at or after `fea165a` so the data order really changes.
+      **Submitted 10-14** (seed 43, `~/training-s43`, pre-#154 schedule).
+      Running at about half the originals' pace (cause not found): ~45 h
+      each, ~360 GPU-h; end late Fri 10-16 / early Sat 10-17, scored Sat. They give the crossing its
       first real noise floor and settle the adapter on 10-23.
 - [ ] **MA arms for all six backbones** (`02-backbones.md`), carried from
       week 4: 700 h/lang on Whisper + the provisional adapter, all six in the
       queue at once on Thu 10-15. The `llama1b-ins` arm is also the recipe
       confirmation (week 3) and the regime study's base MA checkpoint.
       *Outcome:* MA-stage WER per backbone, in-domain and FLEURS-24.
+      **Submitted 10-15** (Whisper + MoE, `~/training-backbones`). 10-16:
+      both Llama arms timed out 360 steps short, resumes queued; EuroLLM-Base
+      restarted after a tokenizer fix (#155); Qwen (~2.5 s/step) needs a
+      ~11 h resume each; EuroLLM-Instruct done.
 - [ ] **Regime MA checkpoints** (`04-regime.md` §3), the three the backbone
       arm does not give: ASR+ST at 700 h/lang and at 2,100 h/lang (new), and
       ASR at 2,100 h/lang (the crossing cell with the provisional adapter,
@@ -573,7 +585,7 @@ No gate on Sunday: the backbone and regime gates move to Fri 10-23.
       If the queue will not turn six backbone IFTs around by 10-22, IFT the
       three leading backbones on the MA-stage signal first; never shorten
       the runs.
-- [ ] **Whisper size ladder** (`03-audio-stack.md` §2b), tiny/base/small/
+- [ ] ~~**Whisper size ladder**~~ dropped 10-15 (PI: not essential now, frees < ~750 GPU-h). (`03-audio-stack.md` §2b), tiny/base/small/
       medium with the provisional adapter, on the crossing recipe, one seed
       each (< ~750 GPU-h). Last in priority this week; submit Fri 10-16 if
       its prep is done. If it lands by 10-29 it can still inform Fondue's
@@ -588,7 +600,7 @@ No gate on Sunday: the backbone and regime gates move to Fri 10-23.
       the ladder renders and the Fondue/raclette drafts (by 10-23).
 - [ ] **MA config on ASR+ST** for the regime study's factor C, at 700 and
       2,100 h/lang. Needed Thu 10-15.
-- [ ] **Whisper size ladder prep**, carried from week 4: stage whisper-tiny/
+- [ ] ~~**Whisper size ladder prep**~~ dropped 10-15. Carried from week 4: stage whisper-tiny/
       -base/-small/-medium on MN5 via `mn5transfer`; add tiny and base to
       `plan_arm.py` `ENCODER_WINDOW_FRAMES`; one offline-load smoke per size.
 - [ ] **Evaluation on artemis works with current code**: melt-eval generation
@@ -604,7 +616,8 @@ No gate on Sunday: the backbone and regime gates move to Fri 10-23.
 ## Week 6 — Mon 2026-10-19 to Sun 2026-10-25
 
 **Gate (Fri 10-23): backbone, regime and final adapter.** Criteria in
-`02-backbones.md` §4 and `04-regime.md` §4; the adapter on the replicate pair.
+`02-backbones.md` §4 and `04-regime.md` §4; the adapter on the replicate pair
+plus the Whisper QK-norm Conformer cell.
 
 ### Track A — GPU
 - [ ] Remaining backbone and regime IFTs in the queue by Mon 10-19.
@@ -633,7 +646,10 @@ No gate on Sunday: the backbone and regime gates move to Fri 10-23.
       distribution, startup time, exposure audit, host-RAM trace. A failure
       here moves the MA freeze.
 - [ ] **MA throughput at 8 vs 16 nodes** on the Fondue MA config (short
-      runs). If flat, Fondue's MA runs on 16 nodes.
+      runs). If flat, Fondue's MA runs on 16 nodes. Prior from the crossing
+      (board 10-15): no wall-time gain from 1->2 or 2->4 nodes, but with a
+      different adapter per node count, so not a clean test; something
+      shared (data path suspected) may set the pace.
 - [ ] **Resume chain tested on a short 2-node run from a checkpoint**
       (`--dependency=afterany`): also the first real test of `b37823b`.
       Needed before Raclette (10-27).

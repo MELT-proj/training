@@ -230,6 +230,9 @@ interaction is assumed small and is stated as an assumption.
 
 ## 2b. Whisper size ladder (PI, 2026-10-01)
 
+**Dropped (PI, 2026-10-15):** not essential now; time and compute go to
+the backbone and regime studies. Design kept below for reference.
+
 Whisper-large-v3 is the leading encoder, and it encodes a full 30 s window
 (1,500 positions) per utterance whatever the length. A rough count puts
 its encoder forward pass at about 1.9 TFLOP per utterance, against about
