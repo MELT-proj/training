@@ -111,7 +111,10 @@ def resolve(row: dict, defaults: dict, arms: list[dict]) -> tuple[ArmAxes, dict]
     # moment a second stage-1 arm exists.
     init_from = merged.get("init_from")
     init_path = None
-    if init_from:
+    if init_from and init_from.startswith("/workspace/outputs/"):
+        # A staged checkpoint (an MA run that left no final weights): the path is taken as is.
+        init_path = init_from
+    elif init_from:
         parent = next((a for a in arms if a["id"] == init_from), None)
         if parent is None:
             die(

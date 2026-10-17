@@ -24,12 +24,12 @@
 # the hours printed beside each source are the hours a run draws. This replaces
 # ABL-IFT-700.yaml, whose hour-share weights over- and under-draw by source.
 #
-# THE STAGE SPLIT: encoder AND adapter are frozen, the DECODER is trained.
+# THE STAGE SPLIT: the encoder is frozen; the DECODER (2e-5) and the ADAPTER (2e-4) train.
 #
 # Hand-applied on top of the render:
 #
 #   1. Encoder block: Whisper-large-v3 (window 3000 frames), spec-augment
-#      pinned off as in the MA config. Adapter: moe, frozen. Both are inert
+#      pinned off as in the MA config. Adapter: moe, trained at 2e-4. Both are inert
 #      under model.ckpt (the architecture is read from the checkpoint) but kept
 #      right in case the config is run without it.
 #   2. Decoder block (Llama defaults; each row overrides decoder, tokens and
@@ -79,7 +79,7 @@ model:
     # to sdpa costs ~12x on generation (#86).
     name: meta-llama/Llama-3.2-1B-Instruct
     attn_implementation: flash_attention_2
-    # THE stage-2 switch: the decoder trains here, the adapter does not.
+    # THE stage-2 switch: the decoder trains here (and the adapter at a lower LR).
     freeze: false
     eos_token: <|eot_id|>
     pad_token: <|finetune_right_pad_id|>
@@ -88,8 +88,9 @@ model:
     audio_eos_token: <|audio_eos|>
 
   adapter:
-    # Frozen here: stage 1 trained it, stage 2 tunes the decoder on top.
-    freeze: true
+    # Trained here at a tenth of its stage-1 LR (adapter_lr below), so the
+    # audio side can adapt a little without losing what stage 1 learned.
+    freeze: false
     # What the stage-1 checkpoints were trained with. Inert while model.ckpt is
     # set (the architecture is read from the checkpoint).
     _type: moe
@@ -442,7 +443,7 @@ data:
     # filtering them differently would make a stage-to-stage comparison partly
     # about which cuts each one was allowed to see.
     #
-    # Safe for the frozen adapter and encoder: stage 1 trained and ran at this
+    # Safe for the frozen encoder and the adapter: stage 1 trained and ran at this
     # cap (Whisper works in 30 s windows).
     # Safe for memory: the decoder runs flash_attention_2, whose footprint is
     # linear in sequence length, so a single 60 s cut costs ~2x a 30 s cut in
@@ -723,10 +724,10 @@ trainer:
 
   # LR schedule
   lr_scheduler_type: cosine
-  # 20 steps of a ~6300-step run. Inherited from the campaign recipe rather
-  # than tuned for this stage; it is short for a run that unfreezes 1.24 B
-  # parameters, so watch the first ~50 logged losses for a spike.
-  warmup_steps: 20
+  # 5% of the 6,310-step budget (PI, 2026-10-17): 316 steps, since this stage
+  # moves 1.2-2 B decoder parameters. warmup_steps, not a ratio, because the
+  # recipe states steps and every row shares max_steps.
+  warmup_steps: 316
 
   # Duration
   # Stated per row as max_steps in campaign.yaml (6,310 for every backbone arm):
@@ -791,7 +792,7 @@ optimization:
   adam_beta1: 0.9
   adam_beta2: 0.95
   # encoder_lr: 6e-6 # Not used since it's frozen
-  # adapter_lr: 2e-4 # Not used since it's frozen
-  # The only learning rate that does anything in this stage.
+  # A tenth of stage 1's 2e-3 (PI, 2026-10-17).
+  adapter_lr: 2e-4
   decoder_lr: 2e-5
   min_lr_scale: 0.1

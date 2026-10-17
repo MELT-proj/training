@@ -1494,12 +1494,12 @@ arms:
     checkpoint_count: 7
     time: "46:00:00"         # ~36 h at 20 s/step incl. evals
 
-  # EuroLLM-Base: the MA run has no final weights (timed out at checkpoint-47730) and init_from can only name a run
-  # directory, which holds no weights, so this row cannot start as it stands.
+  # EuroLLM-Base: the MA run timed out with no final weights. init_from is the staging directory of checkpoint-47730
+  # (relative symlinks to its weights and config, plus the rebuilt base tokenizer and the processor config).
   - id: IFT-700-backbone-eurollm-base
     stage: IFT
     config: ABL-IFT-700-backbone.yaml
-    init_from: MA-700-backbone-eurollm1.7b-base
+    init_from: /workspace/outputs/MA-700-backbone-eurollm-base-ckpt47730
     decoder: utter-project/EuroLLM-1.7B
     encoder: openai/whisper-large-v3
     adapter: moe
