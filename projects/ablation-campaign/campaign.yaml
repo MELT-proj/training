@@ -1399,3 +1399,116 @@ arms:
     seed: 42
     max_steps: 52500
     time: "14:00:00"
+
+  # Backbone study, stage 2 (plan/02-backbones.md): each MA-700-backbone-* arm continued with the decoder trained
+  # (encoder and adapter frozen), ASR + ST at 700 h/lang (ABL-IFT-700-backbone.yaml: per-cut weights, fixed prompt per
+  # task, master_dtype float32, seed 1337). Same for all six: 4,800 audio-s per step, cosine at decoder LR 2e-5 ending at
+  # 0.1x (min_lr_scale), 20 warmup steps, max_steps 6,310 = 1.25 x the estimate of 5,048 (the MA fill rule; ~7,200 h drawn
+  # at 86% fill). The old IFT-700-* rows (w2v-BERT + MLP, hour-share weights) are superseded and untouched.
+  # Batching follows the earlier IFT rows: Llama and EuroLLM at the MA micro-batch (75 s, 16 accumulations, 1 node);
+  # Qwen as IFT-700-qwen35-2b-ins ran (30 s x 20, 2 nodes, checkpointing on; 27.3 s/step measured there).
+  # Unmeasured at this stack: Llama/EuroLLM s/step (17 / 20 assumed) and peak memory. A resume costs the work since the
+  # last checkpoint (~900 steps: 4 h Llama, 5 h EuroLLM, 7 h Qwen) plus ~20 min of startup.
+  - id: IFT-700-backbone-llama1b-ins
+    stage: IFT
+    config: ABL-IFT-700-backbone.yaml
+    init_from: MA-700-backbone-llama1b-ins
+    decoder: meta-llama/Llama-3.2-1B-Instruct
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    batch_duration: 75
+    grad_accum_steps: 16     # 75 x 16 x 4 = 4,800 s
+    gradient_checkpointing: false
+    nodes: 1
+    seed: 1337
+    max_steps: 6310
+    checkpoint_count: 7
+    time: "40:00:00"         # ~31 h at 17 s/step incl. evals
+
+  - id: IFT-700-backbone-llama1b-base
+    stage: IFT
+    config: ABL-IFT-700-backbone.yaml
+    init_from: MA-700-backbone-llama1b-base
+    decoder: meta-llama/Llama-3.2-1B
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    batch_duration: 75
+    grad_accum_steps: 16
+    gradient_checkpointing: false
+    nodes: 1
+    seed: 1337
+    max_steps: 6310
+    checkpoint_count: 7
+    time: "40:00:00"
+
+  - id: IFT-700-backbone-qwen35-2b-ins
+    stage: IFT
+    config: ABL-IFT-700-backbone.yaml
+    init_from: MA-700-backbone-qwen35-2b-ins
+    decoder: Qwen/Qwen3.5-2B
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    batch_duration: 30
+    grad_accum_steps: 20     # 30 x 20 x 8 = 4,800 s
+    gradient_checkpointing: true   # false OOM'd at step 1 in full-decoder DDP
+    nodes: 2                 # one node would need ~100 h, over the 72 h cap
+    seed: 1337
+    max_steps: 6310
+    checkpoint_count: 7
+    time: "66:00:00"         # ~53 h at 30 s/step incl. evals
+
+  - id: IFT-700-backbone-qwen35-2b-base
+    stage: IFT
+    config: ABL-IFT-700-backbone.yaml
+    init_from: MA-700-backbone-qwen35-2b-base
+    decoder: Qwen/Qwen3.5-2B-Base
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    batch_duration: 30
+    grad_accum_steps: 20
+    gradient_checkpointing: true
+    nodes: 2
+    seed: 1337
+    max_steps: 6310
+    checkpoint_count: 7
+    time: "66:00:00"
+
+  - id: IFT-700-backbone-eurollm-ins
+    stage: IFT
+    config: ABL-IFT-700-backbone.yaml
+    init_from: MA-700-backbone-eurollm1.7b-ins
+    decoder: utter-project/EuroLLM-1.7B-Instruct
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    batch_duration: 75
+    grad_accum_steps: 16
+    gradient_checkpointing: false
+    nodes: 1
+    seed: 1337
+    max_steps: 6310
+    checkpoint_count: 7
+    time: "46:00:00"         # ~36 h at 20 s/step incl. evals
+
+  # EuroLLM-Base: the MA run has no final weights (timed out at checkpoint-47730) and init_from can only name a run
+  # directory, which holds no weights, so this row cannot start as it stands.
+  - id: IFT-700-backbone-eurollm-base
+    stage: IFT
+    config: ABL-IFT-700-backbone.yaml
+    init_from: MA-700-backbone-eurollm1.7b-base
+    decoder: utter-project/EuroLLM-1.7B
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    batch_duration: 75
+    grad_accum_steps: 16
+    gradient_checkpointing: false
+    nodes: 1
+    seed: 1337
+    max_steps: 6310
+    checkpoint_count: 7
+    time: "46:00:00"
