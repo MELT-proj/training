@@ -4147,3 +4147,14 @@ catastrophic) but it does overturn "audio was ignored" as the explanation,
 which changes what a passing LibriSpeech screen run should look like (a run
 that only drops eval loss without moving WER may be repeating this same
 coarse-signal pattern rather than fixing the recipe).
+
+## 2026-10-17 — Llama IFT smoke passed (30 steps, 1 node, acc_debug)
+
+IFT-smoke-llama1b-ins (from `~/training-ift` @ d0c8151) COMPLETED in ~35 min.
+- Trainable: 1,357,520,897 params, all fp32 (Llama decoder 1.24B + adapter 121M; encoder frozen).
+- LR: adapter group at 1.52e-5 at step 24, i.e. 2e-4 × 24/316 — the 316-step warmup and the 2e-4 adapter LR are in effect.
+- Memory: gpu_peak 40 GB of 64 (bd 75, ga 16 as in the row); the preallocation warm-up printed a spurious min-duration OOM warning, training was unaffected.
+- Speed: ~17–23 s/step after the first steps (the first 5 were 80–120 s: container/data start-up). The 40 h row limit (6,310 × ~20 s ≈ 35 h) holds.
+- Checkpoint: model.safetensors 7.5 GB, optimizer.pt 11 GB (×save_total_limit 7 ⇒ budget ~130 GB per run).
+- Eval at step 15 ran (en/de/fr WER ~0.11 — start-of-IFT, as expected from the MA weights).
+Not yet measured: Qwen (2 nodes, bd 30) and EuroLLM from the staged checkpoint. Real IFT runs wait for the PI's go.
