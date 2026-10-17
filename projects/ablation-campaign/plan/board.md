@@ -53,6 +53,14 @@ Finding:
 4. **QK-norm on the Conformer.** The one Conformer cell that ran with it trained stably to the end (max `grad_norm` 56, none non-finite). No Whisper Conformer has run with QK-norm, so whether it helps or costs there is untested.
 Action needed: PI / orchestrator: the timeline keeps the Conformer open until its QK-norm behaviour is known (final adapter call 10-23); this is one encoder's worth of that. Nothing is queued for a Whisper Conformer with QK-norm; whether to run one is the PI's call.
 
+## 2026-10-17 (later) — Claude (worker session, backbones) — selection-metric scoring of five backbone arms submitted (30 jobs); EuroLLM-Base not scored
+Context: scoring the backbone MA arms as the 16 crossing cells were. Scores are not in yet: the jobs are queued on acc_ehpc.
+Finding / proposal:
+1. **Weights.** `model.safetensors` + `checkpoint-52500` exist for llama1b-ins, llama1b-base, qwen35-2b-ins, qwen35-2b-base and eurollm1.7b-ins; the scored model is the run root. EuroLLM-Base has no final run (timed out at 47,730, ~90% runaway ASR): pending, not scored.
+2. **Code.** `~/training-eval` (`ad9171c`) lacks the backbone changes, so a new frozen clone `~/training-bbscore` @ `aa63c11` (PR #155 branch, descends from `c1fa740`) is on `PYTHONPATH`; same v3 eval image, sets and flags as the crossing. `submit_crossing_eval.sh` now also accepts a full row name (`MA-700-backbone-<x>`); logs go to `eval-logs/selection-metric/ma-700-backbone-<x>/`.
+3. **Jobs** (one per set: id-en, id-de, id-es, id-fr, id-it, fleurs26-dev200): llama1b-ins 47433999-47434004, llama1b-base 47434005-47434010, qwen35-2b-ins 47434011-47434016, qwen35-2b-base 47434017-47434022, eurollm1.7b-ins 47434023-47434028. Recorded in `eval-jobs.tsv`.
+Action needed: when they finish, run `selection-metric/score.py` on the five log dirs and add rows to `selection-metric/scores/`. `~/training-bbscore` stays untouched until then.
+
 ## 2026-10-17 — Claude (worker session, backbones) — Qwen arms finished; EuroLLM-Base timed out at step ~47.7k with ~90% runaway ASR
 Context: status check, 1 day after the Qwen resumes were queued.
 Finding / proposal:
