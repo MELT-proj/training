@@ -70,7 +70,9 @@ echo "code: $CODE @ $CODE_SHA | image: $(readlink -f "$SIF") | qos: $QOS | time:
 cd "$EVAL"; mkdir -p logs
 QUEUED=$(squeue -u "$USER" -h -o %j)
 for CELL in "${CELLS[@]}"; do
-  PLAN=$(python3 "$CODE/projects/ablation-campaign/campaign.py" run "MA-2100-crossing-$CELL" --dry-run)
+  # A full row name (MA-700-backbone-llama1b-ins, ...) is used as given; a bare suffix means a crossing row.
+  ROW=$CELL; [[ $CELL == MA-* ]] || ROW=MA-2100-crossing-$CELL
+  PLAN=$(python3 "$CODE/projects/ablation-campaign/campaign.py" run "$ROW" --dry-run)
   EXP=$(grep -o -- '--run.exp_name [^ ]*' <<<"$PLAN" | cut -d' ' -f2)
   MAXSTEPS=$(grep -o -- '--trainer.max_steps [0-9]*' <<<"$PLAN" | cut -d' ' -f2)
   CKPT=$OUTPUTS/$EXP
@@ -78,7 +80,7 @@ for CELL in "${CELLS[@]}"; do
   if [[ ! -d $CKPT/checkpoint-$MAXSTEPS || ! -f $CKPT/processor_config.json ]]; then
     echo "SKIP $CELL: not finished (no checkpoint-$MAXSTEPS / processor_config.json in $CKPT)"; continue
   fi
-  ARM=ma2100-$CELL
+  ARM=ma2100-$CELL; [[ $CELL == MA-* ]] && ARM=${CELL,,}
   echo "== $CELL -> $EXP (final step $MAXSTEPS)"
   for S in $USE_SETS; do
     OUT=$LOGS/$ARM/$S
