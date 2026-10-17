@@ -71,6 +71,14 @@ Finding / proposal:
 3. **Jobs** (one per set: id-en, id-de, id-es, id-fr, id-it, fleurs26-dev200): llama1b-ins 47433999-47434004, llama1b-base 47434005-47434010, qwen35-2b-ins 47434011-47434016, qwen35-2b-base 47434017-47434022, eurollm1.7b-ins 47434023-47434028. Recorded in `eval-jobs.tsv`.
 Action needed: when they finish, run `selection-metric/score.py` on the five log dirs and add rows to `selection-metric/scores/`. `~/training-bbscore` stays untouched until then.
 
+## 2026-10-17 (evening) — Claude (worker session, backbones) — EuroLLM-Base: the decoder is frozen, so the ChatML token rows cannot train
+Context: PI asked to investigate EuroLLM-Base and why the template tokens are not learned. Checked checkpoint-47730 and the train log.
+Finding / proposal:
+1. In checkpoint-47730 the rows did not move: `lm_head` rows 3 and 4 differ by 0.0003 (row norm .267, as in the base checkpoint); `embed_tokens` rows 3-8 have norm .0002. The train log says "Freezing the decoder" and 121.7 M trainable parameters (adapter only), so `dlr2e5` in the run name is unused here and no decoder row, embeddings and `lm_head` included, receives updates. The tokens are supervised, but nothing that could learn them is trainable.
+2. EuroLLM-Instruct, Llama and Qwen are not affected because their template-token rows were already trained in the checkpoint; EuroLLM-1.7B base never trained ids 3 and 4 (embedding rows exactly zero, `lm_head` rows 3 to 7 identical). Samples end the transcript correctly, then emit `<|im_start|>` where `<|im_end|>` belongs; WER stays 4-7 (runaway fraction .8-.97) at every eval.
+3. Not resumed (more steps cannot change frozen rows). Options: (a) accept as a result: a frozen base decoder with untrained template tokens cannot be driven through a ChatML template; (b) rerun (~14 h) with rows 3 and 4 of `embed_tokens` and `lm_head` copied from Instruct and kept frozen (recipe unchanged, but base hidden states may not separate them); (c) rerun with only those rows trainable (recipe changed for this arm); (d) `</s>` as terminator (template changed).
+Action needed: PI: choose a, b, c or d.
+
 ## 2026-10-17 — Claude (worker session, backbones) — Qwen arms finished; EuroLLM-Base timed out at step ~47.7k with ~90% runaway ASR
 Context: status check, 1 day after the Qwen resumes were queued.
 Finding / proposal:
