@@ -48,3 +48,13 @@ def test_real_bool_fields_are_left_untouched(tmp_path):
 
     assert result["bf16"] is True
     assert result["do_train"] is False
+
+
+def test_resume_from_checkpoint_true_is_not_turned_into_yes(tmp_path):
+    # campaign.py --resume passes `True`; train.py scans output_dir for it. Turned into the string "yes" it listed a
+    # directory of that name and the resume died (backbone Llama arms, 2026-10-16).
+    cfg = get_default_config()
+    cli_cfg = OmegaConf.from_dotlist(["trainer.resume_from_checkpoint=True", f"trainer.output_dir={tmp_path}"])
+    cfg = OmegaConf.merge(cfg, cli_cfg)
+
+    assert trainer_args_dict(cfg)["resume_from_checkpoint"] is True
