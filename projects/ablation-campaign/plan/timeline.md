@@ -121,8 +121,8 @@ Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
   five QK-norm cells stable end to end). 15 scored, mms1b-conformer scoring
   submitted. The seed-43 replicates of whisper-conformer and whisper-moe
   read the same 2,100 h data, so until **they** end (resumes included):
-  - **Don't merge `yodas3-rest/`** into `yodas3/<lang>/train`; a resume would
-    list different shards. de, fr and it copies are complete; es restarted
+  - ~~Don't merge `yodas3-rest/`~~ hold lifted 10-17: no crossing job reads
+    it (the backbone arms use no yodas3). The merge itself is on the PI's word. de, fr and it copies are complete; es restarted
     10-10. Verify all four against nyx before the merge.
 - **Frozen clones on MN5:** `~/training-crossing` @ e6cc269,
   `~/training-lr1e3` @ 55e3a6a, `~/training-qf1e3` @ ecccf89,
@@ -550,18 +550,19 @@ No gate on Sunday: the backbone and regime gates move to Fri 10-23.
 - [x] **Score the five QK-norm cells** (done 10-15): Q-Former whisper 0.177,
       mhubert 0.423, w2vb 0.827, mms1b 0.912; mms1b-conformer 0.254, the
       best MMS-1b cell.
-- [ ] **QK-norm Conformer on Whisper, mHuBERT, w2v-BERT** at 2e-3 (PI
-      10-15, so the Conformer column is one recipe). Queued 10-15 from
-      `~/training-qkc` (pre-#154 schedule), ~380-680 GPU-h; scoring 18 jobs
-      with a named go. The Whisper cell feeds the 10-23 adapter call.
+- [x] **QK-norm Conformer on Whisper, mHuBERT, w2v-BERT** at 2e-3 (PI
+      10-15), done and scored 10-17: Whisper 0.151, mHuBERT 0.376 (0.385
+      without), w2v-BERT 0.629 (0.922 without); all four QK-norm Conformers
+      trained clean. Its rank against MLP/MoE flips with the encoder.
 - [x] **Stack call, provisional** (PI, Wed 10-14): Whisper-large-v3 + **MoE**
       (MLP 0.157, MoE 0.143, Conformer at 1e-3 0.136, Q-Former with QK-norm
       0.177). Conformer left open for 10-23. Recorded in `03` §2.
 - [ ] **Seed replicates of the top two Whisper cells** at 2,100 h/lang
       from a clone at or after `fea165a` so the data order really changes.
-      **Submitted 10-14** (seed 43, `~/training-s43`, pre-#154 schedule).
-      Running at about half the originals' pace (cause not found): ~45 h
-      each, ~360 GPU-h; end late Fri 10-16 / early Sat 10-17, scored Sat. They give the crossing its
+      Done and scored Fri 10-16 (seed 43, pre-#154 schedule): Conformer
+      0.1526 (seed 42: 0.1364), MoE 0.1596 (0.1429); 286 GPU-h for the pair.
+      A second seed costs both ~0.016 and keeps Conformer 0.007 ahead, so on
+      Whisper the metric does not separate Conformer, MoE and MLP. They give the crossing its
       first real noise floor and settle the adapter on 10-23.
 - [ ] **MA arms for all six backbones** (`02-backbones.md`), carried from
       week 4: 700 h/lang on Whisper + the provisional adapter, all six in the
@@ -571,7 +572,10 @@ No gate on Sunday: the backbone and regime gates move to Fri 10-23.
       **Submitted 10-15** (Whisper + MoE, `~/training-backbones`). 10-16:
       both Llama arms timed out 360 steps short, resumes queued; EuroLLM-Base
       restarted after a tokenizer fix (#155); Qwen (~2.5 s/step) needs a
-      ~11 h resume each; EuroLLM-Instruct done.
+      ~11 h resume each; EuroLLM-Instruct done. 10-17: five arms finished
+      and their scoring is submitted; **EuroLLM-Base timed out at 47.7k with
+      ~90% runaway generations, cause not found** (PI: diagnose first or
+      resume as is).
 - [ ] **Regime MA checkpoints** (`04-regime.md` §3), the three the backbone
       arm does not give: ASR+ST at 700 h/lang and at 2,100 h/lang (new), and
       ASR at 2,100 h/lang (the crossing cell with the provisional adapter,
