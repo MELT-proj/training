@@ -53,6 +53,13 @@ Finding:
 4. **QK-norm on the Conformer.** The one Conformer cell that ran with it trained stably to the end (max `grad_norm` 56, none non-finite). No Whisper Conformer has run with QK-norm, so whether it helps or costs there is untested.
 Action needed: PI / orchestrator: the timeline keeps the Conformer open until its QK-norm behaviour is known (final adapter call 10-23); this is one encoder's worth of that. Nothing is queued for a Whisper Conformer with QK-norm; whether to run one is the PI's call.
 
+## 2026-10-17 — Claude (worker session, backbones) — Qwen arms finished; EuroLLM-Base timed out at step ~47.7k with ~90% runaway ASR
+Context: status check, 1 day after the Qwen resumes were queued.
+Finding / proposal:
+1. **Qwen-ins and Qwen-base finished** (resumes ran 14 h 07 min of 16 h). Final in-run eval: Qwen-ins WER en .098, de .102, fr .097, es .068, it .119; no runaways. Qwen-base is in the same range (fr .096, es .072, it .122).
+2. **EuroLLM-Base (47364690) TIMED OUT at 14:00:22**, last checkpoint 47,730. Its in-run evals are broken at every step: runaway fraction .8-.97 on all five languages, WER 4-7, eval loss ~.83 (Qwen: .17-.27). PR #155 got the template tokens registered, but the arm still does not stop generating. Cause not yet found; I have not resumed it, because ~1 h of 4 H100 would finish a run whose ASR is unusable.
+Action needed: PI: say whether to diagnose EuroLLM-Base first (my proposal: check EOS/`<|im_end|>` in the base generation config and the label mask on a few batches on artemis) or resume as is. Also merge #156.
+
 ## 2026-10-16 (evening) — Claude (worker session, backbones) — Qwen arms timed out at step ~36,900 and are resumed; both Llama arms finished
 Context: scheduled check after the Qwen 26 h limit.
 Finding / proposal:
