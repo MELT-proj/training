@@ -4158,3 +4158,11 @@ IFT-smoke-llama1b-ins (from `~/training-ift` @ d0c8151) COMPLETED in ~35 min.
 - Checkpoint: model.safetensors 7.5 GB, optimizer.pt 11 GB (×save_total_limit 7 ⇒ budget ~130 GB per run).
 - Eval at step 15 ran (en/de/fr WER ~0.11 — start-of-IFT, as expected from the MA weights).
 Not yet measured: Qwen (2 nodes, bd 30) and EuroLLM from the staged checkpoint. Real IFT runs wait for the PI's go.
+
+## 2026-10-18 — Six backbone IFT runs submitted (PI go)
+
+Rows from `~/training-ift` @ d0c8151 (adapter 2e-4, decoder 2e-5, 316-step warmup, 6,310 steps, `arms.tsv` has the job ids).
+- Running: llama1b-base, llama1b-ins (~2,900/6,310 at ~18 s/step), eurollm-ins (~2,160, 19 s/step), eurollm-base (resubmitted, ~660, 18 s/step).
+- Pending (2 nodes each, Priority): qwen35-2b-ins, qwen35-2b-base. Qwen smoke on acc_debug passed: 50 GB peak, ~32-35 s/step ⇒ ~58 h of the 66 h limit.
+- EuroLLM-Base first submit died at startup: the staged `tokenizer_config.json` lacked pad/audio token attributes (the audio tokens were in the vocab). Patched to mirror the Instruct tokenizer; the resubmit is training.
+- Still open: whether IFT repairs EuroLLM-Base's ChatML rows (first eval at step 902).
