@@ -293,6 +293,61 @@ lever that moves along the x-axis.
 
 ## 5. Results
 
-| encoder | adapter | rate | MA-stage CER (5-lang) | FLEURS-24 CER | GPU-h / 1K h | notes |
-|---|---|---|---|---|---|---|
-| | | | | | | |
+| encoder | adapter | rate | ID CER | OOD-train CER | OOD-related CER | score | GPU-h / 1K h | notes |
+|---|---|---|---|---|---|---|---|---|
+| w2v-BERT 2.0 | MLP | 10 Hz | 0.3912 | 0.4352 | 1.0000 | 0.5303 | 11.0 | LR 2e-3 |
+| w2v-BERT 2.0 | Conformer | 10 Hz | 0.7566 | 1.0000 | 1.0000 | 0.9215 | 15.9 | LR 1e-3; at 2e-3 it diverged |
+| w2v-BERT 2.0 | Conformer, QK-norm | 10 Hz | 0.4221 | 0.6184 | 1.0000 | 0.6289 | 15.3 | QK-norm, LR 2e-3 |
+| w2v-BERT 2.0 | MoE | 10 Hz | 0.3808 | 0.4139 | 1.0000 | 0.5166 | 11.0 | LR 2e-3 |
+| w2v-BERT 2.0 | Q-Former | 10 Hz | 0.6681 | 0.8635 | 1.0000 | 0.8269 | 20.6 | QK-norm, LR 2e-3 |
+| MMS-1b | MLP | 10 Hz | 0.2491 | 0.3348 | 0.9426 | 0.4248 | 9.3 | LR 2e-3 |
+| MMS-1b | Conformer | 10 Hz | 0.1130 | 0.0934 | 0.8893 | 0.2538 | 15.8 | QK-norm, LR 2e-3; without it, 2e-3 and 1e-3 both diverged |
+| MMS-1b | MoE | 10 Hz | 0.3008 | 0.3320 | 0.9339 | 0.4384 | 9.3 | LR 2e-3 |
+| MMS-1b | Q-Former | 10 Hz | 0.7860 | 0.9608 | 1.0000 | 0.9120 | 18.4 | QK-norm, LR 2e-3 |
+| Whisper-large-v3 | MLP | 10 Hz | 0.0651 | 0.0392 | 0.6051 | 0.1571 | 9.3 | LR 2e-3 |
+| Whisper-large-v3 | Conformer | 10 Hz | 0.0605 | 0.0401 | 0.5037 | 0.1364 | 9.7 | LR 1e-3 |
+| Whisper-large-v3 | Conformer, seed 43 | 10 Hz | 0.0631 | 0.0448 | 0.5714 | 0.1526 | 13.5 | LR 1e-3; second run of the row above, +0.016 on it |
+| Whisper-large-v3 | Conformer, QK-norm | 10 Hz | 0.0649 | 0.0445 | 0.5618 | 0.1512 | 12.1 | QK-norm, LR 2e-3 |
+| Whisper-large-v3 | MoE | 10 Hz | 0.0610 | 0.0423 | 0.5309 | 0.1429 | 9.3 | LR 2e-3 |
+| Whisper-large-v3 | MoE, seed 43 | 10 Hz | 0.0623 | 0.0432 | 0.6130 | 0.1596 | 14.0 | LR 2e-3; second run of the row above, +0.017 on it |
+| Whisper-large-v3 | Q-Former | 10 Hz | 0.0778 | 0.0454 | 0.6686 | 0.1765 | 18.4 | QK-norm, LR 2e-3 |
+| mHuBERT-147 | MLP | 10 Hz | 0.1713 | 0.1544 | 0.6697 | 0.2596 | 8.9 | LR 2e-3 |
+| mHuBERT-147 | Conformer | 10 Hz | 0.2294 | 0.2422 | 1.0000 | 0.3847 | 10.8 | LR 2e-3, no QK-norm |
+| mHuBERT-147 | Conformer, QK-norm | 10 Hz | 0.2222 | 0.2288 | 1.0000 | 0.3759 | 13.4 | QK-norm, LR 2e-3 |
+| mHuBERT-147 | MoE | 10 Hz | 0.1598 | 0.1298 | 0.8009 | 0.2694 | 11.4 | LR 2e-3 |
+| mHuBERT-147 | Q-Former | 10 Hz | 0.2952 | 0.2772 | 1.0000 | 0.4229 | 21.6 | QK-norm, LR 2e-3 |
+
+Lower is better. Each row is one MA-stage run on Llama-3.2-1B-Instruct, ASR
+only, at 10 Hz, on 2,100 h per language (10,410-10,440 h of audio per run).
+The three CER columns are the selection metric's group medians
+(`selection-metric/README.md`): corpus CER clipped at 1.0 per language,
+median over en/de/es/fr/it on the held-out sets of the corpora trained on
+(ID, 600 utterances per language), over the same five languages on FLEURS
+dev (OOD-train, 200 per language) and over pt/ro/nl/da/sv on FLEURS dev
+(OOD-related, zero-shot, 200 per language; nl has 171). 1.0000 is the clip.
+The score is (1.0 · ID + 1.5 · OOD-train + 0.6 · OOD-related) / 3.1. These
+columns replace the earlier "MA-stage CER" and "FLEURS-24 CER": the crossing
+was scored on this metric, so there is no FLEURS-24 mean and no
+high/low-resource split. The other 16 FLEURS languages (OOD-latin,
+OOD-script) are reported but not scored; their median is 1.0000 for every
+run except mhubert-mlp's OOD-latin (0.9513).
+
+The cells did not all train at the recipe LR (§1b, amended 2026-10-09 and
+2026-10-14), so each row's note gives its LR and whether QK-norm was on. The
+Q-Former cells and mms1b-conformer ran with QK-norm because they diverged
+without it; the three "Conformer, QK-norm" rows are the whisper, w2v-BERT
+and mHuBERT Conformer cells run again with it. The two "seed 43" rows repeat
+the whisper Conformer and MoE cells with `seed: 43`; they are the only cells
+with a measured seed spread (+0.016 and +0.017). Every other score is one
+seed.
+
+GPU-h / 1K h is SLURM elapsed time × allocated GPUs per 1,000 audio hours,
+as the run happened. It is not an architecture cost: node counts were set
+per cell, MLP and MoE took the same wall time on the three encoders where
+both ran on one node, and one config's wall time differed by up to 1.5×
+between two submissions (`cost-axis/README.md`). The 21 runs cost 2,906
+GPU-h; 11 discarded runs (diverged, cancelled, superseded) cost another 883.
+
+Sources: the five `selection-metric/scores/crossing-2100-*.txt` files
+(per-language CERs and runaway counts; the one of 2026-10-17 ranks all 21
+runs) and `cost-axis/crossing-2100-cost-2026-10-17.tsv`.

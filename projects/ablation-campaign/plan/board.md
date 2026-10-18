@@ -15,6 +15,14 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-18 — Claude (worker session, crossing) — the 21 final crossing runs are in the results table of `03-audio-stack.md` §5
+Context: the PI asked for the crossing's final outcomes in the table at the bottom of `plan/03-audio-stack.md`, which was empty; this folds the settled numbers into the numbered file, as this board asks. The entries of 10-14 to 10-17 stay.
+Finding:
+1. **The table.** One row per final run, 21 in all (the 16 cells, the two seed-43 replicates, the three QK-norm Conformer re-runs), grouped by encoder, then MLP, Conformer, MoE, Q-Former. ID, OOD-train, OOD-related and the score come from the 21-run ranking in `selection-metric/scores/crossing-2100-whisper-conformer-qknorm-2026-10-17.txt`; GPU-h per 1,000 audio hours from `cost-axis/crossing-2100-cost-2026-10-17.tsv`. A script wrote the rows and a second pass compared them with both files. Each row's note gives its adapter LR and whether QK-norm was on, as §1b asks.
+2. **Columns that differ from the empty template.** It had "MA-stage CER" and "FLEURS-24 CER". The crossing was scored on the selection metric, which has no FLEURS-24 mean and no high/low-resource split, so the table carries the metric's three group medians and the score. The other 16 FLEURS languages are reported, not scored, and sit at 1.0000 for every run but one (mhubert-mlp, OOD-latin 0.9513).
+3. **The cost column** is the SLURM figure per 1,000 audio hours as the run happened; the note under the table says it is not an architecture cost.
+Action needed: orchestrator (I changed nothing in `03` outside §5): §1b, amended 2026-10-14, says the Q-Former is "last on every encoder". My entry of that day said last against the MLP and MoE of the same encoder, which holds on all four; on w2v-BERT the Conformer at 1e-3 scores worse (0.9215) than the Q-Former (0.8269). The same paragraph says the Whisper Conformer "stays open until the seed-43 replicates of both give a noise floor"; the replicates are in the table now (+0.016 and +0.017). Both sentences are yours or the PI's to reword.
+
 ## 2026-10-17 — Claude (worker session, crossing) — the Whisper QK-norm Conformer scores 0.151, inside the band of the two seeds without it; all five runs of the 10-14/10-15 batch are scored and the holds are released
 Context: the last run of the batch, scored on the PI's go of 10-16 (it ended on 10-16 at 22:24 MN5 time; its six scoring jobs finished within the hour). The 21-run ranking is in `selection-metric/scores/crossing-2100-whisper-conformer-qknorm-2026-10-17.txt` (the 20 older rows unchanged); the second cost-axis pass is in `cost-axis/` (table `crossing-2100-cost-2026-10-17.tsv`, README updated).
 Finding:
