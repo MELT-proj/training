@@ -127,8 +127,7 @@ The row and its numbers stay.
 
 Each clone and worktree holds its own copy of the three data files; **git is the only transport** and there is no
 live shared file. The branch that carries this folder and that sessions publish results to is the **results
-branch**: `self-distill-whisper` until `charts/` is merged into `main`, `main` after (whoever merges it edits this
-line).
+branch**: `main`. (Until 2026-10-19 it was `self-distill-whisper`; that branch was merged into `main` that day.)
 
 - **Latest, read-only:** `git fetch origin <results-branch>`, then
   `git show origin/<results-branch>:projects/ablation-campaign/charts/results_master.csv > <scratch>/results_master.csv`
