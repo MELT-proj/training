@@ -29,6 +29,9 @@ Fondue is 10–30K depending on the backbone, and Raclette is ~1.4K
 (Llama-class) to ~4K (Qwen-class). Spend the rest on seed replicates and
 ladder points; unspent hours vanish on 11-30.
 
+**Position on 2026-10-19:** 950 of 1,752 khours used (54%), **~40,000 GPU-h
+remaining**. Fondue plus Raclette need ~10K (Llama) to ~26K (Qwen).
+
 **Position on 2026-10-14:** 868 of 1,752 khours used (50%), **~44,000 GPU-h
 remaining**. The re-planned weeks below add up to ~19K GPU-h with a
 Llama-class Fondue and ~34K with a Qwen-class one. Compute is not the
@@ -94,6 +97,39 @@ complete and nothing else: no adding, deleting, rewording or moving items
 between weeks. If work needs to change, post it on `board.md` and it is
 folded in from there. A box you could not finish stays unticked, with a
 board entry saying why.
+
+---
+
+## Status and proposed cut, 2026-10-19 (awaiting the PI)
+
+**Where the critical path stands.** The backbone is decidable around Wed
+10-21, from the six IFTs (the EuroLLM pair depends on its queue wait). The
+adapter is decidable now. Nothing else that week 6 needs before Raclette
+has started: the regime study (R1-R10), the ratio and prompt sweeps, the
+Fondue dry run, the resume-chain test, re-emitting the Fondue and Raclette
+drafts with per-cut weights, and the FLEURS in/out numbers. The X->en ST
+eval of the IFTs failed at start: `~/eval` lacks `speech_prompt`. Text
+retention and the cascade oracle have no tool for trained checkpoints.
+
+**Proposed cut (PI to decide).** Freeze the IFT regime as the backbone IFTs
+ran it: full decoder fine-tune, adapter trainable at 2e-4, 1-pass ASR-only
+MA, decoder LR 2e-5, the per-cut 700 h ASR+ST mix. That removes the
+dependency in `06` §4 that holds Raclette behind the regime decision.
+Dropped from MN5: the regime fraction R1-R10 and its MA checkpoints; the
+MA:IFT ratio sweep and its 100/300 h MAs; the MA prompt sweep; the
+second-seed backbone IFTs; and the IFT of the top two audio stacks. The
+backbone decision rule keeps rules 1 and 4 (CER and feasibility); X->en
+joins once the eval is fixed. Text retention and the cascade oracle move to
+December. The ladder (`05`) stays as filler beside Fondue.
+
+| | as planned (10-14) | with the cut |
+|---|---|---|
+| backbone + adapter call | Fri 10-23 | Wed 10-21 or Thu 10-22 |
+| MA freeze, Fondue MA submitted | Thu 10-29 | Fri 10-23 (if the dry run passes) |
+| Raclette | Tue 10-27 to ~11-03 | ~10-23 to ~10-28, from the winning backbone's MA arm |
+| IFT freeze | Wed 11-04 | ~Thu 10-29 |
+| Fondue IFT ends (Llama / Qwen) | ~11-15 / ~11-19 | ~11-07 / ~11-11 |
+| buffer before 11-25 | ~6-10 days | ~2-2.5 weeks |
 
 ---
 
@@ -557,14 +593,14 @@ No gate on Sunday: the backbone and regime gates move to Fri 10-23.
 - [x] **Stack call, provisional** (PI, Wed 10-14): Whisper-large-v3 + **MoE**
       (MLP 0.157, MoE 0.143, Conformer at 1e-3 0.136, Q-Former with QK-norm
       0.177). Conformer left open for 10-23. Recorded in `03` §2.
-- [ ] **Seed replicates of the top two Whisper cells** at 2,100 h/lang
+- [x] **Seed replicates of the top two Whisper cells** at 2,100 h/lang
       from a clone at or after `fea165a` so the data order really changes.
       Done and scored Fri 10-16 (seed 43, pre-#154 schedule): Conformer
       0.1526 (seed 42: 0.1364), MoE 0.1596 (0.1429); 286 GPU-h for the pair.
       A second seed costs both ~0.016 and keeps Conformer 0.007 ahead, so on
       Whisper the metric does not separate Conformer, MoE and MLP. They give the crossing its
       first real noise floor and settle the adapter on 10-23.
-- [ ] **MA arms for all six backbones** (`02-backbones.md`), carried from
+- [x] **MA arms for all six backbones** (`02-backbones.md`), carried from
       week 4: 700 h/lang on Whisper + the provisional adapter, all six in the
       queue at once on Thu 10-15. The `llama1b-ins` arm is also the recipe
       confirmation (week 3) and the regime study's base MA checkpoint.
@@ -576,6 +612,10 @@ No gate on Sunday: the backbone and regime gates move to Fri 10-23.
       and their scoring is submitted; **EuroLLM-Base timed out at 47.7k with
       ~90% runaway generations, cause not found** (PI: diagnose first or
       resume as is).
+      10-19, scored (selection metric, lower is better): Qwen-ins .122,
+      Qwen-base .131, EuroLLM-ins .141, Llama-ins .148, Llama-base 1.0
+      (runaway, ~85% of clips); EuroLLM-Base not scored (runaway). Both base
+      runaways are frozen-decoder template artefacts; IFT repairs them.
 - [ ] **Regime MA checkpoints** (`04-regime.md` §3), the three the backbone
       arm does not give: ASR+ST at 700 h/lang and at 2,100 h/lang (new), and
       ASR at 2,100 h/lang (the crossing cell with the provisional adapter,
@@ -625,6 +665,14 @@ plus the Whisper QK-norm Conformer cell.
 
 ### Track A — GPU
 - [ ] Remaining backbone and regime IFTs in the queue by Mon 10-19.
+      *10-19:* all six backbone IFTs submitted 10-18 (Whisper + MoE,
+      `~/training-ift` @ d0c8151). Llama-base and -ins done and scored:
+      .061 and .085. Qwen pair 2,296/6,310, ETA Tue 10-20 ~20:00Z.
+      EuroLLM pair OOM'd at 4,040 (fp32 logits). Both were resumed from
+      3,608 at bd 50 x ga 24 and are pending, needing ~20 h once started.
+      IFT repaired EuroLLM-Base's ChatML rows (en WER .113 at step 902). **No
+      regime IFT exists:** none of R1-R10, nor their MA checkpoints, was
+      prepared or submitted.
 - [ ] **Evaluate the backbone and regime IFTs** on artemis as they land:
       in-domain, FLEURS-24, X→en, cascade oracle, text-ability retention.
 - [ ] **Second seed on the two leading backbones** (IFT), submitted on the
