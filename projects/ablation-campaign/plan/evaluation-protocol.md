@@ -66,8 +66,12 @@ Traps:
 | `microsoft/Phi-4-multimodal-instruct` | ASR en de es fr it pt; translation to and from English for de es fr it pt | "Transcribe the audio clip into text." / "Translate the audio to <language>." |
 | `nvidia/canary-1b-v2` | 25 European languages incl. 23 of the 24 here (no Irish); translation to and from English only | NeMo `transcribe(source_lang, target_lang)` |
 
-Planned, not built yet: the **text-only ceilings** (Qwen3.5-2B and EuroLLM-1.7B translating the reference text).
-They need their own metric name because they are not speech runs. Published numbers of other public models (Apertus,
+**Text-only ceilings** (kind `reference`, master keys `Text-Qwen3.5-2B`, `Text-EuroLLM-1.7B`, `Text-Llama-3.2-1B`; the
+Instruct variants, Qwen with thinking off, EuroLLM the 2512 release): the model translates the reference transcript of each
+FLEURS test clip (`source_text` in the manifest), no audio, with the `repeatfirst` translate wording, greedy, 384 new tokens at
+most. Sets `fleurs24-st-xen-test-text` and `fleurs24-st-enx-test-text`, fmt `textsrc`, metrics chrF++ and spBLEU (cased and
+lowercased) per language, same scorer as the speech sets. Script: `scripts/text_translate.py` in melt-eval. Runaway outputs are
+scored as they are (Llama en->X: 1,294 of 14,457 hit the cap). Published numbers of other public models (Apertus,
 Kimi-Audio, Qwen2-Audio, Qwen2.5-Omni) are cited in the master for FLEURS WER only (`fleurs-reported`).
 
 **Our checkpoints** (`kind=ours`, fmt `repeatfirst`): Whisper-large-v3 → MLP adapter → decoder (Qwen3.5-2B or
@@ -107,17 +111,16 @@ checkout `/mnt/scratch-artemis/giuseppe/melt-proj/melt-eval-baselines` (decision
    data files, push to `self-distill-whisper`.
 4. Changes to schema, metric list or protocol are the PI's call: post them on `board.md`.
 
-## 7. Where things stand (2026-10-18)
+## 7. Where things stand (2026-10-19)
 
-- Baselines: all 196 jobs on the six test sets finished (Gemma 4: 88, Phi-4: 23, canary: 85). Metrics extracted from
-  the logs; **not yet ingested into the master** (sets not registered).
-- Our checkpoints: 8 final checkpoints on FLEURS-24 dev in the master. SFT-EU24-EuroLLM and CE24-EuroLLM are scored
-  on dev and wait for ingestion. Test-set runs for all checkpoints are queued by the self-distillation session.
-- Not started: text-only ceilings, COMET, Google Drive copy of the master (deferred by the PI).
+- Baselines: all 196 jobs on the six test sets finished and are in the master (Gemma 4, Phi-4, canary).
+- Our checkpoints: all 8 final checkpoints on FLEURS-24 dev and on the six test sets are in the master.
+- Text-only ceilings (Qwen3.5-2B, EuroLLM-1.7B, Llama-3.2-1B) are in the master, both directions.
+- Not done: start models A and A' on the test sets, COMET, Google Drive copy of the master (deferred by the PI).
 - Baseline results were not checked against the numbers on each model card (deferred by the PI).
 
 ## 8. Open items for the next session
 
-Register the six test sets and ingest the baseline cells; ingest the two EuroLLM rows from the dev report and then the
-test reports as they land; design and run the text-only ceilings; update `charts/PROTOCOL.md` §8 as items land
-(propose, do not edit schema); push the melt-eval branch only if the PI asks.
+Start models A and A' on the test sets if the paper table needs them; add `SFT-EU24-EuroLLM`/`CE24-EuroLLM` keys to
+`eval/eu24_report.py` and `eval/eu24_jobs.py`; update `charts/PROTOCOL.md` §8 as items land (propose, do not edit
+schema); the melt-eval branch is proposed as a PR, merge is the PI's call.
