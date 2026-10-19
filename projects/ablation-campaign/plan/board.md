@@ -4174,3 +4174,9 @@ Rows from `~/training-ift` @ d0c8151 (adapter 2e-4, decoder 2e-5, 316-step warmu
 - Pending (2 nodes each, Priority): qwen35-2b-ins, qwen35-2b-base. Qwen smoke on acc_debug passed: 50 GB peak, ~32-35 s/step ⇒ ~58 h of the 66 h limit.
 - EuroLLM-Base first submit died at startup: the staged `tokenizer_config.json` lacked pad/audio token attributes (the audio tokens were in the vocab). Patched to mirror the Instruct tokenizer; the resubmit is training.
 - Still open: whether IFT repairs EuroLLM-Base's ChatML rows (first eval at step 902).
+
+## 2026-10-19 — Llama IFT done and sent to scoring; both EuroLLM runs OOM'd at step 4040 and were resumed
+
+- llama1b-base and llama1b-ins finished (36.4 h, 6,310 steps, ~20.8 s/step). Selection-metric scoring submitted for both (6 sbatch each, `--code ~/training-ift`); `submit_crossing_eval.sh` now accepts `IFT-*` rows.
+- eurollm-ins and eurollm-base both died at step 4040 with the SAME OOM: a batch of 20 cuts × 365 tokens, the fp32 upcast of the 128k-vocab logits (3.8 GiB) on a GPU already at 60 GB. Same seed ⇒ same batch ⇒ a plain resume would hit it again. Resumed from checkpoint-3608 with bd 50 × ga 24 (still 4,800 s per step) instead of bd 75 × ga 16, same output dir. The remaining 2,700 steps therefore see a different batch composition than an uninterrupted run would.
+- Qwen runs (2 nodes) at 2,013/6,310, ~31 s/step.
