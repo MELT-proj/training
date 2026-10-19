@@ -1,0 +1,16 @@
+# melt-eval prompt format (-T format_config=<this file>) for the SFT comparison:
+# the instruction is drawn per sample from the TASK_TEMPLATES pool of
+# melt/training/data/audio/lhotse/helpers.py, the pool an SFT run with
+# prompt_template_selection: random trains under. melteval.prompt.select_template
+# seeds the draw with the sample's own key, so every checkpoint sees the same
+# instruction on the same sample and a rerun reproduces it. ST templates name the
+# target language ({lang} is the target for st). No prompt_template mapping: it is
+# only read under `custom`.
+# Only the keys melteval.prompt.load_format_spec reads.
+data:
+  apply_chat_template: true
+  prompt_template_selection: random
+  chat_template_config: chatml
+model:
+  decoder:
+    audio_token: "<|audio|>"

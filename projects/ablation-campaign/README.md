@@ -222,6 +222,14 @@ Point it at the **run directory**, never at a `checkpoint-N` subdirectory --
 `MELT_GPUS_PER_NODE` pinned to the same value across the resume, or the run
 dies on a `world_size` mismatch.
 
+### Self-distillation (online AZeroS), not yet on the grid
+
+`launch_self_distill.sh` submits `melt.training.train_self_distill` with
+`self-distill.yaml`, an overlay on `ABL-MA-700-asr.yaml` that changes only the
+objective relative to `MA-700-screen-w2vb-lr2e3-b300-evalfrozen`. It is off the
+ledger until `plan_arm.py` grows an entrypoint axis and the PI adds a row. See
+`docs/self_distillation.md` for the method and what its metrics mean.
+
 ## Naming convention
 
 `EXP_NAME` is composed, never typed by hand, from:

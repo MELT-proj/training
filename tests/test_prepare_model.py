@@ -59,8 +59,8 @@ def _processor() -> MagicMock:
     return processor
 
 
-def _cfg(ckpt, master_dtype):
-    return OmegaConf.create(
+def _cfg(ckpt, master_dtype, scope=None):
+    cfg = OmegaConf.create(
         {
             "model": {
                 "encoder": {"freeze": True},
@@ -72,6 +72,18 @@ def _cfg(ckpt, master_dtype):
             "trainer": {},
         }
     )
+    if scope is not None:
+        cfg.model.master_dtype_scope = scope
+    return cfg
+
+
+def _adapter_only_cfg(ckpt, scope):
+    """The adapter-only recipe (self-distillation): the encoder and the decoder are frozen, the adapter trains."""
+    cfg = _cfg(ckpt, "float32", scope)
+    cfg.model.encoder.freeze = True
+    cfg.model.decoder.freeze = True
+    cfg.model.adapter.freeze = False
+    return cfg
 
 
 def _targs(tmp_path):
@@ -150,3 +162,49 @@ def test_a_bad_master_dtype_fails_before_the_checkpoint_is_touched(bad, tmp_path
 def test_master_dtype_is_off_by_default_and_settable_from_the_cli():
     assert get_default_config().model.master_dtype is None
     assert load_config(cli_args=["model.master_dtype=float32"]).model.master_dtype == "float32"
+
+
+# --- model.master_dtype_scope: "trainable" widens only what the optimizer updates -------------------------------------
+
+
+def test_master_dtype_scope_defaults_to_all_and_is_settable_from_the_cli():
+    assert get_default_config().model.master_dtype_scope == "all"
+    assert load_config(cli_args=["model.master_dtype_scope=trainable"]).model.master_dtype_scope == "trainable"
+
+
+def test_scope_all_widens_the_frozen_backbone_too(stage1, tmp_path, monkeypatch):
+    ckpt, _ = stage1
+    processor = _processor()
+    monkeypatch.setattr(train, "MELTProcessor", SimpleNamespace(from_pretrained=lambda _path: processor))
+
+    model, *_ = train.prepare_model(_adapter_only_cfg(ckpt, None), _targs(tmp_path), processor)
+
+    assert _dtypes(model) == {torch.float32}
+
+
+def test_scope_trainable_widens_only_the_adapter_of_an_adapter_only_run(stage1, tmp_path, monkeypatch):
+    """A frozen backbone gains nothing from fp32 masters, and pays a cast of its weights on every use under autocast."""
+    ckpt, _ = stage1
+    processor = _processor()
+    monkeypatch.setattr(train, "MELTProcessor", SimpleNamespace(from_pretrained=lambda _path: processor))
+
+    model, *_ = train.prepare_model(_adapter_only_cfg(ckpt, "trainable"), _targs(tmp_path), processor)
+
+    assert {p.dtype for p in model.audio_stack.adapter.parameters()} == {torch.float32}
+    assert {p.dtype for p in model.audio_stack.encoder.parameters()} == {torch.bfloat16}
+    assert {p.dtype for p in model.text_decoder.parameters()} == {torch.bfloat16}
+
+
+def test_from_scratch_scope_trainable_leaves_the_frozen_decoder_in_the_hub_dtype(tmp_path, monkeypatch):
+    monkeypatch.setattr(train, "prepare_melt_config", lambda _cfg, _processor: _melt_config())
+    monkeypatch.setattr(train, "MELTForCausalLM", lambda config, load_backbones: _bf16_decoder_model(config))
+
+    model, *_ = train.prepare_model(_adapter_only_cfg(None, "trainable"), _targs(tmp_path), _processor())
+
+    assert {p.dtype for p in model.audio_stack.adapter.parameters()} == {torch.float32}
+    assert {p.dtype for p in model.text_decoder.parameters()} == {torch.bfloat16}
+
+
+def test_a_bad_master_dtype_scope_fails_before_the_checkpoint_is_touched(tmp_path):
+    with pytest.raises(ValueError, match="master_dtype_scope"):
+        train.prepare_model(_cfg(tmp_path / "missing", "float32", "adapter"), _targs(tmp_path), _processor())

@@ -171,6 +171,14 @@ model:
   # rounded to bf16 on the way (a cast afterwards would restore the dtype, not the
   # bits); from scratch it is a cast after construction, which loses nothing.
   master_dtype: null
+  # Which parameters master_dtype applies to. "all" (the default): the whole model loads
+  # and trains in master_dtype, as described above. "trainable": the model loads as it
+  # comes (dtype="auto" on the `model.ckpt` path, so without the exactness above) and only
+  # the parameters that require a gradient are cast, after the freeze flags are applied.
+  # A frozen backbone keeps its loaded dtype, as in an adapter-only run, where a float32
+  # copy of the frozen decoder would cost memory, and a cast of its weights on every use
+  # under autocast (every decoding step of a frozen teacher).
+  master_dtype_scope: all
 
 # =============================================================================
 # Data Configuration
@@ -311,6 +319,14 @@ trainer:
   dataloader_num_workers: 4
   remove_unused_columns: false
   ddp_find_unused_parameters: false
+  # DDP keeps a flat gradient buffer per bucket next to every parameter's .grad;
+  # true makes the .grad tensors views into those buckets and zeroes them in
+  # place between steps instead of freeing them (freed gradients come back as a
+  # second copy during accumulation), saving one copy of the gradients: 4 bytes
+  # per trainable parameter in fp32, ~9.4 GiB for the 2.5 B Whisper +
+  # Qwen3.5-2B stack. Same arithmetic. Not a TrainingArguments field:
+  # MELTTrainer applies it.
+  ddp_gradient_as_bucket_view: false
   resume_from_checkpoint: null
 
 # =============================================================================
@@ -644,7 +660,7 @@ def trainer_args_dict(cfg: DictConfig) -> dict:
     # prepare_model() (train.py) reads it directly off the raw YAML instead,
     # so it still takes effect -- the warning below would otherwise be wrong
     # for the one key campaign YAMLs actually rely on.
-    dropped_keys = set(result.keys()) - valid_keys - {"overwrite_output_dir"}
+    dropped_keys = set(result.keys()) - valid_keys - {"overwrite_output_dir", "ddp_gradient_as_bucket_view"}
     if dropped_keys:
         logger.warning(
             "trainer_args_dict: dropping %d key(s) from the YAML `trainer:` block that "

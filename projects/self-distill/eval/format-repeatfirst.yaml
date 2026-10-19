@@ -1,0 +1,15 @@
+# melt-eval prompt format (-T format_config=<this file>) for the step-2 arms.
+# ASR: the instruction they trained under. ST: the teacher audit's translate
+# instruction, which the text-only teacher follows at chrF 59-65 into English
+# (README.md) -- the ceiling for the zero-shot speech translation probe.
+# Only the keys melteval.prompt.load_format_spec reads.
+data:
+  apply_chat_template: true
+  prompt_template_selection: custom
+  chat_template_config: chatml
+  prompt_template:
+    asr: "Repeat the following content exactly, word for word, and write nothing else.\n\n{audio_token}"
+    st: "Translate the following content into {tgt_lang}, and write nothing else.\n\n{audio_token}"
+model:
+  decoder:
+    audio_token: "<|audio|>"

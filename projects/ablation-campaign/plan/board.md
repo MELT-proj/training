@@ -480,6 +480,48 @@ Smoke (w2v-BERT + MLP, 1 node x 4 GPUs, 50 steps, `acc_debug`, hand-submitted so
 Throughput: first step took ~13 min (cold shard open on GPFS scratch); steady state ~1.0-1.2 s/step over the last 20 steps, which is too few to trust. At 126,000 steps that is 35-42 h against the 41 h time: set on `w2vb-mlp`, so the 0.6x walltimes may have almost no margin on the 1-node cells.
 Action needed: PI: decide whether to submit as is or first get a longer steady-state s/step (e.g. 300-500 steps) before committing 41-72 h walltimes on `acc_ehpc`. Whisper-Conformer rows are still subject to the separate Conformer investigation.
 
+## 2026-10-02 — Claude (worker session) — online self-distillation MA trainer built (not launched); WSD arms run with NO warmup under transformers 5
+
+Context: PI asked for an assessment and an implementation of online, on-policy
+AZeroS-style modality alignment (teacher = frozen decoder on the transcript,
+student = audio path, adapter-only). No run was submitted; the trial run is to
+be discussed with the PI first.
+
+Finding / proposal:
+1. **`warmup_ratio` is silently dropped under transformers 5.16, so every
+   WSD arm rendered with `warmup_ratio 0.03` + `warmup_steps 0` (the screen and
+   the crossing) trains with zero warmup**, at the full peak LR from step 0.
+   transformers 5 removed the `warmup_ratio` field and accepts a ratio as a
+   float `warmup_steps` instead; `config.py`'s `trainer_args_dict` drops the
+   unknown key with a warning ("dropping ... ['group_by_length',
+   'warmup_ratio'] ... will NOT take effect"), and `plan_arm.py` forces
+   `warmup_steps 0` next to it. Checked against the installed
+   `Seq2SeqTrainingArguments` fields; not checked against a real run log yet --
+   any WSD arm's startup log should carry that warning. Possibly relevant to
+   whisper-conformer, whose explosion the entries below place "during warmup".
+   Not fixed: the one-line fix (render the ratio as `--trainer.warmup_steps
+   0.03`) changes the recipe of arms still to run, so it is a PI decision.
+2. Self-distillation code: `melt/training/self_distill.py`,
+   `melt/training/train_self_distill.py`, overlay
+   `projects/ablation-campaign/self-distill.yaml`, off-ledger launcher
+   `launch_self_distill.sh`, design notes `docs/self_distillation.md`. The
+   overlay matches `MA-700-screen-w2vb-lr2e3-b300-evalfrozen` except for the
+   objective (including its effective zero warmup, see 1). Standard path
+   untouched; `run_train.sh` gained `MELT_TRAIN_MODULE` (default unchanged).
+   Loss from TRL 0.29.1's GKD divergence; TRL is not in the image.
+3. `uv.lock` already fails `uv lock --check` at HEAD (project version bumped
+   without a relock); a relock also moves ~30 packages (numpy etc.) from the
+   PyTorch index to PyPI. Left untouched -- relocking is a deliberate decision
+   because the image builds with `--locked`.
+4. `infrastructure.md`'s nyx test image is stale: the `_lhotse2_td` image named
+   there carries transformers 4.57.1; the suite needs the transformers 5 image
+   (the default symlink). Not edited, since the line is a cluster path.
+
+Action needed: PI -- decide on the warmup fix (1); decide the self-distillation
+trial setup and how TRL reaches the image (2, 3).
+
+---
+
 ## 2026-09-29 — Claude (bridge session) — Conformer gradient explosion: unbounded attention logits; QK-norm fix in PR #149
 
 Context: PI asked for a diagnosis of the Conformer-adapter explosion (5 of 5 crossing runs: grad_norm

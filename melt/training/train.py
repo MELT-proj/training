@@ -63,6 +63,41 @@ def _master_dtype(model_cfg: DictConfig) -> torch.dtype | None:
     return dtype
 
 
+def _master_dtype_scope(model_cfg: DictConfig) -> str:
+    """Return ``model.master_dtype_scope``: ``"all"`` (the default) or ``"trainable"``."""
+    scope = str(model_cfg.get("master_dtype_scope", None) or "all")
+    if scope not in ("all", "trainable"):
+        raise ValueError(f"model.master_dtype_scope={scope!r} must be 'all' or 'trainable'")
+    return scope
+
+
+def cast_master_weights(model: torch.nn.Module, master_dtype: str | torch.dtype, scope: str = "all") -> torch.nn.Module:
+    """Cast the model's parameters to *master_dtype* (``model.master_dtype``).
+
+    Args:
+        model: The model, after its freeze flags are applied.
+        master_dtype: A torch floating-point dtype, or its name, e.g. ``"float32"``.
+        scope: ``"all"`` casts every parameter. ``"trainable"`` casts only those that require a gradient,
+            which is all an optimizer needs fp32 masters for: a frozen backbone gains nothing from them and,
+            under autocast, pays for them with a cast of its weights on every use (every decoding step of
+            a frozen teacher) and with the memory of the second copy.
+
+    Returns:
+        The model, cast in place.
+    """
+    dtype = master_dtype if isinstance(master_dtype, torch.dtype) else getattr(torch, str(master_dtype), None)
+    if not isinstance(dtype, torch.dtype) or not dtype.is_floating_point:
+        raise ValueError(f"model.master_dtype={master_dtype!r} is not a torch floating-point dtype")
+    if scope == "all":
+        return model.to(dtype)
+    if scope != "trainable":
+        raise ValueError(f"model.master_dtype_scope={scope!r} must be 'all' or 'trainable'")
+    for param in model.parameters():
+        if param.requires_grad:
+            param.data = param.data.to(dtype)
+    return model
+
+
 def prepare_model(
     cfg: DictConfig,
     targs: Seq2SeqTrainingArguments,
@@ -74,7 +109,8 @@ def prepare_model(
     are loaded from the checkpoint directory (which must contain
     ``config.json`` and ``preprocessor_config.json``).  Otherwise they are
     built from scratch using the training config.  ``model.master_dtype``, when
-    set, is the dtype the parameters train in (see ``config.py``).
+    set, is the dtype the parameters train in, and ``model.master_dtype_scope``
+    says which parameters (see ``config.py``).
 
     Args:
         cfg: Training configuration (OmegaConf DictConfig).
@@ -91,6 +127,10 @@ def prepare_model(
     adapter_cfg = model_cfg.adapter
     # Resolved first, so a typo fails before the model is loaded rather than after.
     master_dtype = _master_dtype(model_cfg)
+    master_scope = _master_dtype_scope(model_cfg)
+    # Scope "all": the whole model loads in master_dtype. Scope "trainable": it loads as it
+    # comes, and only what trains is widened, once the freeze flags are applied (below).
+    load_dtype = master_dtype if master_scope == "all" else None
 
     # Detect last checkpoint
     last_checkpoint = None
@@ -170,22 +210,23 @@ def prepare_model(
 
         processor = MELTProcessor.from_pretrained(ckpt_dir)
 
-        # Without `model.master_dtype` the model comes up in whatever dtype="auto"
+        # Without `model.master_dtype` (or under the "trainable" scope, which widens
+        # only what trains, further down) the model comes up in whatever dtype="auto"
         # resolves to: the checkpoint's top-level config.dtype, applied to every
         # parameter. That is the decoder's dtype (the first parameter), so a
         # stage-1 checkpoint from a DDP run -- bf16 decoder, fp32 encoder and
         # adapter -- loads all bf16, rounding the fp32 halves on the way in.
         # Asking for the dtype here, rather than casting after loading, is what
         # keeps those fp32 weights exact.
-        load_kwargs = {} if master_dtype is None else {"dtype": master_dtype}
+        load_kwargs = {} if load_dtype is None else {"dtype": load_dtype}
         model = MELTForCausalLM.from_pretrained(ckpt_dir, config=config, **load_kwargs)
     else:
         config = prepare_melt_config(cfg, processor)
         model = MELTForCausalLM(config, load_backbones=True)
-        if master_dtype is not None:
+        if load_dtype is not None:
             # The backbones arrive in their Hub dtype (bf16 for Llama and Qwen,
             # fp16 for Whisper); widening is exact, so this loses nothing.
-            model = model.to(master_dtype)
+            model = model.to(load_dtype)
 
     logger.info("Tied model weights:")
     for tied_pair in find_tied_parameters(model):
@@ -253,6 +294,12 @@ def prepare_model(
     elif lora_enabled:
         logger.info("Unfreezing the decoder (overriding LoRA freeze)")
     _set_requires_grad(model.text_decoder, not decoder_freeze)
+
+    # `model.master_dtype_scope: trainable`: widen only the parameters that train, now that
+    # the freeze flags say which they are. The scope "all" was handled at load time.
+    if master_dtype is not None and master_scope == "trainable":
+        model = cast_master_weights(model, master_dtype, master_scope)
+        logger.info(f"Trainable parameters cast to {master_dtype} (model.master_dtype, scope {master_scope})")
 
     # The dtype of what the optimizer will actually update decides whether small
     # steps survive (see `model.master_dtype` in config.py), and until now it was

@@ -20,6 +20,7 @@ belongs on the board, not in a section file.
 | file | what it holds |
 |---|---|
 | `agent-protocol.md` | the rules every session follows: machines, experiments, code, and how to record work; read before touching anything |
+| `evaluation-protocol.md` | the paper's benchmarks, metrics, baselines and how a number reaches the master table; read before any eval work |
 | `timeline.md` | week-by-week TODO list with dates, gates and blockers. Added to and pruned **only by the orchestrator**; sessions tick boxes |
 | `01-interface-recipe.md` | step 0 (LibriSpeech) and the five-language interface screen: LR, batch, frame stacking, prompt |
 | `02-backbones.md` | the 2×3 backbone grid (Llama 3.2 1B, Qwen3.5 2B, EuroLLM 1.7B; base and instruct) and the text-prior study |

@@ -1,0 +1,1082 @@
+"""Online self-distillation for modality alignment (AZeroS-style SIFT, on-policy).
+
+AZeroS (arXiv 2601.06086) trains the adapter on targets the frozen decoder
+generates when it is handed the *transcript* as text, with no instruction, and
+stores those targets offline. This module does the same thing online, which
+removes the per-decoder dataset:
+
+* **teacher** = the frozen text decoder on the text path: the chat-templated
+  transcript goes straight into ``model.text_decoder``. No adapter, no audio,
+  and no copy of the weights -- it is the very module the student decodes with.
+* **student** = the full speech LLM on the audio path, instruction-free prompt
+  (``{audio_token}`` only). Only the adapter trains.
+
+Each micro-batch draws one response per utterance -- from the student
+(on-policy, probability ``lmbda``) or from the teacher (the offline AZeroS
+target, regenerated on the fly) -- and scores it under both prompts. Because
+both share one tokenizer and one decoder, the response tokens sit at the same
+positions on both paths and the per-token loss is a full-vocabulary divergence
+between two distributions, not a sampled scalar reward. The divergence is TRL's
+generalized JSD (``GKDTrainer.generalized_jsd_loss``): ``beta=0`` is forward
+KL(teacher || student), ``beta=1`` reverse KL(student || teacher). With
+``lmbda=0`` and ``loss="ce"`` the objective is exactly AZeroS's (hard-label
+cross-entropy on a teacher response), which is the control this method has to
+beat.
+
+What this module deliberately does not do: train the decoder or the encoder
+(the teacher would drift with the student, see ``check_adapter_only``), run
+under FSDP/DeepSpeed (generation and the teacher forward call submodules
+directly), or run with LoRA on the decoder (the teacher would no longer be the
+original LLM).
+"""
+
+import math
+import random
+import zlib
+from collections import defaultdict, deque
+from dataclasses import dataclass, fields
+
+import torch
+import torch.nn.functional as F
+from omegaconf import DictConfig, OmegaConf
+from torch.utils.data import DataLoader
+
+from ..logging_utils import get_logger
+from .data.audio.lhotse import (
+    FallbackDataset,
+    MELTDataCollator,
+    SpeechToTextDataset,
+    get_train_dataloader_from_config,
+)
+from .data.audio.lhotse.helpers import _get_config_value, apply_chat_template_to_texts, resolve_custom_template
+from .trainer import MELTTrainer
+
+
+logger = get_logger(__name__)
+
+# Batch keys this module adds on top of the standard MELT batch.
+DISTILL_PROMPT_KEYS = (
+    "student_prompt_input_ids",
+    "student_prompt_attention_mask",
+    "teacher_prompt_input_ids",
+    "teacher_prompt_attention_mask",
+    # Bool per utterance: its distillation instruction is a translation
+    # (``distill.translate_frac``), for the per-task diagnostics.
+    "distill_translate",
+    # Tokens of each utterance's content (its transcript) as the teacher reads it,
+    # for ``distill.reply_budget_factor``.
+    "teacher_content_tokens",
+    # The reply the instruction asks for when it is "repeat": the transcript, tokenised in context and
+    # ending on the stop token, right-padded, with each row's length (``distill.repeat_from_gold``).
+    "teacher_gold_ids",
+    "teacher_gold_len",
+)
+
+# Keys of the standard (gold-transcript) training batch that the distillation
+# loss does not read. Dropped explicitly so nothing gold-derived can leak into
+# the objective by accident.
+_GOLD_ONLY_KEYS = ("input_ids", "attention_mask", "labels", "audio_lengths")
+
+
+# ----------------------------------------------------------------------------
+# Config
+# ----------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SelfDistillConfig:
+    """The ``distill:`` section of a training config.
+
+    Attributes:
+        lmbda: Probability that a micro-batch's responses are sampled from the
+            student (on-policy). ``0`` always uses teacher responses (online
+            AZeroS); ``1`` is fully on-policy. Same meaning as GKD's ``lmbda``.
+        loss: ``"jsd"`` for TRL's generalized JSD over the full vocabulary, or
+            ``"ce"`` for hard-label cross-entropy on the response tokens.
+            ``"ce"`` requires ``lmbda == 0``: cross-entropy on the student's own
+            samples only sharpens the student and carries no teacher signal.
+        beta: JSD interpolation, ``0`` = forward KL(teacher || student),
+            ``1`` = reverse KL(student || teacher). Ignored by ``"ce"``.
+        max_new_tokens: Response length budget for every rollout, training and
+            eval. A truncated response is still distilled on its prefix.
+        temperature: Sampling temperature for training rollouts; ``0`` decodes
+            greedily. Eval rollouts are always greedy.
+        top_p: Nucleus mass for training rollouts. ``1.0`` samples from the full
+            distribution, which is what the on-policy objective assumes.
+        eval_alignment_gap: Replace ``eval_loss`` with the forward KL of the
+            student from the teacher on greedy teacher responses (see
+            ``MELTSelfDistillTrainer.prediction_step``).
+        teacher_prompt: ``"bare"`` gives the teacher the transcript alone as
+            the user turn (AZeroS's instruction-free target). ``"mirror"``
+            gives it the student's prompt with the transcript where the audio
+            is, so both paths answer the same instruction and differ only in
+            the modality of the content.
+        gold_ce_weight: Weight of an added cross-entropy term on the gold
+            transcript under the student prompt (the standard MA loss). ``0``
+            leaves the objective pure distillation.
+        translate_frac: Share of utterances whose distillation instruction is
+            "translate into <language>" instead of the ASR one: the instruction
+            mix. The target is drawn from *translate_targets* minus the
+            utterance's own language, deterministically per utterance (see
+            ``assign_instructions``), and the teacher reads the same instruction
+            over the transcript, so this needs ``teacher_prompt="mirror"`` and a
+            ``data.prompt_template`` mapping whose ``st`` entry names
+            ``{tgt_lang}``. The gold-CE anchor stays on the ASR prompt. ``0``
+            keeps every instruction the ASR one.
+        translate_targets: Comma-separated ISO codes a translate instruction
+            may target.
+        drop_truncated: Leave out of the loss the rows whose reply was cut at
+            ``max_new_tokens`` before an end-of-sequence token. A cut reply is
+            a transcript or translation longer than the cap, or a degenerate
+            loop, and either way the student would be trained on a target that
+            never stops. The share left out is logged as ``distill/dropped_frac``.
+            ``False`` keeps every row, as every earlier run did.
+        reply_budget_factor: When positive, a micro-batch's teacher rollout stops at
+            ``min(max_new_tokens, ceil(factor x the longest content in the batch, in tokens)
+            + reply_budget_margin)``. A reply is about as long as its content, up to ~3x for a
+            translation into a language the tokenizer splits finely, so only a runaway reply
+            is cut. Without it a looping row in a batch of short utterances decodes to
+            ``max_new_tokens``, and the logits, padded to that length for every row, take
+            several GB (a 64 GB H100 ran out of memory on it). A reply cut this way is
+            truncated like any other (see ``drop_truncated``). ``0`` keeps the fixed budget.
+        reply_budget_margin: Tokens added to the scaled content length.
+        repeat_from_gold: Rows whose instruction is "repeat" (not a translation) take the gold
+            transcript, followed by the stop token, as their reply instead of the teacher's
+            greedy one; translate rows keep the teacher's. A transcript is what "repeat" means, and
+            Qwen3.5-2B returns it for 99.5% of FLEURS clips, so for it nothing changes. A teacher
+            that does not copy (EuroLLM-1.7B-Instruct-2512 returns a paraphrase, an explanation
+            or a refusal for 57% of them) would otherwise teach the student those replies. Needs
+            ``lmbda=0``: a gold reply is not a student sample. Training rollouts only; the
+            alignment-gap evaluation still scores the teacher's own greedy reply.
+        rollout_lookahead: Decode the teacher's replies for this many consecutive micro-batches in one
+            ``generate`` call (their rows side by side), then train on them one micro-batch per step.
+            Greedy decoding is bound by the latency of a token, not by the number of rows, so a free-form
+            reply budget (AZeroS's recipe, where every micro-batch decodes to ``max_new_tokens``) costs
+            about ``1 / rollout_lookahead`` as much, with the same replies up to batch-composition noise.
+            Needs ``lmbda=0`` (a student rollout depends on the weights of the step it feeds), the fixed
+            budget (``reply_budget_factor=0``) and no ``repeat_from_gold``. The sampler state a checkpoint
+            stores is up to ``rollout_lookahead - 1`` micro-batches per rank ahead of the training, which a
+            resume skips. ``1`` decodes each micro-batch on its own.
+        student_template: The student's distillation prompt when it should
+            differ from ``data.prompt_template``, which then still builds the
+            gold batch (the anchor) and the eval prompt. ``"{audio_token}"``
+            with ``teacher_prompt="bare"`` and a gold-CE anchor is AZeroS's
+            instruction-free distillation with the anchor kept on the ASR
+            instruction. Empty uses ``data.prompt_template``. Not combinable with
+            the instruction mix, whose templates come from that mapping.
+    """
+
+    lmbda: float = 1.0
+    loss: str = "jsd"
+    beta: float = 1.0
+    max_new_tokens: int = 256
+    temperature: float = 1.0
+    top_p: float = 1.0
+    eval_alignment_gap: bool = True
+    teacher_prompt: str = "bare"
+    gold_ce_weight: float = 0.0
+    translate_frac: float = 0.0
+    translate_targets: str = "en,de,fr,es,it"
+    drop_truncated: bool = False
+    repeat_from_gold: bool = False
+    reply_budget_factor: float = 0.0
+    reply_budget_margin: int = 32
+    rollout_lookahead: int = 1
+    student_template: str = ""
+
+    @property
+    def targets(self) -> tuple[str, ...]:
+        """``translate_targets`` as a tuple of lower-case ISO codes."""
+        return tuple(t.strip().lower() for t in self.translate_targets.split(",") if t.strip())
+
+    def __post_init__(self):
+        if self.loss not in ("jsd", "ce"):
+            raise ValueError(f"distill.loss must be 'jsd' or 'ce', got {self.loss!r}")
+        if self.teacher_prompt not in ("bare", "mirror"):
+            raise ValueError(f"distill.teacher_prompt must be 'bare' or 'mirror', got {self.teacher_prompt!r}")
+        if self.gold_ce_weight < 0.0:
+            raise ValueError(f"distill.gold_ce_weight must be >= 0, got {self.gold_ce_weight}")
+        if not 0.0 <= self.translate_frac <= 1.0:
+            raise ValueError(f"distill.translate_frac must be in [0, 1], got {self.translate_frac}")
+        if self.repeat_from_gold and self.lmbda != 0.0:
+            raise ValueError("distill.repeat_from_gold needs distill.lmbda=0: a gold reply is not a student sample")
+        if self.reply_budget_factor < 0.0 or self.reply_budget_margin < 0:
+            raise ValueError(
+                "distill.reply_budget_factor and distill.reply_budget_margin must be >= 0, got "
+                f"{self.reply_budget_factor} and {self.reply_budget_margin}"
+            )
+        if self.rollout_lookahead < 1:
+            raise ValueError(f"distill.rollout_lookahead must be >= 1, got {self.rollout_lookahead}")
+        if self.rollout_lookahead > 1 and (
+            self.lmbda != 0.0 or self.reply_budget_factor != 0.0 or self.repeat_from_gold
+        ):
+            raise ValueError(
+                "distill.rollout_lookahead > 1 decodes the teacher's replies ahead of the step that trains on "
+                "them: it needs distill.lmbda=0 (a student rollout depends on the current weights), the fixed "
+                "budget (distill.reply_budget_factor=0, a scaled one is per micro-batch) and no "
+                "distill.repeat_from_gold."
+            )
+        if self.translate_frac > 0.0 and self.teacher_prompt != "mirror":
+            raise ValueError(
+                "distill.translate_frac > 0 needs distill.teacher_prompt=mirror: a bare teacher never "
+                "reads the translate instruction, so it would be scoring a different task."
+            )
+        if not self.targets:
+            raise ValueError(f"distill.translate_targets names no language: {self.translate_targets!r}")
+        if self.student_template and "{audio_token}" not in self.student_template:
+            raise ValueError(f"distill.student_template must contain {{audio_token}}, got {self.student_template!r}")
+        if self.student_template and self.translate_frac > 0.0:
+            raise ValueError(
+                "distill.student_template replaces the distillation prompt, but the instruction mix "
+                "draws its templates from data.prompt_template: set one or the other."
+            )
+        if not 0.0 <= self.lmbda <= 1.0:
+            raise ValueError(f"distill.lmbda must be in [0, 1], got {self.lmbda}")
+        if not 0.0 <= self.beta <= 1.0:
+            raise ValueError(f"distill.beta must be in [0, 1], got {self.beta}")
+        if self.loss == "ce" and self.lmbda != 0.0:
+            raise ValueError(
+                "distill.loss='ce' needs distill.lmbda=0: cross-entropy on the student's own "
+                "samples is self-training, not distillation. Use loss='jsd' for on-policy runs."
+            )
+        if self.max_new_tokens < 1:
+            raise ValueError(f"distill.max_new_tokens must be >= 1, got {self.max_new_tokens}")
+        if self.temperature < 0.0:
+            raise ValueError(f"distill.temperature must be >= 0, got {self.temperature}")
+        if not 0.0 < self.top_p <= 1.0:
+            raise ValueError(f"distill.top_p must be in (0, 1], got {self.top_p}")
+
+    @classmethod
+    def from_config(cls, section: DictConfig | dict | None) -> "SelfDistillConfig":
+        """Build from the ``distill:`` config section; unknown keys are an error.
+
+        A misspelt knob that silently kept its default is how an arm stops being
+        the ablation it claims to be, so typos fail here rather than at the end.
+        """
+        if section is None:
+            return cls()
+        values = OmegaConf.to_container(section, resolve=True) if isinstance(section, DictConfig) else dict(section)
+        known = {f.name for f in fields(cls)}
+        unknown = sorted(set(values) - known)
+        if unknown:
+            raise ValueError(f"Unknown distill.* key(s) {unknown}; expected a subset of {sorted(known)}")
+        return cls(**values)
+
+
+# ----------------------------------------------------------------------------
+# Prompts
+# ----------------------------------------------------------------------------
+
+
+def assign_instructions(
+    texts: list[str], tasks: list[str], langs: list[str], translate_frac: float, targets: tuple[str, ...]
+) -> tuple[list[str], list[str]]:
+    """Draw each utterance's distillation instruction: its own task, or ``st`` into another language.
+
+    Deterministic in the utterance (a CRC of its language and transcript), so
+    every arm, rank, worker and epoch gives an utterance the same instruction:
+    the on-policy and offline arms of an instruction mix then differ only in
+    their objective.
+
+    Args:
+        texts: Transcripts, aligned with *tasks* and *langs*.
+        tasks: Task tags (kept for utterances that are not translated).
+        langs: Language codes of the utterances.
+        translate_frac: Share of utterances to translate.
+        targets: ISO codes a translation may target; the utterance's own
+            language is never one.
+
+    Returns:
+        ``(tasks, tgt_langs)``: ``"st"`` and a target code for translated
+        utterances, the original task and ``""`` for the rest.
+    """
+    out_tasks, tgt_langs = [], []
+    for text, task, lang in zip(texts, tasks, langs):
+        digest = zlib.crc32(f"{lang}\x00{text}".encode())
+        choices = [t for t in targets if t != (lang or "").lower()]
+        if choices and (digest % 1_000_000) / 1_000_000 < translate_frac:
+            out_tasks.append("st")
+            tgt_langs.append(choices[(digest // 1_000_000) % len(choices)])
+        else:
+            out_tasks.append(task)
+            tgt_langs.append("")
+    return out_tasks, tgt_langs
+
+
+def _gold_replies(tokenizer, teacher_prompts: list[str], texts: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
+    """The transcript as a model that read the templated conversation would write it: ids and lengths.
+
+    Tokenised in context (prompt + transcript + stop token, then the prompt's own ids cut off), not alone: a
+    sentencepiece tokenizer puts a dummy prefix space on a lone string, so its first token would be one the
+    chat-tuned decoder never writes after the assistant header. The reply ends on the stop token.
+    """
+    stop = tokenizer.eos_token
+    prompt_ids = tokenizer(teacher_prompts, add_special_tokens=False)["input_ids"]
+    full_ids = tokenizer([p + t + stop for p, t in zip(teacher_prompts, texts)], add_special_tokens=False)["input_ids"]
+    replies = []
+    for prompt, full in zip(prompt_ids, full_ids):
+        if full[: len(prompt)] != prompt or full[-1] != tokenizer.eos_token_id:
+            raise ValueError(
+                "The tokenisation of prompt + transcript + stop token does not continue the prompt's own ids "
+                "and end on the stop token, so the gold reply cannot be cut out of it."
+            )
+        replies.append(full[len(prompt) :])
+    pad = 0 if tokenizer.pad_token_id is None else tokenizer.pad_token_id
+    ids = torch.full((len(replies), max(len(r) for r in replies)), pad, dtype=torch.long)
+    for i, reply in enumerate(replies):
+        ids[i, : len(reply)] = torch.tensor(reply)
+    return ids, torch.tensor([len(r) for r in replies], dtype=torch.long)
+
+
+def build_distill_prompts(
+    processor,
+    texts: list[str],
+    tasks: list[str],
+    langs: list[str],
+    student_prompt_template: str | dict[str, str],
+    teacher_prompt: str = "bare",
+    tgt_langs: list[str] | None = None,
+) -> dict[str, torch.Tensor]:
+    """Tokenise the student and teacher generation prompts for one batch.
+
+    Both prompts go through the same chat template and the same tokenizer call,
+    and end with the same assistant header, so a response appended to either is
+    tokenised identically. They differ only in the user turn: the student's is
+    the training audio template; the teacher's is the transcript alone
+    (``teacher_prompt="bare"``) or the same template with the transcript where
+    the audio is (``"mirror"``). Tokenised and left-padded exactly as
+    ``MELTDataCollator`` tokenises the eval generation prompt, so the student
+    rollout sees the same ids an evaluation would.
+
+    Args:
+        processor: The run's ``MELTProcessor``.
+        texts: Transcripts, one per kept utterance, in batch order.
+        tasks: Task tags, aligned with *texts*.
+        langs: Language codes, aligned with *texts*.
+        student_prompt_template: The training ``data.prompt_template``.
+        teacher_prompt: ``"bare"`` or ``"mirror"``, see ``SelfDistillConfig``.
+        tgt_langs: Target language per utterance for ``st`` instructions
+            (``assign_instructions``); ``None`` when nothing is translated.
+
+    Returns:
+        The ``DISTILL_PROMPT_KEYS`` tensors.
+    """
+    tokenizer = processor.tokenizer
+    if tgt_langs is None:
+        tgt_langs = [""] * len(texts)
+    template_kwargs = {"prompt_template": student_prompt_template, "prompt_template_selection": "custom"}
+    _, student_prompts = apply_chat_template_to_texts(
+        texts, tasks, langs, tokenizer=tokenizer, audio_token=processor.audio_token, return_prompts=True,
+        src_langs=langs, tgt_langs=tgt_langs, **template_kwargs,
+    )
+    if teacher_prompt == "mirror":
+        # The student's template rendered per utterance with its transcript as the
+        # "audio": same instruction, same language placeholders, text content.
+        teacher_prompts = [
+            apply_chat_template_to_texts(
+                [text], [task], [lang], tokenizer=tokenizer, audio_token=text, return_prompts=True,
+                src_langs=[lang], tgt_langs=[tgt], **template_kwargs,
+            )[1][0]
+            for text, task, lang, tgt in zip(texts, tasks, langs, tgt_langs)
+        ]
+    else:
+        teacher_prompts = [
+            tokenizer.apply_chat_template(
+                [{"role": "user", "content": text}],
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=False,
+            )
+            for text in texts
+        ]
+    gold_ids, gold_len = _gold_replies(tokenizer, teacher_prompts, texts)
+    student = tokenizer(
+        [processor._surround_bos_eos_mm_tokens(p) for p in student_prompts],
+        padding=True,
+        padding_side="left",
+        return_tensors="pt",
+    )
+    teacher = tokenizer(teacher_prompts, padding=True, padding_side="left", return_tensors="pt")
+    return {
+        "student_prompt_input_ids": student["input_ids"],
+        "student_prompt_attention_mask": student["attention_mask"],
+        "teacher_prompt_input_ids": teacher["input_ids"],
+        "teacher_prompt_attention_mask": teacher["attention_mask"],
+        "distill_translate": torch.tensor([bool(t) for t in tgt_langs], dtype=torch.bool),
+        "teacher_gold_ids": gold_ids,
+        "teacher_gold_len": gold_len,
+        "teacher_content_tokens": torch.tensor(
+            [len(ids) for ids in tokenizer(list(texts), add_special_tokens=False)["input_ids"]], dtype=torch.long
+        ),
+    }
+
+
+def _require_instruction_free_setup(config) -> None:
+    """The student prompt must be the fixed, chat-templated custom template."""
+    if not bool(_get_config_value(config, "apply_chat_template", False)):
+        raise ValueError("Self-distillation needs data.apply_chat_template: true (the teacher is a chat model).")
+    if str(_get_config_value(config, "prompt_template_selection", "random")) != "custom":
+        raise ValueError(
+            "Self-distillation needs data.prompt_template_selection: custom. The student prompt is "
+            "the fixed instruction-free template; a randomly drawn task instruction is what AZeroS "
+            "shows hurts generalisation (SIT vs SIFT)."
+        )
+
+
+def _require_translate_template(prompt_template) -> None:
+    """An instruction mix needs an ``st`` template that names the target language."""
+    try:
+        template = resolve_custom_template(prompt_template, "st")
+    except ValueError as err:
+        raise ValueError(
+            "distill.translate_frac > 0 needs data.prompt_template to map 'st' to a translate "
+            f"instruction as well as 'asr' to the ASR one: {err}"
+        ) from err
+    if "{tgt_lang}" not in template:
+        raise ValueError(f"The 'st' prompt template must name the target as {{tgt_lang}}, got {template!r}")
+
+
+class SelfDistillDataset(SpeechToTextDataset):
+    """``SpeechToTextDataset`` plus the student and teacher generation prompts.
+
+    The parent builds the usual batch (audio features, gold-transcript ids and
+    labels). The transcripts it keeps -- after skipping cuts whose audio or text
+    failed -- are only visible inside ``_apply_chat_template``, so they are
+    captured there and turned into the two prompt tensors afterwards.
+    """
+
+    def __init__(
+        self, *args, teacher_prompt: str = "bare", translate_frac: float = 0.0,
+        translate_targets: tuple[str, ...] = (), student_template: str | None = None, **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        _require_instruction_free_setup(self.config)
+        if translate_frac > 0:
+            _require_translate_template(self.prompt_template)
+        self.teacher_prompt = teacher_prompt
+        self.translate_frac = translate_frac
+        self.translate_targets = tuple(translate_targets)
+        # The distillation prompt; the parent's gold batch keeps self.prompt_template.
+        self.student_template = student_template or self.prompt_template
+        self._batch_meta: tuple[list[str], list[str], list[str]] | None = None
+
+    def _apply_chat_template(self, texts, tasks, langs, src_langs=None, tgt_langs=None):
+        self._batch_meta = (list(texts), list(tasks), list(langs))
+        return super()._apply_chat_template(texts, tasks, langs, src_langs, tgt_langs)
+
+    def __getitem__(self, cuts):
+        self._batch_meta = None
+        batch = super().__getitem__(cuts)
+        if batch is None:
+            return None
+        texts, tasks, langs = self._batch_meta
+        tgt_langs = None
+        if self.translate_frac > 0:
+            tasks, tgt_langs = assign_instructions(texts, tasks, langs, self.translate_frac, self.translate_targets)
+        batch.update(
+            build_distill_prompts(
+                self.processor, texts, tasks, langs, self.student_template, self.teacher_prompt, tgt_langs
+            )
+        )
+        return batch
+
+
+class SelfDistillEvalCollator(MELTDataCollator):
+    """``MELTDataCollator`` plus the prompts the alignment-gap metric needs.
+
+    The eval generation prompt (for WER) follows ``validation_ds`` as usual and
+    may carry an instruction; the distillation prompts always use the
+    *training* template, so the metric scores the objective that was trained.
+    """
+
+    def __init__(
+        self, processor, config, student_prompt_template, is_train: bool = False, teacher_prompt: str = "bare",
+        translate_frac: float = 0.0, translate_targets: tuple[str, ...] = (),
+    ):
+        super().__init__(processor=processor, config=config, is_train=is_train)
+        self.student_prompt_template = student_prompt_template
+        self.teacher_prompt = teacher_prompt
+        self.translate_frac = translate_frac
+        self.translate_targets = tuple(translate_targets)
+
+    def __call__(self, items: list[dict]) -> dict:
+        batch = super().__call__(items)
+        valid = [it for it in items if not it.get("__invalid__", False)]
+        texts = [it["text"] for it in valid]
+        tasks = [it.get("task", "asr") for it in valid]
+        langs = [it.get("lang", "") for it in valid]
+        tgt_langs = None
+        if self.translate_frac > 0:
+            tasks, tgt_langs = assign_instructions(texts, tasks, langs, self.translate_frac, self.translate_targets)
+        batch.update(
+            build_distill_prompts(
+                self.processor, texts, tasks, langs, self.student_prompt_template, self.teacher_prompt, tgt_langs
+            )
+        )
+        return batch
+
+
+# ----------------------------------------------------------------------------
+# Rollouts and loss
+# ----------------------------------------------------------------------------
+
+
+def check_adapter_only(model: torch.nn.Module) -> None:
+    """Raise unless the adapter holds every trainable parameter (and has some).
+
+    The teacher *is* the student's decoder, so training the decoder would move
+    the target with the student; training the encoder would leave the method's
+    "adapter alone aligns the modalities" claim untested. LoRA is excluded for
+    the first reason.
+    """
+    adapter_ids = {id(p) for p in model.audio_stack.adapter.parameters()}
+    stray = [name for name, p in model.named_parameters() if p.requires_grad and id(p) not in adapter_ids]
+    if stray:
+        raise ValueError(
+            f"Self-distillation trains the adapter only, but {len(stray)} other parameter(s) are trainable, "
+            f"e.g. {stray[:3]}. Set model.encoder.freeze and model.decoder.freeze to true and disable LoRA."
+        )
+    if not any(p.requires_grad for p in model.audio_stack.adapter.parameters()):
+        raise ValueError("Self-distillation needs a trainable adapter (model.adapter.freeze: false).")
+
+
+def check_adapter_only_gradients(model: torch.nn.Module) -> None:
+    """Raise if any non-adapter parameter holds a gradient, or the adapter holds none."""
+    adapter_ids = {id(p) for p in model.audio_stack.adapter.parameters()}
+    stray = [name for name, p in model.named_parameters() if p.grad is not None and id(p) not in adapter_ids]
+    if stray:
+        raise RuntimeError(f"Non-adapter parameters received gradients: {stray[:5]}")
+    if all(p.grad is None for p in model.audio_stack.adapter.parameters()):
+        raise RuntimeError("The adapter received no gradient from the distillation loss.")
+
+
+def distill_vocab_limit(processor) -> int:
+    """First token id MELT added to the decoder's vocabulary.
+
+    The audio placeholder tokens, and any embedding rows past them, were never
+    in the LLM's own output distribution: they are randomly initialised rows of
+    a tied, frozen head. Slicing logits to ``[:limit]`` (and suppressing those
+    ids in generation) is what makes the teacher exactly the original LLM, and
+    keeps the student from being scored on mass it can only put on placeholders.
+    """
+    limit = min(processor.audio_token_id, processor.audio_bos_token_id, processor.audio_eos_token_id)
+    # The stop token must be inside the teacher's distribution. The pad id may lie
+    # past the limit (Qwen's is a token MELT adds): it only fills masked positions.
+    eos = getattr(processor.tokenizer, "eos_token_id", None)
+    if eos is not None and eos >= limit:
+        raise ValueError(f"tokenizer.eos_token_id={eos} lies past MELT's added tokens (limit {limit}).")
+    return limit
+
+
+def response_mask(response: torch.Tensor, eos_token_ids: torch.Tensor) -> torch.Tensor:
+    """Mask of real response tokens: everything up to and including the first EOS.
+
+    ``generate()`` pads finished rows with the pad id; those positions, and any
+    token after the first EOS, are excluded. A row that never emitted EOS was
+    truncated at ``max_new_tokens`` and is kept whole.
+    """
+    is_eos = torch.isin(response, eos_token_ids).long()
+    eos_before = is_eos.cumsum(dim=1) - is_eos
+    return eos_before == 0
+
+
+def terminated_rows(response: torch.Tensor, mask: torch.Tensor, eos_token_ids: torch.Tensor) -> torch.Tensor:
+    """``(batch,)`` bool: the rows of *response* that ended on an EOS; the rest were cut at ``max_new_tokens``.
+
+    Only positions inside *mask* count: a decoder whose pad token is also one of its stop tokens (EuroLLM's
+    ``</s>``) would otherwise make every row that is padded out to the batch width look terminated.
+    """
+    return (torch.isin(response, eos_token_ids) & mask).any(dim=1)
+
+
+def response_logits(
+    model: torch.nn.Module,
+    prompt_ids: torch.Tensor,
+    prompt_mask: torch.Tensor,
+    response_ids: torch.Tensor,
+    response_attention: torch.Tensor,
+    vocab_limit: int,
+    **model_kwargs,
+) -> torch.Tensor:
+    """Logits that predict each response token, shape ``(batch, response_len, vocab_limit)``.
+
+    The response is appended to the left-padded prompt, so it occupies the last
+    ``L`` positions of every row -- also after MELT injects the audio frames,
+    because ``_inject_tensor`` left-pads the merged sequence. ``logits_to_keep=L+1``
+    therefore returns the last prompt position plus the response, and dropping
+    the final position leaves exactly one predicting logit per response token.
+    It also skips the LM head over the audio frames and the prompt.
+    """
+    response_len = response_ids.shape[1]
+    out = model(
+        input_ids=torch.cat([prompt_ids, response_ids], dim=1),
+        attention_mask=torch.cat([prompt_mask, response_attention], dim=1),
+        logits_to_keep=response_len + 1,
+        use_cache=False,
+        **model_kwargs,
+    )
+    logits = out.logits[:, :-1, :vocab_limit]
+    if logits.shape[1] != response_len:
+        raise RuntimeError(f"Expected {response_len} response logits, got {logits.shape[1]}")
+    return logits
+
+
+def distillation_loss(
+    student_logits: torch.Tensor,
+    teacher_logits: torch.Tensor,
+    response_ids: torch.Tensor,
+    mask: torch.Tensor,
+    cfg: SelfDistillConfig,
+) -> torch.Tensor:
+    """Token-mean distillation loss over the real response tokens.
+
+    Logits are gathered to the ``(N, vocab)`` real tokens before the divergence,
+    so padding never materialises a full-vocabulary log-softmax.
+    """
+    student = student_logits[mask].float()
+    if cfg.loss == "ce":
+        return F.cross_entropy(student, response_ids[mask])
+
+    teacher = teacher_logits[mask].float()
+    # labels=None with "batchmean" divides by the first dimension, i.e. the
+    # number of real tokens: a per-token mean, summed over the vocabulary.
+    return _generalized_jsd_loss()(student, teacher, labels=None, beta=cfg.beta, reduction="batchmean")
+
+
+def _generalized_jsd_loss():
+    """TRL's GKD divergence, imported lazily.
+
+    Only this objective, not the standard training path, depends on TRL; see
+    pyproject.toml's ``distill`` extra for the pin and why it is 0.29.x.
+    """
+    from trl.experimental.gkd import GKDTrainer
+
+    return GKDTrainer.generalized_jsd_loss
+
+
+# ----------------------------------------------------------------------------
+# Trainer
+# ----------------------------------------------------------------------------
+
+
+class MELTSelfDistillTrainer(MELTTrainer):
+    """``MELTTrainer`` whose objective is online self-distillation.
+
+    Data loading, evaluation, optimizer groups, checkpointing and logging are the
+    parent's. Only the loss changes, plus two checks the method depends on: the
+    adapter is the only trainable module (at construction), and the only one
+    that actually receives a gradient (after the first backward).
+    """
+
+    def __init__(self, model, args, config: DictConfig, processor, **kwargs):
+        self.distill = SelfDistillConfig.from_config(config.get("distill"))
+        _require_instruction_free_setup(config.data)
+        super().__init__(model=model, args=args, config=config, processor=processor, **kwargs)
+
+        if self.is_fsdp_enabled or self.is_deepspeed_enabled:
+            raise ValueError(
+                "Self-distillation runs under DDP only: rollouts and the teacher forward call "
+                "submodules directly, which sharded parameters do not support."
+            )
+        if self._memory_preallocation:
+            raise ValueError(
+                "run.memory_preallocation measures the gold-transcript forward, not the distillation "
+                "step (rollout + two forwards), so its numbers would mislead. Set it to false."
+            )
+        check_adapter_only(self.model)
+        # Import now, so a missing TRL fails at startup and not at step 1.
+        _generalized_jsd_loss()
+
+        # compute_loss returns a per-micro-batch token mean. MELT's forward takes
+        # **kwargs, so HF would otherwise assume the loss is already normalised
+        # by num_items_in_batch (counted from the *gold* labels) and skip the
+        # division by the accumulation steps.
+        self.model_accepts_loss_kwargs = False
+
+        self._vocab_limit = distill_vocab_limit(processor)
+        eos = self.model.text_decoder.generation_config.eos_token_id
+        eos = list(eos) if isinstance(eos, (list, tuple)) else [eos]
+        if processor.tokenizer.eos_token_id is not None:
+            eos.append(processor.tokenizer.eos_token_id)
+        self._eos_token_ids = sorted({int(e) for e in eos if e is not None})
+        self._pad_token_id = processor.tokenizer.pad_token_id
+        self._rng = random.Random(int(args.seed))
+        self._decoded_ahead: deque[dict] = deque()
+        self._gradients_checked = False
+        self._distill_stats: dict[str, list[float]] = defaultdict(list)
+
+        if self._eval_collator is not None:
+            self._eval_collator = SelfDistillEvalCollator(
+                processor=processor,
+                config=self._eval_collator.config,
+                student_prompt_template=self.distill.student_template
+                or _get_config_value(config.data, "prompt_template", None),
+                teacher_prompt=self.distill.teacher_prompt,
+                translate_frac=self.distill.translate_frac,
+                translate_targets=self.distill.targets,
+            )
+
+        logger.info(
+            "Self-distillation: %s (eos ids %s, vocab limit %d)",
+            self.distill,
+            self._eos_token_ids,
+            self._vocab_limit,
+        )
+
+    # -- data ----------------------------------------------------------------
+
+    def get_train_dataloader(self) -> DataLoader:
+        """``MELTTrainer.get_train_dataloader`` with the prompt-emitting dataset."""
+        dataset = FallbackDataset(
+            SelfDistillDataset(
+                processor=self.processor,
+                config=self.config.data,
+                is_train=True,
+                return_labels=True,
+                return_langs=True,
+                teacher_prompt=self.distill.teacher_prompt,
+                translate_frac=self.distill.translate_frac,
+                translate_targets=self.distill.targets,
+                student_template=self.distill.student_template or None,
+            )
+        )
+        dataloader = get_train_dataloader_from_config(
+            data_config=self.config.data,
+            dataset=dataset,
+            global_rank=self._global_rank,
+            world_size=self._world_size,
+        )
+        self._train_dataloader_ref = dataloader
+        if self._lhotse_resume_from is not None:
+            self._restore_sampler_state(dataloader)
+        return dataloader
+
+    def get_batch_samples(self, epoch_iterator, num_batches: int, device: torch.device) -> tuple[list, None]:
+        """The parent's prefetch, with the teacher's replies decoded ``distill.rollout_lookahead`` batches at a time.
+
+        Every ``rollout_lookahead``-th call pulls that many micro-batches (times ``num_batches``) from the
+        loader, decodes their replies in one ``generate`` call and queues them; the calls in between serve the
+        queue. An exhausted loader returns what is left, then an empty list, which ends the epoch.
+        """
+        lookahead = self.distill.rollout_lookahead
+        if lookahead <= 1:
+            return super().get_batch_samples(epoch_iterator, num_batches, device)
+        if len(self._decoded_ahead) < num_batches:
+            fetched, _ = super().get_batch_samples(epoch_iterator, lookahead * num_batches, device)
+            if fetched:
+                self._decode_together(fetched, device)
+                self._decoded_ahead.extend(fetched)
+        # compute_loss ignores num_items_in_batch (model_accepts_loss_kwargs is False).
+        return [self._decoded_ahead.popleft() for _ in range(min(num_batches, len(self._decoded_ahead)))], None
+
+    @torch.no_grad()
+    def _decode_together(self, batches: list[dict], device: torch.device) -> None:
+        """Decode the teacher's replies for *batches* in one ``generate`` call; store each micro-batch's share in it.
+
+        Each batch gets ``precomputed_response`` and ``precomputed_mask``, cut to its own longest reply, which is
+        the shape a call on that batch alone returns; ``_rollout`` hands them back instead of decoding.
+        """
+        width = max(b["teacher_prompt_input_ids"].shape[1] for b in batches)
+
+        def left_pad(key: str, value: int) -> torch.Tensor:
+            rows = [F.pad(b[key], (width - b[key].shape[1], 0), value=value) for b in batches]
+            return torch.cat(rows).to(device)
+
+        prompt_ids = left_pad("teacher_prompt_input_ids", self._pad_token_id)
+        prompt_mask = left_pad("teacher_prompt_attention_mask", 0)
+        vocab = self.model.text_decoder.get_output_embeddings().weight.shape[0]
+        with self.accelerator.autocast():
+            out = self.model.text_decoder.generate(
+                input_ids=prompt_ids, attention_mask=prompt_mask, **self._generation_kwargs_for(False, vocab)
+            )
+        response = out[:, width:]
+        mask = response_mask(response, torch.tensor(self._eos_token_ids, device=response.device))
+        response = response.masked_fill(~mask, self._pad_token_id)
+        start = 0
+        for batch in batches:
+            rows = slice(start, start + batch["teacher_prompt_input_ids"].shape[0])
+            start = rows.stop
+            longest = max(int(mask[rows].sum(dim=1).max()), 1)
+            batch["precomputed_response"] = response[rows, :longest]
+            batch["precomputed_mask"] = mask[rows, :longest]
+
+    # -- rollouts ------------------------------------------------------------
+
+    def _generation_kwargs_for(self, greedy: bool, logits_dim: int) -> dict:
+        kwargs = {
+            "max_new_tokens": self.distill.max_new_tokens,
+            "eos_token_id": self._eos_token_ids,
+            "pad_token_id": self._pad_token_id,
+            "use_cache": True,
+            # Same support as the loss: see distill_vocab_limit.
+            "suppress_tokens": list(range(self._vocab_limit, logits_dim)),
+        }
+        if greedy or self.distill.temperature == 0.0:
+            # Explicit, because Llama's generation_config ships do_sample=True.
+            kwargs.update(do_sample=False, temperature=None, top_p=None, top_k=None)
+        else:
+            # top_k=0 disables transformers' default top-k of 50, which would
+            # otherwise truncate the "on-policy" distribution.
+            kwargs.update(do_sample=True, temperature=self.distill.temperature, top_p=self.distill.top_p, top_k=0)
+        return kwargs
+
+    def _reply_budget(self, inputs: dict) -> int:
+        """The teacher rollout's token budget for this micro-batch: ``max_new_tokens``, or less for short content."""
+        cap, factor = self.distill.max_new_tokens, self.distill.reply_budget_factor
+        content = inputs.get("teacher_content_tokens")
+        if factor <= 0.0 or content is None or content.numel() == 0:
+            return cap
+        return min(cap, math.ceil(factor * int(content.max())) + self.distill.reply_budget_margin)
+
+    def _gold_and_teacher_responses(self, inputs: dict, gen_kwargs: dict) -> tuple[torch.Tensor, torch.Tensor]:
+        """Replies for ``distill.repeat_from_gold``: the teacher's for translate rows, the transcript for the rest.
+
+        Only the translate rows are decoded, so the batch's decoding length follows their content alone. A gold
+        reply longer than ``max_new_tokens`` is cut there without its stop token, so it counts as truncated.
+        """
+        unwrapped = self.model
+        translate = inputs["distill_translate"].to(torch.bool)
+        device = translate.device
+        cap = self.distill.max_new_tokens
+        eos_ids = torch.tensor(self._eos_token_ids, device=device)
+        generated = gen_mask = None
+        rows = translate.nonzero(as_tuple=True)[0]
+        if rows.numel() > 0:
+            prompt = inputs["teacher_prompt_input_ids"][rows]
+            budget = self._reply_budget({"teacher_content_tokens": inputs["teacher_content_tokens"][rows]})
+            out = unwrapped.text_decoder.generate(
+                input_ids=prompt,
+                attention_mask=inputs["teacher_prompt_attention_mask"][rows],
+                **{**gen_kwargs, "max_new_tokens": budget},
+            )
+            generated = out[:, prompt.shape[1] :]
+            gen_mask = response_mask(generated, eos_ids)
+            generated = generated.masked_fill(~gen_mask, self._pad_token_id)
+        gold_rows = (~translate).nonzero(as_tuple=True)[0]
+        gold_len = inputs["teacher_gold_len"].clamp(max=cap)
+        width = max(
+            0 if generated is None else generated.shape[1],
+            int(gold_len[gold_rows].max()) if gold_rows.numel() > 0 else 0,
+        )
+        response = torch.full((translate.shape[0], width), self._pad_token_id, dtype=torch.long, device=device)
+        mask = torch.zeros_like(response, dtype=torch.bool)
+        for i in gold_rows.tolist():
+            n = int(gold_len[i])
+            response[i, :n] = inputs["teacher_gold_ids"][i, :n]
+            mask[i, :n] = True
+        if generated is not None:
+            response[rows, : generated.shape[1]] = generated
+            mask[rows, : generated.shape[1]] = gen_mask
+        return response, mask
+
+    @torch.no_grad()
+    def _rollout(self, inputs: dict, from_student: bool, greedy: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
+        """Sample one response per utterance; return ``(ids, mask)``, pad ids where masked."""
+        if not from_student and "precomputed_response" in inputs:
+            return inputs.pop("precomputed_response"), inputs.pop("precomputed_mask")
+        unwrapped = self.model
+        gen_kwargs = self._generation_kwargs_for(greedy, unwrapped.text_decoder.get_output_embeddings().weight.shape[0])
+        if not from_student:
+            gen_kwargs["max_new_tokens"] = self._reply_budget(inputs)
+        with self.accelerator.autocast():
+            if from_student:
+                response = unwrapped.generate(
+                    input_ids=inputs["student_prompt_input_ids"],
+                    attention_mask=inputs["student_prompt_attention_mask"],
+                    input_features=self._cast_to_audio_dtype(inputs["input_features"]),
+                    features_attention_mask=inputs.get("features_attention_mask"),
+                    **gen_kwargs,
+                )
+            elif self.distill.repeat_from_gold and not greedy and "teacher_gold_ids" in inputs:
+                return self._gold_and_teacher_responses(inputs, gen_kwargs)
+            else:
+                prompt_ids = inputs["teacher_prompt_input_ids"]
+                response = unwrapped.text_decoder.generate(
+                    input_ids=prompt_ids,
+                    attention_mask=inputs["teacher_prompt_attention_mask"],
+                    **gen_kwargs,
+                )
+                # Generating from input_ids returns prompt + response; from
+                # inputs_embeds (the student path) only the response.
+                response = response[:, prompt_ids.shape[1]:]
+        mask = response_mask(response, torch.tensor(self._eos_token_ids, device=response.device))
+        return response.masked_fill(~mask, self._pad_token_id), mask
+
+    def _student_and_teacher_logits(self, model, inputs: dict, response: torch.Tensor, mask: torch.Tensor):
+        attention = mask.long()
+        # Through `model` (the DDP wrapper) so the gradient is all-reduced.
+        student = response_logits(
+            model,
+            inputs["student_prompt_input_ids"],
+            inputs["student_prompt_attention_mask"],
+            response,
+            attention,
+            self._vocab_limit,
+            input_features=inputs["input_features"],
+            features_attention_mask=inputs.get("features_attention_mask"),
+        )
+        with torch.no_grad(), self.accelerator.autocast():
+            teacher = response_logits(
+                self.model.text_decoder,
+                inputs["teacher_prompt_input_ids"],
+                inputs["teacher_prompt_attention_mask"],
+                response,
+                attention,
+                self._vocab_limit,
+            )
+        return student, teacher
+
+    # -- training ------------------------------------------------------------
+
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        gold = {key: inputs.pop(key) for key in _GOLD_ONLY_KEYS if key in inputs}
+        from_student = self._rng.random() < self.distill.lmbda
+        response, mask = self._rollout(inputs, from_student=from_student)
+        student, teacher = self._student_and_teacher_logits(model, inputs, response, mask)
+        loss_mask = mask
+        if self.distill.drop_truncated:
+            ended = terminated_rows(response, mask, torch.tensor(self._eos_token_ids, device=response.device))
+            loss_mask = mask & ended.unsqueeze(1)
+            self._distill_stats["dropped_frac"].append(1.0 - ended.float().mean().item())
+        if loss_mask.any():
+            loss = distillation_loss(student, teacher, response, loss_mask, self.distill)
+        else:
+            # Every reply of this micro-batch was cut: there is no target to learn from. A zero that still
+            # depends on the logits keeps the backward pass, and DDP's gradient reduction, running on every rank.
+            loss = student.sum() * 0.0
+        # The monitors describe the replies as the teacher wrote them, cut ones included.
+        self._record_stats(student, teacher, response, mask, from_student, inputs.get("distill_translate"))
+        if self.distill.gold_ce_weight > 0:
+            gold_ce = self._gold_cross_entropy(inputs, gold)
+            self._distill_stats["gold_ce"].append(gold_ce.item())
+            loss = loss + self.distill.gold_ce_weight * gold_ce
+        return (loss, None) if return_outputs else loss
+
+    def _gold_cross_entropy(self, inputs: dict, gold: dict) -> torch.Tensor:
+        """The standard MA loss on the gold transcript, under the same student prompt.
+
+        Runs on the unwrapped model: the student forward above already went
+        through the DDP wrapper, which allows one forward per backward. The
+        gradient still lands in the adapter's ``.grad`` before DDP's hooks
+        all-reduce it, because both terms reach backward in one graph.
+        """
+        out = self.model(
+            input_ids=gold["input_ids"],
+            attention_mask=gold["attention_mask"],
+            labels=gold["labels"],
+            input_features=inputs["input_features"],
+            features_attention_mask=inputs.get("features_attention_mask"),
+            audio_lengths=gold.get("audio_lengths"),
+            use_cache=False,
+        )
+        return out.loss
+
+    def training_step(self, model, inputs, num_items_in_batch=None):
+        loss = super().training_step(model, inputs, num_items_in_batch)
+        if not self._gradients_checked:
+            check_adapter_only_gradients(self.model)
+            self._gradients_checked = True
+            logger.info("Gradient check passed: only adapter parameters received gradients.")
+        return loss
+
+    @torch.no_grad()
+    def _record_stats(self, student, teacher, response, mask, from_student: bool, translate=None) -> None:
+        """Per-micro-batch diagnostics, averaged and reduced at log time.
+
+        ``teacher_logp`` is the mean log-probability the teacher gives the
+        response tokens. On on-policy batches it is the reward-hacking monitor:
+        it can only go up by the student writing text the transcript makes more
+        plausible, and a collapse to generic boilerplate shows up as it rising
+        while ``response_len`` falls.
+        """
+        tokens = response[mask].unsqueeze(-1)
+        s, t = student[mask].float(), teacher[mask].float()
+        student_logp = (s.gather(-1, tokens).squeeze(-1) - s.logsumexp(-1)).mean()
+        teacher_logp = (t.gather(-1, tokens).squeeze(-1) - t.logsumexp(-1)).mean()
+        lengths = mask.sum(dim=1).float()
+        # Truncated = no EOS. Not `lengths == response.shape[1]`: the longest
+        # row that did stop spans the whole width too, ending on its EOS.
+        has_eos = terminated_rows(response, mask, torch.tensor(self._eos_token_ids, device=response.device))
+        stats = self._distill_stats
+        stats["on_policy_frac"].append(float(from_student))
+        stats["response_len"].append(lengths.mean().item())
+        stats["truncated_frac"].append((~has_eos).float().mean().item())
+        stats["student_logp" if from_student else "student_logp_on_teacher"].append(student_logp.item())
+        stats["teacher_logp" if from_student else "teacher_logp_on_teacher"].append(teacher_logp.item())
+        if translate is not None and translate.any():
+            # The same monitor restricted to translate instructions, which have
+            # no gold to fall back on; plus the share of rows they took.
+            rows = mask & translate.to(mask.device).unsqueeze(1)
+            t_rows = teacher[rows].float()
+            t_logp = (t_rows.gather(-1, response[rows].unsqueeze(-1)).squeeze(-1) - t_rows.logsumexp(-1)).mean()
+            stats["teacher_logp_translate" if from_student else "teacher_logp_translate_on_teacher"].append(t_logp.item())
+            stats["response_len_translate"].append(mask[translate.to(mask.device)].sum(dim=1).float().mean().item())
+        if translate is not None:
+            stats["translate_rows"].append(translate.float().mean().item())
+
+    def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
+        """Add ``distill/*`` means, reduced across ranks, to training rows.
+
+        The collective runs unconditionally on every rank, as in the parent's
+        reductions: gating it on local state would deadlock.
+        """
+        local = dict(self._distill_stats)
+        self._distill_stats = defaultdict(list)
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            gathered: list[dict | None] = [None] * torch.distributed.get_world_size()
+            torch.distributed.all_gather_object(gathered, local)
+        else:
+            gathered = [local]
+        merged: dict[str, list[float]] = defaultdict(list)
+        for rank_stats in gathered:
+            for key, values in (rank_stats or {}).items():
+                merged[key].extend(values)
+        if "loss" in logs:
+            logs.update({f"distill/{k}": sum(v) / len(v) for k, v in merged.items() if v})
+        super().log(logs, start_time)
+
+    # -- evaluation ----------------------------------------------------------
+
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None, **gen_kwargs):
+        """WER as usual, and ``eval_loss`` := the student's alignment gap.
+
+        The alignment gap is the per-token forward KL(teacher || student) on
+        the teacher's own greedy response to the transcript -- how far the audio
+        path is from reading the utterance as the text path does. It is defined
+        for any MELT checkpoint, so it can be scored on the gold-transcript MA
+        arms too, which is what makes it the comparison metric. WER keeps using
+        ``validation_ds``'s prompt, which for this method should carry a
+        transcription instruction (an instruction-free model answers rather
+        than transcribes).
+        """
+        distill_inputs = {key: inputs.pop(key) for key in DISTILL_PROMPT_KEYS if key in inputs}
+        features = {key: inputs[key] for key in ("input_features", "features_attention_mask") if key in inputs}
+        loss, predictions, labels = super().prediction_step(
+            model, inputs, prediction_loss_only, ignore_keys=ignore_keys, **gen_kwargs
+        )
+        if not self.distill.eval_alignment_gap or not distill_inputs:
+            return loss, predictions, labels
+
+        batch = self._prepare_inputs({**distill_inputs, **features})
+        response, mask = self._rollout(batch, from_student=False, greedy=True)
+        with torch.no_grad(), self.accelerator.autocast():
+            student, teacher = self._student_and_teacher_logits(model, batch, response, mask)
+        gap = distillation_loss(student, teacher, response, mask, SelfDistillConfig(loss="jsd", beta=0.0, lmbda=0.0))
+        return gap.detach(), predictions, labels
+
+
+__all__ = [
+    "DISTILL_PROMPT_KEYS",
+    "assign_instructions",
+    "MELTSelfDistillTrainer",
+    "SelfDistillConfig",
+    "SelfDistillDataset",
+    "SelfDistillEvalCollator",
+    "build_distill_prompts",
+    "check_adapter_only",
+    "check_adapter_only_gradients",
+    "distill_vocab_limit",
+    "distillation_loss",
+    "response_logits",
+    "response_mask",
+]

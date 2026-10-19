@@ -1,0 +1,12 @@
+# melt-eval prompt format: ST instruction placed AFTER the audio (as 3 of the 6 random SFT templates do).
+# Same chat template and audio token as format-repeatfirst.yaml; the asr entry is unused by the ST sets.
+data:
+  apply_chat_template: true
+  prompt_template_selection: custom
+  chat_template_config: chatml
+  prompt_template:
+    asr: "Repeat the following content exactly, word for word, and write nothing else.\n\n{audio_token}"
+    st: "{audio_token} Translate this audio to {tgt_lang}."
+model:
+  decoder:
+    audio_token: "<|audio|>"
