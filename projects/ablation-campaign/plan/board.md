@@ -15,6 +15,28 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-19 — Claude (worker session, backbones) — MA scores of five backbones; Llama IFT done and scored (base .061, ins .085); EuroLLM OOM at step 4040 and resumed; Qwen pair at 2,296/6,310
+
+- **MA selection score** (lower is better; `selection-metric/scores/backbones-ma-and-llama-ift-2026-10-19.txt`): qwen35-2b-ins .122, qwen35-2b-base .131, eurollm1.7b-ins .141, llama1b-ins .148, llama1b-base 1.0 (2,555/3,000 in-domain clips run away — the base Llama MA weights do not transcribe; not yet diagnosed). EuroLLM-Base MA: not scored (runaway WER 4–7).
+- **Llama IFT** (6,310 steps, 36.4 h): base **.0614** (ID .051, FLEURS-OOD-related .158), ins **.0850** (ID .048, OOD-related .292). Both far better than their MA scores; base beats ins on out-of-domain languages.
+- **EuroLLM-Base IFT repairs the ChatML rows**: step-0 eval WER en 6.8, step 902 en 0.113, step 2125 de .107 / es .065; no runaway after the first 902 steps. Unfreezing the decoder was the fix.
+- **EuroLLM-Ins and -Base** (47449749, 47464246) died at step 4040 on the same batch (20 cuts × 365 tokens, 3.8 GiB fp32 logits on a GPU at 60 GB). Resumed from checkpoint-3608 at bd 50 × ga 24 (still 4,800 s/step; the remaining 2,700 steps see different batches): 47529945 (ins), 47529946 (base), pending on Priority.
+- **Qwen pair** (47464247/8, 2 nodes): 2,296/6,310 at ~29 s/step, ETA 2026-10-20 ~19:40Z, ~53 h of the 66 h limit.
+- **X→en ST evals for Llama IFT FAILED at start** (47530214/5): `~/eval` tasks.py imports `speech_prompt` that `melteval/solver.py` in the same checkout does not have; needs an eval-code fix before resubmitting. Text retention / cascade oracle: no tool for trained checkpoints.
+- `submit_crossing_eval.sh` accepts `IFT-*` rows. Rows `IFT-700-backbone-*` from `~/training-ift` @ d0c8151: adapter 2e-4, decoder 2e-5, 316-step warmup.
+
+
+## 2026-10-17 (late) — Claude (worker session, backbones) — Llama IFT smoke passed (30 steps, 1 node, acc_debug)
+
+IFT-smoke-llama1b-ins (from `~/training-ift` @ d0c8151) COMPLETED in ~35 min.
+- Trainable: 1,357,520,897 params, all fp32 (Llama decoder 1.24B + adapter 121M; encoder frozen).
+- LR: adapter group at 1.52e-5 at step 24, i.e. 2e-4 × 24/316 — the 316-step warmup and the 2e-4 adapter LR are in effect.
+- Memory: gpu_peak 40 GB of 64 (bd 75, ga 16 as in the row); the preallocation warm-up printed a spurious min-duration OOM warning, training was unaffected.
+- Speed: ~17–23 s/step after the first steps (the first 5 were 80–120 s: container/data start-up). The 40 h row limit (6,310 × ~20 s ≈ 35 h) holds.
+- Checkpoint: model.safetensors 7.5 GB, optimizer.pt 11 GB (×save_total_limit 7 ⇒ budget ~130 GB per run).
+- Eval at step 15 ran (en/de/fr WER ~0.11 — start-of-IFT, as expected from the MA weights).
+Not yet measured: Qwen (2 nodes, bd 30) and EuroLLM from the staged checkpoint. Real IFT runs wait for the PI's go.
+
 ## 2026-10-18 — Claude (worker session, crossing) — the 21 final crossing runs are in the results table of `03-audio-stack.md` §5
 Context: the PI asked for the crossing's final outcomes in the table at the bottom of `plan/03-audio-stack.md`, which was empty; this folds the settled numbers into the numbered file, as this board asks. The entries of 10-14 to 10-17 stay.
 Finding:
@@ -4155,34 +4177,3 @@ catastrophic) but it does overturn "audio was ignored" as the explanation,
 which changes what a passing LibriSpeech screen run should look like (a run
 that only drops eval loss without moving WER may be repeating this same
 coarse-signal pattern rather than fixing the recipe).
-
-## 2026-10-17 — Llama IFT smoke passed (30 steps, 1 node, acc_debug)
-
-IFT-smoke-llama1b-ins (from `~/training-ift` @ d0c8151) COMPLETED in ~35 min.
-- Trainable: 1,357,520,897 params, all fp32 (Llama decoder 1.24B + adapter 121M; encoder frozen).
-- LR: adapter group at 1.52e-5 at step 24, i.e. 2e-4 × 24/316 — the 316-step warmup and the 2e-4 adapter LR are in effect.
-- Memory: gpu_peak 40 GB of 64 (bd 75, ga 16 as in the row); the preallocation warm-up printed a spurious min-duration OOM warning, training was unaffected.
-- Speed: ~17–23 s/step after the first steps (the first 5 were 80–120 s: container/data start-up). The 40 h row limit (6,310 × ~20 s ≈ 35 h) holds.
-- Checkpoint: model.safetensors 7.5 GB, optimizer.pt 11 GB (×save_total_limit 7 ⇒ budget ~130 GB per run).
-- Eval at step 15 ran (en/de/fr WER ~0.11 — start-of-IFT, as expected from the MA weights).
-Not yet measured: Qwen (2 nodes, bd 30) and EuroLLM from the staged checkpoint. Real IFT runs wait for the PI's go.
-
-## 2026-10-18 — Six backbone IFT runs submitted (PI go)
-
-Rows from `~/training-ift` @ d0c8151 (adapter 2e-4, decoder 2e-5, 316-step warmup, 6,310 steps, `arms.tsv` has the job ids).
-- Running: llama1b-base, llama1b-ins (~2,900/6,310 at ~18 s/step), eurollm-ins (~2,160, 19 s/step), eurollm-base (resubmitted, ~660, 18 s/step).
-- Pending (2 nodes each, Priority): qwen35-2b-ins, qwen35-2b-base. Qwen smoke on acc_debug passed: 50 GB peak, ~32-35 s/step ⇒ ~58 h of the 66 h limit.
-- EuroLLM-Base first submit died at startup: the staged `tokenizer_config.json` lacked pad/audio token attributes (the audio tokens were in the vocab). Patched to mirror the Instruct tokenizer; the resubmit is training.
-- Still open: whether IFT repairs EuroLLM-Base's ChatML rows (first eval at step 902).
-
-## 2026-10-19 — Llama IFT done and sent to scoring; both EuroLLM runs OOM'd at step 4040 and were resumed
-
-- llama1b-base and llama1b-ins finished (36.4 h, 6,310 steps, ~20.8 s/step). Selection-metric scoring submitted for both (6 sbatch each, `--code ~/training-ift`); `submit_crossing_eval.sh` now accepts `IFT-*` rows.
-- eurollm-ins and eurollm-base both died at step 4040 with the SAME OOM: a batch of 20 cuts × 365 tokens, the fp32 upcast of the 128k-vocab logits (3.8 GiB) on a GPU already at 60 GB. Same seed ⇒ same batch ⇒ a plain resume would hit it again. Resumed from checkpoint-3608 with bd 50 × ga 24 (still 4,800 s per step) instead of bd 75 × ga 16, same output dir. The remaining 2,700 steps therefore see a different batch composition than an uninterrupted run would.
-- Qwen runs (2 nodes) at 2,013/6,310, ~31 s/step.
-
-## 2026-10-19 — Llama IFT: evals queued
-
-- Selection metric (ID CER + FLEURS-26 dev200 CER, i.e. the "IFT CER 5-lang" and "FLEURS-24 CER (IFT)" columns): 12 jobs on acc_ehpc, logs under `eval-logs/selection-metric/ift-700-backbone-llama1b-{base,ins}/`.
-- X→en ST (FLEURS-24 dev, 100 utt × 23 languages, chrF++/spBLEU, `melt_eval_cuda126_spbleu.sif`, frozen set `eval-sets-spbleu/fleurs24-st-xen-dev`): jobs 47530214 (base), 47530215 (ins), logs under `eval-logs/ift-st/`.
-- NOT queued: "text retention" (BPC of the IFT'd decoder) and the cascade oracle — the §3 text-prior tool is not built for trained checkpoints (only `run_text_prior.sbatch` for bare backbones). Needs a design call.
