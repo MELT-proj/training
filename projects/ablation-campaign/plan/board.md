@@ -15,6 +15,18 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-19 — MELT orchestrator — MoE or Conformer for Fondue: the evidence in one place
+Context: the PI is unsure whether MoE is more stable and more defensible than the Conformer. Everything below is already on main (03 §5, the score files, the board entries of 09-26 to 10-17); nothing new was run.
+Finding:
+1. **Accuracy on Whisper is a tie.** Pairs with the same seed (same data order), Conformer (no QK-norm, LR 1e-3) vs MoE (2e-3): .1364 vs .1429 (seed 42), .1526 vs .1596 (seed 43). ID CER: .0605/.0610 and .0631/.0623; OOD-train: .0401/.0423 and .0448/.0432. These are tied. The whole 0.007 edge is in OOD-related (zero-shot pt/ro/nl/da/sv, weight 0.6), where single languages swing by up to 0.3 between seeds (sv: MoE .531 vs .755; Conformer da .596 vs .854). The Conformer that can run at the recipe LR (QK-norm, 2e-3) scores .1512, behind MoE seed 42 (.1429), and has one seed.
+2. **Stability favours MoE.** MoE ran at the recipe LR on all four encoders with no change: 4/4 clean, max `grad_norm` <= 16. Without QK-norm the Whisper Conformer exploded three times (2e-3 twice; 1e-3 once at epoch 0.53, before the warmup fix). The 1e-3 run that finished had a spike to 70. The worker's probe found its attention saturated (near hard argmax) from step ~5. Across encoders, even with warmup at 2e-3, 2 of 4 Conformer cells and 4 of 4 Q-Former cells failed without QK-norm (board 10-09 to 10-11). QK-norm fixed all four Conformers (max 29-56), but that is one seed each at 2,100 h/lang, against a Fondue MA of ~247K h, a larger batch and a 5-day chained run.
+3. **Across encoders it flips.** Conformer+QK-norm wins big on MMS-1b (.254 vs MoE .438). It loses on mHuBERT (.376 vs .269) and w2v-BERT (.629 vs .517). On Whisper it is tied.
+4. **Downstream, only MoE is tested.** All six backbone MA and IFT arms run Whisper + MoE. Switching would make Fondue's stack one that has never been through IFT, and the week-6 "winning stack x winning backbone confirmation" box would need its own MA+IFT before 10-23, which cannot land.
+5. **Cost.** Conformer is 55M parameters, MoE 122M total (about a quarter active). Wall time was the same within run-to-run noise (03 §5). Neither matters next to the encoder and the decoder.
+6. **What a reviewer can attack, and the cheap answer.** For MoE: no per-language expert-usage measurement exists (03 §1b promised one; deferred 09-23). Router statistics on the two Whisper MoE checkpoints over the ID and FLEURS sets would take a few GPU-h on artemis and also give the paper a figure. For the Conformer: results from the unpatched one rest on a saturated attention.
+Proposal: MoE for Fondue. In the paper, report the Whisper adapters as tied within the seed spread, and choose MoE for stability without an architecture patch and for being the only stack validated through IFT on all backbones. Measure the MoE router usage before the MA freeze.
+Action needed: PI: adapter call by 10-23; say if the router-usage measurement should be tasked.
+
 ## 2026-10-19 — Claude (worker session, backbones) — MA scores of five backbones; Llama IFT done and scored (base .061, ins .085); EuroLLM OOM at step 4040 and resumed; Qwen pair at 2,296/6,310
 
 - **MA selection score** (lower is better; `selection-metric/scores/backbones-ma-and-llama-ift-2026-10-19.txt`): qwen35-2b-ins .122, qwen35-2b-base .131, eurollm1.7b-ins .141, llama1b-ins .148, llama1b-base 1.0 (2,555/3,000 in-domain clips run away — the base Llama MA weights do not transcribe; not yet diagnosed). EuroLLM-Base MA: not scored (runaway WER 4–7).

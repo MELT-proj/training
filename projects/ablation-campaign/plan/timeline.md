@@ -100,7 +100,15 @@ board entry saying why.
 
 ---
 
-## Status and proposed cut, 2026-10-19 (awaiting the PI)
+## Status and proposed cut, 2026-10-19
+
+**PI decisions of 10-19:** the **MA freeze moves to Fri 10-23**. The cut
+below is undecided. The PI is weighing a WER-based data filter or
+curriculum instead: cuts with WER in [0.1, 0.4] for warmup and the stable
+phase, and [0, 0.1] for the decay. No per-cut WER exists in the training
+repo yet. If the filter applies to Fondue's MA, it must be specified by
+10-23; if it applies only to IFT, by the IFT freeze. The adapter
+(MoE or Conformer) is still open; the analysis is on the board, 10-19.
 
 **Where the critical path stands.** The backbone is decidable around Wed
 10-21, from the six IFTs (the EuroLLM pair depends on its queue wait). The
@@ -659,7 +667,8 @@ No gate on Sunday: the backbone and regime gates move to Fri 10-23.
 
 ## Week 6 — Mon 2026-10-19 to Sun 2026-10-25
 
-**Gate (Fri 10-23): backbone, regime and final adapter.** Criteria in
+**Gate (Fri 10-23): backbone, regime, final adapter, and the MA freeze
+(moved from 10-29 by the PI on 10-19).** Criteria in
 `02-backbones.md` §4 and `04-regime.md` §4; the adapter on the replicate pair
 plus the Whisper QK-norm Conformer cell.
 
@@ -721,7 +730,7 @@ plus the Whisper QK-norm Conformer cell.
 
 ## Week 7 — Mon 2026-10-26 to Sun 2026-11-01
 
-**Gate (Thu 10-29): MA freeze.** The MA rows of `06-fondue.md` §3 are filled
+**Gate (moved to Fri 10-23 by the PI on 10-19): MA freeze.** The MA rows of `06-fondue.md` §3 are filled
 and frozen: backbone, stack, prompt, language set, mixture, MA data budget
 and stage split, MA batch and LR, filters, FLEURS in/out, `min_lr_scale`.
 
