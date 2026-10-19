@@ -79,6 +79,7 @@ are one `ingest_eu24_report.py` call each (PROTOCOL.md §4). `PROTOCOL.md` §8 l
 | `master.py` | the only writer (lock, schema, no silent overwrite, changelog, cell-level merge driver) and the command line above |
 | `ingest_eu24_report.py` | an `eu24_report.json` into the master |
 | `ingest_published.py`, `published/` | hand-copied published tables into the master |
+| `export_xlsx.py` | read-only export of the master to an Excel workbook, one tab per set (`uv run --no-project --with openpyxl python export_xlsx.py`) |
 | `fig_fleurs_asr_vs_baselines.py`, `figures/` | figure 1 and its output |
 | `test_master.py`, `test_fig_fleurs_asr_vs_baselines.py` | tests; `python -m pytest projects/ablation-campaign/charts -q` in the melteval venv (the figure tests skip without matplotlib) |
 

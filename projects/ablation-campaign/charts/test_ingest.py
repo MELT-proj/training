@@ -124,7 +124,7 @@ def test_a_report_filed_under_the_wrong_prompt_format_or_with_an_unknown_model_i
 
 def test_a_report_on_a_split_that_is_not_registered_cannot_be_ingested(workdir, capsys):
     test_split = report()
-    test_split["meta"]["sets_note"] = "fleurs24-asr-test, fleurs24-st-xen-test, fleurs24-st-enx-test"
+    test_split["meta"]["sets_note"] = "fleurs24-asr-heldout, fleurs24-st-xen-heldout, fleurs24-st-enx-heldout"
     assert ingest(workdir, test_split) == 2
     assert "is not in results_sets.csv" in capsys.readouterr().err
 
