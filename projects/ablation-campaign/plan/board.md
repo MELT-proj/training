@@ -4180,3 +4180,9 @@ Rows from `~/training-ift` @ d0c8151 (adapter 2e-4, decoder 2e-5, 316-step warmu
 - llama1b-base and llama1b-ins finished (36.4 h, 6,310 steps, ~20.8 s/step). Selection-metric scoring submitted for both (6 sbatch each, `--code ~/training-ift`); `submit_crossing_eval.sh` now accepts `IFT-*` rows.
 - eurollm-ins and eurollm-base both died at step 4040 with the SAME OOM: a batch of 20 cuts × 365 tokens, the fp32 upcast of the 128k-vocab logits (3.8 GiB) on a GPU already at 60 GB. Same seed ⇒ same batch ⇒ a plain resume would hit it again. Resumed from checkpoint-3608 with bd 50 × ga 24 (still 4,800 s per step) instead of bd 75 × ga 16, same output dir. The remaining 2,700 steps therefore see a different batch composition than an uninterrupted run would.
 - Qwen runs (2 nodes) at 2,013/6,310, ~31 s/step.
+
+## 2026-10-19 — Llama IFT: evals queued
+
+- Selection metric (ID CER + FLEURS-26 dev200 CER, i.e. the "IFT CER 5-lang" and "FLEURS-24 CER (IFT)" columns): 12 jobs on acc_ehpc, logs under `eval-logs/selection-metric/ift-700-backbone-llama1b-{base,ins}/`.
+- X→en ST (FLEURS-24 dev, 100 utt × 23 languages, chrF++/spBLEU, `melt_eval_cuda126_spbleu.sif`, frozen set `eval-sets-spbleu/fleurs24-st-xen-dev`): jobs 47530214 (base), 47530215 (ins), logs under `eval-logs/ift-st/`.
+- NOT queued: "text retention" (BPC of the IFT'd decoder) and the cascade oracle — the §3 text-prior tool is not built for trained checkpoints (only `run_text_prior.sbatch` for bare backbones). Needs a design call.
