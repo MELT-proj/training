@@ -95,6 +95,24 @@ def test_a_dry_run_with_everything_assumed_landed_lists_every_job_and_submits_no
     assert not state.exists()
 
 
+def test_a_dry_run_on_the_real_disk_writes_nothing_into_the_checkpoints(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(tq.q, "in_flight", lambda: {"gpu-short": 0, "gpu-medium": 0, "gpu-long": 0})
+    gold = tmp_path / wsc.WARM_STARTS["goldw"]
+    gold.mkdir()
+    for name in tq.TOKENIZER_FILES:
+        (gold / name).write_text(name)
+    ckpt = tmp_path / "SFT-EU24-from-sd24-bd60-ga4-8g-s1337" / "checkpoint-2872"
+    ckpt.mkdir(parents=True)
+    for name in ("model.safetensors", "config.json", ".transfer_complete"):
+        (ckpt / name).write_text("")
+    state = tmp_path / "state.jsonl"
+    assert tq.main(["--state", str(state), "--dry-run", "--outputs", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert "eu24-repeatfirst-ckpt2872 selection-fleurs26-dev200" in out  # placed: a landed checkpoint counts as ready
+    assert not any((ckpt / name).exists() for name in tq.TOKENIZER_FILES)  # but the dry run did not copy the files in
+    assert not state.exists()
+
+
 @pytest.mark.parametrize("pause", [True, False])
 def test_a_pause_file_stops_submissions(tmp_path, monkeypatch, capsys, pause):
     monkeypatch.setattr(tq.q, "in_flight", lambda: {"gpu-short": 0, "gpu-medium": 0, "gpu-long": 0})

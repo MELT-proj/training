@@ -137,9 +137,10 @@ def main(argv: list[str] | None = None) -> int:
         for arm, step in order:
             path = target_dir(arm, step, args.outputs)
             if not args.assume_ready:
-                if landed(path):
+                # a dry run writes nothing into the checkpoints, so for it a landed target counts as ready
+                if landed(path) and not args.dry_run:
                     assemble(path, processor_source)
-                if not ready(path):
+                if not (landed(path) if args.dry_run else ready(path)):
                     not_landed.append(f"{arm.key}@{step}")
                     continue
             todo += [
