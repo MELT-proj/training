@@ -190,17 +190,21 @@ def cell_text(value: float | None, key: str) -> str:
     return fmt(value, 4 if key == "selection" else 1)
 
 
-def table_for(by_arm: dict[str, dict], keys: tuple[str, ...]) -> str:
-    head = ["arm", "MA h", *(METRICS[k][0] for k in keys), "runaways"]
+def table_for(by_arm: dict[str, dict], keys: tuple[str, ...], with_runaways: bool = True) -> str:
+    head = ["arm", "MA h", *(METRICS[k][0] for k in keys), *(["runaways"] if with_runaways else [])]
     lines = ["| " + " | ".join(head) + " |", "|" + "|".join("---:" if i else "---" for i in range(len(head))) + "|"]
     for arm in ARMS:
         m = by_arm.get(arm.key)
         if m is None:
             continue
         runaway = "-" if m["runaways"] is None else f"{m['runaways']}/{m['clips']}"
-        lines.append(
-            "| " + " | ".join([arm.label, f"{arm.ma_hours:,.0f}", *(cell_text(m[k], k) for k in keys), runaway]) + " |"
-        )
+        cells = [
+            arm.label,
+            f"{arm.ma_hours:,.0f}",
+            *(cell_text(m[k], k) for k in keys),
+            *([runaway] if with_runaways else []),
+        ]
+        lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)
 
 
@@ -221,7 +225,7 @@ def render(result: dict) -> str:
             continue
         out += [f"## Step {step}" + (" (final model)" if step == FINAL_STEP else ""), ""]
         out += [table_for(by_arm, ("selection", *asr_st)), ""]
-        out += [table_for(by_arm, ("share_hr", "share_other")), ""]
+        out += [table_for(by_arm, ("share_hr", "share_other"), with_runaways=False), ""]
     gaps = result["replicate_gaps"]
     if gaps:
         out += [
@@ -299,7 +303,12 @@ def figure(
             ax.grid(alpha=0.25)
             if row == len(metric_keys) - 1:
                 ax.set_xlabel("MA hours before the fine-tune")
-    axes[0][0].legend(loc="best", fontsize=8)
+    from matplotlib.lines import Line2D
+
+    handles, labels = axes[0][0].get_legend_handles_labels()
+    handles.append(Line2D([0], [0], color="#888888", alpha=0.35, linewidth=9))
+    labels.append("seed spread (T0/T0', A/A')")
+    axes[0][0].legend(handles, labels, loc="best", fontsize=8)
     fig.tight_layout()
     written = []
     for suffix in (".png", ".pdf"):
