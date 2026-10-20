@@ -99,7 +99,9 @@ data:
     lhotse_sampler_type: dynamic_bucketing
     num_buckets: 30
     buffer_size: 300
-    bucket_duration_bins: null
+    # Explicit: left null, the sampler reads 10,000 shuffled cuts with their audio in the
+    # main process to estimate bins, which does not finish on these sources.
+    bucket_duration_bins: [2.62, 3.6, 4.2, 4.7, 5.14, 5.54, 5.96, 6.38, 6.86, 7.42, 8.14, 9.2, 10.5, 11.67, 12.8, 13.89, 14.96, 16.0, 17.06, 18.13, 19.22, 20.46, 23.44, 26.5, 29.64, 34.68, 36.76, 38.12, 39.1]
 
     shuffle: true
     drop_last: false
