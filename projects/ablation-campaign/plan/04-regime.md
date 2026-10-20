@@ -77,6 +77,24 @@ One downstream protocol for every point: **the step-5 EU24 fine-tune**.
 - Arms stop at 2,872. The schedule stays the 11,499-step one, so the LR is
   in its stable phase at every readout for every arm.
 
+**What each tier answers.** Every comparison is made *after* the same
+fine-tune, because Fondue fine-tunes everything: MA matters only if what
+it gives survives that.
+- **Tier 1** reuses what exists and answers three things:
+  - *Is MA needed?* No MA (T0) against MA (T1, T2, A, T3) at equal
+    fine-tune steps, with T0' and A' for the noise.
+  - *Roughly how much?* The same CE objective at 0 / 120 / 360 / 1,000 /
+    3,700 h.
+  - *Which format?* At equal hours (3,700): ASR only (T3), gold ASR+ST
+    (T6), teacher ST (T4), SIFT (T5); A against B at 1,000 h.
+  
+  Its limits: below 1,000 h it covers only the five high-resource
+  languages, and every point above 1,000 h stands on the same 1,000 h CE
+  base.
+- **Tier 2** runs only if Tier 1 says MA matters. It re-measures the
+  hours curve the way Fondue would run MA: from scratch, on all 24
+  languages, per format. That gives the hours to reserve directly.
+
 **Tier 1 — reuse, submit this week.**
 
 | point | MA objective | MA hours | languages in MA | start | fine-tune |
@@ -89,6 +107,7 @@ One downstream protocol for every point: **the step-5 EU24 fine-tune**.
 | T3 | CE + CE | 1,000 + 2,700 | HR5 then EU24 | CE24 | new, to 2,872 |
 | T4 | CE + SD-mix | 1,000 + 2,700 | HR5 then EU24 | SD24 | new, to 2,872 |
 | T5 | CE + SIFT | 1,000 + 2,700 | HR5 then EU24 | SD-SIFT24 | new, to 2,872 |
+| T6 | CE + gold ASR+ST (PI, 10-20) | 1,000 + 2,700 | HR5 then EU24 | **new MA**: CE24 with gold ST rows (X→en, en→X where data exist) under the translate instruction, same audio cap and batches; adapter only | new, to 2,872 |
 | T0', A' | replicates of T0 and A, data seed changed | | | | new, to 2,872: there is no fine-tune seed noise yet, and the T0-A gap is the headline |
 
 - **Decay branches (T1, T2).** Resume the GOLDW checkpoint and override
@@ -98,6 +117,7 @@ One downstream protocol for every point: **the step-5 EU24 fine-tune**.
   checkpoints carry optimizer and sampler state, but whether the resume
   takes the overrides has to be checked first. On artemis 2× H200 each
   branch is minutes.
+- **T6's MA.** Same launcher as CE24 (~75 GPU-h, ~9.5 h on 2 nodes), with gold ST rows added to the mix. It is a new config, so it is submitted ~Thu 10-22 and its fine-tune follows ~1 day after the others.
 - **T0's init.** Check that `sft/launch_sft.sh` can build the model with no
   `model.ckpt`. That is a code check, not an assumption.
 
@@ -108,8 +128,7 @@ on the 1,000 h HR5 base.
 - MA from scratch on the SD24 language mix (flat cap), CE and SD-mix at
   120 / 360 / 1,000 h.
 - Six cheap MAs plus six fine-tunes to 2,872.
-- Optional, PI's call: one CE MA on **gold** ASR+ST at 1,000 h. This is the
-  only test of gold ST inside MA.
+- Gold ASR+ST CE at the same three hour points, if T6 beats T3 (PI kept gold ST in MA, 10-20).
 
 **Fondue-stack check (beside Tier 1, once the backbone is called).**
 - The whole study above runs on Qwen3.5-2B-Instruct + MLP, not on the Fondue
@@ -170,6 +189,7 @@ by the first readout that lands.
 |---|---|---|---|
 | T1, T2 decay branches | < 2 | artemis 2× H200 | Tue 10-20 to Wed 10-21 |
 | Tier-1 fine-tunes: T1-T5, T0' and A' to 2,872 | 7 × ~60 = ~420 | MN5, 2 nodes each | submitted Wed 10-21 |
+| T6: gold ASR+ST MA, then its fine-tune to 2,872 | ~75 + ~60 | MN5 | MA ~Thu 10-22, fine-tune ~Fri 10-23 |
 | T0 to the end | ~226 | MN5 | submitted Wed 10-21 |
 | evals (6-7 checkpoints × 9 runs) | A6000 | artemis | as checkpoints land |
 | Fondue-stack no-MA IFT | ~100 (Llama) / ~300 (Qwen) | MN5 | when the backbone is called (~10-22) |
@@ -184,4 +204,4 @@ Everything submitted on 10-21 is read by Sat 10-24 to Sun 10-25.
 |---|---|---|---|---|---|---|---|---|---|
 | A | CE | 1,000 | 0 / 718 / 2,872 | .081 / .092 / .072 | .582 / .136 / .092 | 25.7 / 22.3, 57.3 / 47.5, 57.7 / 50.1 | | | |
 | B | CE + SD-mix | 1,050 | 0 / 718 / 2,872 | .083 / .077 / .072 | .565 / .147 / .098 | 39.2 / 40.3, 57.4 / 47.2, 57.9 / 49.9 | | | |
-| T0 … T5 | | | | | | | | | |
+| T0 … T6 | | | | | | | | | |

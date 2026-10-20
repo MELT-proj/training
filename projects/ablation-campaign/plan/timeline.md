@@ -174,11 +174,11 @@ step 718.
   set when the decay is triggered.
 - Raclette no longer waits for a ratio sweep.
 
-**Open for the PI:**
-1. Tier 1 as listed.
-2. Gold ST inside MA (`04` Tier 2, optional).
-3. Whether the MA prompt sweep (week 6) stays: it is also an MA-format
-   question.
+**Also decided 10-20 (PI):**
+- Gold ST inside MA is tested: T6 in Tier 1 (`04` §3).
+- The MA prompt sweep becomes a later paper experiment.
+- The ASR:ST ratio is not studied; IFT uses Canary's weighting scheme by
+  language and corpus.
 
 ---
 
@@ -734,14 +734,15 @@ plus the Whisper QK-norm Conformer cell.
 - [ ] **MA utility study, Tier 1** (`04-regime.md` §3), submitted Wed 10-21
       on MN5 from `~/training-sd-sft` @ 2a26f33: fine-tunes from no MA (to the
       end), CE 120 h and 360 h, CE24, SD24 and SD-SIFT24, plus replicates of
-      no-MA and A (to step 2,872). ~650 GPU-h. Scored on artemis as each
+      no-MA and A (to step 2,872). ~650 GPU-h. Plus T6 (PI 10-20): a gold
+      ASR+ST MA (~Thu 10-22) and its fine-tune, ~135 GPU-h. Scored on artemis as each
       checkpoint lands. Read Mon 10-26.
 - [ ] **No-MA IFT on the Fondue stack** (`04` §3): the winning backbone's IFT
       config without its MA checkpoint, submitted when the backbone is called.
 - [ ] ~~**MA:IFT ratio sweep under the winning regime**~~ retired 10-20 (PI: `04` restructured). (`04-regime.md` §6),
       submitted Sat 10-24: IFT from the 0/100/300/700 h MA points, plus the
       zero-IFT probe. Read Tue 10-27.
-- [ ] **MA prompt sweep on the winning combination** (verbatim, verbatim+LID;
+- [ ] ~~**MA prompt sweep on the winning combination**~~ postponed 10-20 (PI: a later paper experiment). (verbatim, verbatim+LID;
       `01-interface-recipe.md` §3), submitted Sat 10-24. MA at 700 h is
       ~13 h wall; read by Tue 10-27, before the MA freeze.
 - [ ] ~~**Ladder MA tiers 10, 30, 100**~~ postponed 10-20 (PI: the ladder is a paper experiment, off the path to Fondue). On the winning backbone and stack,

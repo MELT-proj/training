@@ -215,10 +215,9 @@ batch) is kept in `raclette-draft.yaml` as a method, not as values.
 
 *2026-10-20 (PI):* reasons 1 and 2 are gone, because Fondue is a full
 fine-tune. The ratio sweep is retired (`04-regime.md`, restructured).
-Reason 3 still holds: the ASR:ST allocation inside IFT has to be fixed
-before Raclette's grid. It has no study of its own any more, so it is the
-PI's call, defaulting to the backbone IFTs' 700 h per language and per
-direction.
+Reason 3 is set aside for now (PI, 10-20): the IFT mixture follows
+Canary's weighting scheme by language and corpus, and the ASR:ST ratio is
+not studied separately.
 
 **Drafted 2026-09-18** (`raclette-draft.yaml`): the mixture is
 `fondue-ift-draft.yaml`'s own weighted pool (alpha=0.2/beta=0.5) with
