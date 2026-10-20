@@ -153,6 +153,22 @@ December. The ladder (`05`) stays as filler beside Fondue.
   becomes a paper experiment, run on MN5 capacity Fondue does not need, or
   in December.
 
+**What each tier answers (`04` §3).** Fondue fine-tunes everything, so
+MA counts only if its effect survives the fine-tune. Every point therefore
+gets the same EU24 fine-tune on the same batches and is compared at equal
+fine-tune steps (718 and 2,872).
+- **Tier 1 (reuse, now)** answers three questions:
+  - *Is MA needed?* No MA against MA, with seed replicates for the noise.
+  - *Roughly how much?* CE at 0 / 120 / 360 / 1,000 / 3,700 h.
+  - *Which format?* At 3,700 h: ASR only, gold ASR+ST, teacher ST, SIFT.
+
+  Limits: below 1,000 h it covers only en/de/fr/es/it, and every point
+  above 1,000 h is built on the same 1,000 h CE start. So it gives a firm
+  yes or no and a format ranking, but only a rough number of hours.
+- **Tier 2 (only if MA matters)** redoes the hours curve the way Fondue
+  would run MA: from scratch, on all 24 languages, for each format still
+  in the running, at 120 / 360 / 1,000 h. That gives the hours to reserve.
+
 **Plan (`04` §3, Tier 1).** The self-distillation study's MA starts are
 fine-tuned with its step-5 EU24 recipe, from the frozen clone, on matched
 batches, and read at steps 718-2,872:
@@ -767,8 +783,8 @@ plus the Whisper QK-norm Conformer cell.
       Needed before Raclette (10-27).
 - [ ] **Quantify FLEURS in or out of the Fondue pool**, carried from week 2,
       so the PI can make that call by 10-29.
-- [ ] **Tier-1 starts ready by Wed 10-21** (`04` §3): the two GOLDW decay
-      branches on artemis (check the resume takes the `max_steps` /
+- [ ] **Tier-1 starts ready by Wed 10-21** (`04` §3, checklist in §6): the two GOLDW decay
+      branches on artemis `hades`, 2 GPUs as GOLDW (check the resume takes the `max_steps` /
       `num_decay_steps` overrides), `launch_sft.sh` building a no-MA start,
       every start on MN5 via `mn5transfer`, and the step-5 scoring watcher
       extended to the new runs.

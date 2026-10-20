@@ -195,6 +195,32 @@ by the first readout that lands.
 | Fondue-stack no-MA IFT | ~100 (Llama) / ~300 (Qwen) | MN5 | when the backbone is called (~10-22) |
 | Tier 2, if triggered | ~500 | MN5 + artemis | 10-26 to ~10-30 |
 
+**Where things run.**
+- **artemis `hades`:** the two decay branches only. They must resume
+  GOLDW's 2-rank sampler state, so they need GOLDW's world size: 2 H200,
+  which fits the three GPUs free there.
+- **MN5:** everything that needs a whole node, so that the arms stay
+  consistent: all fine-tunes (2 nodes, as A and B), T6's MA (2 nodes, as
+  CE24), and the Fondue-stack IFT. Each is requested with the shortest wall
+  time that covers it.
+
+**Checklist to start Tier 1** (checked 2026-10-20 unless marked):
+
+| # | item | state |
+|---|---|---|
+| 1 | MN5 clone `~/training-sd-sft` @ 2a26f33, clean | ✓ checked |
+| 2 | starts on MN5 scratch: GOLDW-final, `S3-azeros_anchor` d42, CE24, SD24, SD-SIFT24 (Qwen) | ✓ all present |
+| 3 | `launch_sft.sh` builds a **no-MA start** (`INIT=none`: no `--model.ckpt`, a fresh MLP, the same processor) | **missing**; `INIT` takes only goldw or sd today. Small launcher change, on main and added to the clone. |
+| 4 | the reused starts (CE24, SD24, SD-SIFT24) go through `INIT=sd SD_CKPT=…` with their own `INIT_TAG` | to check in a dry run |
+| 5 | **a clean stop at step 2,872** without changing the 11,499-step schedule: a stop-at-step option, or a wall time ending just past the 2,872 save. MN5 step time varies up to 1.5×, so the option is safer. | **missing** |
+| 6 | decay branches T1 and T2: resume GOLDW ckpt-1200 and ckpt-3600 with `max_steps` 1,440 and 4,320 and `num_decay_steps` 240 and 720. At the first logged step, check that the LR starts decaying from 1e-3. It should: the HF WSD scheduler is a LambdaLR rebuilt from the new arguments, with the step count restored from `scheduler.pt`. | to run on `hades`, then `mn5transfer` the two finals (~5 GB each) |
+| 7 | T6's MA: the CE24 config plus gold ST rows (X→en, and en→X where data exist) under the translate instruction. A new mix from `build_sft_mix.py`, plus an `acc_debug` smoke. | **missing**: the only real new config |
+| 8 | replicates: `SEED=1338` for T0' and A' (it changes the init and the data order together) | launcher supports it |
+| 9 | scoring: add the new run names to `runs.txt` for `eval/watch_sft_checkpoints.py` (nyx → artemis A6000), with `pull_mn5_checkpoints.sh` limited to steps 718-2,872 | to do |
+| 10 | the selection metric on each readout, beside the step-5 tables | to do |
+
+Items 3, 5, 6 and 9 gate the Wed 10-21 submission. Item 7 gates only T6.
+
 The fine-tunes run at ~7 h to step 2,872 after a 12-13 h `acc_ehpc` queue.
 Everything submitted on 10-21 is read by Sat 10-24 to Sun 10-25.
 
