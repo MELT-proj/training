@@ -160,7 +160,7 @@ fine-tune steps (718 and 2,872).
 - **Tier 1 (reuse, now)** answers three questions:
   - *Is MA needed?* No MA against MA, with seed replicates for the noise.
   - *Roughly how much?* CE at 0 / 120 / 360 / 1,000 / 3,700 h.
-  - *Which format?* At 3,700 h: ASR only, gold ASR+ST, teacher ST, SIFT.
+  - *Which format?* At 3,700 h: ASR only, teacher ST, SIFT (gold ST in MA dropped 10-20).
 
   Limits: below 1,000 h it covers only en/de/fr/es/it, and every point
   above 1,000 h is built on the same 1,000 h CE start. So it gives a firm
@@ -191,7 +191,7 @@ step 718.
 - Raclette no longer waits for a ratio sweep.
 
 **Also decided 10-20 (PI):**
-- Gold ST inside MA is tested: T6 in Tier 1 (`04` §3).
+- ~~Gold ST inside MA is tested: T6 in Tier 1~~ dropped later on 10-20 (PI: not tested for now).
 - The MA prompt sweep becomes a later paper experiment.
 - The ASR:ST ratio is not studied; IFT uses Canary's weighting scheme by
   language and corpus.
@@ -748,10 +748,10 @@ plus the Whisper QK-norm Conformer cell.
 - [ ] **IFT for the top two audio stacks** (the replicate pair), carried from
       week 4: does the MA ranking survive IFT. ~200 GPU-h.
 - [ ] **MA utility study, Tier 1** (`04-regime.md` §3), submitted Wed 10-21
-      on MN5 from `~/training-sd-sft` @ 2a26f33: fine-tunes from no MA (to the
+      on MN5 from `~/training-ma-utility` (2a26f33 + PR #159): fine-tunes from no MA (to the
       end), CE 120 h and 360 h, CE24, SD24 and SD-SIFT24, plus replicates of
-      no-MA and A (to step 2,872). ~650 GPU-h. Plus T6 (PI 10-20): a gold
-      ASR+ST MA (~Thu 10-22) and its fine-tune, ~135 GPU-h. Scored on artemis as each
+      no-MA and A (to step 2,872). ~630 GPU-h, needs the PI's `acc_ehpc` go.
+      T6 dropped (PI 10-20). Decay branches queued on hades 10-20. Scored on artemis as each
       checkpoint lands. Read Mon 10-26.
 - [ ] **No-MA IFT on the Fondue stack** (`04` §3): the winning backbone's IFT
       config without its MA checkpoint, submitted when the backbone is called.

@@ -85,8 +85,9 @@ it gives survives that.
     fine-tune steps, with T0' and A' for the noise.
   - *Roughly how much?* The same CE objective at 0 / 120 / 360 / 1,000 /
     3,700 h.
-  - *Which format?* At equal hours (3,700): ASR only (T3), gold ASR+ST
-    (T6), teacher ST (T4), SIFT (T5); A against B at 1,000 h.
+  - *Which format?* At equal hours (3,700): ASR only (T3), teacher ST
+    (T4), SIFT (T5); A against B at 1,000 h. Gold ST inside MA (T6) was
+    dropped on 10-20 (PI: not tested for now).
   
   Its limits: below 1,000 h it covers only the five high-resource
   languages, and every point above 1,000 h stands on the same 1,000 h CE
@@ -107,7 +108,7 @@ it gives survives that.
 | T3 | CE + CE | 1,000 + 2,700 | HR5 then EU24 | CE24 | new, to 2,872 |
 | T4 | CE + SD-mix | 1,000 + 2,700 | HR5 then EU24 | SD24 | new, to 2,872 |
 | T5 | CE + SIFT | 1,000 + 2,700 | HR5 then EU24 | SD-SIFT24 | new, to 2,872 |
-| T6 | CE + gold ASR+ST (PI, 10-20) | 1,000 + 2,700 | HR5 then EU24 | **new MA**: CE24 with gold ST rows (X→en, en→X where data exist) under the translate instruction, same audio cap and batches; adapter only | new, to 2,872 |
+| ~~T6~~ | ~~CE + gold ASR+ST~~ | | | dropped 10-20 (PI) | |
 | T0', A' | replicates of T0 and A, data seed changed | | | | new, to 2,872: there is no fine-tune seed noise yet, and the T0-A gap is the headline |
 
 - **Decay branches (T1, T2).** Resume the GOLDW checkpoint and override
@@ -117,9 +118,16 @@ it gives survives that.
   checkpoints carry optimizer and sampler state, but whether the resume
   takes the overrides has to be checked first. On artemis 2× H200 each
   branch is minutes.
-- **T6's MA.** Same launcher as CE24 (~75 GPU-h, ~9.5 h on 2 nodes), with gold ST rows added to the mix. It is a new config, so it is submitted ~Thu 10-22 and its fine-tune follows ~1 day after the others.
-- **T0's init.** Check that `sft/launch_sft.sh` can build the model with no
-  `model.ckpt`. That is a code check, not an assumption.
+- **T6 dropped (PI, 10-20).** For the record, the gold ST that exists:
+  X→en 55,633 h over 21 sources, en→X 2,744 h over 12 targets, none for
+  ga/mt. At 2,700 h with a 0.25 ST share that is 24.5 h per direction over
+  33 directions.
+- **T0's init.** `INIT=none` (PR #159). The model config matches
+  GOLDW-final's except `encoder.eval_when_frozen`, which is inert with an
+  unfrozen encoder. One caveat: A's start loads through `dtype=auto`, so its
+  Whisper weights are F16 rounded to bf16, while T0 keeps the hub's F16.
+  That is ~0.1% per weight, below seed noise, but T0 vs A is not purely
+  "MA vs none".
 
 **Tier 2 — only if Tier 1 shows an MA effect that survives step 718.**
 The Fondue answer then needs the curve over **24 languages** and from
@@ -128,7 +136,6 @@ on the 1,000 h HR5 base.
 - MA from scratch on the SD24 language mix (flat cap), CE and SD-mix at
   120 / 360 / 1,000 h.
 - Six cheap MAs plus six fine-tunes to 2,872.
-- Gold ASR+ST CE at the same three hour points, if T6 beats T3 (PI kept gold ST in MA, 10-20).
 
 **Fondue-stack check (beside Tier 1, once the backbone is called).**
 - The whole study above runs on Qwen3.5-2B-Instruct + MLP, not on the Fondue
@@ -189,7 +196,6 @@ by the first readout that lands.
 |---|---|---|---|
 | T1, T2 decay branches | < 2 | artemis 2× H200 | Tue 10-20 to Wed 10-21 |
 | Tier-1 fine-tunes: T1-T5, T0' and A' to 2,872 | 7 × ~60 = ~420 | MN5, 2 nodes each | submitted Wed 10-21 |
-| T6: gold ASR+ST MA, then its fine-tune to 2,872 | ~75 + ~60 | MN5 | MA ~Thu 10-22, fine-tune ~Fri 10-23 |
 | T0 to the end | ~226 | MN5 | submitted Wed 10-21 |
 | evals (6-7 checkpoints × 9 runs) | A6000 | artemis | as checkpoints land |
 | Fondue-stack no-MA IFT | ~100 (Llama) / ~300 (Qwen) | MN5 | when the backbone is called (~10-22) |
@@ -197,29 +203,29 @@ by the first readout that lands.
 
 **Where things run.**
 - **artemis `hades`:** the two decay branches only. They must resume
-  GOLDW's 2-rank sampler state, so they need GOLDW's world size: 2 H200,
-  which fits the three GPUs free there.
+  GOLDW's 2-rank sampler state, so they need GOLDW's world size: 2 H200.
+  Queued 2026-10-20 and waiting for GPUs (1 of 8 was free).
 - **MN5:** everything that needs a whole node, so that the arms stay
-  consistent: all fine-tunes (2 nodes, as A and B), T6's MA (2 nodes, as
-  CE24), and the Fondue-stack IFT. Each is requested with the shortest wall
+  consistent: all fine-tunes (2 nodes, as A and B) and the Fondue-stack
+  IFT. Each is requested with the shortest wall
   time that covers it.
 
 **Checklist to start Tier 1** (checked 2026-10-20 unless marked):
 
 | # | item | state |
 |---|---|---|
-| 1 | MN5 clone `~/training-sd-sft` @ 2a26f33, clean | ✓ checked |
+| 1 | MN5 clone `~/training-ma-utility` = 2a26f33 + the two PR #159 commits (`~/training-sd-sft` stays untouched) | ✓ clean |
 | 2 | starts on MN5 scratch: GOLDW-final, `S3-azeros_anchor` d42, CE24, SD24, SD-SIFT24 (Qwen) | ✓ all present |
-| 3 | `launch_sft.sh` builds a **no-MA start** (`INIT=none`: no `--model.ckpt`, a fresh MLP, the same processor) | **missing**; `INIT` takes only goldw or sd today. Small launcher change, on main and added to the clone. |
-| 4 | the reused starts (CE24, SD24, SD-SIFT24) go through `INIT=sd SD_CKPT=…` with their own `INIT_TAG` | to check in a dry run |
-| 5 | **a clean stop at step 2,872** without changing the 11,499-step schedule: a stop-at-step option, or a wall time ending just past the 2,872 save. MN5 step time varies up to 1.5×, so the option is safer. | **missing** |
-| 6 | decay branches T1 and T2: resume GOLDW ckpt-1200 and ckpt-3600 with `max_steps` 1,440 and 4,320 and `num_decay_steps` 240 and 720. At the first logged step, check that the LR starts decaying from 1e-3. It should: the HF WSD scheduler is a LambdaLR rebuilt from the new arguments, with the step count restored from `scheduler.pt`. | to run on `hades`, then `mn5transfer` the two finals (~5 GB each) |
-| 7 | T6's MA: the CE24 config plus gold ST rows (X→en, and en→X where data exist) under the translate instruction. A new mix from `build_sft_mix.py`, plus an `acc_debug` smoke. | **missing**: the only real new config |
+| 3 | `launch_sft.sh` builds a **no-MA start** (`INIT=none`: no `--model.ckpt`, a fresh MLP, the same processor) | ✓ PR #159 (open), in the clone |
+| 4 | the reused starts (CE24, SD24, SD-SIFT24) go through `INIT=sd SD_CKPT=…` with their own `INIT_TAG` | ✓ dry-run table done on MN5 |
+| 5 | **a clean stop at step 2,872** without changing the 11,499-step schedule: a stop-at-step option, or a wall time ending just past the 2,872 save. MN5 step time varies up to 1.5×, so the option is safer. | ✓ `run.stop_after_step`, PR #159; `acc_debug` smoke against A's log queued |
+| 6 | decay branches T1 and T2: resume GOLDW ckpt-1200 and ckpt-3600 with `max_steps` 1,440 and 4,320 and `num_decay_steps` 240 and 720. At the first logged step, check that the LR starts decaying from 1e-3. It should: the HF WSD scheduler is a LambdaLR rebuilt from the new arguments, with the step count restored from `scheduler.pt`. | queued on `hades`; then the LR check and `mn5transfer` of the two finals (~5 GB each) |
+| 7 | ~~T6's MA~~ | dropped 10-20 (PI) |
 | 8 | replicates: `SEED=1338` for T0' and A' (it changes the init and the data order together) | launcher supports it |
 | 9 | scoring: add the new run names to `runs.txt` for `eval/watch_sft_checkpoints.py` (nyx → artemis A6000), with `pull_mn5_checkpoints.sh` limited to steps 718-2,872 | to do |
 | 10 | the selection metric on each readout, beside the step-5 tables | to do |
 
-Items 3, 5, 6 and 9 gate the Wed 10-21 submission. Item 7 gates only T6.
+Items 6 and 9 gate the Wed 10-21 submission, and so does the PI's go for `acc_ehpc` (~630 GPU-h).
 
 The fine-tunes run at ~7 h to step 2,872 after a 12-13 h `acc_ehpc` queue.
 Everything submitted on 10-21 is read by Sat 10-24 to Sun 10-25.
@@ -230,4 +236,4 @@ Everything submitted on 10-21 is read by Sat 10-24 to Sun 10-25.
 |---|---|---|---|---|---|---|---|---|---|
 | A | CE | 1,000 | 0 / 718 / 2,872 | .081 / .092 / .072 | .582 / .136 / .092 | 25.7 / 22.3, 57.3 / 47.5, 57.7 / 50.1 | | | |
 | B | CE + SD-mix | 1,050 | 0 / 718 / 2,872 | .083 / .077 / .072 | .565 / .147 / .098 | 39.2 / 40.3, 57.4 / 47.2, 57.9 / 49.9 | | | |
-| T0 … T6 | | | | | | | | | |
+| T0 … T5 | | | | | | | | | |
