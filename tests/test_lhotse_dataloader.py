@@ -1546,3 +1546,249 @@ class TestStepsPerEpochEstimate:
             return len(dl)
 
         assert loader_len(1) == loader_len(2) == self.BATCHES_PER_EPOCH // 2
+
+
+def _write_indexed_shar(d: Path, prefix: str, n: int = 40, same_id: bool = False) -> str:
+    """An indexed Shar source of ``n`` cuts (ids ``<prefix>0000``..., or all ``<prefix>``)."""
+    import gzip
+    import shutil
+
+    from lhotse import CutSet
+    from lhotse.indexing import create_shar_index
+    from lhotse.testing.dummies import DummyManifest
+
+    d.mkdir(parents=True, exist_ok=True)
+    cuts = CutSet.from_cuts(
+        _shar_writable(c.with_id(prefix if same_id else f"{prefix}{i:04d}"))
+        for i, c in enumerate(DummyManifest(CutSet, begin_id=0, end_id=n, with_data=True))
+    )
+    cuts.to_shar(str(d), fields={"recording": "wav"}, shard_size=10)
+    for gz in sorted(d.glob("cuts.*.jsonl.gz")):
+        with gzip.open(gz, "rb") as fin, open(gz.with_suffix(""), "wb") as fout:
+            shutil.copyfileobj(fin, fout)
+        gz.unlink()
+    create_shar_index(d)
+    return str(d)
+
+
+class TestAsrScoreFilter:
+    """Per-source, step-aware ASR band filter (asr_score_filter.py)."""
+
+    @staticmethod
+    def _scores(tmp: Path, name: str, values, metric: str = "wer") -> None:
+        import numpy as np
+
+        out = tmp / "scores" / name
+        out.mkdir(parents=True, exist_ok=True)
+        np.save(out / f"{metric}.u16.npy", np.asarray(values, dtype=np.uint16))
+
+    @staticmethod
+    def _cfg(tmp: Path, entries: list, **asr):
+        return OmegaConf.create(
+            {
+                "input_cfg": entries,
+                "seed": 42,
+                "shard_seed": 0,
+                "shuffle": False,
+                "asr_filter": {"scores_root": str(tmp / "scores"), "datasets_root": str(tmp / "ds"), **asr},
+            }
+        )
+
+    @staticmethod
+    def _entry(path: str, task: str, weight: float | None = None, **extra):
+        e = {"type": "lhotse_shar", "shar_path": path, "tags": {"task": task, "lang": "en"}, **extra}
+        if weight is not None:
+            e["weight"] = weight
+        return e
+
+    def _ids(self, cfg, repeat=False):
+        from melt.training.data.audio.lhotse.dataloader import read_cutset_from_config
+
+        cuts, _ = read_cutset_from_config(cfg, repeat=repeat)
+        return [c.id for c in cuts]
+
+    def test_asr_in_band_and_st_untouched(self, tmp_path):
+        """The mixed ASR+ST case: ST cuts come out exactly as without the filter."""
+        a = _write_indexed_shar(tmp_path / "ds" / "a", "a")
+        s = _write_indexed_shar(tmp_path / "ds" / "s", "s")
+        self._scores(tmp_path, "a", list(range(0, 4000, 100)))  # 0.00 .. 0.39
+        self._scores(tmp_path, "s", [9000] * 40)  # an ST score file that would drop everything
+        entries = [self._entry(a, "asr", 1.0), self._entry(s, "st", 1.0)]
+        filtered = self._ids(self._cfg(tmp_path, entries, min=0.1, max=0.2))
+        plain_cfg = self._cfg(tmp_path, entries, min=0.1, max=0.2)
+        del plain_cfg["asr_filter"]
+        plain = self._ids(plain_cfg)
+
+        assert [i for i in filtered if i[0] == "s"] == [i for i in plain if i[0] == "s"]
+        assert len([i for i in filtered if i[0] == "s"]) == 40
+        kept = sorted(i for i in filtered if i[0] == "a")
+        assert kept == [f"a{k:04d}" for k in range(10, 21)]  # scores 1000..2000, inclusive
+
+    def test_outer_group_task_wins(self, tmp_path):
+        """A leaf tagged asr inside a group tagged st is an ST source (and vice versa)."""
+        a = _write_indexed_shar(tmp_path / "ds" / "a", "a")
+        b = _write_indexed_shar(tmp_path / "ds" / "b", "b")
+        self._scores(tmp_path, "a", [9000] * 40)
+        self._scores(tmp_path, "b", [0] * 40)
+        entries = [
+            {"type": "group", "weight": 1.0, "tags": {"task": "st"}, "input_cfg": [self._entry(a, "asr")]},
+            {"type": "group", "weight": 1.0, "tags": {"task": "asr"}, "input_cfg": [self._entry(b, "st")]},
+        ]
+        ids = self._ids(self._cfg(tmp_path, entries, min=0.0, max=0.1))
+        assert len([i for i in ids if i[0] == "a"]) == 40  # st by group: untouched
+        assert len([i for i in ids if i[0] == "b"]) == 40  # asr by group: scores 0, kept
+
+    def test_off_without_key(self, tmp_path):
+        a = _write_indexed_shar(tmp_path / "ds" / "a", "a")
+        cfg = self._cfg(tmp_path, [self._entry(a, "asr")], min=0.5, max=0.6)
+        del cfg["asr_filter"]
+        assert len(self._ids(cfg)) == 40
+
+    def test_positional_join_with_repeated_ids(self, tmp_path):
+        """FLEURS-style repeated ids: each cut is judged by its own row."""
+        from lhotse.lazy import get_graph_origin
+
+        from melt.training.data.audio.lhotse.dataloader import read_cutset_from_config
+
+        a = _write_indexed_shar(tmp_path / "ds" / "a", "dup", same_id=True)
+        self._scores(tmp_path, "a", list(range(40)))
+        cfg = self._cfg(tmp_path, [self._entry(a, "asr")], min=0.0010, max=0.0019)
+        cuts, _ = read_cutset_from_config(cfg, repeat=False)
+        rows = sorted(get_graph_origin(c)[0] for c in cuts)
+        assert rows == list(range(10, 20))
+
+    def test_missing_policy(self, tmp_path):
+        a = _write_indexed_shar(tmp_path / "ds" / "a", "a")
+        self._scores(tmp_path, "a", [65535] * 20 + [100] * 20)
+        entries = [self._entry(a, "asr")]
+        assert len(self._ids(self._cfg(tmp_path, entries, min=0.0, max=0.5))) == 20
+        assert len(self._ids(self._cfg(tmp_path, entries, min=0.0, max=0.5, missing="keep"))) == 40
+
+    def test_loud_failures(self, tmp_path):
+        a = _write_indexed_shar(tmp_path / "ds" / "a", "a")
+        entries = [self._entry(a, "asr")]
+        with pytest.raises(FileNotFoundError):
+            self._ids(self._cfg(tmp_path, entries, min=0.0, max=0.5))
+        self._scores(tmp_path, "a", [100] * 39)  # wrong length
+        with pytest.raises(ValueError, match="manifests changed"):
+            self._ids(self._cfg(tmp_path, entries, min=0.0, max=0.5))
+        self._scores(tmp_path, "a", [9000] * 40)  # nothing in band
+        with pytest.raises(ValueError, match="keeps no cut"):
+            self._ids(self._cfg(tmp_path, entries, min=0.0, max=0.5))
+        # exempt source needs no file and keeps everything
+        exempt = [self._entry(a, "asr", asr_filter=False)]
+        assert len(self._ids(self._cfg(tmp_path, exempt, min=0.0, max=0.5))) == 40
+
+    def test_per_source_override_and_percentile(self, tmp_path):
+        a = _write_indexed_shar(tmp_path / "ds" / "a", "a")
+        b = _write_indexed_shar(tmp_path / "ds" / "b", "b")
+        self._scores(tmp_path, "a", list(range(40)))
+        self._scores(tmp_path, "b", [v * 1000 for v in range(40)])
+        entries = [
+            self._entry(a, "asr", 1.0, asr_filter={"min": 0.0, "max": 0.0009}),
+            # lowest quarter of b's own distribution, whatever its absolute values
+            self._entry(b, "asr", 1.0, asr_filter={"pct_max": 25}),
+        ]
+        ids = self._ids(self._cfg(tmp_path, entries, min=0.9, max=1.0))
+        assert len([i for i in ids if i[0] == "a"]) == 10
+        assert len([i for i in ids if i[0] == "b"]) == 10
+
+    def test_phases_follow_the_step(self, tmp_path):
+        from melt.training.data.audio.lhotse import asr_score_filter as f
+
+        a = _write_indexed_shar(tmp_path / "ds" / "a", "a")
+        self._scores(tmp_path, "a", list(range(0, 4000, 100)))
+        cfg = self._cfg(
+            tmp_path,
+            [self._entry(a, "asr")],
+            phases=[{"from_step": 0, "min": 0.2, "max": 0.39}, {"from_step": 50, "min": 0.0, "max": 0.0999}],
+        )
+        try:
+            f.set_step(0)
+            first = self._ids(cfg)
+            f.set_step(49)
+            assert self._ids(cfg) == first
+            f.set_step(50)
+            second = self._ids(cfg)
+        finally:
+            f.set_step(0)
+        assert first == [f"a{k:04d}" for k in range(20, 40)]
+        assert second == [f"a{k:04d}" for k in range(0, 10)]
+
+    def test_restore_ignores_the_current_band(self, tmp_path):
+        """A cut buffered under the old band must restore after the band moved (stock LazyFilter raises)."""
+        from lhotse.lazy import get_graph_origin
+
+        from melt.training.data.audio.lhotse import asr_score_filter as f
+        from melt.training.data.audio.lhotse.dataloader import read_cutset_from_config
+
+        a = _write_indexed_shar(tmp_path / "ds" / "a", "a")
+        self._scores(tmp_path, "a", list(range(0, 4000, 100)))
+        cfg = self._cfg(
+            tmp_path,
+            [self._entry(a, "asr")],
+            phases=[{"from_step": 0, "min": 0.2, "max": 0.39}, {"from_step": 50, "min": 0.0, "max": 0.0999}],
+        )
+        try:
+            f.set_step(0)
+            cuts, _ = read_cutset_from_config(cfg, repeat=False)
+            cut = next(iter(cuts))
+            token = get_graph_origin(cut)
+            f.set_step(50)
+            assert cuts.data[token].id == cut.id
+        finally:
+            f.set_step(0)
+
+    def test_ties_are_inside_both_bands(self, tmp_path):
+        a = _write_indexed_shar(tmp_path / "ds" / "a", "a")
+        self._scores(tmp_path, "a", [1000] * 20 + [4000] * 20)  # WER exactly 0.1 and 0.4
+        entries = [self._entry(a, "asr")]
+        assert len(self._ids(self._cfg(tmp_path, entries, min=0.1, max=0.4))) == 40
+        assert len(self._ids(self._cfg(tmp_path, entries, min=0.0, max=0.1))) == 20
+
+
+class TestAsrScoreFilterWorkers:
+    def test_step_reaches_forked_workers(self, tmp_path):
+        """The trainer-side counter must be visible inside a running DataLoader worker."""
+        import numpy as np
+
+        from melt.training.data.audio.lhotse import asr_score_filter as f
+        from melt.training.data.audio.lhotse.dataloader import get_lhotse_dataloader_from_config
+
+        a = _write_indexed_shar(tmp_path / "ds" / "a", "a")
+        out = tmp_path / "scores" / "a"
+        out.mkdir(parents=True)
+        np.save(out / "wer.u16.npy", np.arange(0, 4000, 100, dtype=np.uint16))
+        cfg = _loader_config(
+            a,
+            num_workers=1,
+            batch_duration=2.0,
+            asr_filter={
+                "scores_root": str(tmp_path / "scores"),
+                "datasets_root": str(tmp_path / "ds"),
+                "phases": [
+                    {"from_step": 0, "min": 0.2, "max": 0.39},
+                    {"from_step": 50, "min": 0.0, "max": 0.0999},
+                ],
+            },
+        )
+        f.set_step(0)
+        dl = get_lhotse_dataloader_from_config(
+            config=cfg, global_rank=0, world_size=1, dataset=_IdDataset(), repeat=True
+        )
+        try:
+            it = iter(dl)
+            before = [i for _ in range(5) for i in next(it)["cut_ids"]]
+            assert all(int(i[1:]) >= 20 for i in before)
+            f.set_step(50)
+            seen = []
+            for _ in range(400):
+                seen = next(it)["cut_ids"]
+                if all(int(i[1:]) < 10 for i in seen):
+                    break
+            assert all(int(i[1:]) < 10 for i in seen), "workers never saw the new step"
+        finally:
+            f.set_step(0)
+            from melt.training.trainer import _shutdown_dataloader_workers
+
+            _shutdown_dataloader_workers(dl)

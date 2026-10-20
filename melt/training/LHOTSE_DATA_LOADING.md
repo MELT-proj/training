@@ -185,3 +185,27 @@ This is computed via `estimate_steps_per_epoch()` and used to convert between `n
 | Progress bar shows wrong count | Ensure dataloader has `__len__` (use `FiniteIterableDatasetWrapper` for eval) |
 | Duplicate samples in eval | Check `num_workers` settings and `worker_init_fn` |
 | Infinite eval loop | Use `get_eval_dataloader_from_config`, not `get_lhotse_dataloader_from_config` |
+
+## ASR score band (`data.train_ds.asr_filter`)
+
+Off unless the key is present. Keeps only ASR cuts whose precomputed WER/CER is inside a band, per source, optionally changing at optimizer steps. Code: `data/audio/lhotse/asr_score_filter.py`; scores are built by `infra/build_asr_scores.py`.
+
+```yaml
+asr_filter:
+  scores_root: ${oc.env:LOCAL_ASR_SCORES_DIR}   # <root>/<shar_path under LOCAL_DATASETS_DIR>/wer.u16.npy
+  metric: wer            # wer | cer
+  missing: drop          # a cut with no score: drop | keep
+  phases:                # default for every ASR source; or just min/max
+    - {from_step: 0,    min: 0.10, max: 0.40}
+    - {from_step: 5400, min: 0.00, max: 0.10}
+input_cfg:               # per source or per group, nearest wins
+  - {type: lhotse_shar, shar_path: .../x, asr_filter: {pct_max: 25}}   # lowest quarter of THIS source
+  - {type: lhotse_shar, shar_path: .../y, asr_filter: false}           # exempt (no scores)
+```
+
+- Only leaves whose merged `task` tag is `asr` get a filter (outer group tags win, as for the cuts themselves); ST and other tasks are never touched.
+- The node sits on the leaf before `repeat()`, so the leaf keeps its mux weight; hours per source move with the survivors' mean cut length.
+- Join is positional (`_graph_origin` row index of the indexed reader): needs indexed Shar. A missing score file, a row count that differs from the manifests, or a band that keeps nothing is a startup error.
+- `min`/`max` are inclusive score units (0.1 == 10%); `pct_min`/`pct_max` are percentiles of the source's own scored cuts.
+- Phase steps are optimizer steps, published to the workers by a trainer callback. The switch gates admission into the sampler: cuts already in the bucket buffer leave over about `buffer_size * mean_cut / (batch_duration * grad_accum)` steps.
+- Resuming with a different band is allowed: buffered cuts restore without being re-checked.

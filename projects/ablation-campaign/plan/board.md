@@ -15,6 +15,13 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-20 — Claude (worker session, data) — ASR score band implemented on branch `asr-score-filter` (PI's go with changes; PR to follow)
+Context: the PI approved joining over baking, accepted a transition period after a band switch (old-band half-life 70-270 steps), and asked for a **per-source band** so a run-wide band does not give languages different shares of cuts. Producer of the scores confirmed: the untracked `asr_wer/` code, likely claude.ai session 01GvZ5z5YmihX6hn5ULQro5q.
+Finding: implemented as designed above, with these changes: (1) the band is per source (or group), nearest `asr_filter` wins, `false` exempts; (2) a band is absolute (`min`/`max`) or relative (`pct_min`/`pct_max`, percentiles of the source's own scored cuts, which keeps the same share of every source); (3) no purge, the transition period stands. Task is read from the merged tags (outer group wins), ST leaves never get a node. 14 new tests pass (mixed ASR+ST with an ST score file present, outer-group task, repeated ids joined by row, missing/keep, loud failures, percentile + per-source override, phases, step visible in a forked worker, restore after a band change, ties, builder); `test_lhotse_dataloader.py` + `test_trainer.py` 130 passed. Built and filtered one real leaf (`voxpopuli/de/train`) from a scratch copy: builder checks `cut_id` against shar-stats. **Not done** (follow-ups, not in the PR): band-aware `check_training_config.py`, `plan_arm.py` `from_frac`, `compute_mix_weights.py`/`build_campaign_config.py` survivor weights, per-phase exposure meter. No score arrays written to shared storage yet.
+Action needed: PI reviews the PR when opened. Before any run: build the arrays on nyx (~0.15 GB, new tree beside Shar), stage over `mn5transfer`, choose per-source bands (the pool table above shows the tail languages cannot take a hard band 1), smoke on `acc_debug` from a fresh clone.
+
+---
+
 ## 2026-10-20 — Claude (worker session, data) — WER/CER-aware ASR sampler: investigation and design (phase 1, nothing implemented; needs the PI's go)
 Context: the PI wants ASR cuts dropped by per-cut WER/CER band, switchable inside one run (band 1 `[0.1, 0.4]` for warmup+stable, band 2 `[0, 0.1]` for the LR decay), ST and other tasks untouched. Read-only: lhotse 2.0.0a3 source from the container (`melt_cuda126.sif`, pinned by `pyproject.toml:31`), our loader and trainer, the sidecars, the drafts. No code, no data writes, no GPU, no MN5, no jupiter.
 
