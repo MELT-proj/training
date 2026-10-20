@@ -182,6 +182,7 @@ class PhasedScoreFilter(LazyFilter):
         self._starts = [p[0] for p in phases]
         self._step_fn = step_fn
         self._scores = None
+        self._phase = None
         super().__init__(source, self._keep)
 
     def _array(self) -> np.ndarray:
@@ -194,6 +195,18 @@ class PhasedScoreFilter(LazyFilter):
         _, lo, hi = self.phases[bisect.bisect_right(self._starts, step) - 1]
         return lo, hi
 
+    def _note_phase(self, step: int) -> None:
+        """Log once per worker when it first admits under a new phase (the smoke test reads this)."""
+        phase = bisect.bisect_right(self._starts, step) - 1
+        if phase != self._phase:
+            self._phase = phase
+            _, lo, hi = self.phases[phase]
+            logger.info(
+                f"asr_filter {Path(self.scores_path).parent.name}: phase {phase} from step "
+                f"{self.phases[phase][0]} -> [{lo / SCORE_SCALE:.4f}, {hi / SCORE_SCALE:.4f}], "
+                f"first admission at step {step}"
+            )
+
     def _keep(self, cut) -> bool:
         token = get_graph_origin(cut)
         if token is None:
@@ -203,7 +216,9 @@ class PhasedScoreFilter(LazyFilter):
         value = int(self._array()[token[0]])
         if value == NULL_SCORE:
             return self.missing == "keep"
-        lo, hi = self.band()
+        step = self._step_fn()
+        self._note_phase(step)
+        lo, hi = self.band(step)
         return lo <= value <= hi
 
     def __getitem__(self, token):

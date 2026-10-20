@@ -26,6 +26,7 @@ from ....data.chat_templates import (
     get_chat_template_config,
     validate_chat_template_config,
 )
+from .asr_score_filter import get_step as get_asr_filter_step
 from .helpers import (
     LANGUAGE_ISO_TO_NAME,
     TASK_TEMPLATES,
@@ -180,6 +181,7 @@ class SpeechToTextDataset(torch.utils.data.Dataset):
             "world_size": world_size,
             "worker_id": worker_id,
             "batch_idx": self._debug_cut_ids_batch_idx,
+            "asr_filter_step": get_asr_filter_step(),
             "num_cuts": len(cut_ids),
             "cut_ids": cut_ids,
         }
