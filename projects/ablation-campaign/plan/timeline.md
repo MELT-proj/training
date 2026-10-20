@@ -747,7 +747,7 @@ plus the Whisper QK-norm Conformer cell.
       MA-stage signal by Tue 10-20 so it lands before the gate.
 - [ ] **IFT for the top two audio stacks** (the replicate pair), carried from
       week 4: does the MA ranking survive IFT. ~200 GPU-h.
-- [ ] **MA utility study, Tier 1** (`04-regime.md` §3), submitted Wed 10-21
+- [ ] **MA utility study, Tier 1** (`04-regime.md` §3)
       on MN5 from `~/training-ma-utility` (2a26f33 + PR #159): fine-tunes from no MA (to the
       end), CE 120 h and 360 h, CE24, SD24 and SD-SIFT24, plus replicates of
       no-MA and A (to step 2,872). ~644 GPU-h. **Submitted 10-20 18:50Z** (PI's go): T0 (42 h wall), T0', A', T3-T5 (11 h walls); T1 and T2 follow their decay branches.
