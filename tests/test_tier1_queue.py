@@ -95,6 +95,14 @@ def test_a_dry_run_with_everything_assumed_landed_lists_every_job_and_submits_no
     assert not state.exists()
 
 
+@pytest.mark.parametrize(("leave_free", "placed"), [(0, 4 + 3 + 2), (1, 3 + 2 + 1), (3, 1), (9, 0)])
+def test_leave_free_keeps_slots_of_every_qos_for_other_jobs(tmp_path, monkeypatch, capsys, leave_free, placed):
+    monkeypatch.setattr(tq.q, "in_flight", lambda: {"gpu-short": 0, "gpu-medium": 0, "gpu-long": 0})
+    argv = ["--state", str(tmp_path / "s.jsonl"), "--dry-run", "--assume-ready", "--outputs", str(tmp_path)]
+    tq.main([*argv, "--leave-free", str(leave_free)])
+    assert capsys.readouterr().out.count("DRY ") == placed
+
+
 def test_a_dry_run_on_the_real_disk_writes_nothing_into_the_checkpoints(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(tq.q, "in_flight", lambda: {"gpu-short": 0, "gpu-medium": 0, "gpu-long": 0})
     gold = tmp_path / wsc.WARM_STARTS["goldw"]

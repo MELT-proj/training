@@ -14,7 +14,7 @@ is what intermediate checkpoints need:
 Per checkpoint: six melt-eval jobs (``selection-fleurs26-dev200`` and ``selection-id-{en,de,es,fr,it}``). Melt-eval
 metadata: ``sft_run`` = the run, ``sft_label`` = ``eu24-repeatfirst-ckpt<N>``; ``tier1_selection.py`` reads them back.
 
-    tier1_queue.py [--state STATE.jsonl] [--poll 90] [--dry-run] [--assume-ready]
+    tier1_queue.py [--state STATE.jsonl] [--poll 90] [--leave-free N] [--dry-run] [--assume-ready]
 
 Like ``eval_queue.py`` it never cancels or resubmits (the state file makes a restart submit nothing twice), and a file named
 PAUSE next to the state file stops new submissions until it is removed. Run it where nyx scratch and the ``artemis`` ssh alias
@@ -105,6 +105,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--log", default=None)
     parser.add_argument("--outputs", type=Path, default=OUTPUTS)
     parser.add_argument("--poll", type=int, default=90)
+    parser.add_argument(
+        "--leave-free",
+        type=int,
+        default=0,
+        help="slots of each QOS to leave to other jobs of the user (the caps are the QOS limits; the step-5 watcher keeps one free)",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--assume-ready", action="store_true", help="dry runs only: treat every target as landed")
     args = parser.parse_args(argv)
@@ -117,6 +123,7 @@ def main(argv: list[str] | None = None) -> int:
     pause = state_path.with_name("PAUSE")
     processor_source = args.outputs / WARM_STARTS["goldw"]
     order = plan()
+    caps = {name: max(limit - args.leave_free, 0) for name, limit in q.CAPS.items()}
 
     def say(message: str) -> None:
         line = f"[{stamp()}] {message}"
@@ -162,7 +169,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 placed = 0
                 for job in todo:
-                    qos = next((c for c in job["qos"] if counts[c] < q.CAPS[c]), None)
+                    qos = next((c for c in job["qos"] if counts[c] < caps[c]), None)
                     if qos is None:
                         continue
                     job_id, message = q.submit(job, qos, args.dry_run)
