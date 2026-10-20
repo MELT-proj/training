@@ -69,6 +69,7 @@ run:
   config: null            # Path to config file (set via CLI)
   memory_profiling: false # Enable PyTorch CUDA memory snapshot on OOM (writes .pkl to output_dir)
   memory_preallocation: false # Run a max-length warmup forward+backward pass before training to preallocate CUDA buffers
+  stop_after_step: null   # End the run after this optimizer step, a checkpoint saved there. The LR schedule stays that of trainer.max_steps
 
 # =============================================================================
 # Model Configuration
