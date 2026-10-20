@@ -750,8 +750,8 @@ plus the Whisper QK-norm Conformer cell.
 - [ ] **MA utility study, Tier 1** (`04-regime.md` §3)
       on MN5 from `~/training-ma-utility` (2a26f33 + PR #159): fine-tunes from no MA (to the
       end), CE 120 h and 360 h, CE24, SD24 and SD-SIFT24, plus replicates of
-      no-MA and A (to step 2,872). ~644 GPU-h. **Submitted 10-20 18:50Z** (PI's go): T0 (42 h wall), T0', A', T3-T5 (11 h walls); T1 submitted 10-20 after its decay branch passed the LR check; T2 follows its branch.
-      T6 dropped (PI 10-20). Decay branches on hades: T1 done, T2 running. Scored on artemis as each
+      no-MA and A (to step 2,872). ~644 GPU-h. **Submitted 10-20 18:50Z** (PI's go): T0 (42 h wall), T0', A', T3-T5 (11 h walls); T1 and T2 submitted 10-20 after their decay branches passed the LR check: all eight queued.
+      T6 dropped (PI 10-20). Decay branches done on hades. Scored on artemis as each
       checkpoint lands. Read Mon 10-26.
 - [ ] **No-MA IFT on the Fondue stack** (`04` §3): the winning backbone's IFT
       config without its MA checkpoint, submitted when the backbone is called.
