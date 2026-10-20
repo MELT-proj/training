@@ -34,7 +34,11 @@ COMMON=(--config "$CONFIG"
 case "$PHASE" in
 train)  EXP="${EXP_BASE}-train" ;;
 resume) EXP="${EXP_BASE}-resume"
-        COMMON+=(--trainer.resume_from_checkpoint "/workspace/outputs/${EXP_BASE}-train/checkpoint-20") ;;
+        # train.py resumes from the newest checkpoint inside a directory, so give it one
+        # that holds only checkpoint-20 (a symlink; nothing is copied or touched).
+        mkdir -p "${OUTPUT_DIR}/${EXP_BASE}-train-ck20"
+        ln -sfn "../${EXP_BASE}-train/checkpoint-20" "${OUTPUT_DIR}/${EXP_BASE}-train-ck20/checkpoint-20"
+        COMMON+=(--trainer.resume_from_checkpoint "/workspace/outputs/${EXP_BASE}-train-ck20") ;;
 *) echo "unknown phase '$PHASE' (expected train|resume)" >&2; exit 1 ;;
 esac
 
