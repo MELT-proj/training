@@ -141,6 +141,47 @@ December. The ladder (`05`) stays as filler beside Fondue.
 
 ---
 
+## Regime restructured, ladder postponed, 2026-10-20
+
+**PI decisions of 10-20.**
+- **Regime (`04`, rewritten).** Fondue is a full fine-tune, so the regime
+  study now asks one thing: is MA worth running before it, with which
+  objective, and for how many hours. Retired: R1-R10 and their MA
+  checkpoints, the MA:IFT ratio sweep with its 100/300 h MAs, the ASR+ST MA
+  config and the per-task budgets.
+- **Language ladder (`05`).** It leaves the path to Raclette and Fondue and
+  becomes a paper experiment, run on MN5 capacity Fondue does not need, or
+  in December.
+
+**Plan (`04` §3, Tier 1).** The self-distillation study's MA starts are
+fine-tuned with its step-5 EU24 recipe, from the frozen clone, on matched
+batches, and read at steps 718-2,872:
+- no MA;
+- CE at 120 h, 360 h (two decay branches of GOLDW) and 1,000 h (exists);
+- CE + SD-mix at 1,050 h (exists);
+- CE, SD-mix and SIFT at 3,700 h;
+- replicates of no-MA and 1,000 h.
+
+That is seven new fine-tunes, ~650 GPU-h, submitted Wed 10-21. On top
+comes one no-MA IFT on the Fondue stack, once the backbone is called.
+Tier 2 (EU24 from scratch, ~500 GPU-h) runs only if an MA effect survives
+step 718.
+
+**What moves.**
+- The 10-23 MA freeze holds for every row except "MA data budget and stage
+  split", which is read **Mon 10-26** (`04` §5).
+- Fondue's MA, if any, is submitted 10-26/27. It is WSD, so its length is
+  set when the decay is triggered.
+- Raclette no longer waits for a ratio sweep.
+
+**Open for the PI:**
+1. Tier 1 as listed.
+2. Gold ST inside MA (`04` Tier 2, optional).
+3. Whether the MA prompt sweep (week 6) stays: it is also an MA-format
+   question.
+
+---
+
 ## Blocked / waiting
 
 Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
@@ -567,7 +608,7 @@ audio stacks, regime fraction.
       *Outcome:* MA-stage WER per backbone, in-domain and FLEURS-24.
 - [ ] **IFT for the top three or four audio stacks** from the week-3
       crossing (`03-audio-stack.md` §2), moved from week 5.
-- [ ] **Regime half fraction** (`04-regime.md`): 8 IFT runs on
+- [ ] ~~**Regime half fraction**~~ retired 10-20 (PI: `04` restructured). (`04-regime.md`): 8 IFT runs on
       Llama-3.2-1B-Instruct from the confirmed MA checkpoint. Runs on the
       week-3 confirmation checkpoint, so on the provisional stack if the
       crossing moved it; regime factors are assumed independent of the
@@ -624,15 +665,16 @@ No gate on Sunday: the backbone and regime gates move to Fri 10-23.
       Qwen-base .131, EuroLLM-ins .141, Llama-ins .148, Llama-base 1.0
       (runaway, ~85% of clips); EuroLLM-Base not scored (runaway). Both base
       runaways are frozen-decoder template artefacts; IFT repairs them.
-- [ ] **Regime MA checkpoints** (`04-regime.md` §3), the three the backbone
+- [ ] ~~**Regime MA checkpoints**~~ retired 10-20 (PI: `04` restructured). The three the backbone
       arm does not give: ASR+ST at 700 h/lang and at 2,100 h/lang (new), and
       ASR at 2,100 h/lang (the crossing cell with the provisional adapter,
       reused). Submit Thu 10-15.
-- [ ] **MA runs at 100 and 300 h/lang** for the ratio study (`04-regime.md`
+- [ ] ~~**MA runs at 100 and 300 h/lang**~~ retired 10-20 (PI: `04` restructured). For the ratio study (`04-regime.md`
       §6), full schedules each. On artemis (H100 or H200), Thu 10-15.
 - [ ] **First IFTs**, as soon as the bf16 fix is on `main` and their MA
       checkpoints land (from Sat 10-17): the six backbone IFTs and the ten
       regime runs R1-R10, all on Llama-3.2-1B-Instruct for the regime study.
+      *10-20:* the R1-R10 part is retired (PI: `04` restructured).
       Check `optimizer.pt` size on the first checkpoint of the first one.
       If the queue will not turn six backbone IFTs around by 10-22, IFT the
       three leading backbones on the MA-stage signal first; never shorten
@@ -650,7 +692,7 @@ No gate on Sunday: the backbone and regime gates move to Fri 10-23.
 - [ ] **Re-check every hour-weighted config for per-cut mux weights**,
       carried from week 3: the IFT config first (needed by Sat 10-17), then
       the ladder renders and the Fondue/raclette drafts (by 10-23).
-- [ ] **MA config on ASR+ST** for the regime study's factor C, at 700 and
+- [ ] ~~**MA config on ASR+ST**~~ retired 10-20 (PI: `04` restructured). For the regime study's factor C, at 700 and
       2,100 h/lang. Needed Thu 10-15.
 - [ ] ~~**Whisper size ladder prep**~~ dropped 10-15. Carried from week 4: stage whisper-tiny/
       -base/-small/-medium on MN5 via `mn5transfer`; add tiny and base to
@@ -667,8 +709,9 @@ No gate on Sunday: the backbone and regime gates move to Fri 10-23.
 
 ## Week 6 — Mon 2026-10-19 to Sun 2026-10-25
 
-**Gate (Fri 10-23): backbone, regime, final adapter, and the MA freeze
-(moved from 10-29 by the PI on 10-19).** Criteria in
+**Gate (Fri 10-23): backbone, final adapter, and the MA freeze
+(moved from 10-29 by the PI on 10-19), except the MA budget and objective,
+read Mon 10-26 from `04` Tier 1 (PI, 10-20).** Criteria in
 `02-backbones.md` §4 and `04-regime.md` §4; the adapter on the replicate pair
 plus the Whisper QK-norm Conformer cell.
 
@@ -688,13 +731,20 @@ plus the Whisper QK-norm Conformer cell.
       MA-stage signal by Tue 10-20 so it lands before the gate.
 - [ ] **IFT for the top two audio stacks** (the replicate pair), carried from
       week 4: does the MA ranking survive IFT. ~200 GPU-h.
-- [ ] **MA:IFT ratio sweep under the winning regime** (`04-regime.md` §6),
+- [ ] **MA utility study, Tier 1** (`04-regime.md` §3), submitted Wed 10-21
+      on MN5 from `~/training-sd-sft` @ 2a26f33: fine-tunes from no MA (to the
+      end), CE 120 h and 360 h, CE24, SD24 and SD-SIFT24, plus replicates of
+      no-MA and A (to step 2,872). ~650 GPU-h. Scored on artemis as each
+      checkpoint lands. Read Mon 10-26.
+- [ ] **No-MA IFT on the Fondue stack** (`04` §3): the winning backbone's IFT
+      config without its MA checkpoint, submitted when the backbone is called.
+- [ ] ~~**MA:IFT ratio sweep under the winning regime**~~ retired 10-20 (PI: `04` restructured). (`04-regime.md` §6),
       submitted Sat 10-24: IFT from the 0/100/300/700 h MA points, plus the
       zero-IFT probe. Read Tue 10-27.
 - [ ] **MA prompt sweep on the winning combination** (verbatim, verbatim+LID;
       `01-interface-recipe.md` §3), submitted Sat 10-24. MA at 700 h is
       ~13 h wall; read by Tue 10-27, before the MA freeze.
-- [ ] **Ladder MA tiers 10, 30, 100** on the winning backbone and stack,
+- [ ] ~~**Ladder MA tiers 10, 30, 100**~~ postponed 10-20 (PI: the ladder is a paper experiment, off the path to Fondue). On the winning backbone and stack,
       submitted Sat 10-24 (they need only the backbone and the stack).
 - [ ] **Winning stack × winning backbone confirmation**, MA plus IFT. If the
       adapter called on 10-23 is the provisional one, the winning backbone's
@@ -716,12 +766,17 @@ plus the Whisper QK-norm Conformer cell.
       Needed before Raclette (10-27).
 - [ ] **Quantify FLEURS in or out of the Fondue pool**, carried from week 2,
       so the PI can make that call by 10-29.
-- [ ] **Per-task budgets in `build_campaign_config.py`** and the ratio IFT
+- [ ] **Tier-1 starts ready by Wed 10-21** (`04` §3): the two GOLDW decay
+      branches on artemis (check the resume takes the `max_steps` /
+      `num_decay_steps` overrides), `launch_sft.sh` building a no-MA start,
+      every start on MN5 via `mn5transfer`, and the step-5 scoring watcher
+      extended to the new runs.
+- [ ] ~~**Per-task budgets in `build_campaign_config.py`**~~ retired 10-20 (PI: `04` restructured). And the ratio IFT
       renders (ASR at 600/400/0 h/lang, ST fixed at 700; `04-regime.md` §6).
       Needed by Sat 10-24.
 - [ ] **melt-eval: score the LID prompt with and without the tag** at
       inference. Needed by 10-26.
-- [ ] **Ladder tier configs** (min(tier, available) per language), carried
+- [ ] ~~**Ladder tier configs**~~ postponed 10-20 (PI: the ladder is a paper experiment, off the path to Fondue). (min(tier, available) per language), carried
       from week 3; mixed-tier, repetition and Russian probe configs.
 - [ ] Raclette config final once the backbone and regime are known (batch on
       the order of one audio hour per step, three LR points, topology).
@@ -735,13 +790,16 @@ and frozen: backbone, stack, prompt, language set, mixture, MA data budget
 and stage split, MA batch and LR, filters, FLEURS in/out, `min_lr_scale`.
 
 ### Track A — GPU
-- [ ] **Raclette** (`06-fondue.md` §4), submitted Tue 10-27 after the ratio
+- [ ] **Raclette** (`06-fondue.md` §4). *10-20:* it no longer waits for a ratio sweep (retired). Submitted Tue 10-27 after the ratio
       sweep is read: three LR points at ~25K h on the Fondue IFT batch and
       topology (24 nodes if all three run at once). Read by Tue 11-03.
-- [ ] **Fondue MA submitted Thu 10-29**: ~5 days on 8 nodes, less on 16 if
+- [ ] **Fondue MA submitted Thu 10-29** (*10-20:* Mon 10-26 to Tue 10-27, if `04` keeps MA; its length is set by the decay trigger): ~5 days on 8 nodes, less on 16 if
       the scaling check was flat. Chain of 3-day segments.
-- [ ] **Ladder IFT tiers 10, 30, 100** under the winning regime.
-- [ ] **Ratio sweep, runner-up regime** (P0 and P3, `04-regime.md` §6). First
+- [ ] **MA utility study, Tier 2**, only if Tier 1 shows an effect that
+      survives step 718 (`04` §3): CE and SD-mix from scratch on EU24 at
+      120 / 360 / 1,000 h, plus their fine-tunes. ~500 GPU-h.
+- [ ] ~~**Ladder IFT tiers 10, 30, 100**~~ postponed 10-20 (PI: the ladder is a paper experiment, off the path to Fondue).
+- [ ] ~~**Ratio sweep, runner-up regime**~~ retired 10-20 (PI: `04` restructured). (P0 and P3, `04-regime.md` §6). First
       to drop if the queue is tight and the backbone is Qwen-class.
 
 ### Track B — preparation
@@ -749,7 +807,7 @@ and stage split, MA batch and LR, filters, FLEURS in/out, `min_lr_scale`.
 - [ ] **Off-boarding plan** (`06-fondue.md` §7), carried from week 5: what
       leaves MN5, where it lands, who verifies. Copying starts this week,
       rolling, as arms finish.
-- [ ] Ladder analysis notebook: curve fitting, family pooling.
+- [ ] ~~Ladder analysis notebook: curve fitting, family pooling.~~ postponed 10-20 (PI: the ladder is a paper experiment, off the path to Fondue).
 
 ---
 
@@ -762,12 +820,12 @@ cadence, topology.
 ### Track A — GPU
 - [ ] **Fondue IFT starts** when MA ends (~11-05). Llama-class: ~8 days on 8
       nodes. Qwen-class: 16 nodes from the start (~11.5 days).
-- [ ] **Ladder tiers 300 and 700**, the two mixed-tier runs, the repetition
+- [ ] ~~**Ladder tiers 300 and 700**~~ postponed 10-20 (PI: the ladder is a paper experiment, off the path to Fondue). The two mixed-tier runs, the repetition
       probe (two runs), the Russian probe (two runs).
 
 ### Track B — preparation
 - [ ] Fill the IFT rows of `06-fondue.md` §3 and mark them frozen (11-04).
-- [ ] First ladder fits with tiers 10-100; check the functional form.
+- [ ] ~~First ladder fits with tiers 10-100; check the functional form.~~ postponed 10-20 (PI: the ladder is a paper experiment, off the path to Fondue).
 - [ ] Draft the efficiency figure from the audio-stack results, with the
       Whisper window-padding ratio per corpus (carried from week 2) and the
       efficiency instrumentation (week 3, PR #135).
@@ -780,13 +838,13 @@ cadence, topology.
 - [ ] Fondue IFT continues: Llama-class ends ~11-15, Qwen-class ~11-19
       (resume queue gaps included). If it is not done by 11-23, apply
       `06-fondue.md` §6: stop at the last checkpoint.
-- [ ] Seed replicates and any missing ladder points, filling spare capacity
+- [ ] Seed replicates and ladder points (the ladder runs here on spare capacity, PI 10-20), filling spare capacity
       without delaying a Fondue resume.
 - [ ] In-training evals of every arm complete on MN5.
 
 ### Track B — preparation
 - [ ] Off-board everything not yet copied. Sync all offline W&B runs.
-- [ ] Ladder fits final; Fondue's intermediate checkpoints evaluated on the
+- [ ] Ladder fits (paper, PI 10-20); Fondue's intermediate checkpoints evaluated on the
       FLEURS-24 dev subset (artemis).
 
 ---
