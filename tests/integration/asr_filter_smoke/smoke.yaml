@@ -52,15 +52,15 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/de/train
         weight: 0.25
         tags: {task: asr, lang: de}
-      # own phases, relative: lowest 30% of this source, then its highest 30%
+      # own phases: any error up to 0.3, then only perfect matches
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/de/train
         weight: 0.15
         tags: {task: asr, lang: de, text_field: custom.metadata.sentence}
         asr_filter:
           phases:
-            - {from_step: 0,  pct_max: 30}
-            - {from_step: 25, pct_min: 70}
+            - {from_step: 0,  min: 0.01, max: 0.30}
+            - {from_step: 25, min: 0.00, max: 0.00}
       # one static band, no phases
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/dutch/train

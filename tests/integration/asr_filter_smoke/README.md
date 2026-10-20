@@ -5,7 +5,7 @@ One node, acc_debug. A short run whose ASR sources have *different* bands and ph
 | source | task | filter |
 |---|---|---|
 | `voxpopuli/de/train` | asr | default phases: WER [0.1, 0.4], then [0, 0.1] from step 25 |
-| `cv22_sidon/de/train` | asr | own phases, relative: lowest 30% of its scores, then highest 30% from step 25 |
+| `cv22_sidon/de/train` | asr | own phases: WER [0.01, 0.3], then exactly 0 from step 25 |
 | `mls_sidon/dutch/train` | asr | static WER [0, 0.05] |
 | `voxpopuli/es/train` | asr | `asr_filter: false` |
 | `covost2/{nl,it}_en/train` | st | none |

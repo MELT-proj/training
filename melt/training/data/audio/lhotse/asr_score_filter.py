@@ -207,19 +207,35 @@ class PhasedScoreFilter(LazyFilter):
                 f"first admission at step {step}"
             )
 
-    def _keep(self, cut) -> bool:
-        token = get_graph_origin(cut)
-        if token is None:
-            raise RuntimeError(
-                f"asr_filter needs indexed Shar sources: cut {cut.id} carries no row index"
-            )
-        value = int(self._array()[token[0]])
+    def _keep_index(self, idx: int) -> bool:
+        value = int(self._array()[idx])
         if value == NULL_SCORE:
             return self.missing == "keep"
         step = self._step_fn()
         self._note_phase(step)
         lo, hi = self.band(step)
         return lo <= value <= hi
+
+    def _keep(self, cut) -> bool:
+        token = get_graph_origin(cut)
+        if token is None:
+            raise RuntimeError(
+                f"asr_filter needs indexed Shar sources: cut {cut.id} carries no row index"
+            )
+        return self._keep_index(token[0])
+
+    def __iter__(self):
+        """Decide on the row index *before* reading the cut.
+
+        Reading and deserialising a cut only to drop it is what the stock filter does, and on
+        GPFS a source that keeps 7% costs ~13 random reads per cut it yields. Same traversal,
+        position bookkeeping and epoch handling as ``LazyIndexedSharIterator.__iter__``.
+        """
+        source = self.source
+        for idx in source._iter_state.iterate(source._total_len):
+            if self._keep_index(idx):
+                yield source[idx]
+        source.epoch += 1
 
     def __getitem__(self, token):
         from lhotse.lazy import attach_graph_origin, normalize_graph_token
@@ -253,6 +269,8 @@ def apply_asr_filter(
 
     if getattr(cuts.data, "is_indexed", False) is not True:
         raise ValueError(f"{where}: asr_filter needs an indexed Shar source ({shar_path} has no .idx)")
+    if not hasattr(cuts.data, "_iter_state"):
+        raise ValueError(f"{where}: asr_filter must wrap the bare indexed Shar reader")
     path = scores_file(scores_root, datasets_root, shar_path, spec["metric"])
     if not path.exists():
         raise FileNotFoundError(

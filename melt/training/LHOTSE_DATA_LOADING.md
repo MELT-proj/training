@@ -205,7 +205,8 @@ input_cfg:               # per source or per group, nearest wins
 
 - Only leaves whose merged `task` tag is `asr` get a filter (outer group tags win, as for the cuts themselves); ST and other tasks are never touched.
 - The node sits on the leaf before `repeat()`, so the leaf keeps its mux weight; hours per source move with the survivors' mean cut length.
+- The row index is checked *before* the cut is read, so a band that keeps 7% costs index lookups, not 13 manifest reads per kept cut (the stock filter reads every cut; on GPFS that stalled the smoke test).
 - Join is positional (`_graph_origin` row index of the indexed reader): needs indexed Shar. A missing score file, a row count that differs from the manifests, or a band that keeps nothing is a startup error.
-- `min`/`max` are inclusive score units (0.1 == 10%); `pct_min`/`pct_max` are percentiles of the source's own scored cuts.
+- `min`/`max` are inclusive score units (0.1 == 10%); `pct_min`/`pct_max` are percentiles of the source's own scored cuts, inclusive of ties: WER is discrete and often exactly 0 (77% of `cv22_sidon/de`), so `pct_max: 30` there keeps 77%, not 30%. Prefer absolute bands unless the source's scores are spread out; the startup log prints what each band keeps.
 - Phase steps are optimizer steps, published to the workers by a trainer callback. The switch gates admission into the sampler: cuts already in the bucket buffer leave over about `buffer_size * mean_cut / (batch_duration * grad_accum)` steps.
 - Resuming with a different band is allowed: buffered cuts restore without being re-checked.
