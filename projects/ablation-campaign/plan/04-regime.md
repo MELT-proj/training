@@ -234,6 +234,55 @@ Everything submitted on 10-21 is read by Sat 10-24 to Sun 10-25.
 
 | point | MA objective | MA h | step | WER HR5 | CER other-19 | X→en HR4 / other | en→X HR4 / other | selection | GPU-h |
 |---|---|---|---|---|---|---|---|---|---|
-| A | CE | 1,000 | 0 / 718 / 2,872 | .081 / .092 / .072 | .582 / .136 / .092 | 25.7 / 22.3, 57.3 / 47.5, 57.7 / 50.1 | | | |
-| B | CE + SD-mix | 1,050 | 0 / 718 / 2,872 | .083 / .077 / .072 | .565 / .147 / .098 | 39.2 / 40.3, 57.4 / 47.2, 57.9 / 49.9 | | | |
-| T0 … T5 | | | | | | | | | |
+First readout, 2026-10-21. Steps 718 / 2,872 unless marked (A and B
+also show step 0). WER and CER are fractions; lower is better for WER, CER
+and selection. ST cells are chrF, "HR4 / other-19" at each step in turn.
+
+| point | MA objective | MA h | step | WER HR5 | CER other-19 | X→en HR4 / other | en→X HR4 / other | selection | GPU-h |
+|---|---|---|---|---|---|---|---|---|---|
+| T0 | none | 0 | 718 / 2,872 | .091 / .075 | .124 / .090 | 56.7 / 47.3, 57.6 / 49.7 | 49.4 / 38.8, 51.2 / 39.8 | .0616 / .0518 | |
+| T0' | none, seed 1338 | 0 | 718 / 2,872 | .090 / .076 | .147 / .100 | 56.2 / 46.5, 57.7 / 50.1 | 50.6 / 38.5, 51.7 / 40.9 | .0628 / .0429 | |
+| T1 | CE | 120 | 718 / 2,872 | .112 / .074 | .155 / .093 | 56.7 / 47.0, 58.0 / 49.7 | 49.3 / 38.5, 51.5 / 40.5 | .0566 / .0437 | |
+| T2 | CE | 360 | 718 / 2,872 | .080 / .074 | .132 / .096 | 57.5 / 47.7, 57.8 / 49.8 | 50.5 / 38.9, 52.1 / 40.2 | .0549 / .0433 | |
+| A | CE | 1,000 | 0 / 718 / 2,872 | .081 / .092 / .072 | .582 / .136 / .092 | 25.7 / 22.3, 57.3 / 47.5, 57.7 / 50.1 | 50.3 / 39.3, 51.7 / 41.2 | .0523 / .0430 | |
+| A' | CE, seed 1338 | 1,000 | 718 / 2,872 | .075 / .072 | .146 / .097 | 57.8 / 48.0, 58.2 / 49.6 | 51.4 / 39.1, 51.5 / 40.7 | .0509 / .0434 | |
+| B | CE + SD-mix | 1,050 | 0 / 718 / 2,872 | .083 / .077 / .072 | .565 / .147 / .098 | 39.2 / 40.3, 57.4 / 47.2, 57.9 / 49.9 | 50.1 / 38.8, 51.8 / 40.6 | .0549 / .0431 | |
+| T3 | CE + CE24 | 3,700 | 718 / 2,872 | .076 / .072 | .117 / .090 | 57.6 / 48.2, 58.1 / 50.4 | 50.3 / 39.5, 51.8 / 40.2 | .0515 / .0404 | |
+| T4 | CE + SD-mix24 | 3,700 | 718 / 2,872 | .076 / .070 | .122 / .089 | 58.1 / 49.4, 58.5 / 50.4 | 50.5 / 39.2, 52.3 / 40.2 | .0538 / .0410 | |
+| T5 | CE + SIFT24 | 3,700 | 718 / 2,872 | .089 / .072 | .120 / .091 | 58.4 / 50.1, 58.1 / 50.7 | 51.1 / 38.9, 52.0 / 40.5 | .0490 / .0427 | |
+
+Selection score at 718 / 1,436 / 2,154 / 2,872:
+
+| point | 718 | 1,436 | 2,154 | 2,872 |
+|---|---|---|---|---|
+| T0 | .0616 | .0520 | .0503 | .0518 |
+| T0' | .0628 | .0595 | .0551 | .0429 |
+| T1 | .0566 | .0544 | .0507 | .0437 |
+| T2 | .0549 | .0476 | .0474 | .0433 |
+| A | .0523 | .0429 | .0461 | .0430 |
+| A' | .0509 | .0471 | .0458 | .0434 |
+| B | .0549 | .0447 | .0464 | .0431 |
+| T3 | .0515 | .0440 | .0448 | .0404 |
+| T4 | .0538 | .0457 | .0461 | .0410 |
+| T5 | .0490 | .0425 | .0479 | .0427 |
+
+**Interim reading (10-21; T0 runs to the end on Thu 10-22).**
+- **Step 718: MA helps.** No MA scores .0616 / .0628. Every MA arm scores
+  .0490-.0566. The gap, ~.010, is 7-8× the seed gap of either pair
+  (.0012, .0014). The score improves with MA hours up to 1,000 h; 3,700 h
+  adds nothing consistent.
+- **Step 2,872: undecided.** The seed-1338 pair has caught up
+  (T0' .0429, A' .0434). The seed-1337 pair has not (T0 .0518, A .0430);
+  T0's excess sits in the five trained languages on FLEURS dev (OOD-train
+  median CER .0448 against .0265-.0322 for every other arm). Paired no-MA
+  minus MA gaps favour MA in 7 of 8 step/seed pairs. The step-5 metrics show
+  only a small HR5 WER lag for no MA (.075 / .076 against .072 / .072).
+- **Hours:** at 2,872, 120 h (T1 .0437) and 360 h (T2 .0433) already match
+  1,000 h (A .0430). The extra 2,700 h on EU24 buy at most .003
+  (T3 .0404), inside the largest A/A' gap seen (.0042).
+- **Format:** neither SD-mix nor SIFT beats CE consistently on selection.
+  The 3,700 h arms lead the ST chrF columns by up to ~1.
+- **Against §5:** between rows 2 and 3. T0's later reads, and a third
+  no-MA seed if the PI wants one, decide it.
+- **Caveat:** T0's Whisper keeps the hub's F16, while A's was rounded to
+  bf16 (§3).
