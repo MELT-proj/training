@@ -71,6 +71,7 @@ run:
   memory_profiling: false # Enable PyTorch CUDA memory snapshot on OOM (writes .pkl to output_dir)
   memory_preallocation: false # Run a max-length warmup forward+backward pass before training to preallocate CUDA buffers
   stop_after_step: null   # End the run after this optimizer step, a checkpoint saved there. The LR schedule stays that of trainer.max_steps
+  defer_optimizer_load: false # On a resume, load the optimizer state just before the first optimizer step instead of before the first micro-batch, so that window has a fresh run's GPU memory
 
 # =============================================================================
 # Model Configuration
