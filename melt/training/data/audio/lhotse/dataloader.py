@@ -47,6 +47,7 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 
 
 from .....logging_utils import get_logger
+from .asr_score_filter import apply_asr_filter, effective_task, resolve_source_filter
 from ....memtrace import (
     memstats_requested,
     start_worker_memstats,
@@ -679,8 +680,17 @@ def read_cutset_from_config(config: DictConfig, repeat: bool = True) -> tuple[Cu
         )
         shard_seed = seed
 
+    asr_cfg = _get_config_value(config, "asr_filter", None)
+    if asr_cfg is not None:
+        asr_cfg = OmegaConf.to_container(asr_cfg, resolve=True) if isinstance(asr_cfg, DictConfig) else dict(asr_cfg)
+        if "scores_root" not in asr_cfg:
+            raise ValueError("asr_filter.scores_root must be set")
+        asr_cfg.setdefault("datasets_root", os.environ.get("LOCAL_DATASETS_DIR", ""))
+        if not asr_cfg["datasets_root"]:
+            raise ValueError("asr_filter needs datasets_root or LOCAL_DATASETS_DIR")
+
     combined, use_iterable, _ = _combine_entries(
-        input_cfg, shuffle, shard_seed, repeat=repeat, indexed=indexed
+        input_cfg, shuffle, shard_seed, repeat=repeat, indexed=indexed, asr_cfg=asr_cfg
     )
 
     return combined, use_iterable
@@ -721,7 +731,8 @@ def _sources_are_indexed(entries: list) -> bool:
 
 def _combine_entries(
     entries: list, shuffle: bool, shard_seed, repeat: bool, indexed: bool | None = None,
-    _where: str = "input_cfg"
+    _where: str = "input_cfg", asr_cfg: dict | None = None,
+    _outer_tags: dict | None = None, _outer_filters: tuple = (),
 ) -> tuple[CutSet, bool, int]:
     """Load one level of ``input_cfg`` and mux its entries together.
 
@@ -765,8 +776,18 @@ def _combine_entries(
                 )
             # The group's leaves are repeated inside the recursion, so the
             # group's own mux is already infinite.
+            group_tags = _get_config_value(source_cfg, "tags", None)
+            group_tags = dict(group_tags) if group_tags else {}
+            group_filter = (
+                (_get_config_value(source_cfg, "asr_filter", None),)
+                if "asr_filter" in source_cfg else ()
+            )
             cuts, child_iterable, n_cuts = _combine_entries(
-                children, shuffle, shard_seed, repeat, indexed, f"{where}.input_cfg"
+                children, shuffle, shard_seed, repeat, indexed, f"{where}.input_cfg",
+                asr_cfg=asr_cfg,
+                # An outer group's tags are applied last, so they override the inner ones.
+                _outer_tags={**group_tags, **(_outer_tags or {})},
+                _outer_filters=(*_outer_filters, *group_filter),
             )
             use_iterable = use_iterable or child_iterable
         elif source_type == "lhotse_shar":
@@ -807,6 +828,29 @@ def _combine_entries(
             # Count before repeating: len() of a repeated CutSet is not the
             # corpus size, and auto-weighting needs the corpus size.
             n_cuts = _count_cuts(cuts, where)
+            # ASR leaves only: the task is the one the cuts will carry (see
+            # effective_task), never a property of the corpus. Applied before
+            # repeat() so the leaf keeps its mux weight.
+            if asr_cfg is not None:
+                leaf_tags = _get_config_value(source_cfg, "tags", None)
+                if effective_task(
+                    dict(leaf_tags) if leaf_tags else {}, _outer_tags
+                ) == "asr":
+                    leaf_filter = (
+                        (_get_config_value(source_cfg, "asr_filter", None),)
+                        if "asr_filter" in source_cfg else ()
+                    )
+                    spec = resolve_source_filter(asr_cfg, [*_outer_filters, *leaf_filter])
+                    if spec is not None:
+                        cuts = apply_asr_filter(
+                            cuts,
+                            shar_path=shar_path,
+                            n_cuts=n_cuts,
+                            spec=spec,
+                            scores_root=asr_cfg["scores_root"],
+                            datasets_root=asr_cfg["datasets_root"],
+                            where=where,
+                        )
             if repeat:
                 cuts = cuts.repeat(preserve_id=True)
         # elif source_type == "lhotse_cuts":

@@ -214,6 +214,9 @@ data:
     total_hours: null
     total_cuts: null
     force_estimate: null
+    # Per-source, step-aware WER/CER band for ASR cuts (off when null). See
+    # melt/training/data/audio/lhotse/asr_score_filter.py.
+    asr_filter: null
     batch_size: null
     batch_duration: 120.0
     quadratic_duration: null
