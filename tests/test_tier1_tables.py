@@ -212,6 +212,26 @@ def test_the_markdown_lists_the_arms_in_registry_order_with_their_ma_hours(data)
     assert "## Seed replicates" in text and "T0 vs T0'" in text
 
 
+def test_the_section7_table_has_the_design_documents_columns_and_prints_fractions(data):
+    selection = {("A", 718): 0.0523, ("A", 2872): 0.043}
+    result = t1.build(t1.load(str(data / "summaries.json"), None), selection)
+    lines = t1.render_section7(result).splitlines()
+    assert lines[0] == (
+        "| point | MA objective | MA h | step | WER HR5 | CER other-19 | X→en HR4 / other | en→X HR4 / other "
+        "| selection | GPU-h |"
+    )
+    rows = {line.split(" | ")[0].removeprefix("| "): line for line in lines[2:]}
+    assert list(rows) == ["T0", "T0'", "A", "A'", "B", "T3"]  # the arms with a scored step, in registry order
+    assert rows["A"] == (
+        "| A | CE | 1,000 | 718 / 2,872 | .100 / .070 | .100 / .080 | 40.0 / 20.0, 50.0 / 25.0 "
+        "| 30.0 / 15.0, 35.0 / 17.5 | .0523 / .0430 |  |"
+    )
+    assert rows["B"] == (  # one step scored: the other shows a dash, never a zero
+        "| B | CE + SD-mix | 1,050 | 718 / 2,872 | .090 / - | .110 / - | 45.0 / 22.5, - | 33.0 / 16.5, - | - / - |  |"
+    )
+    assert t1.render_section7(result, steps=(2872,)).count("\n") == 2  # only A has a 2,872 read: header, rule, A
+
+
 def test_the_scatter_figure_is_written_as_png_and_pdf(tmp_path, data):
     pytest.importorskip("matplotlib")
     result = t1.build(t1.load(str(data / "summaries.json"), str(data / "langshare.json")), {})
@@ -227,6 +247,7 @@ def test_the_command_line_writes_the_tables_and_a_json(tmp_path, data):
         == 0
     )
     assert (out / "tier1_tables.md").read_text().startswith("# MA utility, Tier 1")
+    assert (out / "tier1_section7.md").read_text().startswith("| point | MA objective |")
     saved = json.loads((out / "tier1_tables.json").read_text())
     assert [a["key"] for a in saved["arms"]][:3] == ["T0", "T0'", "T1"]
     assert saved["rows"]["718"]["A"]["wer_hr5"] == pytest.approx(10.0)

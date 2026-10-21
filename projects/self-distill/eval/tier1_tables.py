@@ -243,6 +243,75 @@ def render(result: dict) -> str:
     return "\n".join(out)
 
 
+OBJECTIVE = {  # the "MA objective" column of plan/04-regime.md §7
+    "T0": "none",
+    "T0'": "none",
+    "T1": "CE",
+    "T2": "CE",
+    "A": "CE",
+    "A'": "CE",
+    "B": "CE + SD-mix",
+    "T3": "CE + CE24",
+    "T4": "CE + SD-mix24",
+    "T5": "CE + SIFT24",
+}
+SECTION7_HEAD = (
+    "point",
+    "MA objective",
+    "MA h",
+    "step",
+    "WER HR5",
+    "CER other-19",
+    "X→en HR4 / other",
+    "en→X HR4 / other",
+    "selection",
+    "GPU-h",
+)
+
+
+def bare(value: float | None, digits: int, scale: float = 1.0) -> str:
+    """A fraction as §7 prints it, without the leading zero (``.092``); ``-`` when the number is not there yet."""
+    if value is None:
+        return "-"
+    return f"{value / scale:.{digits}f}".removeprefix("0")
+
+
+def render_section7(result: dict, steps: tuple[int, ...] = FIGURE_STEPS) -> str:
+    """The results table of ``plan/04-regime.md`` §7: one row per arm, the scored steps side by side inside each cell.
+
+    WER and CER are fractions (the tables above hold percent), chrF pairs read ``HR4 / other-19``, and a step that has not
+    been scored yet shows ``-``. The GPU-h column is left empty: it is the cost accounting's, not the scorer's.
+    """
+    lines = ["| " + " | ".join(SECTION7_HEAD) + " |", "|" + "|".join("---" for _ in SECTION7_HEAD) + "|"]
+    for arm in ARMS:
+        ms = [result["rows"].get(step, {}).get(arm.key) for step in steps]
+        if not any(ms):
+            continue
+
+        def joined(key: str, digits: int = 3, scale: float = 100.0, ms=ms) -> str:
+            return " / ".join(bare(m[key], digits, scale) if m else "-" for m in ms)
+
+        def pairs(first: str, second: str, ms=ms) -> str:
+            return ", ".join(
+                f"{cell_text(m[first], first)} / {cell_text(m[second], second)}" if m else "-" for m in ms
+            )
+
+        cells = [
+            arm.key,
+            OBJECTIVE[arm.key],
+            f"{arm.ma_hours:,.0f}",
+            " / ".join(f"{step:,}" for step in steps),
+            joined("wer_hr5"),
+            joined("cer_other"),
+            pairs("xen_hr", "xen_other"),
+            pairs("enx_hr", "enx_other"),
+            joined("selection", 4, 1.0),
+            "",
+        ]
+        lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines)
+
+
 # --- the figure ---------------------------------------------------------------------------------------------------
 
 MARKERS = {"none": ("X", "#555555"), "CE": ("o", "#1f77b4"), "SD-mix": ("s", "#d62728"), "SIFT": ("^", "#2ca02c")}
@@ -352,7 +421,11 @@ def main(argv: list[str] | None = None) -> int:
     (args.out_dir / "tier1_tables.json").write_text(
         json.dumps({"arms": [a.__dict__ for a in ARMS], **result}, indent=1)
     )
+    section7 = render_section7(result)
+    (args.out_dir / "tier1_section7.md").write_text(section7 + "\n")
     print(render(result))
+    print("## Results table (plan/04-regime.md §7 layout)\n")
+    print(section7)
     if not args.no_figure:
         written = figure(
             result, args.out_dir / "tier1_scatter", ("selection", "wer_hr5", "cer_other", "xen_hr", "enx_hr")
