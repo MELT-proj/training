@@ -356,6 +356,10 @@ def figure(
             )
             if len(ce) > 1:
                 ax.plot(*zip(*ce), color="#1f77b4", alpha=0.35, zorder=2)
+            for arm, y in points.values():
+                ax.annotate(
+                    arm.key, (arm.ma_hours, y), textcoords="offset points", xytext=(5, 3), fontsize=7, color="#444"
+                )
             for first, second in REPLICATES.items():
                 if first in points and second in points:
                     pair = [points[first][1], points[second][1]]
@@ -377,8 +381,8 @@ def figure(
     handles, labels = axes[0][0].get_legend_handles_labels()
     handles.append(Line2D([0], [0], color="#888888", alpha=0.35, linewidth=9))
     labels.append("seed spread (T0/T0', A/A')")
-    axes[0][0].legend(handles, labels, loc="best", fontsize=8)
-    fig.tight_layout()
+    fig.tight_layout(rect=(0, 0.035, 1, 1))  # room under the panels for the legend, which then never covers a point
+    fig.legend(handles, labels, loc="lower center", ncol=len(labels), fontsize=8, frameon=False)
     written = []
     for suffix in (".png", ".pdf"):
         target = path.with_suffix(suffix)
