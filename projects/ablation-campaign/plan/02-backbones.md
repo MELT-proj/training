@@ -384,11 +384,36 @@ Ranked, in this order, with the noise estimate from the seed replicates:
 
 ## 5. Results
 
-| arm | MA-stage WER (5-lang mean) | FLEURS-24 CER (MA) | IFT CER (5-lang) | FLEURS-24 CER (IFT) | X→en chrF | text retention | notes |
+| arm | MA-stage WER (5-lang mean, %) | FLEURS-24 CER (MA) | IFT CER (5-lang) | FLEURS-24 CER (IFT) | X→en chrF | text retention | notes |
 |---|---|---|---|---|---|---|---|
-| llama1b-base | | | | | | | |
-| llama1b-ins | | | | | | | |
-| qwen35-2b-base | | | | | | | |
-| qwen35-2b-ins | | | | | | | |
-| eurollm1.7b-base | | | | | | | |
-| eurollm1.7b-ins | | | | | | | |
+| llama1b-base | runaway¹ | runaway¹ | .0500 | **.3571** | 47.3 | not measured | MA unusable; IFT recovers it (selection .0614) |
+| llama1b-ins | 11.52 | .6680 | .0477 | .4448 | 47.6 | not measured | selection .0850 |
+| qwen35-2b-base | 10.28 | .6191 | **.0431** | .4350 | 47.2 | not measured | selection .0858; 2 nodes, bd 30 |
+| qwen35-2b-ins | 9.87 | .6547 | .0473 | .4219 | 47.1 | not measured | selection .1066; 2 nodes, bd 30 |
+| eurollm1.7b-base | not scored² | — | pending | pending | — | not measured | IFT resuming (47783769) from step 3,608 |
+| eurollm1.7b-ins | 10.88 | .6661 | pending | pending | — | not measured | selection .1407 (MA); IFT resuming (47783768) |
+
+Read the columns as follows (all numbers from melt-eval on the saved checkpoint,
+never from the in-training history):
+
+- **WER and CER means** are unweighted means over the five training languages, on
+  the frozen selection sets (600 in-domain clips per language), not the medians the
+  selection metric uses. WER and CER differ by the reference length; the selection
+  metric's per-language quantity is CER.
+- **FLEURS-24 CER** is the mean over the 24 EU languages of `fleurs26-dev200`, so
+  ru and uk are excluded here; including them raises every IFT figure by 0.055–0.073.
+- **X→en chrF** is cased, macro-mean over the 23 directions of `fleurs24-st-xen-dev`
+  (100 clips each). Lowercase chrF++ runs 48.2–48.6 for all four scored arms; the
+  full BLEU/spBLEU/chrF/chrF++ rows are in
+  `selection-metric/scores/backbones-st-xen-2026-10-22.txt`.
+- **Selection scores** (a different, median-based aggregate): .0614, .0850, .0858,
+  .1066 for the four scored arms, .1478 / .1311 / .1216 / .1407 at MA; raw output
+  in `selection-metric/scores/backbones-ma-and-ift-2026-10-22.txt`.
+- **Text retention** is unmeasured: `melteval text-prior` scores a bare backbone,
+  and an IFT checkpoint is a `melt` model whose decoder is stored under a
+  `text_decoder.` prefix, so it needs an export step first (§3 row 5, the cascade
+  oracle, has the same requirement).
+- ¹ 2,555 of 3,000 in-domain generations run away (per-sample CER > 1): the Llama-Base
+  MA weights do not transcribe, so both MA columns are meaningless for that arm.
+- ² EuroLLM-Base MA ran away on 4–7 of the WER scale and was never scored; the IFT
+  stage starts from a staged checkpoint-47730 of that arm and repairs its ChatML rows.

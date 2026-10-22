@@ -15,6 +15,20 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-22 — Claude (worker session, backbones) — Qwen IFT scored (.0858 base, .1066 ins); Llama and Qwen tie on X→en; EuroLLM OOM'd a third time at bd 25 and resumes with gradient checkpointing
+
+Context: the four finished arms (Llama and Qwen, base and instruct) now have their full evaluation round; EuroLLM has been retried twice since the 10-19 entry. The §5 table of `02-backbones.md` is filled from these numbers.
+
+Finding:
+1. **Qwen IFT finished both arms** (47464247/48, 6,310 steps, 2 d 9 h on 2 nodes) and is scored: selection **.0858** (base) and **.1066** (instruct), against Llama's .0614 and .0850. In-domain WER (mean of the five training languages, 600 clips each): Qwen-base 8.27, Qwen-ins 8.70, Llama-ins 9.13, Llama-base 9.39. On FLEURS-24 dev CER it inverts: Llama-base **.3571**, Qwen-ins .4219, Qwen-base .4350, Llama-ins .4448. No arm is best on both, which is the decision rule's item 1 in the PI's hands.
+2. **X→en does not separate them.** Macro-mean over 23 directions, 100 samples each: chrF++ 44.2 (Qwen-ins) to 44.7 (Llama-ins) cased, 48.2 to 48.6 lowercase; base and instruct are within 0.5 of each other in both families. Full rows in `selection-metric/scores/backbones-st-xen-2026-10-22.txt`. Qwen's ST logs were scored with 47783772.
+3. **EuroLLM OOM'd a third time.** The bd 25 × ga 48 resume (47683539/40) died at 09:13Z on 10-22 at step 3,752, on the same 3.82 GiB fp32-logits allocation at ~61 GB. It also ran at **52 s/step** (tqdm), against 21 s/step for the original bd 75 × ga 16, so halving the micro-batch both failed to shrink the offending batch and cost 2.5× the step time. Do not retry that shape.
+4. **Resumed 47783768 (ins) / 47783769 (base)** from checkpoint-3608 with the **original bd 75 × ga 16 plus `--trainer.gradient_checkpointing true`**, 36 h limit. This is the fix the Qwen rows already use; it is a memory change only, and bd 75 also matches the sampler state saved at 3,608. Expected ~27 s/step, so ~20 h for the 2,558 steps left. Both were pending at 10:50Z.
+5. **Selection scores, 9 runs:** `selection-metric/scores/backbones-ma-and-ift-2026-10-22.txt` (every MA arm and the four finished IFT arms, raw `score.py` output). Note MA llama1b-base is 1.0000 from 2,555/3,000 runaway in-domain generations — that checkpoint is unusable as an MA arm, though its IFT recovered.
+6. **`~/eval-main` on MN5** (melt-eval main, has `st_metrics.py`) is what `st-metrics` must be run from, inside the spbleu eval image. The login node has no `inspect_ai`.
+
+Action needed: PI — the gate, provisionally moved to Mon 10-26 while EuroLLM finishes, needs item 1's choice between in-domain and zero-shot weighting; text retention is still unmeasured (no exporter for a MELT checkpoint into `melteval text-prior`).
+
 ## 2026-10-19 — MELT orchestrator — MoE or Conformer for Fondue: the evidence in one place
 Context: the PI is unsure whether MoE is more stable and more defensible than the Conformer. Everything below is already on main (03 §5, the score files, the board entries of 09-26 to 10-17); nothing new was run.
 Finding:
