@@ -37,11 +37,15 @@ log's values so its mean row reproduces the column.
 
 Result: joint 51.7 / 50.4 / 50.6 / 50.3 (llama-base / llama-ins / qwen-base /
 qwen-ins). en→X chrF (cased) 22.5 / 23.1 / 24.4 / 23.7. The en→X detail is the
-substantive finding: only `de` was trained (429.9 h probe), and it scores
-56–62 chrF; every other target is 0.5–50, with bg 0.7, el 0.6, mt 15–20 —
-the models answer in English, Italian or a hallucination rather than the
-requested language. Irish X→en (18–19 chrF for every arm) is degenerate
-English repetition, not translation.
+substantive finding, and it is a property of the mixture rather than of the
+decoders: `build_campaign_config.py` keeps one en→de probe (CoVoST2, 429.9 h,
+9.6% of the group draws, the only en→X direction among the five training
+languages — the CoVoST2 en→et/lv/sl/sv sets are staged but outside the grid).
+That probe scores 56–62 chrF; every other target is 0.5–50, with bg 0.7,
+el 0.6, mt 15–20 — the models answer in English, Italian or a hallucination
+rather than the requested language. Irish X→en (18–19 chrF for every arm) is
+degenerate English repetition, not translation. Note the probe buys little:
+trained de sits only ~4–5 chrF above untrained es/fr/it.
 
 Action needed: none. EuroLLM rows (en→X, joint, per-language) stay pending —
 its IFT is still resuming towards `checkpoint-6310` (47783768/47783769).

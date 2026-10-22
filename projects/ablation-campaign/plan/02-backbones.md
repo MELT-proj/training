@@ -531,13 +531,16 @@ translations, so that row says nothing about the arms' relative quality.
 | el | **49.0** | 48.8 | 47.5 | 47.4 |
 | **mean** | 50.5 | 50.8 | 50.5 | 50.3 |
 
-**ST en→X — lowercase chrF, 100 clips per target.** Only `de` was trained
-(the 429.9 h en→de probe in `ABL-IFT-700.yaml`); every other target is
-zero-shot, and the model usually answers in English or another language
-than the one asked for (bg and el come out as English, mt as Italian,
-el often unrelated to the audio) — hence the near-zero cells. The
-intermediate values (es 44–50, fr 45–57, it 41–49) are untrained
-directions too; why they sit far above bg/el was not investigated.
+**ST en→X — lowercase chrF, 100 clips per target.** Only `de` was trained:
+`build_campaign_config.py` keeps a single en→de probe (CoVoST2, 429.9 h — 9.6%
+of the mixture's group draws) because that is the only en→X direction among the
+five training languages; the CoVoST2 en→X sets staged for et/lv/sl/sv are
+outside the grid and are not in the render. Every other target here is
+zero-shot, and the model usually answers in English or another language than
+the one asked for (bg and el come out as English, mt as Italian, el often
+unrelated to the audio) — hence the near-zero cells. The intermediate values
+(es 44–50, fr 45–57, it 41–49) are untrained directions too; why they sit far
+above bg/el was not investigated.
 
 | tgt | L-B | L-I | Q-B | Q-I |
 |---|---|---|---|---|
