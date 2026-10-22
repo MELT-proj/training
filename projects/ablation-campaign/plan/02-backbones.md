@@ -386,12 +386,12 @@ Ranked, in this order, with the noise estimate from the seed replicates:
 
 | arm | MA-stage WER (5-lang mean, %) | FLEURS-24 CER (MA) | IFT CER (5-lang) | FLEURS-24 CER (IFT) | X→en chrF | text retention | notes |
 |---|---|---|---|---|---|---|---|
-| llama1b-base | runaway¹ | runaway¹ | .0500 | **.3571** | 47.3 | not measured | MA unusable; IFT recovers it (selection .0614) |
-| llama1b-ins | 11.52 | .6680 | .0477 | .4448 | 47.6 | not measured | selection .0850 |
-| qwen35-2b-base | 10.28 | .6191 | **.0431** | .4350 | 47.2 | not measured | selection .0858; 2 nodes, bd 30 |
-| qwen35-2b-ins | 9.87 | .6547 | .0473 | .4219 | 47.1 | not measured | selection .1066; 2 nodes, bd 30 |
-| eurollm1.7b-base | not scored² | — | pending | pending | — | not measured | IFT resuming (47783769) from step 3,608 |
-| eurollm1.7b-ins | 10.88 | .6661 | pending | pending | — | not measured | selection .1407 (MA); IFT resuming (47783768) |
+| llama1b-base | runaway¹ | runaway¹ | .0500 | **.3571** | 47.3 | −0.058 / −0.315 † | MA unusable; IFT recovers it (selection .0614) |
+| llama1b-ins | 11.52 | .6680 | .0477 | .4448 | 47.6 | +0.677 / +0.123 | selection .0850 |
+| qwen35-2b-base | 10.28 | .6191 | **.0431** | .4350 | 47.2 | +0.628 / +0.009 | selection .0858; 2 nodes, bd 30 |
+| qwen35-2b-ins | 9.87 | .6547 | .0473 | .4219 | 47.1 | +1.006 / +0.332 | selection .1066; 2 nodes, bd 30 |
+| eurollm1.7b-base | not scored² | — | pending | pending | — | pending | IFT resuming (47783769) from step 3,608 |
+| eurollm1.7b-ins | 10.88 | .6661 | pending | pending | — | pending | selection .1407 (MA); IFT resuming (47783768) |
 
 Read the columns as follows (all numbers from melt-eval on the saved checkpoint,
 never from the in-training history):
@@ -409,10 +409,16 @@ never from the in-training history):
 - **Selection scores** (a different, median-based aggregate): .0614, .0850, .0858,
   .1066 for the four scored arms, .1478 / .1311 / .1216 / .1407 at MA; raw output
   in `selection-metric/scores/backbones-ma-and-ift-2026-10-22.txt`.
-- **Text retention** is unmeasured: `melteval text-prior` scores a bare backbone,
-  and an IFT checkpoint is a `melt` model whose decoder is stored under a
-  `text_decoder.` prefix, so it needs an export step first (§3 row 5, the cascade
-  oracle, has the same requirement).
+- **Text retention** is "ASR cond Δ / ST cond Δ" in bits per character,
+  post-IFT minus pre-IFT (positive = less retained), measured with the §3.7
+  instrument on `checkpoint-6310` after exporting the decoder to a bare causal
+  LM (`text_prior_export.py`). Full tables, per-language breakdown, same-day
+  controls and job IDs in [`text-retention.md`](text-retention.md). EuroLLM is
+  pending: its resumed runs are queued and only step 3,608 exists.
+- † The base arms' conditioned delta is confounded by learning the chat template
+  (their pre-IFT conditioned number is dominated by template unfamiliarity,
+  §2). Their raw deltas (+0.671 ASR / +0.211 ST for llama1b-base) are the clean
+  retention numbers.
 - ¹ 2,555 of 3,000 in-domain generations run away (per-sample CER > 1): the Llama-Base
   MA weights do not transcribe, so both MA columns are meaningless for that arm.
 - ² EuroLLM-Base MA ran away on 4–7 of the WER scale and was never scored; the IFT

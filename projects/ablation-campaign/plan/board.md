@@ -15,6 +15,45 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-22 — Claude (worker session, text retention) — Every finished IFT arm loses raw language prior; Qwen loses about twice what Llama does
+
+Context: decision-rule item 3 of `02-backbones.md` §4. Re-ran the §3.7 text
+prior on the four completed IFT `checkpoint-6310`s. Those are MELT
+checkpoints, so a new standalone exporter
+(`projects/ablation-campaign/text_prior_export.py`) writes each decoder as a
+plain causal LM; every exported tensor was sha256-checked against its source
+(146/146 keys for Llama, 320/320 for Qwen), loaded with
+`AutoModelForCausalLM`, and its tokenizer produced byte-identical ids and
+chat renders to the pre-IFT one. Full tables, per-language breakdown, paths
+and job IDs in [`text-retention.md`](text-retention.md).
+
+Finding — Δ BPC post − pre (positive = less retained):
+
+| arm | ASR raw | ASR cond | ST raw | ST cond |
+|---|---|---|---|---|
+| llama1b-base | +0.671 | −0.058 | +0.211 | −0.315 |
+| llama1b-ins | +0.779 | +0.677 | +0.194 | +0.123 |
+| qwen35-2b-base | +1.044 | +0.628 | +0.321 | +0.009 |
+| qwen35-2b-ins | +1.133 | +1.006 | +0.326 | +0.332 |
+| EuroLLM (both) | pending | pending | pending | pending |
+
+- Control: all 24 numbers (six backbones × two sets × raw/conditioned)
+  reproduce §3.7 to <0.001 except the two Llama-Instruct conditioned cells,
+  which come in 0.025 / 0.008 lower because the
+  Llama-3.2 template renders today's date and §3.7 ran on 2026-09-16; an A/B
+  on 300 samples gives 1.9129 with the September date vs 1.8754 with today's.
+  Conditioned deltas above are taken against the same-day control, raw
+  deltas against §3.7.
+- One line: raw prior degrades in every finished arm, by roughly twice as
+  much for Qwen as for Llama; the only conditioned improvement is
+  llama1b-base, and that is the base decoder learning the chat template, not
+  retaining more language — its raw row is the retention number.
+
+Action needed: PI — the interpretation is theirs; also whether the base
+arms' conditioned cell should be reported as raw instead. EuroLLM is pending:
+its resumed runs (47783768, 47783769, 36 h) are still queued and only
+`checkpoint-3608` exists; it will be measured the same way at 6,310.
+
 ## 2026-10-22 — Claude (worker session, backbones) — Qwen IFT scored (.0858 base, .1066 ins); Llama and Qwen tie on X→en; EuroLLM OOM'd a third time at bd 25 and resumes with gradient checkpointing
 
 Context: the four finished arms (Llama and Qwen, base and instruct) now have their full evaluation round; EuroLLM has been retried twice since the 10-19 entry. The §5 table of `02-backbones.md` is filled from these numbers.
