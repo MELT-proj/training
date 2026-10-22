@@ -384,14 +384,14 @@ Ranked, in this order, with the noise estimate from the seed replicates:
 
 ## 5. Results
 
-| arm | MA-stage WER (5-lang mean, %) | FLEURS-24 CER (MA) | IFT CER (5-lang) | FLEURS-24 CER (IFT) | X→en chrF | text retention | notes |
-|---|---|---|---|---|---|---|---|
-| llama1b-base | runaway¹ | runaway¹ | .0500 | **.3571** | 47.3 | −0.058 / −0.315 † | MA unusable; IFT recovers it (selection .0614) |
-| llama1b-ins | 11.52 | .6680 | .0477 | .4448 | 47.6 | +0.677 / +0.123 | selection .0850 |
-| qwen35-2b-base | 10.28 | .6191 | **.0431** | .4350 | 47.2 | +0.628 / +0.009 | selection .0858; 2 nodes, bd 30 |
-| qwen35-2b-ins | 9.87 | .6547 | .0473 | .4219 | 47.1 | +1.006 / +0.332 | selection .1066; 2 nodes, bd 30 |
-| eurollm1.7b-base | not scored² | — | pending | pending | — | pending | IFT resuming (47783769) from step 3,608 |
-| eurollm1.7b-ins | 10.88 | .6661 | pending | pending | — | pending | selection .1407 (MA); IFT resuming (47783768) |
+| arm | MA-stage WER (5-lang mean, %) | FLEURS-24 CER (MA) | IFT CER (5-lang) | FLEURS-24 CER (IFT) | X→en chrF | en→X chrF | joint³ | text retention | notes |
+|---|---|---|---|---|---|---|---|---|---|
+| llama1b-base | runaway¹ | runaway¹ | .0500 | **.3571** | 47.3 | 22.5 | 51.7 | −0.058 / −0.315 † | MA unusable; IFT recovers it (selection .0614) |
+| llama1b-ins | 11.52 | .6680 | .0477 | .4448 | 47.6 | 23.1 | 50.4 | +0.677 / +0.123 | selection .0850 |
+| qwen35-2b-base | 10.28 | .6191 | **.0431** | .4350 | 47.2 | 24.4 | 50.6 | +0.628 / +0.009 | selection .0858; 2 nodes, bd 30 |
+| qwen35-2b-ins | 9.87 | .6547 | .0473 | .4219 | 47.1 | 23.7 | 50.3 | +1.006 / +0.332 | selection .1066; 2 nodes, bd 30 |
+| eurollm1.7b-base | not scored² | — | pending | pending | — | — | pending | pending | IFT resuming (47783769) from step 3,608 |
+| eurollm1.7b-ins | 10.88 | .6661 | pending | pending | — | — | pending | pending | selection .1407 (MA); IFT resuming (47783768) |
 
 Read the columns as follows (all numbers from melt-eval on the saved checkpoint,
 never from the in-training history):
@@ -406,6 +406,11 @@ never from the in-training history):
   (100 clips each). Lowercase chrF++ runs 48.2–48.6 for all four scored arms; the
   full BLEU/spBLEU/chrF/chrF++ rows are in
   `selection-metric/scores/backbones-st-xen-2026-10-22.txt`.
+- **en→X chrF** is cased, macro-mean over the 23 targets of `fleurs24-st-enx-dev`
+  (100 clips each). That set exists only on artemis — MN5's eval copy has neither
+  the spec nor a frozen set — so these four runs were made there (jobs 338939–338942);
+  the full rows are in `selection-metric/scores/backbones-st-enx-2026-10-22.txt`.
+  Lowercase values and the per-target rows are in "Per language" below.
 - **Selection scores** (a different, median-based aggregate): .0614, .0850, .0858,
   .1066 for the four scored arms, .1478 / .1311 / .1216 / .1407 at MA; raw output
   in `selection-metric/scores/backbones-ma-and-ift-2026-10-22.txt`.
@@ -423,3 +428,140 @@ never from the in-training history):
   MA weights do not transcribe, so both MA columns are meaningless for that arm.
 - ² EuroLLM-Base MA ran away on 4–7 of the WER scale and was never scored; the IFT
   stage starts from a staged checkpoint-47730 of that arm and repairs its ChatML rows.
+
+### Joint ASR + ST score
+
+³ This section defines the `joint` column of the table above. It is the
+MA-utility study's headline score (defined in
+`projects/self-distill/eval/tier1_joint.py`, branch `ma-utility-scoring`;
+adopted 2026-10-21):
+
+`joint = (100 − asr24 + X→en chrF + en→X chrF) / 3`, higher is better, where
+`asr24` is the geometric mean over the 24 EU languages of min(CER, 1), in
+percent, and both chrF terms are lowercase plain chrF, macro-means over the
+23 directions. Equal thirds: over steps 718 to 2,872 the study's arms gain
+about as many points on each part (1.7 / 1.9 / 1.5), so one point of each
+stands for about the same amount of fine-tuning.
+
+| arm | asr24 (%) | X→en chrF | en→X chrF | joint |
+|---|---|---|---|---|
+| llama1b-base | 19.09 | 50.5 | 23.9 | 51.7 |
+| llama1b-ins | 24.02 | 50.8 | 24.5 | 50.4 |
+| qwen35-2b-base | 24.64 | 50.5 | 25.9 | 50.6 |
+| qwen35-2b-ins | 24.63 | 50.3 | 25.1 | 50.3 |
+
+Two instrument differences from the study's own table, both improving this
+one: `asr24` here is measured on `fleurs26-dev200` (200 clips per language)
+rather than the study's 100, and the ST terms are 100 clips per direction on
+the frozen ST dev sets rather than the step-5 battery. Absolute values are
+therefore not interchangeable with Tier 1's; the ranking within this table is.
+
+EuroLLM is pending (its IFT is resuming); its MA-stage selection score is
+.1407, the worst of the six, so its joint score is not expected to lead.
+
+### Per language
+
+Languages on rows, arms on columns: **L-B** Llama-3.2-1B (base), **L-I**
+Llama-3.2-1B-Instruct, **Q-B** Qwen3.5-2B-Base, **Q-I** Qwen3.5-2B (instruct).
+EuroLLM is not in these tables: its IFT is still resuming, so there is no
+`checkpoint-6310` to score.
+
+**ASR — FLEURS-24 dev CER (%), 200 clips per language.** These are the eval
+logs' own per-language CERs, unclipped: a language where the model runs away
+sits above 100% instead of being capped, which is what makes the `mean` row
+equal to the FLEURS-24 CER column above. Bold marks the best arm in the row.
+
+| lang | L-B | L-I | Q-B | Q-I |
+|---|---|---|---|---|
+| en | **3.3** | 3.7 | 4.2 | 4.2 |
+| de | 3.0 | 2.7 | **2.4** | 2.9 |
+| es | 1.7 | 1.8 | **1.6** | 1.7 |
+| fr | 3.2 | 3.1 | **2.4** | 2.6 |
+| it | 1.6 | 1.6 | **1.5** | 1.6 |
+| pt | **8.6** | 9.6 | 11.4 | 18.4 |
+| ro | **13.0** | 18.5 | 31.0 | 43.0 |
+| nl | **24.7** | 29.2 | 40.9 | 37.5 |
+| da | **22.3** | 37.3 | 35.3 | 50.1 |
+| sv | **15.7** | 30.1 | 24.5 | 40.8 |
+| cs | 50.7 | 58.3 | 58.2 | **48.8** |
+| sk | 40.9 | 53.9 | 35.3 | **32.9** |
+| pl | **32.8** | 66.1 | 76.8 | 65.5 |
+| hr | **16.8** | 31.6 | 32.4 | 31.2 |
+| sl | **21.4** | 35.0 | 42.6 | 27.9 |
+| hu | **50.4** | 64.2 | 84.3 | 75.0 |
+| fi | **33.0** | 49.9 | 40.6 | 55.6 |
+| et | 18.8 | 30.2 | 34.5 | **17.5** |
+| lt | **38.2** | 49.1 | 51.3 | 41.8 |
+| lv | 34.7 | 35.8 | 34.5 | **26.2** |
+| ga | 94.1 | 93.7 | 93.3 | **92.2** |
+| mt | **68.6** | 73.7 | 81.4 | 74.4 |
+| bg | **105.8** | 146.3 | 106.7 | 110.7 |
+| el | 153.6 | 142.3 | 116.9 | **110.1** |
+| **mean** | 35.7 | 44.5 | 43.5 | 42.2 |
+
+**ST X→en — lowercase chrF, 100 clips per source.** `ga` is the outlier for
+every arm (18–19 against 39–66 elsewhere): the outputs are degenerate
+English repetitions ("...the church of the church of the church..."), not
+translations, so that row says nothing about the arms' relative quality.
+
+| src | L-B | L-I | Q-B | Q-I |
+|---|---|---|---|---|
+| de | 63.1 | 63.1 | 65.2 | **65.3** |
+| es | 56.7 | 56.9 | 58.5 | **58.7** |
+| fr | 62.1 | 61.5 | **64.2** | 63.4 |
+| it | 59.3 | 60.2 | **61.9** | 61.7 |
+| pt | 65.0 | 65.7 | **66.0** | 65.5 |
+| ro | 57.5 | 58.6 | **60.0** | 59.3 |
+| nl | 53.1 | 53.2 | **53.7** | 53.4 |
+| da | 57.9 | 59.4 | 59.3 | **60.2** |
+| sv | 61.7 | 61.3 | 62.0 | **62.1** |
+| cs | 52.7 | 53.7 | **53.8** | 53.6 |
+| sk | 54.0 | **54.6** | 53.6 | 53.3 |
+| pl | **51.4** | 51.2 | 50.2 | 50.2 |
+| hr | 52.6 | 52.9 | **54.2** | 52.8 |
+| sl | 44.8 | **46.1** | 44.3 | 44.9 |
+| hu | 43.5 | **44.5** | 41.0 | 39.7 |
+| fi | 44.2 | **45.2** | 40.0 | 40.8 |
+| et | 39.7 | **42.5** | 37.0 | 39.4 |
+| lt | **40.5** | 39.1 | 37.3 | 38.3 |
+| lv | **40.3** | 39.5 | 37.8 | 38.4 |
+| ga | 18.3 | 18.5 | **18.9** | 15.8 |
+| mt | 39.0 | 39.7 | **39.8** | 38.5 |
+| bg | 54.4 | 52.7 | **55.0** | 54.7 |
+| el | **49.0** | 48.8 | 47.5 | 47.4 |
+| **mean** | 50.5 | 50.8 | 50.5 | 50.3 |
+
+**ST en→X — lowercase chrF, 100 clips per target.** Only `de` was trained
+(the 429.9 h en→de probe in `ABL-IFT-700.yaml`); every other target is
+zero-shot, and the model usually answers in English or another language
+than the one asked for (bg and el come out as English, mt as Italian,
+el often unrelated to the audio) — hence the near-zero cells. The
+intermediate values (es 44–50, fr 45–57, it 41–49) are untrained
+directions too; why they sit far above bg/el was not investigated.
+
+| tgt | L-B | L-I | Q-B | Q-I |
+|---|---|---|---|---|
+| de | 56.5 | 57.3 | **61.5** | 59.5 |
+| es | 44.6 | 45.3 | **50.4** | 49.9 |
+| fr | 45.2 | 49.8 | **57.4** | 57.2 |
+| it | 41.4 | 41.7 | 48.4 | **48.8** |
+| pt | 41.1 | 46.3 | **48.3** | 46.6 |
+| ro | 24.7 | **30.7** | 27.5 | 23.0 |
+| nl | 26.6 | **27.5** | 27.1 | 26.9 |
+| da | 27.0 | 27.3 | 27.4 | 27.4 |
+| sv | 26.8 | 26.5 | **26.9** | 26.7 |
+| cs | 17.1 | 17.1 | **18.5** | 17.2 |
+| sk | 17.8 | 17.5 | **19.2** | 17.8 |
+| pl | **17.7** | 16.7 | 17.3 | 16.9 |
+| hr | 19.7 | 18.8 | **22.2** | 19.4 |
+| sl | 18.7 | 18.4 | 21.1 | **21.2** |
+| hu | 15.7 | 15.4 | 15.6 | **15.9** |
+| fi | 17.6 | 17.3 | 17.6 | 17.6 |
+| et | 20.4 | **20.5** | 18.9 | 18.3 |
+| lt | **17.2** | 16.5 | 15.7 | 14.0 |
+| lv | **16.8** | 15.8 | 16.2 | 16.2 |
+| ga | 16.5 | 16.3 | **16.7** | 15.8 |
+| mt | 18.6 | 18.5 | 19.5 | **19.9** |
+| bg | 0.7 | 0.7 | 0.7 | 0.7 |
+| el | 0.6 | 0.6 | 0.6 | 0.5 |
+| **mean** | 23.9 | 24.5 | 25.9 | 25.1 |

@@ -15,6 +15,37 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-22 — Claude (worker session, backbone scores) — Backbone table gains en→X chrF, the joint ASR+ST score and per-language tables; en→X is untrained except en→de
+
+Context: reviewing the §5 scores. Two gaps: the table had no en→X column, and
+its aggregate (the campaign selection metric) is ASR-only. The PI's improved
+score from the MA-utility study was adopted as the headline on 2026-10-21
+(`tier1_joint.py`, PR #160): `joint = (100 − asr24 + X→en chrF + en→X chrF)/3`
+with lowercase chrF and `asr24` the geometric mean of min(CER,1) over the 24 EU
+languages.
+
+Finding: `fleurs24-st-enx-dev` (23 targets × 100) existed only in melt-eval's
+x-to-y branch and as a frozen set on **artemis**; MN5 has neither the spec nor a
+set. The four IFT checkpoints were copied from MN5 and scored on artemis (jobs
+338939–338942, each 2,300/2,300 samples, 0 errors). Two method notes:
+`inspect eval` cannot score a multi-target set (the pooled corpus BLEU/chrF
+scorer raises "Mixed target languages: ['es','fr']"), so the runs use
+`--no-score` and are scored afterwards with `melteval st-metrics`; and §5's
+FLEURS-24 CER column is the mean of the eval log's grouped `cer_<lang>`, which
+is unclipped, while `score.py` clips at 1.0 — the per-language table uses the
+log's values so its mean row reproduces the column.
+
+Result: joint 51.7 / 50.4 / 50.6 / 50.3 (llama-base / llama-ins / qwen-base /
+qwen-ins). en→X chrF (cased) 22.5 / 23.1 / 24.4 / 23.7. The en→X detail is the
+substantive finding: only `de` was trained (429.9 h probe), and it scores
+56–62 chrF; every other target is 0.5–50, with bg 0.7, el 0.6, mt 15–20 —
+the models answer in English, Italian or a hallucination rather than the
+requested language. Irish X→en (18–19 chrF for every arm) is degenerate
+English repetition, not translation.
+
+Action needed: none. EuroLLM rows (en→X, joint, per-language) stay pending —
+its IFT is still resuming towards `checkpoint-6310` (47783768/47783769).
+
 ## 2026-10-22 — Claude (worker session, text retention) — Every finished IFT arm loses raw language prior; Qwen loses about twice what Llama does
 
 Context: decision-rule item 3 of `02-backbones.md` §4. Re-ran the §3.7 text

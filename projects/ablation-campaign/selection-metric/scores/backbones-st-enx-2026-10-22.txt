@@ -1,0 +1,28 @@
+FLEURS-24 en->X dev, IFT-stage backbone arms (whisper-large-v3 encoder + MoE adapter,
+700 h/lang, 6,310 steps). Macro-mean over the 23 translation targets, 100 samples
+per target, greedily decoded. spBLEU uses flores200; chrF++ is char n-grams 6 + word
+bigrams. Targets: the 23 non-English EU-24 languages of `fleurs24-st-enx-dev`.
+
+Only en->de appears in the IFT mix (a 429.9 h probe, ABL-IFT-700.yaml); every other
+target is zero-shot. Read the per-language rows (plan/02-backbones.md, "Per
+language") before any mean.
+
+Computed 2026-10-22 with `melteval st-metrics` (melt-eval at PR #28, checkout on
+artemis) from `--no-score` logs: the pooled corpus BLEU/chrF scorer refuses a set
+with several target languages, so an en->X run cannot use the in-run scorer and is
+scored after the fact from the log. Jobs 338939/338940 (llama, h100 partition) and
+338941/338942 (qwen, h200), each 2,300/2,300 samples with zero errors.
+
+model                 case   BLEU  spBLEU   chrF  chrF++
+llama1b-base          cased      2.8     3.6   22.5   19.5
+llama1b-base          lower      4.0     5.5   23.9   21.0
+llama1b-ins           cased      3.1     4.0   23.1   20.2
+llama1b-ins           lower      4.4     6.0   24.5   21.7
+qwen35-2b-base        cased      4.0     5.2   24.4   21.4
+qwen35-2b-base        lower      5.6     7.3   25.9   23.1
+qwen35-2b-ins         cased      3.7     4.7   23.7   20.7
+qwen35-2b-ins         lower      5.2     6.8   25.1   22.3
+Logs (artemis): /mnt/scratch-artemis/giuseppe/melt-data/eval-logs/ift-st-enx/
+The frozen set exists only on artemis: MN5's eval copy has no en->X set. The four
+checkpoints were copied from mn5:/gpfs/scratch/epor48/outputs/ into
+/mnt/scratch-artemis/giuseppe/ckpts/ift-backbones/ for these runs.
