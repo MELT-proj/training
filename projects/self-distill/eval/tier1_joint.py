@@ -59,6 +59,11 @@ CER_CLIP = 1.0
 CER_FLOOR = 0.002  # keeps the log of a perfect language finite
 WEIGHTS = (1 / 3, 1 / 3, 1 / 3)  # ASR, X->en, en->X
 STEPS = (718, 1436, 2154, 2872)
+# the reads after step 2,872: T0 and the continued arms run on to the end, A was scored there
+LATE = (4308, 5744, 8616, 11499)
+LATE_ARMS = ("T0", "A", "T3", "T5")  # the arms read at the late steps
+LATE_MA = ("A", "T3", "T5")  # the MA starts whose lead over T0 is read at the end of the schedule
+DECAY_START = 0.8 * t1.FINAL_STEP  # the last fifth of the schedule is the WSD decay
 PAIRS = (("T0", "A"), ("T0'", "A'"))  # (no MA, MA) fine-tunes on identical batches
 ARM_BY_KEY = {arm.key: arm for arm in t1.ARMS}
 VARIANTS = {  # name -> (weights asr / X->en / en->X, ASR key)
@@ -271,6 +276,93 @@ def comparison_table(rows: dict, spread: dict[str, float]) -> str:
     return "\n".join(out)
 
 
+def late_gaps(rows: dict) -> dict[str, dict[int, float]]:
+    """D(s) = joint(X, s) - joint(T0, s) at the late steps where both were read, for each MA start X."""
+    return {
+        arm: {
+            step: rows[step][arm]["joint"] - rows[step]["T0"]["joint"]
+            for step in LATE
+            if arm in rows.get(step, {}) and "T0" in rows.get(step, {})
+        }
+        for arm in LATE_MA
+    }
+
+
+def gate_verdict(gaps: dict[int, float], spread: float) -> str:
+    """The reading of one MA start's lead over T0 at the end of the schedule, fixed before the late reads came in.
+
+    *gone*: the lead at the last step and the mean of the stable-phase leads are both within the seed spread; *persists*: the lead at the
+    last step is at least twice the spread and the stable-phase mean at least the spread; anything else is *between*. Before the three
+    stable-phase reads and the last step are in, the verdict is *open*.
+    """
+    stable = [d for step, d in gaps.items() if step < DECAY_START]
+    if len(stable) < 3 or t1.FINAL_STEP not in gaps:
+        return "open"
+    final, stable_mean = gaps[t1.FINAL_STEP], statistics.fmean(stable)
+    if final <= spread and stable_mean <= spread:
+        return "gone"
+    if final >= 2 * spread and stable_mean >= spread:
+        return "persists"
+    return "between"
+
+
+def recipe_verdict(rows: dict, spread: float) -> str:
+    """T5 (SIFT) against T3 (CE24), the same 2,700 h of audio, at the last step."""
+    last = rows.get(t1.FINAL_STEP, {})
+    if "T5" not in last or "T3" not in last:
+        return "open"
+    gap = last["T5"]["joint"] - last["T3"]["joint"]
+    if gap >= 2 * spread:
+        return f"T5 - T3 = {gap:+.2f}: SIFT earns its extra MA"
+    return f"T5 - T3 = {gap:+.2f}: " + ("CE24 does the same for less" if gap <= spread else "between")
+
+
+def late_table(rows: dict, spread: dict[str, float]) -> str:
+    """The reads after step 2,872 (T0, the continued arms and A), the lead of each MA start over T0, and the registered verdicts."""
+    seen = [step for step in LATE if any(arm in rows.get(step, {}) for arm in LATE_ARMS)]
+    if not seen:
+        return "No read after step 2,872 yet."
+    out = [
+        "Steps 4,308 to 11,499 of the 11,499-step schedule (the WSD decay is its last fifth, from step 9,200). T0 and the continued arms (T3, T5) are read at "
+        "these steps, A was scored there; D = joint minus T0's joint at the same step, positive = the arm is ahead.",
+        "",
+        "| step | arm | ASR-24 CER % (geo) | X→en 23 | en→X 23 | ST-46 | joint | D (joint − T0) |",
+        "|---|---|---:|---:|---:|---:|---:|---:|",
+    ]
+    for step in seen:
+        by_arm = rows[step]
+        for key in LATE_ARMS:
+            if key not in by_arm:
+                continue
+            v = by_arm[key]
+            d = v["joint"] - by_arm["T0"]["joint"] if "T0" in by_arm and key != "T0" else None
+            out.append(
+                f"| {step:,} | {key} | {num(v['asr24'])} | {num(v['xen23'])} | {num(v['enx23'])} | {num(v['st46'])} | "
+                f"{num(v['joint'])} | {'-' if d is None else f'{d:+.2f}'} |"
+            )
+    yardstick = spread["joint"]
+    gaps = late_gaps(rows)
+    out += [
+        "",
+        f"Reading fixed before the late reads came in: the yardstick is the seed spread of the joint score, {yardstick:.2f}. *gone*: D at "
+        f"11,499 <= {yardstick:.2f} and the mean of the three stable-phase D <= {yardstick:.2f}; *persists*: D at 11,499 >= {2 * yardstick:.2f} "
+        f"and the stable-phase mean >= {yardstick:.2f}; otherwise *between*; *open* until the 4,308, 5,744, 8,616 and 11,499 reads of the arm "
+        "and of T0 are in.",
+        "",
+        "| MA start | " + " | ".join(f"D at {s:,}" for s in LATE) + " | stable-phase mean | verdict |",
+        "|---|" + "---:|" * (len(LATE) + 1) + "---|",
+    ]
+    for arm in LATE_MA:
+        stable = [d for step, d in gaps[arm].items() if step < DECAY_START]
+        out.append(
+            f"| {arm} | "
+            + " | ".join("-" if s not in gaps[arm] else f"{gaps[arm][s]:+.2f}" for s in LATE)
+            + f" | {'-' if not stable else f'{statistics.fmean(stable):+.2f}'} | **{gate_verdict(gaps[arm], yardstick)}** |"
+        )
+    out += ["", f"Recipe, SIFT against CE24 at 11,499: {recipe_verdict(rows, yardstick)}."]
+    return "\n".join(out)
+
+
 def variants_table(rows: dict) -> str:
     """The pooled MA advantage in the joint score under other weights and other CER aggregates."""
     out = [
@@ -378,6 +470,10 @@ def render(rows: dict) -> str:
             "## MA against no MA, on identical batches",
             "",
             comparison_table(rows, spread),
+            "",
+            "## The end of the schedule",
+            "",
+            late_table(rows, spread),
             "",
             "## Under other definitions",
             "",

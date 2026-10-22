@@ -133,11 +133,68 @@ def test_the_seed_spread_is_the_mean_absolute_gap_between_an_arm_and_its_replica
     assert tj.seed_spread(gaps)["joint"] == pytest.approx((0.5 + 1.0 + 0.1) / 3)
 
 
+def late_rows(leads: dict[str, float], steps: tuple[int, ...] = tj.LATE) -> dict:
+    """The late reads of T0 and of the MA starts in ``leads``; each leads T0 by its number of joint points at every step."""
+    rows: dict = {}
+    for step in steps:
+        rows[step] = {"T0": tj.aggregates(cell(0.06, 48.0, 40.0))}
+        for arm, lead in leads.items():  # the joint moves by a third of the X->en chrF
+            rows[step][arm] = tj.aggregates(cell(0.06, 48.0 + 3 * lead, 40.0))
+    return rows
+
+
+def test_the_registered_verdicts_read_the_stable_phase_and_the_last_step():
+    spread = 0.32
+    stable = {4308: 0.4, 5744: 0.4, 8616: 0.4}
+    assert tj.gate_verdict({**stable, 11499: 0.1}, spread) == "between"  # the lead was there and is gone at the end
+    assert tj.gate_verdict({**stable, 11499: 0.7}, spread) == "persists"
+    assert tj.gate_verdict({**stable, 11499: 0.5}, spread) == "between"
+    assert tj.gate_verdict({4308: 0.1, 5744: 0.0, 8616: 0.2, 11499: 0.2}, spread) == "gone"
+    assert tj.gate_verdict({4308: 0.1, 5744: 0.1, 8616: 0.1, 11499: 0.7}, spread) == "between"  # only the decay moved
+    assert tj.gate_verdict({4308: 0.1, 5744: 0.1, 11499: 0.0}, spread) == "open"  # an 8,616 read is missing
+    assert tj.gate_verdict({4308: 0.1, 5744: 0.1, 8616: 0.1}, spread) == "open"  # no last step
+    assert tj.gate_verdict({}, spread) == "open"
+
+
+def test_the_late_gaps_are_the_joint_lead_over_t0_at_the_steps_both_were_read():
+    rows = late_rows({"A": 0.5, "T5": 1.0})
+    del rows[8616]["T0"]
+    gaps = tj.late_gaps(rows)
+    assert gaps["A"] == pytest.approx({4308: 0.5, 5744: 0.5, 11499: 0.5})
+    assert gaps["T5"] == pytest.approx({4308: 1.0, 5744: 1.0, 11499: 1.0})
+    assert gaps["T3"] == {}
+
+
+def test_the_late_table_lists_the_reads_and_applies_the_registered_verdicts():
+    rows = late_rows({"A": 0.2, "T3": 0.4, "T5": 1.2})
+    text = tj.late_table(rows, {"joint": 0.32})
+    assert text.count("| T5 |") == 4 + 1  # four late reads and the verdict row
+    assert "| 11,499 | T5 | 6.00 | 51.60 | 40.00 | 45.80 | 61.87 | +1.20 |" in text
+    assert "| A | +0.20 | +0.20 | +0.20 | +0.20 | +0.20 | **gone** |" in text
+    assert "| T3 | +0.40 | +0.40 | +0.40 | +0.40 | +0.40 | **between** |" in text
+    assert "| T5 | +1.20 | +1.20 | +1.20 | +1.20 | +1.20 | **persists** |" in text
+    assert "T5 - T3 = +0.80: SIFT earns its extra MA" in text
+    cheaper = tj.late_table(late_rows({"A": 0.2, "T3": 1.0, "T5": 1.1}), {"joint": 0.32})
+    assert "T5 - T3 = +0.10: CE24 does the same for less" in cheaper
+    assert "Recipe, SIFT against CE24 at 11,499: T5 - T3 = +0.50: between." in tj.late_table(
+        late_rows({"T3": 1.0, "T5": 1.5}), {"joint": 0.32}
+    )
+
+
+def test_the_late_table_is_open_until_the_reads_are_in_and_says_so_when_there_are_none():
+    assert tj.late_table(grid_rows(), {"joint": 0.32}) == "No read after step 2,872 yet."
+    text = tj.late_table(late_rows({"A": 0.9}, steps=(4308,)), {"joint": 0.32})
+    assert "| 4,308 | A | 6.00 | 50.70 | 40.00 | 45.35 | 61.57 | +0.90 |" in text
+    assert "| A | +0.90 | - | - | - | +0.90 | **open** |" in text
+    assert "Recipe, SIFT against CE24 at 11,499: open." in text
+
+
 def test_the_report_has_every_section_and_a_row_per_arm_and_step():
     text = tj.render(grid_rows())
     for heading in (
         "### Step 718",
         "### Step 2,872",
+        "## The end of the schedule",
         "## MA against no MA, on identical batches",
         "## Under other definitions",
         "## Which aggregate resolves the arms best",
