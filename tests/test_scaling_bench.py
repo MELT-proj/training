@@ -419,7 +419,18 @@ def _perf_stub(tmp_path, step=0):
     trainer._perf_step_times = deque(maxlen=100)
     trainer._perf_window = {}
     trainer.state = SimpleNamespace(global_step=step)
-    trainer.config = OmegaConf.create({"model": {"encoder": {"max_audio_seq_len": 1500}}})
+    trainer.config = OmegaConf.create(
+        {
+            "model": {
+                "encoder": {"max_audio_seq_len": 1500},
+                "decoder": {"audio_token": "<|audio|>"},
+                "adapter": {"stack_factor": 1},
+            }
+        }
+    )
+    trainer.processor = SimpleNamespace(
+        tokenizer=SimpleNamespace(unk_token_id=-1, convert_tokens_to_ids=lambda _t: 99)
+    )
     trainer.args = SimpleNamespace(device=torch.device("cpu"), output_dir=str(tmp_path))
     return trainer
 
@@ -450,9 +461,39 @@ def test_perf_window_counts_match_the_batch(tmp_path):
     assert w["enc_padded_frames"] == pytest.approx(2 * 1500)
     assert w["enc_valid_frames"] == pytest.approx(2900.0)
     assert w["enc_chunks"] == pytest.approx(2.0)  # ceil(1500/1500) x 2 cuts
-    assert w["dec_positions"] == pytest.approx(200.0)
+    # 200 input_ids tokens, no audio placeholders in this batch, plus the
+    # 2,900 valid frames that get INSERTED into the decoder sequence.
+    assert w["dec_positions"] == pytest.approx(200.0 + 2900.0)
     assert w["dec_sequences"] == pytest.approx(2.0)
     assert w["sup_tokens"] == pytest.approx(120.0)
+
+
+def test_decoder_positions_include_the_inserted_audio_embeddings(tmp_path):
+    """MELT *inserts* audio into the decoder sequence; input_ids alone undercounts.
+
+    `_inject_tensor` replaces the `<|audio|>` placeholder with the adapter's
+    embeddings by insertion, so the decoder runs on
+    `input_ids - placeholders + audio_embeddings`. On a 50 Hz encoder that is
+    about nine times the raw `input_ids.numel()`, and using the raw count
+    deflates every FLOPs and MFU figure derived from it.
+    """
+    torch = pytest.importorskip("torch")
+    stub = _perf_stub(tmp_path)
+    batch = _batch()
+    batch["input_ids"][:, 0] = 99  # the audio placeholder the stub's tokenizer resolves to
+    stub._perf_observe_batch(batch, [10.0, 20.0])
+
+    # 2 x 100 input_ids, 2 placeholders removed, 2,900 valid audio frames inserted.
+    assert stub._perf_window["dec_positions"] == pytest.approx(200.0 - 2.0 + 2900.0)
+
+
+def test_decoder_positions_respect_the_adapter_stack_factor(tmp_path):
+    """Stacking frames before the decoder divides the injected positions."""
+    pytest.importorskip("torch")
+    stub = _perf_stub(tmp_path)
+    stub.config.model.adapter.stack_factor = 8
+    stub._perf_observe_batch(_batch(), [10.0, 20.0])
+    assert stub._perf_window["dec_positions"] == pytest.approx(200.0 + 2900.0 / 8)
 
 
 def test_perf_counters_accumulate_across_microbatches(tmp_path):

@@ -46,6 +46,9 @@ import flops  # noqa: E402
 # from being read as a tag, since both are "a dash then letters".
 EXP_PATTERN = re.compile(r"-n(?P<nodes>\d+)(?:-(?!r\d+$)(?P<tag>[A-Za-z][\w.]*))?(?:-r(?P<repeat>\d+))?$")
 
+# The perf record format this collector understands. See MELTTrainer._perf_emit.
+CURRENT_PERF_VERSION = 2
+
 # Audio-hour budgets the report tabulates: the pilot, the request that prompted
 # this campaign, and the two pools Fondue actually draws from.
 BUDGETS = (25_000, 100_000, 247_000, 330_000)
@@ -90,6 +93,17 @@ def steady_state(records: list[dict], drop_first: int) -> list[dict]:
 
 def summarise(path: Path, shape_kwargs: dict, drop_first: int, override_nodes: int | None) -> dict:
     records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    versions = {int(r.get("perf_version", 1)) for r in records}
+    if versions != {CURRENT_PERF_VERSION}:
+        # Mixing them is silent and wrong: v1 counted input_ids, which is ~9x
+        # smaller than what the decoder actually runs on once MELT has inserted
+        # the audio embeddings, so an old record would deflate MFU by that
+        # factor while looking perfectly ordinary.
+        raise SystemExit(
+            f"{path.parent.name}: perf records have version(s) {sorted(versions)}, "
+            f"this collector expects {CURRENT_PERF_VERSION}. "
+            "Re-run the point, or analyse that run separately."
+        )
     kept = steady_state(records, drop_first)
     nodes, repeat = nodes_from(path, override_nodes)
     world_size = 4 * nodes

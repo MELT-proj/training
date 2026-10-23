@@ -1489,6 +1489,7 @@ class MELTTrainer(Seq2SeqTrainer):
             window["audio_s"] = window.get("audio_s", 0.0) + sum(float(d) for d in durations)
 
         features = inputs.get("input_features")
+        audio_positions = 0.0
         if features is not None:
             padded = float(features.shape[0]) * float(features.shape[1])
             window["enc_padded_frames"] = window.get("enc_padded_frames", 0.0) + padded
@@ -1499,14 +1500,45 @@ class MELTTrainer(Seq2SeqTrainer):
             if chunk > 0:
                 chunks = math.ceil(features.shape[1] / chunk) * features.shape[0]
                 window["enc_chunks"] = window.get("enc_chunks", 0.0) + float(chunks)
+            stack_factor = int(getattr(self.config.model.adapter, "stack_factor", 0) or 0) or 1
+            audio_positions = valid / stack_factor
 
         input_ids = inputs.get("input_ids")
         if input_ids is not None:
-            window["dec_positions"] = window.get("dec_positions", 0.0) + float(input_ids.numel())
+            # The decoder does NOT run on input_ids as given. MELT injects the
+            # adapter's audio embeddings into the sequence, INSERTING rather
+            # than replacing (``_inject_tensor`` says so in its docstring), so
+            # the real length is
+            #     input_ids - (audio placeholders) + (audio embeddings).
+            # Counting input_ids.numel() alone undercounts the decoder by ~9x
+            # on a 50 Hz encoder -- the audio placeholder is one token standing
+            # in for hundreds of frames -- which would deflate every FLOPs
+            # figure derived from it.
+            placeholders = int((input_ids == self._perf_audio_token_id()).sum())
+            merged = float(input_ids.numel()) - placeholders + audio_positions
+            window["dec_positions"] = window.get("dec_positions", 0.0) + merged
             window["dec_sequences"] = window.get("dec_sequences", 0.0) + float(input_ids.shape[0])
         labels = inputs.get("labels")
         if labels is not None:
             window["sup_tokens"] = window.get("sup_tokens", 0.0) + float((labels != -100).sum())
+
+    def _perf_audio_token_id(self) -> int:
+        """Token id MELT injects audio at; cached, and -1 if it cannot be resolved."""
+        cached = getattr(self, "_perf_audio_id", None)
+        if cached is not None:
+            return cached
+        token = self.config.model.decoder.audio_token
+        token_id = -1
+        try:
+            tokenizer = getattr(self.processor, "tokenizer", None)
+            if tokenizer is not None:
+                token_id = int(tokenizer.convert_tokens_to_ids(token))
+                if token_id == tokenizer.unk_token_id:
+                    logger.warning("perf: audio token %r is unknown to the tokenizer; decoder positions will over-count", token)
+        except (AttributeError, ValueError, TypeError) as exc:
+            logger.warning("perf: could not resolve the audio token id (%s); decoder positions will over-count", exc)
+        self._perf_audio_id = token_id
+        return token_id
 
     def _perf_emit(self, logs: dict[str, float]) -> None:
         """Reduce and log the perf window; no-op until the second call.
@@ -1540,6 +1572,11 @@ class MELTTrainer(Seq2SeqTrainer):
         s_per_step = wall / n_steps
         record = {
             "step": int(self.state.global_step),
+            # Bumped when a counter's definition changes. v2 counts the decoder
+            # positions MELT actually runs on (input_ids with the audio
+            # embeddings inserted) rather than the raw input_ids length, which
+            # was ~9x too small. collect.py refuses to mix versions.
+            "perf_version": 2,
             "s_per_step": s_per_step,
             "window_s": wall,
             "window_steps": int(n_steps),
