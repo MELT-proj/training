@@ -107,11 +107,11 @@ The MA rows freeze Thu 2026-10-29, the IFT rows Wed 2026-11-04.*
 |---|---|---|---|
 | backbone | week-5 winner | `02-backbones.md` §4, plus the Qwen throughput | open |
 | audio stack, frame rate | week-6 confirmation | `03-audio-stack.md` | open |
-| regime (adapter at IFT, full vs LoRA, MA data, MA length) | week-5 winner | `04-regime.md` | open |
+| regime | full fine-tune, nothing frozen, no LoRA | PI, 2026-10-20 (`04-regime.md` restructured) | settled |
 | language set | EU-24 + ru + uk (+ ca?) | Russian probe, `05-language-ladder.md` | ru, uk in (settled); ca open |
 | mixture weights | two-tier alpha/beta (the config builder already implements it); values to choose | ladder and repetition probe | **drafted 2026-09-18:** alpha=0.5/beta=0.5 for MA (the paper's own pretraining setting, arXiv:2509.14128 §3.3.1); alpha=0.2/beta=0.5 for IFT (the paper's named fine-tuning-stage alpha). Reasoning and the concrete boost/repetition numbers this implies (e.g. mt's ASR tail at ~53× its 12.3 unique h under MA's weights) are in `fondue-ma-draft.yaml` and `fondue-ift-draft.yaml`. Not frozen — the repetition probe and ladder may move it. |
 | epochs for the tail | 1–4× repetition of languages under 100 h | repetition probe | open |
-| MA data budget and stage split | full 247K h of ASR in MA, a subset, or — if the decoder-frozen regime wins and the no-MA point matches — a single stage with instructions from the start | the MA:IFT ratio sweep (`04-regime.md` §6, week 6), ladder MA-stage curves, step-0 transition; default if the sweep misses the freeze: full MA, as today | open |
+| MA data budget and stage split | no MA, a short MA, or MA at the knee of the hours curve, with its objective (CE, SD-mix, SIFT) | the MA utility study (`04-regime.md` §5, Tier 1 read Mon 10-26); default if it is late: CE MA on the EU24 pool, decay triggered by the first readout | open, read 10-26 |
 | effective batch and LR | batch ~ one audio hour per step; LR from Raclette | Raclette | open |
 | topology | 8 nodes × 4 GPUs; 16 nodes as contingency. **`grad_accum` follows the backbone, not the node count:** the Llama IFT arms run 4, every Qwen arm in `campaign.yaml` runs 20, and the two differ 5× in effective batch. §2's Llama row is a `grad_accum 4` extrapolation and its Qwen rows are `grad_accum 20` measurements; do not read one against the other | scaling test, and the backbone row above | open |
 | FLEURS in the training pool | FLEURS **train** in or out; FLEURS **test + validation** stay the benchmark either way | see §3.1 | **PI said out (2026-09-20); re-opened the same day on new evidence — needs one more call** |
@@ -212,6 +212,12 @@ MA:IFT ratio sweep (week 6, `04-regime.md` §6) → *then* Raclette's grid,
 chosen against whatever parameter is actually trainable. The draft's
 arithmetic (anchor at the campaign's measured 2e-5, sqrt-scaled to Fondue's
 batch) is kept in `raclette-draft.yaml` as a method, not as values.
+
+*2026-10-20 (PI):* reasons 1 and 2 are gone, because Fondue is a full
+fine-tune. The ratio sweep is retired (`04-regime.md`, restructured).
+Reason 3 is set aside for now (PI, 10-20): the IFT mixture follows
+Canary's weighting scheme by language and corpus, and the ASR:ST ratio is
+not studied separately.
 
 **Drafted 2026-09-18** (`raclette-draft.yaml`): the mixture is
 `fondue-ift-draft.yaml`'s own weighted pool (alpha=0.2/beta=0.5) with
