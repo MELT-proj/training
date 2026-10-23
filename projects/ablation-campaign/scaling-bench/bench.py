@@ -36,6 +36,7 @@ from pathlib import Path
 
 import yaml
 
+
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[2]
 CAMPAIGN_DIR = HERE.parent
@@ -44,6 +45,7 @@ ARMS_TSV = CAMPAIGN_DIR / "arms.tsv"
 sys.path.insert(0, str(CAMPAIGN_DIR))
 
 import plan_arm  # noqa: E402  (needs the path above)
+
 
 # Inside the container, outputs are at /workspace/outputs (the site's host
 # OUTPUT_DIR is only the bind source); see infra/runners/submit-container.sh.
