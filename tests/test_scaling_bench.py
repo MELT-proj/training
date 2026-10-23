@@ -638,3 +638,15 @@ def test_fondue_recipe_pins_the_requested_configuration():
     assert "--model.ckpt=null" in argv
     for part in ("encoder", "adapter", "decoder"):
         assert f"--model.{part}.freeze=false" in argv
+
+
+def test_ledger_job_id_prefers_the_newest_row_across_both_copies(tmp_path, monkeypatch):
+    import bench
+
+    home = tmp_path / "arms.tsv"
+    home.write_text("2026-10-23T22:00:00Z\tBENCH-x-n1-smoke\t100\tcmd\n")
+    monkeypatch.setattr(bench, "ARMS_TSV", home)
+    remote = "2026-10-23T23:00:00Z\tBENCH-x-n1-smoke\t200\tcmd\n"
+    assert bench.ledger_job_id("BENCH-x-n1-smoke") == "100"
+    assert bench.ledger_job_id("BENCH-x-n1-smoke", remote) == "200"
+    assert bench.ledger_job_id("BENCH-unknown", remote) is None

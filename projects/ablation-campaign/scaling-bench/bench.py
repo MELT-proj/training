@@ -92,16 +92,21 @@ def site_output_dir(site: str) -> str:
     return path
 
 
-def ledger_job_id(name: str) -> str | None:
-    """The most recent job id recorded for *name* in arms.tsv."""
-    if not ARMS_TSV.exists():
-        return None
-    found = None
-    for line in ARMS_TSV.read_text(encoding="utf-8").splitlines():
+def ledger_job_id(name: str, extra_text: str = "") -> str | None:
+    """The most recent job id recorded for *name* in arms.tsv.
+
+    *extra_text* is a second copy of the ledger -- the cluster clone's, whose
+    newest rows are not at home until they are pulled back -- merged by the
+    timestamp in column one. Without it a reused name (a tag) resolves to an
+    older job's log.
+    """
+    text = ARMS_TSV.read_text(encoding="utf-8") if ARMS_TSV.exists() else ""
+    rows = []
+    for line in (text + "\n" + extra_text).splitlines():
         parts = line.split("\t")
         if len(parts) >= 3 and parts[1] == name:
-            found = parts[2]
-    return found
+            rows.append((parts[0], parts[2]))
+    return max(rows)[1] if rows else None
 
 
 def fetch(cfg: dict, point: dict, repeat: int, tag: str | None = None) -> None:
@@ -120,7 +125,11 @@ def fetch(cfg: dict, point: dict, repeat: int, tag: str | None = None) -> None:
         if result.returncode != 0:
             print(f"  missing {filename}: {result.stderr.strip()}")
 
-    job_id = ledger_job_id(name)
+    remote_ledger = subprocess.run(
+        ["ssh", site, f"cat {cfg['defaults'].get('remote_repo', 'training')}/projects/ablation-campaign/arms.tsv"],
+        capture_output=True, text=True,
+    ).stdout
+    job_id = ledger_job_id(name, remote_ledger)
     if job_id:
         log_name = f"melt-train-container.{job_id}.out"
         src = f"{site}:{cfg['defaults'].get('remote_repo', 'training')}/logs/{log_name}"
