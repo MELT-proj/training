@@ -63,9 +63,11 @@ recipes:
     batch_duration: 15
     grad_accum_steps: 40
     gradient_checkpointing: false
-    # Unknown until the smoke: the Qwen recipe needed it for its unused encoder
-    # block; EuroLLM + Whisper may not.
-    ddp_find_unused_parameters: false
+    # Needed: the 1-node smoke died in step 2 without it. Top-2 routing over 8
+    # experts leaves an expert with no tokens on some rank in some step, so its
+    # parameters get no gradient. It costs a graph traversal per iteration and
+    # is part of what this recipe's number includes.
+    ddp_find_unused_parameters: true
     max_steps: 110
     drop_first: 10
 
