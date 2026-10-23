@@ -131,6 +131,21 @@ def test_the_warm_start_follows_the_run_name(tmp_path):
         wsc.warm_start_of("SFT-HR5-from-nowhere-s1", tmp_path)
 
 
+@pytest.mark.parametrize("start", wsc.TIER1_STARTS)
+def test_the_tier1_starts_share_golds_processor(tmp_path, start):
+    """The MA-utility arms fine-tune from other starts, but a checkpoint carries no processor and all of them use GOLDW-final's."""
+    run = f"SFT-EU24-from-{start}-bd60-ga4-8g-s1338"
+    assert wsc.warm_start_of(run, tmp_path) == tmp_path / wsc.WARM_STARTS["goldw"]
+
+
+@pytest.mark.parametrize(
+    "name", ["SFT-EU24-from-ce240-bd60-ga4-8g-s1337", "SFT-EU24-from-sd-bd60-ga4-8g-s1337", "SFT-EU24-from-noma"]
+)
+def test_a_start_is_matched_whole_not_as_a_prefix(tmp_path, name):
+    with pytest.raises(ValueError, match="cannot tell the warm start"):
+        wsc.warm_start_of(name, tmp_path)
+
+
 def test_targets_are_the_scheduled_steps_then_the_final_model(tmp_path):
     targets = wsc.targets_for(RUN_A, tmp_path, wsc.DEFAULT_STEPS)
     assert [t.label for t in targets] == [
@@ -146,6 +161,108 @@ def test_targets_are_the_scheduled_steps_then_the_final_model(tmp_path):
     assert targets[0].sets == wsc.SETS
     assert targets[-1].sets == wsc.SETS + ("sd-dev-per-source",)  # in-domain ASR only for the final model
     assert targets[0].comment("fleurs24-asr-dev") == f"sft-score:{RUN_A}:ckpt718:fleurs24-asr-dev"
+
+
+STOPPED = "SFT-EU24-from-ce24-bd60-ga4-8g-s1337"
+LONG = "SFT-EU24-from-noma-bd60-ga4-8g-s1337"
+
+
+def test_a_run_with_listed_steps_has_exactly_those_targets_and_no_final_model(tmp_path):
+    listed = {STOPPED: (718, 1436, 2154, 2872)}
+    targets = wsc.targets_of(STOPPED, tmp_path, wsc.DEFAULT_STEPS, listed)
+    assert [t.label for t in targets] == ["ckpt718", "ckpt1436", "ckpt2154", "ckpt2872"]
+    assert all(t.sets == wsc.SETS for t in targets)  # the in-domain set is for a final model only
+    other = wsc.targets_of(RUN_A, tmp_path, wsc.DEFAULT_STEPS, listed)  # a run that lists nothing keeps the default
+    assert [t.label for t in other][-2:] == ["ckpt8616", "final"]
+
+
+def test_a_run_with_listed_steps_is_done_when_those_are_scored(tmp_path):
+    targets = {STOPPED: wsc.targets_of(STOPPED, tmp_path, wsc.DEFAULT_STEPS, {STOPPED: (718, 2872)})}
+    state = {"jobs": {t.key(s): {"state": "COMPLETED"} for t in targets[STOPPED] for s in t.sets}}
+    assert wsc.all_done(targets, state)
+    unlisted = {
+        STOPPED: wsc.targets_of(STOPPED, tmp_path, wsc.DEFAULT_STEPS, {})
+    }  # would still wait for 1436, ..., final
+    assert not wsc.all_done(unlisted, state)
+
+
+def test_the_runs_file_can_list_the_steps_of_a_run(tmp_path):
+    runs = tmp_path / "runs.txt"
+    runs.write_text(
+        f"{RUN_A}\n{STOPPED} mn5 steps=718,1436,2154,2872\n{LONG} steps=718,11499 mn5   # scored at two steps\n"
+    )
+    assert wsc.read_run_specs(runs) == [
+        wsc.RunSpec(RUN_A),
+        wsc.RunSpec(STOPPED, "mn5", (718, 1436, 2154, 2872)),
+        wsc.RunSpec(LONG, "mn5", (718, 11499)),
+    ]
+    assert wsc.read_runs_file(runs) == [(RUN_A, ""), (STOPPED, "mn5"), (LONG, "mn5")]  # the older view is unchanged
+
+
+@pytest.mark.parametrize(
+    "option", ["steps=", "steps=718,x", "steps=0", "steps=-3", "steps=1 steps=2", "mn5 mn5", "slurm"]
+)
+def test_a_malformed_option_in_the_runs_file_is_refused_with_its_line(tmp_path, option):
+    runs = tmp_path / "runs.txt"
+    runs.write_text(f"{RUN_A}\n{STOPPED} {option}\n")
+    with pytest.raises(ValueError, match=r"runs.txt:2: expected"):
+        wsc.read_run_specs(runs)
+
+
+PULL = REPO_ROOT / "projects" / "self-distill" / "eval" / "pull_mn5_checkpoints.sh"
+
+
+def _pull_dry_run(tmp_path: Path, runs_text: str, *extra: str) -> str:
+    """Dry-run the MN5 puller against a local directory standing in for MN5 (MN5_HOST empty); the output of the run."""
+    source = tmp_path / "mn5"
+    for run in ("listed", "default"):
+        for step in (718, 1436, 2872):
+            directory = source / run / f"checkpoint-{step}"
+            directory.mkdir(parents=True)
+            for name in ("trainer_state.json", "model.safetensors", "config.json", "generation_config.json"):
+                (directory / name).write_text("x")
+    runs = tmp_path / "runs.txt"
+    runs.write_text(runs_text)
+    env = {"PATH": os.environ["PATH"], "MN5_HOST": "", "MN5_OUTPUTS": str(source), "DEST": str(tmp_path / "dest")}
+    done = subprocess.run(
+        ["bash", str(PULL), "--dry-run", "--runs-file", str(runs), *extra], env=env, capture_output=True, text=True
+    )
+    assert done.returncode == 0, done.stderr
+    return done.stdout
+
+
+def test_the_puller_takes_the_steps_a_runs_file_lists_and_only_for_mn5_runs(tmp_path):
+    out = _pull_dry_run(tmp_path, "listed mn5 steps=718,2872\ndefault mn5   # the default schedule\nlocal steps=1\n")
+    assert "[listed 718] [DRY_RUN]" in out and "[listed 2872] [DRY_RUN]" in out
+    assert "[listed 1436]" not in out and "[listed 2154]" not in out  # only the listed steps
+    assert "[default 1436] [DRY_RUN]" in out and "[default 8616] not complete on MN5" in out  # the default schedule
+    assert "[local" not in out  # not marked mn5
+
+
+def test_an_explicit_steps_option_wins_over_the_runs_file(tmp_path):
+    out = _pull_dry_run(tmp_path, "listed mn5 steps=718,2872\n", "--steps", "1436")
+    assert "[listed 1436] [DRY_RUN]" in out
+    assert "[listed 718]" not in out and "[listed 2872]" not in out
+
+
+def test_a_run_whose_steps_are_listed_is_scored_at_those_steps_only(sim):
+    """Through the watcher: the listed run is never waited on for steps it will not have, and a change of the list is noticed."""
+    runs_file = sim["outputs"] / "scoring" / "runs.txt"
+    runs_file.parent.mkdir(parents=True)
+    runs_file.write_text(f"{RUN_A} steps=718\n{RUN_B}\n")
+    assert sim["run_once"]("--runs-file", str(runs_file)) == 0
+    assert {k.split("|")[1] for k in read_state(sim)} == {"ckpt718"}
+    assert len(read_state(sim)) == 6
+    write_checkpoint(
+        sim["outputs"] / RUN_A / "checkpoint-1436", 1436
+    )  # on disk, but not listed for RUN_A: stays unscored
+    write_checkpoint(sim["outputs"] / RUN_B / "checkpoint-1436", 1436)
+    assert sim["run_once"]("--runs-file", str(runs_file)) == 0
+    scored = {(k.split("|")[0], k.split("|")[1]) for k in read_state(sim)}
+    assert (RUN_B, "ckpt1436") in scored and (RUN_A, "ckpt1436") not in scored
+    runs_file.write_text(f"{RUN_A} steps=718,1436\n{RUN_B}\n")  # the steps are re-read at every poll as well
+    assert sim["run_once"]("--runs-file", str(runs_file)) == 0
+    assert (RUN_A, "ckpt1436") in {(k.split("|")[0], k.split("|")[1]) for k in read_state(sim)}
 
 
 def test_parse_submitted_reads_the_launchers_lines():
@@ -189,7 +306,7 @@ done
 def sim(tmp_path, monkeypatch):
     """An outputs root with the two warm starts, two runs with checkpoint-718, and a fake launcher."""
     outputs = tmp_path / "outputs-sft"
-    for name in wsc.WARM_STARTS.values():
+    for name in set(wsc.WARM_STARTS.values()):  # several starts share GOLDW-final's directory
         (outputs / name).mkdir(parents=True)
         (outputs / name / "tokenizer.json").write_text("{}")
     for run in (RUN_A, RUN_B):
