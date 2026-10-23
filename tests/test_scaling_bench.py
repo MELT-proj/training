@@ -315,6 +315,49 @@ def test_anchor_point_lands_at_the_mfu_the_plan_predicts():
     assert out["encoder_share"] == pytest.approx(0.25, abs=0.02)
 
 
+def test_bench_overrides_pin_the_recipe_invariants():
+    """A missing override here silently measures a different model.
+
+    `model.ckpt` is the dangerous one. The base config is a stage-2 YAML whose
+    checkpoint points at a stage-1 run directory; while it is set, MELTConfig --
+    and so the decoder, the adapter and the vocabulary -- come from that
+    checkpoint and `model.decoder.name` is ignored. A smoke run did exactly that
+    before this test existed, quietly training Llama-3.2-1B instead of
+    Qwen3.5-2B, with nothing in the logs looking wrong.
+    """
+    sys.path.insert(0, str(REPO_ROOT / "projects" / "ablation-campaign" / "scaling-bench"))
+    import bench
+
+    cfg = bench.load()
+    overrides = bench.bench_overrides(cfg["recipes"][0])
+    for required in (
+        "--model.ckpt=null",
+        "--model.encoder.freeze=false",
+        "--model.adapter.freeze=false",
+        "--model.decoder.freeze=false",
+        "--run.perf_logging=true",
+        "--run.memory_preallocation=false",
+        "--trainer.eval_on_start=false",
+        "--trainer.do_eval=false",
+        '--trainer.eval_strategy="no"',
+        '--trainer.save_strategy="no"',
+        "--data.validation_ds.input_cfg=null",
+    ):
+        assert required in overrides, f"bench lost the {required!r} override"
+
+
+def test_bench_max_steps_override_replaces_the_recipe_value():
+    sys.path.insert(0, str(REPO_ROOT / "projects" / "ablation-campaign" / "scaling-bench"))
+    import bench
+
+    cfg = bench.load()
+    recipe = cfg["recipes"][0]
+    default = [o for o in bench.bench_overrides(recipe) if o.startswith("--trainer.max_steps=")]
+    smoke = [o for o in bench.bench_overrides(recipe, max_steps=40) if o.startswith("--trainer.max_steps=")]
+    assert default == [f"--trainer.max_steps={recipe['max_steps']}"]
+    assert smoke == ["--trainer.max_steps=40"]
+
+
 # --------------------------------------------------------------------------
 # collect.py: reading the node count back out of a run name
 # --------------------------------------------------------------------------

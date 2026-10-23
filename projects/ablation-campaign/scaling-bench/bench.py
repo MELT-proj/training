@@ -155,6 +155,14 @@ def bench_overrides(recipe: dict, max_steps: int | None = None) -> list[str]:
     profile = plan_arm.DECODER_PROFILES.get(recipe["decoder"], {})
     overrides = [
         f"--model.encoder.name={recipe['encoder']}",
+        # NOT optional. `ABL-IFT-700.yaml` is a stage-2 config: its model.ckpt
+        # points at a stage-1 run directory, and while it is set MELTConfig (and
+        # therefore the decoder, the adapter and the vocabulary) come from that
+        # checkpoint -- `model.decoder.name` is silently ignored. A smoke run
+        # built a Llama-3.2-1B from the stage-1 MA checkpoint with this line
+        # missing, which is the failure mode this benchmark cannot afford: the
+        # numbers would have looked entirely plausible.
+        "--model.ckpt=null",
         # "Everything unfrozen" is the requested recipe: a full fine-tune, not
         # the campaign's frozen-encoder IFT. One line each to revert.
         "--model.encoder.freeze=false",
