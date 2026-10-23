@@ -60,8 +60,13 @@ def load_shape(path: Path) -> dict:
 
 
 def discover(raw: Path) -> list[Path]:
-    """Every perf.jsonl under *raw*, whether fetched into a subdir or dropped in."""
-    files = sorted(raw.rglob("perf.jsonl"))
+    """Every perf.jsonl under *raw*, whether fetched into a subdir or dropped in.
+
+    `legacy/` is skipped on purpose: it holds runs recorded before the decoder
+    counters were fixed, which `summarise` refuses anyway. Keeping them on disk
+    without letting one stale run abort a collection of the others.
+    """
+    files = sorted(p for p in raw.rglob("perf.jsonl") if "legacy" not in p.parts)
     if not files:
         raise SystemExit(f"no perf.jsonl under {raw}")
     return files
