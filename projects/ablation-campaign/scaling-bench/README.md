@@ -229,6 +229,28 @@ sbatch --nodes=32 projects/ablation-campaign/scaling-bench/dataloader_bench.sbat
 `bench.py fetch <point>` pulls `perf.jsonl`, `resolved_config.json` and the
 SLURM `.out` into `raw/<exp_name>/`; `collect.py` never touches the cluster.
 
+### The ledger makes the cluster clone dirty
+
+`bench.py run` appends to `../arms.tsv`, which is a *tracked* file — so every
+submission leaves the cluster clone with an unstaged change, and the next
+`infra/sync_repo.sh mn5` is refused ("Working directory has unstaged changes",
+`receive.denyCurrentBranch updateInstead` doing its job). Submissions still work;
+only a code re-sync is blocked. The fix is to bring the rows home, commit them,
+and leave the clone clean:
+
+```bash
+scp mn5:training-scaling-bench/projects/ablation-campaign/arms.tsv .
+git add projects/ablation-campaign/arms.tsv && git commit -m "arms.tsv: bench submissions"
+ssh mn5 'git -C ~/training-scaling-bench stash push -m ledger -- projects/ablation-campaign/arms.tsv'
+```
+
+This bit twice in one session: a sync was rejected silently behind a redirected
+log, the next submission re-rendered the previous (wrong) override list, and a
+second GPU allocation was spent before anyone noticed. Check the sync's exit
+status, not just that it printed something.
+
+## Files
+
 ## Files
 
 | | |
