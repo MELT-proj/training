@@ -316,6 +316,34 @@ def test_anchor_point_lands_at_the_mfu_the_plan_predicts():
 
 
 # --------------------------------------------------------------------------
+# collect.py: reading the node count back out of a run name
+# --------------------------------------------------------------------------
+
+
+def test_exp_name_parses_nodes_tag_and_repeat():
+    """`-r2` and `-smoke` are both "dash then letters"; the repeat must win.
+
+    A mis-parse here is silent -- a repeat would be read as a tag and collapse
+    into the wrong point -- which is why the lookahead is pinned by a test.
+    """
+    sys.path.insert(0, str(REPO_ROOT / "projects" / "ablation-campaign" / "scaling-bench"))
+    from collect import EXP_PATTERN
+
+    cases = {
+        "BENCH-ift-qwen-n1": ("1", None, None),
+        "BENCH-ift-qwen-n8-r2": ("8", None, "2"),
+        "BENCH-ift-qwen-n16-smoke": ("16", "smoke", None),
+        "BENCH-ift-qwen-n32-smoke-r3": ("32", "smoke", "3"),
+    }
+    for name, (nodes, tag, repeat) in cases.items():
+        match = EXP_PATTERN.search(name)
+        assert match is not None, name
+        assert match["nodes"] == nodes
+        assert match["tag"] == tag
+        assert match["repeat"] == repeat
+
+
+# --------------------------------------------------------------------------
 # The trainer side: MELTTrainer._perf_observe_batch / _perf_emit
 #
 # Imported lazily so this file still runs its arithmetic on a machine without

@@ -101,9 +101,9 @@ def ledger_job_id(name: str) -> str | None:
     return found
 
 
-def fetch(cfg: dict, point: dict, repeat: int) -> None:
+def fetch(cfg: dict, point: dict, repeat: int, tag: str | None = None) -> None:
     """Copy a run's measurement files off the cluster into raw/<exp_name>/."""
-    name = exp_name(point, repeat)
+    name = exp_name(point, repeat, tag)
     site = cfg["defaults"]["site"]
     remote_root = site_output_dir(site)
     dest = HERE / "raw" / name
@@ -128,16 +128,26 @@ def fetch(cfg: dict, point: dict, repeat: int) -> None:
     print(f"fetched into {os.path.relpath(dest, REPO_ROOT)}")
 
 
-def exp_name(point: dict, repeat: int) -> str:
-    """Short and sortable; the repeat suffix keeps each submission's output_dir unique."""
-    suffix = "" if repeat <= 1 else f"-r{repeat}"
-    return f"BENCH-{point['recipe']}-n{point['nodes']}{suffix}"
+def exp_name(point: dict, repeat: int, tag: str | None = None) -> str:
+    """Short and sortable; the repeat suffix keeps each submission's output_dir unique.
+
+    A tag ("smoke") makes a short dry run a separate run rather than overwriting
+    the point it is standing in for -- ``overwrite_output_dir`` is on, so sharing
+    a name would delete the earlier one's perf.jsonl.
+    """
+    name = f"BENCH-{point['recipe']}-n{point['nodes']}"
+    if tag:
+        name += f"-{tag}"
+    if repeat > 1:
+        name += f"-r{repeat}"
+    return name
 
 
-def bench_overrides(recipe: dict) -> list[str]:
+def bench_overrides(recipe: dict, max_steps: int | None = None) -> list[str]:
     """Everything held fixed across points, plus the timing-hygiene switches.
 
     Order matters only in that later overrides win; none here collide.
+    ``max_steps`` shortens a smoke run; the point's own value is the default.
     """
     profile = plan_arm.DECODER_PROFILES.get(recipe["decoder"], {})
     overrides = [
@@ -155,7 +165,7 @@ def bench_overrides(recipe: dict) -> list[str]:
             if recipe.get("gradient_checkpointing")
             else "--trainer.gradient_checkpointing=false"
         ),
-        f"--trainer.max_steps={recipe['max_steps']}",
+        f"--trainer.max_steps={max_steps if max_steps is not None else recipe['max_steps']}",
         "--trainer.num_train_epochs=1",
     ]
     if profile:
@@ -183,10 +193,16 @@ def bench_overrides(recipe: dict) -> list[str]:
     return overrides
 
 
-def render(cfg: dict, point: dict, repeat: int = 1) -> tuple[str, dict[str, str], list[str]]:
+def render(
+    cfg: dict,
+    point: dict,
+    repeat: int = 1,
+    max_steps: int | None = None,
+    tag: str | None = None,
+) -> tuple[str, dict[str, str], list[str]]:
     recipe = recipe_of(cfg, point)
     defaults = cfg["defaults"]
-    name = exp_name(point, repeat)
+    name = exp_name(point, repeat, tag)
     env = {
         "MELT_NODES": str(point["nodes"]),
         "MELT_GPUS_PER_NODE": str(defaults["gpus_per_node"]),
@@ -204,7 +220,7 @@ def render(cfg: dict, point: dict, repeat: int = 1) -> tuple[str, dict[str, str]
         name,
         "--trainer.output_dir",
         f"{CONTAINER_OUTPUTS}/{name}",
-        *bench_overrides(recipe),
+        *bench_overrides(recipe, max_steps),
         "--trainer.seed",
         str(defaults["seed"]),
     ]
@@ -296,6 +312,14 @@ def record(name: str, job_id: str, argv: list[str]) -> None:
     print(f"recorded {name} job {job_id} in {os.path.relpath(ARMS_TSV, REPO_ROOT)}")
 
 
+def _add_shortening_flags(sub) -> None:
+    """Flags that make a point shorter or separately named, for smoke runs."""
+    sub.add_argument("--max-steps", type=int, default=None,
+                     help="override the recipe's step count (smoke runs)")
+    sub.add_argument("--tag", default=None,
+                     help="suffix the exp name, so a smoke run does not overwrite the real point")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -305,19 +329,23 @@ def main() -> None:
     p_render = sub.add_parser("render", help="print the exact command for a point")
     p_render.add_argument("point", nargs="?")
     p_render.add_argument("--repeat", type=int, default=1)
+    _add_shortening_flags(p_render)
     p_render.add_argument("--all", action="store_true", help="check every point renders one recipe")
 
     p_check = sub.add_parser("check", help="sbatch --test-only (validates QOS, nodes, walltime)")
     p_check.add_argument("point")
     p_check.add_argument("--repeat", type=int, default=1)
+    _add_shortening_flags(p_check)
 
     p_run = sub.add_parser("run", help="submit the point and record it in arms.tsv")
     p_run.add_argument("point")
     p_run.add_argument("--repeat", type=int, default=1)
+    _add_shortening_flags(p_run)
 
     p_fetch = sub.add_parser("fetch", help="copy perf.jsonl / resolved_config.json / log into raw/")
     p_fetch.add_argument("point")
     p_fetch.add_argument("--repeat", type=int, default=1)
+    _add_shortening_flags(p_fetch)
 
     sub.add_parser("status", help="queue state for BENCH- jobs")
 
@@ -334,20 +362,20 @@ def main() -> None:
         if args.all or not args.point:
             assert_one_recipe(cfg)
             return
-        name, env, argv = render(cfg, find_point(cfg, args.point), args.repeat)
+        name, env, argv = render(cfg, find_point(cfg, args.point), args.repeat, args.max_steps, args.tag)
         print(describe(name, env, argv))
         return
 
     if args.command == "check":
         point = find_point(cfg, args.point)
-        name, env, argv = render(cfg, point, args.repeat)
+        name, env, argv = render(cfg, point, args.repeat, args.max_steps, args.tag)
         env["_SITE"] = cfg["defaults"]["site"]
         submit(name, env, argv, test_only=True)
         return
 
     if args.command == "run":
         point = find_point(cfg, args.point)
-        name, env, argv = render(cfg, point, args.repeat)
+        name, env, argv = render(cfg, point, args.repeat, args.max_steps, args.tag)
         result = subprocess.run(
             [str(REPO_ROOT / argv[0]), *argv[1:]],
             cwd=REPO_ROOT,
@@ -366,7 +394,7 @@ def main() -> None:
         return
 
     if args.command == "fetch":
-        fetch(cfg, find_point(cfg, args.point), args.repeat)
+        fetch(cfg, find_point(cfg, args.point), args.repeat, args.tag)
         return
 
     if args.command == "status":

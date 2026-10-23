@@ -42,7 +42,9 @@ sys.path.insert(0, str(HERE))
 
 import flops  # noqa: E402
 
-EXP_PATTERN = re.compile(r"-n(?P<nodes>\d+)(?:-r(?P<repeat>\d+))?$")
+# `BENCH-<recipe>-n<nodes>[-<tag>][-r<repeat>]`. The lookahead keeps `-r2`
+# from being read as a tag, since both are "a dash then letters".
+EXP_PATTERN = re.compile(r"-n(?P<nodes>\d+)(?:-(?!r\d+$)(?P<tag>[A-Za-z][\w.]*))?(?:-r(?P<repeat>\d+))?$")
 
 # Audio-hour budgets the report tabulates: the pilot, the request that prompted
 # this campaign, and the two pools Fondue actually draws from.
