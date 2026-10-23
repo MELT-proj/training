@@ -49,8 +49,6 @@ recipes:
   # decoder, MoE adapter, everything trainable, NO gradient checkpointing,
   # bf16 mixed precision. ift-qwen above is the earlier w2v-BERT/Qwen recipe and
   # stays as a reference; its points are not comparable with this one.
-  # batch_duration / grad_accum are starting values: the 1-node smoke decides
-  # whether 30 x 20 fits in 64 GB without checkpointing (fallback 20, then 15).
   - id: fondue
     config: ABL-IFT-700.yaml
     decoder: utter-project/EuroLLM-1.7B-Instruct
@@ -58,8 +56,12 @@ recipes:
     encoder_attn: flash_attention_2
     max_audio_seq_len: 3000
     adapter: moe
-    batch_duration: 30
-    grad_accum_steps: 20
+    # 30 x 20 OOMed in the first forward of the 1-node smoke (no checkpointing:
+    # ~37 GB of fp32 weights/grads/Adam leave ~26 GB for activations, and Whisper
+    # pads every cut to a 30 s window). 15 x 40 keeps the per-rank audio per step
+    # at 600 s, so audio-hours per step is unchanged.
+    batch_duration: 15
+    grad_accum_steps: 40
     gradient_checkpointing: false
     # Unknown until the smoke: the Qwen recipe needed it for its unused encoder
     # block; EuroLLM + Whisper may not.
