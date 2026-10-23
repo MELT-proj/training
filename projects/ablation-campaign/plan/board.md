@@ -15,6 +15,42 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-23 — Claude (worker session, backbone scores) — §5 scores only the languages and directions the arms train; the selection metric gains an ST half
+
+Context: the PI changed the basis of comparison. The Tier-1 joint score
+averages over all 24 ASR languages and all 23 ST directions each way, but
+these arms train X→en for four sources and en→X for one, so most of that mass
+is zero-shot and dilutes the comparison. The instruction was to keep the
+campaign selection metric and add ST to it, restricted to the directions the
+mix trains plus the related sources the metric already weights.
+
+Decision: `sel (ASR+ST) = (sel (ASR) + sel (ST)) / 2`. `sel (ASR)` is the
+metric of `README.md` unchanged. `sel (ST)` maps X→en chrF to `1 − chrF/100`
+and applies the same group medians and weights to the metric's own languages:
+trained de/es/fr/it→en at 1.5, related pt/ro/nl/da/sv→en at 0.6. en→de is the
+only trained en→X direction and is reported but not scored (it would count
+German twice and rest on one 100-clip direction). Folding ST into the existing
+sum as two more groups instead gives the same order, and adding en→de as a
+fifth trained direction leaves it unchanged — both recorded in
+`selection-metric/scores/backbones-sel-asr-st-2026-10-23.txt`.
+
+Result: 0.2311 / 0.2319 / 0.2403 / 0.2439 (llama-base / qwen-base / llama-ins
+/ qwen-ins). The leading pair is a tie at 0.0008. The ST half more than
+reverses the ASR-only order of llama-ins (0.0851) and qwen-base (0.0858): their
+ST scores are 0.3956 and 0.3780, and qwen-base's X→en medians lead on both
+groups (63.1 vs 60.9 trained, 60.0 vs 59.4 related). Only the leading pair
+against qwen-ins clears the metric's 0.010 noise bound.
+
+Caveats worth carrying into the paper: the metric was frozen 2026-09-23 before
+any of these numbers, and this extension was defined 2026-10-23 after four arms
+had been scored, so the extended ordering is exploratory — the ASR-only column
+is kept beside it; and no in-domain X→en set exists for these arms, so the ST
+half has no ID group and one fewer language in its trained group than ASR's.
+
+Action needed: none from anyone else. EuroLLM's `sel (ST)` and per-language
+rows stay pending until its IFT reaches `checkpoint-6310`
+(47783768/47783769).
+
 ## 2026-10-22 — Claude (worker session, backbone scores) — Backbone table gains en→X chrF, the joint ASR+ST score and per-language tables; en→X is untrained except en→de
 
 Context: reviewing the §5 scores. Two gaps: the table had no en→X column, and

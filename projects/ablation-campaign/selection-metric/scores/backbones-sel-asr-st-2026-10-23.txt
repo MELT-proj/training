@@ -1,0 +1,48 @@
+Selection score with speech translation, IFT-stage backbone arms
+(checkpoint-6310, whisper-large-v3 encoder + MoE adapter, 700 h/lang).
+
+Defined 2026-10-23 for plan/02-backbones.md §5. The ASR part is the metric of
+README.md unchanged (frozen 2026-09-23); the ST part is added here, after four
+arms had been scored, so the ordering it produces is exploratory.
+
+  ASR   sel = (1.0*med(ID) + 1.5*med(OOD-train) + 0.6*med(OOD-related)) / 3.1
+        medians of clipped per-language CER; ID en,de,es,fr,it in-domain;
+        OOD-train the same five on FLEURS; OOD-related pt,ro,nl,da,sv.
+
+  ST    s_l = 1 - chrF_l/100, X->en, lowercase plain chrF, 100 clips per source
+        sel = (1.5*med(de,es,fr,it) + 0.6*med(pt,ro,nl,da,sv)) / 2.1
+        The first four are the directions the IFT mix trains (YODAS Granary
+        `ast`); the second five are zero-shot but related by the same
+        genealogy rule the ASR group uses. `en` has no X->en direction, so this
+        group has four languages where OOD-train has five, and no in-domain
+        X->en set exists for these arms: ST has no ID group.
+
+  headline  sel(ASR+ST) = (sel(ASR) + sel(ST)) / 2                     lower better
+
+  Folded as two more groups instead --
+    (3.1*sel(ASR) + 1.5*med(de,es,fr,it) + 0.6*med(pt,ro,nl,da,sv)) / 5.2
+  -- gives the same order: 0.1985 / 0.2038 / 0.2105 / 0.2175 for
+  llama1b-base / qwen35-2b-base / llama1b-ins / qwen35-2b-ins.
+
+  en->de (CoVoST2, 429.9 h, 9.6% of group draws) is the only trained en->X
+  direction. It is reported but not scored: it would count German twice and
+  rest on a single 100-clip direction. Adding it as a fifth ST-train direction
+  gives 0.2361 / 0.2361 / 0.2426 / 0.2470 (llama1b-base / qwen35-2b-base /
+  llama1b-ins / qwen35-2b-ins): the order is unchanged and the top two swap by
+  0.00004.
+
+Inputs
+  ASR   scores/backbones-ma-and-ift-2026-10-22.txt (per-language CER, 4 dp)
+  ST    scores/backbones-st-xen-2026-10-22.txt is the aggregate; the
+        per-direction values below are the lowercase chrF of
+        `melteval st-metrics --group-by src_lang --lowercase --json` on the
+        four ift-st logs listed in that file.
+
+arm                 ID      OODtr   OODrel  sel(ASR)  med_train  med_rel  sel(ST)  sel(ASR+ST)
+llama1b-base        0.0510  0.0300  0.1570  0.0614      60.7      57.9    0.4009   0.2311
+llama1b-ins         0.0480  0.0270  0.2920  0.0851      60.9      59.4    0.3956   0.2403
+qwen35-2b-base      0.0440  0.0240  0.3100  0.0858      63.1      60.0    0.3780   0.2319
+qwen35-2b-ins       0.0470  0.0260  0.4080  0.1067      62.5      60.2    0.3811   0.2439
+
+med_train / med_rel are medians of lowercase chrF over de,es,fr,it and
+pt,ro,nl,da,sv; the score uses the same medians of 1 - chrF/100.
