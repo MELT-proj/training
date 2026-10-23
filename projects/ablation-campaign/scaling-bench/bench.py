@@ -123,7 +123,7 @@ def fetch(cfg: dict, point: dict, repeat: int, tag: str | None = None) -> None:
     job_id = ledger_job_id(name)
     if job_id:
         log_name = f"melt-train-container.{job_id}.out"
-        src = f"{site}:~/training/logs/{log_name}"
+        src = f"{site}:{cfg['defaults'].get('remote_repo', 'training')}/logs/{log_name}"
         result = subprocess.run(["scp", "-q", src, str(dest / log_name)], cwd=REPO_ROOT,
                                 capture_output=True, text=True)
         if result.returncode != 0:

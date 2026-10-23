@@ -17,6 +17,10 @@ defaults:
   accelerate: config/accelerate/ddp.yaml
   gpus_per_node: 4          # acc nodes are allocated whole: 4 GPUs, 80 cores
   seed: 1337
+  # The cluster checkout this campaign runs from. A dedicated clone, not the
+  # live `training/` one, so a benchmark submission never switches the branch
+  # under somebody else's run. `bench.py fetch` reads SLURM logs from here.
+  remote_repo: training-scaling-bench
   # MN5 bills elapsed, not requested, so a generous request costs queue
   # position rather than budget. Sized from 110 steps x ~32 s + a ~20 min first
   # step; acc_debug's hard cap is 2 h.
