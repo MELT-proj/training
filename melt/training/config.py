@@ -69,6 +69,12 @@ run:
   config: null            # Path to config file (set via CLI)
   memory_profiling: false # Enable PyTorch CUDA memory snapshot on OOM (writes .pkl to output_dir)
   memory_preallocation: false # Run a max-length warmup forward+backward pass before training to preallocate CUDA buffers
+  # Log per-step throughput: s/step, audio-seconds per wall-second, and the
+  # work counters (frames, positions, supervised tokens) the scaling benchmark
+  # turns into TFLOP/s and MFU. Off by default -- it is a measurement device,
+  # not a metric every run should pay for. See
+  # projects/ablation-campaign/scaling-bench/README.md.
+  perf_logging: false
 
 # =============================================================================
 # Model Configuration

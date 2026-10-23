@@ -1,0 +1,56 @@
+# Scaling benchmark: recipe + points.
+#
+# Intent only -- `bench.py` renders it into a submission and records job ids in
+# ../arms.tsv (the campaign's ledger). Numbers land in tables/.
+#
+# The question this answers: at 1/2/4/8/16/32 MN5 nodes (4 H100s each), what is
+# TFLOP/s per GPU, MFU against the 989 TFLOP/s bf16 peak, and wall time for
+# 100,000 audio hours? Read `README.md` beside this file for the method, and
+# `plan/06-fondue.md` sections 2-4 for the campaign this feeds.
+#
+# Everything except `nodes` is held fixed across points. `bench.py render`
+# prints the full argv for a point so the invariant can be checked by eye, and
+# `bench.py render --all` asserts it mechanically.
+
+defaults:
+  site: mn5
+  accelerate: config/accelerate/ddp.yaml
+  gpus_per_node: 4          # acc nodes are allocated whole: 4 GPUs, 80 cores
+  seed: 1337
+  # MN5 bills elapsed, not requested, so a generous request costs queue
+  # position rather than budget. Sized from 110 steps x ~32 s + a ~20 min first
+  # step; acc_debug's hard cap is 2 h.
+  time: "02:00:00"
+
+recipes:
+  # IFT on Qwen3.5-2B with EVERYTHING unfrozen (encoder, adapter, decoder).
+  # Batch and accumulation are the campaign's memory-constrained Qwen values
+  # (the same pair `IFT-700-qwen35-2b-ins` runs in campaign.yaml), so the
+  # measured rate is directly comparable to the documented 31-32 s/step.
+  - id: ift-qwen
+    config: ABL-IFT-700.yaml
+    decoder: Qwen/Qwen3.5-2B
+    encoder: facebook/w2v-bert-2.0
+    batch_duration: 30
+    grad_accum_steps: 20
+    gradient_checkpointing: true
+    max_steps: 110
+    # Steps thrown away before the steady-state window: shuffle-buffer fill,
+    # CUDA allocator growth, cuDNN/triton autotune. The first step alone has
+    # been measured at 13-21 min in this repo.
+    drop_first: 10
+
+points:
+  # acc_debug: priority 10000, 2 h wall, max 8 nodes, and only ONE job
+  # submitted at a time -- so these are chained by a polling driver, not by
+  # --dependency (a dependent job is itself a second submission and is
+  # rejected). 1 and 2 nodes anchor against the already-measured 31 s/step.
+  - {id: ift-qwen-n1,  recipe: ift-qwen, nodes: 1,  qos: acc_debug, time: "02:00:00"}
+  - {id: ift-qwen-n2,  recipe: ift-qwen, nodes: 2,  qos: acc_debug, time: "02:00:00"}
+  - {id: ift-qwen-n4,  recipe: ift-qwen, nodes: 4,  qos: acc_debug, time: "02:00:00"}
+  - {id: ift-qwen-n8,  recipe: ift-qwen, nodes: 8,  qos: acc_debug, time: "02:00:00"}
+  # acc_ehpc: 16 and 32 nodes exceed acc_debug's 8-node cap. Short requests
+  # backfill; the 32-node point is over half the sweep's GPU-hour budget and is
+  # the one point that cannot be inferred from the others.
+  - {id: ift-qwen-n16, recipe: ift-qwen, nodes: 16, qos: acc_ehpc,  time: "02:00:00"}
+  - {id: ift-qwen-n32, recipe: ift-qwen, nodes: 32, qos: acc_ehpc,  time: "03:00:00"}

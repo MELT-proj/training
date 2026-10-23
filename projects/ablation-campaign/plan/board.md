@@ -15,6 +15,19 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-23 — Claude (scaling-bench session) — a harness for TFLOP/s, MFU and wall-time vs node count; the arithmetic predicts ~2% MFU, which is the thing to explain
+Context: the PI asked for a debug campaign that estimates the codebase's efficiency and the wall time for a 100,000-audio-hour run at 4/8/16/32 nodes. Nothing in the repo measured per-step time except tqdm, and no FLOPs or MFU existed anywhere. Built `projects/ablation-campaign/scaling-bench/` (README, bench.yaml/bench.py, flops.py, collect.py, calibrate_flops.py, dataloader_bench.py, gpu_peak.py) plus an opt-in `run.perf_logging` in `MELTTrainer`. **Nothing has been run on a GPU yet**; the numbers below are the prediction the sweep exists to test.
+Finding:
+1. Parameter counts are now real, counted on the meta device (transformers 5.16.1): w2v-BERT-2.0 **580.5 M**, Qwen3.5-2B **1.8818 B** (body 1.3733 B + tied head 0.5086 B, 6 of 24 layers full attention), MLP adapter **6.30 M**. `tables/flops-static.json`.
+2. Applied to the documented 8-node Qwen IFT point (32.3 s/step, `batch_duration 30` / `grad_accum 20`, 19,200 audio-s per step): 594 audio-s per wall-s, **19.5 TFLOP/s per GPU, MFU 1.97%**, 53.8 GPU-h per 1,000 audio-h, and **100,000 h in 168 wall-h (7.0 days) at 8 nodes**. The GPU-h figure reproduces the 53.9 the plan already quotes, so the cost side is consistent; the 2% is not explained by the cost side.
+3. Composition: with everything unfrozen the encoder is **25%** of the step's FLOPs (about 2% when frozen), so freezing it buys less than the "frozen 580 M encoder is pure overhead" framing implies. The decoder's 18 linear-attention layers carry no quadratic term; its 6 full layers are ~1.5% of the step.
+4. 32 nodes cannot run on `acc_debug` (8-node cap, and `MaxSubmitPU=1` makes `--dependency` chaining impossible — the dependent job is itself a second submission and is rejected). Points are chained by a polling driver instead.
+5. Two bugs in my own first draft, both caught by the synthetic round-trip (a fabricated perf log pushed through `collect.py`) rather than by a GPU run: `walltime_for` divided audio hours by the rate with a stray x3600 (168 h came out as 606,000 h), and `collect.py` divided a window's totals by a **per-step** time instead of the window's wall time, which would have reported 100x the throughput on a 100-step run with nothing in the output looking wrong.
+What it changes: nothing measured, so nothing yet. It does make the cost-axis TODOs executable — the FLOPs-per-audio-second measure and the dataloader-only benchmark are both arms here, the latter on `gp_debug` at zero GPU-hours.
+Action needed: PI to approve ~500 GPU-h and the 1-node smoke before the sweep. When the numbers land, the question to answer is which of the two causes the ~2%: the data path (the loader arm and an IO-bypass arm separate them) or the FLOPs being somewhere the config does not say. Do not quote MFU from this entry — it is arithmetic on a 2026-09-16 step time, not a measurement.
+
+---
+
 ## 2026-09-26 — Fondue Orchestrator — screen closed; crossing recipe decided; crossing prep delegated
 
 Context: the selection-metric worker reported (entry below) and PR #143 merged.
