@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -387,13 +388,20 @@ def main() -> None:
             capture_output=True,
             text=True,
         )
-        print(result.stdout.strip())
+        for stream in (result.stdout, result.stderr):
+            if stream.strip():
+                print(stream.strip())
         if result.returncode != 0:
-            sys.stderr.write(result.stderr)
             raise SystemExit(f"submission failed (exit {result.returncode})")
-        job_id = result.stdout.strip().rsplit(" ", 1)[-1]
-        if not job_id.isdigit():
-            raise SystemExit(f"could not parse a job id out of sbatch output: {result.stdout!r}")
+        # sbatch announces the id on stderr; submit-container.sh's own echo is
+        # on stdout and ends with the argv, so the whole of stdout cannot be
+        # treated as the message.
+        match = re.search(r"Submitted batch job (\d+)", result.stderr + result.stdout)
+        if not match:
+            raise SystemExit(
+                f"could not parse a job id out of sbatch output: {result.stdout!r} {result.stderr!r}"
+            )
+        job_id = match.group(1)
         record(name, job_id, argv)
         return
 
