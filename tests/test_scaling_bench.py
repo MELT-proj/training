@@ -342,6 +342,7 @@ def test_bench_overrides_pin_the_recipe_invariants():
         '--trainer.eval_strategy="no"',
         '--trainer.save_strategy="no"',
         "--data.validation_ds.input_cfg=null",
+        "--trainer.ddp_find_unused_parameters=true",
     ):
         assert required in overrides, f"bench lost the {required!r} override"
 

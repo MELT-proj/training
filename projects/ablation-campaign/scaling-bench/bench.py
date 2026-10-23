@@ -200,6 +200,15 @@ def bench_overrides(recipe: dict, max_steps: int | None = None) -> list[str]:
         # several minutes of startup on every point, and we never evaluate.
         "--data.validation_ds.input_cfg=null",
         "--trainer.overwrite_output_dir=true",
+        # Required once the encoder is unfrozen. DDP aborts with "Expected to
+        # have finished reduction in the prior iteration" because a block of
+        # encoder parameter tensors receives no gradient in this forward path
+        # (rank 0 reported 320, 325-356, 485-548, 766-768 of 773). The same
+        # knob is already a per-arm axis in campaign.py for the MoE cell.
+        # Identical at every node count, so it does not bias the comparison --
+        # but it costs a graph traversal per iteration, which is part of the
+        # recipe and therefore part of what is being measured.
+        "--trainer.ddp_find_unused_parameters=true",
     ]
     return overrides
 
