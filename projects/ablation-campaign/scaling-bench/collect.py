@@ -96,6 +96,30 @@ def steady_state(records: list[dict], drop_first: int) -> list[dict]:
     return kept
 
 
+def batch_fill(path: Path, window: flops.Window, steps: int, world_size: int) -> float:
+    """Audio a step really carries, against its nominal ``B * G * R``.
+
+    The nominal figure is what `plan_arm.derive_steps` assumes when it turns
+    "N audio hours" into a step count, and a duration-bucketed batch rarely
+    reaches it -- the board measured 78-86% on the 2,100 h mix. Read from the
+    run's own `resolved_config.json`, so it is the batch that actually ran
+    rather than what bench.yaml asked for.
+    """
+    config_path = path.parent / "resolved_config.json"
+    if not config_path.exists():
+        return float("nan")
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    try:
+        batch_duration = float(config["data"]["train_ds"]["batch_duration"])
+        grad_accum = float(config["trainer"]["gradient_accumulation_steps"])
+    except (KeyError, TypeError, ValueError):
+        return float("nan")
+    nominal = batch_duration * grad_accum * world_size
+    if nominal <= 0 or not steps:
+        return float("nan")
+    return (window.audio_s / steps) / nominal
+
+
 def summarise(path: Path, shape_kwargs: dict, drop_first: int, override_nodes: int | None) -> dict:
     records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     versions = {int(r.get("perf_version", 1)) for r in records}
@@ -143,10 +167,11 @@ def summarise(path: Path, shape_kwargs: dict, drop_first: int, override_nodes: i
         "s_per_step_p10": _percentile([r.get("s_per_step") for r in kept], 10),
         "s_per_step_p90": _percentile([r.get("s_per_step") for r in kept], 90),
         **{k: metrics[k] for k in (
-            "fill", "audio_s_per_wall_s", "audio_h_per_wall_h",
+            "encoder_fill", "audio_s_per_wall_s", "audio_h_per_wall_h",
             "tflops_per_gpu_total", "mfu_total", "mfu_trainable",
             "encoder_share", "flops_per_audio_h",
         )},
+        "fill": batch_fill(path, window, steps, world_size),
         "gpu_h_per_1k_audio_h": 1000.0 / rate * world_size if rate > 0 else float("nan"),
     }
     for budget in BUDGETS:

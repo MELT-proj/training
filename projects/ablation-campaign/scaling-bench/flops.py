@@ -103,11 +103,14 @@ class Window:
     steps: float = 1.0
 
     @property
-    def fill(self) -> float:
-        """Real audio per padded encoder second, 0..1.
+    def encoder_fill(self) -> float:
+        """Real frames per padded encoder frame, 0..1.
 
-        The padded frames are what the encoder and adapter pay for; the ratio to
-        ``50 * audio_s`` is how much of that work is padding.
+        This is *padding* efficiency, not batch fill: how much of the encoder's
+        work is padding within a batch. Batch fill -- the audio a step really
+        carries against its nominal ``B * G * R`` -- needs the batch duration
+        and accumulation, so it is computed where those are known
+        (``collect.py``), not here.
         """
         if self.audio_s <= 0:
             return 0.0
@@ -223,7 +226,7 @@ def point_metrics(
         "encoder_share": flops["encoder"] / flops["total"] if flops["total"] else 0.0,
         "audio_s_per_wall_s": audio_s_per_wall_s,
         "audio_h_per_wall_h": audio_s_per_wall_s,
-        "fill": w.fill,
+        "encoder_fill": w.encoder_fill,
         # Compute per audio hour is node-independent, so it is the one number
         # that compares recipes rather than topologies.
         "flops_per_audio_h": flops["total"] / (w.audio_s / 3600.0) if w.audio_s else 0.0,

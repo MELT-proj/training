@@ -173,13 +173,14 @@ def test_frozen_components_are_excluded_from_the_trainable_column():
 # --------------------------------------------------------------------------
 
 
-def test_fill_is_the_padded_encoder_frame_ratio():
+def test_encoder_fill_is_the_padded_encoder_frame_ratio():
+    """Padding efficiency, not batch fill: collect.py computes batch fill."""
     window = make_window(enc_padded_frames=1000.0, enc_valid_frames=860.0)
-    assert window.fill == pytest.approx(0.86)
+    assert window.encoder_fill == pytest.approx(0.86)
 
 
-def test_fill_of_an_empty_window_is_zero_not_a_division_error():
-    assert make_window(audio_s=0.0, enc_padded_frames=0.0).fill == 0.0
+def test_encoder_fill_of_an_empty_window_is_zero_not_a_division_error():
+    assert make_window(audio_s=0.0, enc_padded_frames=0.0).encoder_fill == 0.0
 
 
 # --------------------------------------------------------------------------
