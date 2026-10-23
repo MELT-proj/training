@@ -292,9 +292,13 @@ def submit(name: str, env: dict[str, str], argv: list[str], test_only: bool = Fa
         cmd = [str(REPO_ROOT / argv[0]), *argv[1:]]
 
     result = subprocess.run(cmd, cwd=REPO_ROOT, env=run_env, capture_output=True, text=True)
-    print(result.stdout.strip())
+    # sbatch reports its verdict -- "Submitted batch job N", and the
+    # --test-only start estimate -- on stderr, so printing only stdout makes a
+    # successful check look like a silent no-op.
+    for stream in (result.stdout, result.stderr):
+        if stream.strip():
+            print(stream.strip())
     if result.returncode != 0:
-        sys.stderr.write(result.stderr)
         raise SystemExit(f"submission failed (exit {result.returncode})")
 
 
