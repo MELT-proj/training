@@ -199,8 +199,11 @@ for p in ift-qwen-n1 ift-qwen-n2 ift-qwen-n4 ift-qwen-n8 ift-qwen-n16 ift-qwen-n
 done
 
 # 3. Smoke first: 1 node proves the model fits, the [perf] lines appear, and the
-#    rate is plausible before any of the expensive points are queued.
-python3 projects/ablation-campaign/scaling-bench/bench.py run ift-qwen-n1
+#    rate is plausible before any of the expensive points are queued. `--tag`
+#    keeps it in its own output_dir -- overwrite_output_dir is on, so reusing
+#    the point's name would delete the real run's perf.jsonl.
+python3 projects/ablation-campaign/scaling-bench/bench.py run ift-qwen-n1 \
+    --max-steps 40 --tag smoke
 
 # 4. The sweep. acc_debug allows ONE submitted job at a time, so the four small
 #    points are chained by a polling driver -- --dependency is not an option,
@@ -261,6 +264,11 @@ point runs ~80 min of stepping plus a ~20 min first step):
 
 ~500 GPU-h with the repeat on the worst-fitting points. The 32-node point alone
 is over half of it — that is the price of the one number no other point can give.
+
+Each finished point also writes its weights: `train.py` calls `save_model()`
+unconditionally at the end, ~5 GB of bf16 for this model, so budget ~30 GB on
+`gpfs_scratch` for the sweep. It happens after the last step, so it costs wall
+time but does not enter the measured window.
 
 ## Confounds, and what is done about them
 
