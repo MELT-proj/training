@@ -386,33 +386,35 @@ Ranked, in this order, with the noise estimate from the seed replicates:
 
 | arm | MA-stage WER (5-lang mean, %) | FLEURS-24 CER (MA) | IFT CER (5-lang) | FLEURS-24 CER (IFT) | sel (ASR) | sel (ST) | sel (ASR+ST)³ | text retention | notes |
 |---|---|---|---|---|---|---|---|---|---|
-| llama1b-base | runaway¹ | runaway¹ | .0500 | .3571 | 0.0614 | 0.4009 | 0.2311 | −0.058 / −0.315 † | MA unusable; IFT recovers it |
-| llama1b-ins | 11.52 | .6680 | .0477 | .4448 | 0.0851 | 0.3956 | 0.2403 | +0.677 / +0.123 |  |
-| qwen35-2b-base | 10.28 | .6191 | **.0431** | .4350 | 0.0858 | 0.3780 | 0.2319 | +0.628 / +0.009 | 2 nodes, bd 30 |
-| qwen35-2b-ins | 9.87 | .6547 | .0473 | .4219 | 0.1067 | 0.3811 | 0.2439 | +1.006 / +0.332 | 2 nodes, bd 30 |
-| eurollm1.7b-base | not scored² | — | not entered⁴ | .365 | 0.0646 | 0.3849 | 0.2247 | −0.365 / −0.455 † | resumed IFT, `checkpoint-6310` |
-| eurollm1.7b-ins | 10.88 | .6661 | not entered⁴ | **.335** | 0.0563 | 0.3800 | 0.2182 | −0.264 / −0.236 | resumed IFT, `checkpoint-6310` |
+| llama1b-base | runaway¹ | runaway¹ | .0500 | .3571 | 0.0614 | 0.4069 | 0.2342 | −0.058 / −0.315 † | MA unusable; IFT recovers it |
+| llama1b-ins | 11.52 | .6680 | .0477 | .4448 | 0.0851 | 0.3976 | 0.2413 | +0.677 / +0.123 |  |
+| qwen35-2b-base | 10.28 | .6191 | **.0431** | .4350 | 0.0858 | **0.3811** | 0.2335 | +0.628 / +0.009 | 2 nodes, bd 30 |
+| qwen35-2b-ins | 9.87 | .6547 | .0473 | .4219 | 0.1067 | 0.3832 | 0.2449 | +1.006 / +0.332 | 2 nodes, bd 30 |
+| eurollm1.7b-base | not scored² | — | .0521 | .365 | 0.0646 | 0.3951 | 0.2299 | −0.365 / −0.455 † | resumed IFT, `checkpoint-6310` |
+| eurollm1.7b-ins | 10.88 | .6661 | .0498 | **.335** | **0.0563** | 0.3878 | **0.2220** | −0.264 / −0.236 | resumed IFT, `checkpoint-6310` |
 
 Read the columns as follows (all numbers from melt-eval on the saved checkpoint,
 never from the in-training history). The columns left of `sel (ASR)` describe
-the runs; the comparison is the three `sel` columns, which score only the
-languages and directions the IFT mix trains and the related ones the metric
-already weights.
+the runs; the comparison is the three `sel` columns. `sel (ASR)` is the
+pre-registered metric and keeps its related group; `sel (ST)` scores only the
+five speech-translation directions the IFT mix trains, and `sel (ASR+ST)` is
+their equal-weighted mean (defined under "Selection score with ST" below).
 
 - **WER and CER means** are unweighted means over the five training languages, on
   the frozen selection sets (600 in-domain clips per language), not the medians the
   selection metric uses. WER and CER differ by the reference length; the selection
   metric's per-language quantity is CER.
 - **FLEURS-24 CER** is the mean over the 24 EU languages of `fleurs26-dev200`, so
-  ru and uk are excluded here; including them raises every IFT figure by 0.055–0.073.
+  ru and uk are excluded here; including them raises every IFT figure by 0.054–0.073.
 - **sel (ASR)** is the selection metric of `selection-metric/README.md`, unchanged:
   `(1.0·med(ID) + 1.5·med(OOD-train) + 0.6·med(OOD-related)) / 3.1` over clipped
   per-language CER on the frozen selection sets. Post-IFT for all six arms. Raw
   output (per-language CER, group medians, runaways) in
   `selection-metric/scores/backbones-ma-and-ift-2026-10-22.txt`.
-- **sel (ST)** and **sel (ASR+ST)** extend it with speech translation over the same
-  language groups; defined in "Selection score with ST" below, next to the
-  per-direction chrF they are built from.
+- **sel (ST)** and **sel (ASR+ST)** add speech translation on the five
+  directions the mix trains (`de,es,fr,it`→en and en→de); defined in
+  "Selection score with ST" below, next to the per-direction chrF they are
+  built from.
 - **Text retention** is "ASR cond Δ / ST cond Δ" in bits per character,
   post-IFT minus pre-IFT (positive = less retained), measured with the §3.7
   instrument on `checkpoint-6310` after exporting the decoder to a bare causal
@@ -431,83 +433,78 @@ already weights.
   MA weights do not transcribe, so both MA columns are meaningless for that arm.
 - ² EuroLLM-Base MA ran away on 4–7 of the WER scale and was never scored; the IFT
   stage starts from a staged checkpoint-47730 of that arm and repairs its ChatML rows.
-- ⁴ Not entered: the EuroLLM IFT CER (5-lang) and the per-language ASR and X→en
-  cells were not part of the hand-over this table was filled from (X→en logs:
-  `/gpfs/scratch/epor48/eval-logs/ift-st/ift-700-backbone-eurollm-{ins,base}/`).
-  The FLEURS-24 CER (IFT) values .335 / .365 are the hand-over's 33.5 / 36.5.
 
 ### Selection score with ST
 
 ³ This section defines `sel (ST)` and `sel (ASR+ST)`. They compare the arms
-only on the languages and directions the IFT mix actually trains: the
-selection metric's own groups, with speech translation added on the same
-languages.
+only on the languages and directions the IFT mix actually trains. The ST half
+was narrowed to those directions on 2026-10-23 at the PI's instruction, after
+the 23-target en→X column was found to measure language following on
+zero-shot targets rather than translation quality ("What the en→X column
+measures", below).
 
 - **ASR — unchanged** (the pre-registered metric): ID `en,de,es,fr,it`
   in-domain; OOD-train `en,de,es,fr,it` on FLEURS; OOD-related
   `pt,ro,nl,da,sv` on FLEURS; clipped per-language CER, group medians,
   weights 1.0 / 1.5 / 0.6.
-- **ST**: per direction `s_l = 1 − chrF_l/100`, on X→en, lowercase plain
-  chrF, 100 clips per source:
-  - ST-train `de,es,fr,it` → en (the four directions the mix trains, YODAS
-    Granary `ast`, 4.7–10.5% of group draws each), weight **1.5**;
-  - ST-related `pt,ro,nl,da,sv` → en (zero-shot, same genealogy rule as the
-    ASR group), weight **0.6**.
+- **ST**: per direction `s_l = 1 − chrF_l/100`, lowercase plain chrF, 100
+  clips per direction, on the five directions the mix trains:
+  - X→en for `de,es,fr,it` (YODAS Granary `ast`, 4.7–10.5% of group draws
+    each);
+  - en→de (CoVoST2, 429.9 h, 9.6% of group draws).
 
-  `sel (ST) = (1.5·med(ST-train) + 0.6·med(ST-related)) / 2.1`.
+  `sel (ST) = 1 − med(chrF over the five)/100`. The zero-shot related group
+  (`pt,ro,nl,da,sv`→en) that a first draft of this section carried at weight
+  0.6 is not in the score.
 - **Headline**: `sel (ASR+ST) = (sel (ASR) + sel (ST)) / 2`, lower is better.
 
-The two halves are weighted equally because the ASR score spans three groups
-and ST two: adding the ST groups to the same sum would weight ASR 60/40 on no
-principled basis. Folding them in that way instead —
-`(3.1·sel(ASR) + 1.5·ST-train + 0.6·ST-related)/5.2` — gives the same order
-(.1985 < .2038 < .2105 < .2175), so the choice is not load-bearing here.
-Neither is the related group: restricting ST to the four trained directions
-also leaves the order, at .2271 / .2276 / .2382 / .2406.
+The two halves are weighted equally: folding ST into the ASR sum would make
+the score 3.1:1 ASR-dominant on no principled basis. That choice is not free —
+under the folded form `(3.1·sel(ASR) + sel(ST))/4.1` the order is the same
+except that llama1b-base and qwen35-2b-base swap (see the sensitivity bullet
+below).
 
-| arm | de→en | es→en | fr→en | it→en | med (trained) | pt→en | ro→en | nl→en | da→en | sv→en | med (related) | en→de | en→X, 23 targets |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| llama1b-base | 63.1 | 56.7 | 62.1 | 59.3 | 60.7 | 65.0 | 57.5 | 53.1 | 57.9 | 61.7 | 57.9 | 56.5 | 23.9 |
-| llama1b-ins | 63.1 | 56.9 | 61.5 | 60.2 | 60.9 | 65.7 | 58.6 | 53.2 | 59.4 | 61.3 | 59.4 | 57.3 | 24.5 |
-| qwen35-2b-base | 65.2 | 58.5 | 64.2 | 61.9 | 63.1 | 66.0 | 60.0 | 53.7 | 59.3 | 62.0 | 60.0 | 61.5 | 25.9 |
-| qwen35-2b-ins | 65.3 | 58.7 | 63.4 | 61.7 | 62.5 | 65.5 | 59.3 | 53.4 | 60.2 | 62.1 | 60.2 | 59.5 | 25.1 |
-| eurollm1.7b-base | —⁴ | —⁴ | —⁴ | —⁴ | —⁴ | —⁴ | —⁴ | —⁴ | —⁴ | —⁴ | —⁴ | 59.5 | 37.6 |
-| eurollm1.7b-ins | —⁴ | —⁴ | —⁴ | —⁴ | —⁴ | —⁴ | —⁴ | —⁴ | —⁴ | —⁴ | —⁴ | 59.9 | 42.9 |
+| arm | de→en | es→en | fr→en | it→en | en→de | med (five) | sel (ST) |
+|---|---|---|---|---|---|---|---|
+| llama1b-base | 63.1 | 56.7 | 62.1 | 59.3 | 56.5 | 59.3 | 0.4069 |
+| llama1b-ins | 63.1 | 56.9 | 61.5 | 60.2 | 57.3 | 60.2 | 0.3976 |
+| qwen35-2b-base | 65.2 | 58.5 | 64.2 | 61.9 | 61.5 | 61.9 | 0.3811 |
+| qwen35-2b-ins | 65.3 | 58.7 | 63.4 | 61.7 | 59.5 | 61.7 | 0.3832 |
+| eurollm1.7b-base | 64.2 | 58.3 | 63.6 | 60.5 | 59.5 | 60.5 | 0.3951 |
+| eurollm1.7b-ins | 65.2 | 58.3 | 63.5 | 61.2 | 59.9 | 61.2 | 0.3878 |
 
 Lowercase plain chrF throughout (`melteval st-metrics --lowercase`); cased
-macro-means run 3.2–3.3 points lower and are in
-`selection-metric/scores/backbones-st-xen-2026-10-22.txt`. The median of
+macro-means for the four older arms run 3.2–3.3 points lower and are in
+`selection-metric/scores/backbones-st-xen-2026-10-22.txt` (EuroLLM was scored
+lowercase only). The median of
 `1 − chrF/100` is `1 − med(chrF)/100`, so the score can be recomputed from
-this table to within rounding:
-`sel (ST) = 1 − (1.5·med(trained) + 0.6·med(related))/210`.
+this table to within rounding: `sel (ST) = 1 − med(five)/100`.
 
-- **What the score resolves.** The leading pair (llama1b-base .2311,
-  qwen35-2b-base .2319) is a tie at 0.0008, and the pair swaps with
-  llama1b-ins relative to the ASR-only score (0.0851 vs 0.0858 for
-  llama1b-ins and qwen35-2b-base; the ST part, 0.3956 vs 0.3780, more than
-  reverses it). Both gaps are inside the 0.002–0.010 eval noise the metric's
-  README records, and the ST directions add 100-clip noise on top of it. The
-  only gaps that clear its 0.010 upper bound are the leading pair against
-  qwen35-2b-ins (0.0128 and 0.0120).
-- **No ST in-domain twin.** `en` has no X→en direction, so ST-train is four
-  languages where ASR's OOD-train is five, and no in-domain X→en set exists
-  for these arms: the ST half has no ID group to weight at 1.0.
-- **en→de is reported, not scored.** It is the only trained en→X direction
-  (CoVoST2, 429.9 h, 9.6% of group draws). Scoring it would count German
-  twice in a group of five and rest the result on a single 100-clip
-  direction; folding it in as a fifth ST-train direction leaves the order
-  unchanged (the leading pair swaps by 0.00004). Every other en→X target is
-  zero-shot — the older four arms mostly answer in German or English rather
-  than the language asked for, and EuroLLM mostly does not ("What the en→X
-  column measures", below) — so the 23-target column is there for continuity,
-  not as a comparison of these arms. That set exists only on artemis (MN5's eval copy
-  has neither the spec nor a frozen set), so those runs were made there,
-  jobs 338939–338942.
-- **Exploratory ordering.** The metric was frozen 2026-09-23, before any of
-  these numbers existed, precisely so a ranking could not be tuned to them.
-  This extension was defined 2026-10-23, after four arms had been scored. The
-  ASR-only score is the pre-registered one and is kept in the table beside
-  the extended one so the difference stays visible.
+- **What the score resolves.** EuroLLM-ins leads (.2220), then EuroLLM-base
+  (.2299), qwen35-2b-base (.2335), llama1b-base (.2342), llama1b-ins (.2413),
+  qwen35-2b-ins (.2449). The EuroLLM pair leads by .0079: above the 0.002
+  floor of the eval-noise band the metric's README records, below its 0.010
+  ceiling. Every other gap is at most .0071, and qwen35-2b-base against
+  llama1b-base (.0007) is unresolved — it swaps under both sensitivity checks
+  below.
+- **No ST in-domain twin.** No in-domain X→en set exists for these arms, so
+  the ST half has no ID group to weight at 1.0; all five directions are
+  FLEURS. Every training language appears, but German appears twice (next
+  bullet).
+- **en→de is scored here (changed 2026-10-23).** It is the only trained en→X
+  direction (CoVoST2, 429.9 h, 9.6% of group draws) and the PI asked for ST on
+  the trained directions only. Two costs are visible in the table: German is
+  counted twice (de→en and en→de), and its en→de half rests on a single
+  100-clip probe. Dropping en→de from the median — `sel (ST)` over the four
+  X→en directions — gives joint scores .2271 / .2382 / .2276 / .2406 / .2221
+  / .2163 in the table's row order: every arm improves by .003–.008 and the
+  qwen35-2b-base / llama1b-base pair swaps. Replacing the median with the mean
+  of the five changes no order.
+- **Exploratory ordering.** The ASR metric was frozen 2026-09-23, before any
+  of these numbers existed, precisely so a ranking could not be tuned to them.
+  The ST half was defined, and then narrowed, on 2026-10-23, after four arms
+  had been scored. The ASR-only score is the pre-registered one and is kept in
+  the table beside the extended one so the difference stays visible.
 - The Tier-1 joint score of the MA-utility study (`joint =
   (100 − asr24 + X→en + en→X)/3`, `projects/self-distill/eval/tier1_joint.py`,
   adopted 2026-10-21) is not used here: it averages over all 24 ASR languages
@@ -515,89 +512,94 @@ this table to within rounding:
   and en→X for one, so most of its mass is zero-shot.
 
 EuroLLM's rows were added 2026-10-23 once its resumed IFT reached
-`checkpoint-6310`: sel (ASR) 0.0563 / 0.0646, sel (ST) 0.3800 / 0.3849, joint
-0.2182 / 0.2247 (ins / base). These figures were handed to this document as
-established under the definitions above; they were not re-derived here, and
-the per-direction X→en cells behind them are not entered (⁴).
+`checkpoint-6310`. Its ASR cells come from `selection-metric/score.py` on the
+same logs as the other four arms, in a run that also reproduced llama1b-base's
+published 0.0614 (job 47883097). Its per-direction X→en chrF come from
+`melteval st-metrics --group-by src_lang --lowercase` on the MN5 X→en logs, in
+a run that reproduced llama1b-base's published cells to the decimal (job
+47883090; the other three arms job 47883105); en→de comes from the artemis
+en→X logs. `IFT CER (5-lang)` for both arms is the mean of the five in-domain
+selection-set CERs, the same quantity the other rows use.
 
 ### Per language
 
 Languages on rows, arms on columns: **L-B** Llama-3.2-1B (base), **L-I**
-Llama-3.2-1B-Instruct, **Q-B** Qwen3.5-2B-Base, **Q-I** Qwen3.5-2B (instruct).
-EuroLLM is in the en→X table only (**E-B**, **E-I**); its ASR and X→en
-per-language cells are not entered here (⁴).
+Llama-3.2-1B-Instruct, **Q-B** Qwen3.5-2B-Base, **Q-I** Qwen3.5-2B (instruct),
+**E-B** EuroLLM-1.7B (base), **E-I** EuroLLM-1.7B-Instruct. The EuroLLM cells
+were entered 2026-10-23 from the same logs as the other four arms.
 
-These tables are context, not the comparison. Only en, de, es, fr, it (ID and
-OOD-train) and pt, ro, nl, da, sv (OOD-related) enter the scores above; the
-remaining rows are reported so a reader can see what the untrained languages
-do, and are not part of any ranking.
+These tables are context, not the comparison. `sel (ASR)` uses en, de, es,
+fr, it (ID and OOD-train) and pt, ro, nl, da, sv (OOD-related); `sel (ST)` uses
+de, es, fr, it→en and en→de. The remaining rows are reported so a reader can
+see what the untrained languages do, and are not part of any ranking.
 
 **ASR — FLEURS-24 dev CER (%), 200 clips per language.** These are the eval
 logs' own per-language CERs, unclipped: a language where the model runs away
 sits above 100% instead of being capped, which is what makes the `mean` row
 equal to the FLEURS-24 CER column above. Bold marks the best arm in the row.
 
-| lang | L-B | L-I | Q-B | Q-I |
-|---|---|---|---|---|
-| en | **3.3** | 3.7 | 4.2 | 4.2 |
-| de | 3.0 | 2.7 | **2.4** | 2.9 |
-| es | 1.7 | 1.8 | **1.6** | 1.7 |
-| fr | 3.2 | 3.1 | **2.4** | 2.6 |
-| it | 1.6 | 1.6 | **1.5** | 1.6 |
-| pt | **8.6** | 9.6 | 11.4 | 18.4 |
-| ro | **13.0** | 18.5 | 31.0 | 43.0 |
-| nl | **24.7** | 29.2 | 40.9 | 37.5 |
-| da | **22.3** | 37.3 | 35.3 | 50.1 |
-| sv | **15.7** | 30.1 | 24.5 | 40.8 |
-| cs | 50.7 | 58.3 | 58.2 | **48.8** |
-| sk | 40.9 | 53.9 | 35.3 | **32.9** |
-| pl | **32.8** | 66.1 | 76.8 | 65.5 |
-| hr | **16.8** | 31.6 | 32.4 | 31.2 |
-| sl | **21.4** | 35.0 | 42.6 | 27.9 |
-| hu | **50.4** | 64.2 | 84.3 | 75.0 |
-| fi | **33.0** | 49.9 | 40.6 | 55.6 |
-| et | 18.8 | 30.2 | 34.5 | **17.5** |
-| lt | **38.2** | 49.1 | 51.3 | 41.8 |
-| lv | 34.7 | 35.8 | 34.5 | **26.2** |
-| ga | 94.1 | 93.7 | 93.3 | **92.2** |
-| mt | **68.6** | 73.7 | 81.4 | 74.4 |
-| bg | **105.8** | 146.3 | 106.7 | 110.7 |
-| el | 153.6 | 142.3 | 116.9 | **110.1** |
-| **mean** | 35.7 | 44.5 | 43.5 | 42.2 |
+| lang | L-B | L-I | Q-B | Q-I | E-B | E-I |
+|---|---|---|---|---|---|---|
+| en | **3.3** | 3.7 | 4.2 | 4.2 | 3.8 | 3.4 |
+| de | 3.0 | 2.7 | **2.4** | 2.9 | 3.2 | 3.4 |
+| es | 1.7 | 1.8 | **1.6** | 1.7 | 3.3 | **1.6** |
+| fr | 3.2 | 3.1 | **2.4** | 2.6 | 2.8 | 2.6 |
+| it | 1.6 | 1.6 | **1.5** | 1.6 | 1.7 | 3.2 |
+| pt | 8.6 | 9.6 | 11.4 | 18.4 | **6.3** | 6.6 |
+| ro | 13.0 | 18.5 | 31.0 | 43.0 | **11.3** | 13.3 |
+| nl | 24.7 | 29.2 | 40.9 | 37.5 | 20.4 | **19.2** |
+| da | 22.3 | 37.3 | 35.3 | 50.1 | **19.4** | 28.3 |
+| sv | 15.7 | 30.1 | 24.5 | 40.8 | **12.7** | 16.5 |
+| cs | 50.7 | 58.3 | 58.2 | 48.8 | **24.0** | 24.1 |
+| sk | 40.9 | 53.9 | 35.3 | 32.9 | **21.5** | 26.0 |
+| pl | 32.8 | 66.1 | 76.8 | 65.5 | **14.4** | 16.2 |
+| hr | **16.8** | 31.6 | 32.4 | 31.2 | 30.1 | 32.8 |
+| sl | **21.4** | 35.0 | 42.6 | 27.9 | 29.8 | 39.3 |
+| hu | 50.4 | 64.2 | 84.3 | 75.0 | **47.0** | 65.7 |
+| fi | 33.0 | 49.9 | 40.6 | 55.6 | **28.7** | 31.7 |
+| et | 18.8 | 30.2 | 34.5 | **17.5** | 24.1 | 32.1 |
+| lt | 38.2 | 49.1 | 51.3 | 41.8 | **32.8** | 50.6 |
+| lv | 34.7 | 35.8 | 34.5 | **26.2** | 47.4 | 63.3 |
+| ga | 94.1 | 93.7 | 93.3 | **92.2** | 108.4 | 111.2 |
+| mt | 68.6 | 73.7 | 81.4 | 74.4 | 89.1 | **65.0** |
+| bg | **105.8** | 146.3 | 106.7 | 110.7 | 113.2 | 114.8 |
+| el | 153.6 | 142.3 | 116.9 | 110.1 | 108.9 | **104.4** |
+| **mean** | 35.7 | 44.5 | 43.5 | 42.2 | 33.5 | 36.5 |
 
 **ST X→en — lowercase chrF, 100 clips per source.** The rows that enter
-`sel (ST)` are de, es, fr, it (trained) and pt, ro, nl, da, sv (related).
-`ga` is the outlier for every arm (18–19 against 39–66 elsewhere): the
-outputs are degenerate English repetitions ("...the church of the church of
-the church..."), not translations, so that row says nothing about the arms'
-relative quality.
+`sel (ST)` are de, es, fr, it; pt, ro, nl, da, sv are zero-shot context (the
+ASR half still weights them, the ST half no longer does). `ga` is the outlier
+for every arm (18–20 against 39–66 elsewhere): the outputs are degenerate
+English repetitions
+("...the church of the church of the church..."), not translations, so that
+row says nothing about the arms' relative quality.
 
-| src | L-B | L-I | Q-B | Q-I |
-|---|---|---|---|---|
-| de | 63.1 | 63.1 | 65.2 | **65.3** |
-| es | 56.7 | 56.9 | 58.5 | **58.7** |
-| fr | 62.1 | 61.5 | **64.2** | 63.4 |
-| it | 59.3 | 60.2 | **61.9** | 61.7 |
-| pt | 65.0 | 65.7 | **66.0** | 65.5 |
-| ro | 57.5 | 58.6 | **60.0** | 59.3 |
-| nl | 53.1 | 53.2 | **53.7** | 53.4 |
-| da | 57.9 | 59.4 | 59.3 | **60.2** |
-| sv | 61.7 | 61.3 | 62.0 | **62.1** |
-| cs | 52.7 | 53.7 | **53.8** | 53.6 |
-| sk | 54.0 | **54.6** | 53.6 | 53.3 |
-| pl | **51.4** | 51.2 | 50.2 | 50.2 |
-| hr | 52.6 | 52.9 | **54.2** | 52.8 |
-| sl | 44.8 | **46.1** | 44.3 | 44.9 |
-| hu | 43.5 | **44.5** | 41.0 | 39.7 |
-| fi | 44.2 | **45.2** | 40.0 | 40.8 |
-| et | 39.7 | **42.5** | 37.0 | 39.4 |
-| lt | **40.5** | 39.1 | 37.3 | 38.3 |
-| lv | **40.3** | 39.5 | 37.8 | 38.4 |
-| ga | 18.3 | 18.5 | **18.9** | 15.8 |
-| mt | 39.0 | 39.7 | **39.8** | 38.5 |
-| bg | 54.4 | 52.7 | **55.0** | 54.7 |
-| el | **49.0** | 48.8 | 47.5 | 47.4 |
-| **mean** | 50.5 | 50.8 | 50.5 | 50.3 |
+| src | L-B | L-I | Q-B | Q-I | E-B | E-I |
+|---|---|---|---|---|---|---|
+| de | 63.1 | 63.1 | 65.2 | **65.3** | 64.2 | 65.2 |
+| es | 56.7 | 56.9 | 58.5 | **58.7** | 58.3 | 58.3 |
+| fr | 62.1 | 61.5 | **64.2** | 63.4 | 63.6 | 63.5 |
+| it | 59.3 | 60.2 | **61.9** | 61.7 | 60.5 | 61.2 |
+| pt | 65.0 | 65.7 | **66.0** | 65.5 | 65.4 | 65.9 |
+| ro | 57.5 | 58.6 | 60.0 | 59.3 | 60.2 | **61.0** |
+| nl | 53.1 | 53.2 | **53.7** | 53.4 | 53.3 | **53.7** |
+| da | 57.9 | 59.4 | 59.3 | 60.2 | 60.3 | **60.7** |
+| sv | 61.7 | 61.3 | 62.0 | 62.1 | **62.6** | 62.5 |
+| cs | 52.7 | 53.7 | 53.8 | 53.6 | 54.8 | **54.9** |
+| sk | 54.0 | 54.6 | 53.6 | 53.3 | **55.7** | 55.1 |
+| pl | 51.4 | 51.2 | 50.2 | 50.2 | 51.9 | **52.0** |
+| hr | 52.6 | 52.9 | 54.2 | 52.8 | 55.3 | **56.1** |
+| sl | 44.8 | 46.1 | 44.3 | 44.9 | **47.4** | 46.4 |
+| hu | 43.5 | 44.5 | 41.0 | 39.7 | 45.3 | **46.6** |
+| fi | 44.2 | 45.2 | 40.0 | 40.8 | 46.8 | **47.2** |
+| et | 39.7 | 42.5 | 37.0 | 39.4 | 42.7 | **43.1** |
+| lt | 40.5 | 39.1 | 37.3 | 38.3 | **42.0** | 40.3 |
+| lv | 40.3 | 39.5 | 37.8 | 38.4 | **43.0** | 41.8 |
+| ga | 18.3 | 18.5 | 18.9 | 15.8 | **19.6** | 19.2 |
+| mt | 39.0 | 39.7 | 39.8 | 38.5 | 41.5 | **42.3** |
+| bg | 54.4 | 52.7 | 55.0 | 54.7 | 55.3 | **55.6** |
+| el | 49.0 | 48.8 | 47.5 | 47.4 | **50.7** | 50.5 |
+| **mean** | 50.5 | 50.8 | 50.5 | 50.3 | 52.2 | 52.3 |
 
 **ST en→X — lowercase chrF, 100 clips per target.** **E-B** EuroLLM-1.7B
 (base), **E-I** EuroLLM-1.7B-Instruct, added 2026-10-23; the other four columns

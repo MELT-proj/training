@@ -15,6 +15,45 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-23 — Claude (worker session, backbone score) — ST restricted to the trained directions and joined with ASR; EuroLLM's missing cells scored
+
+Context: after the en→X audit below, the PI ruled that the 23-target en→X
+column cannot compare these arms and asked for ST on the languages and
+directions they were trained on, combined with the ASR selection score into
+one metric for choosing a backbone.
+
+Decision: `sel (ST) = 1 − med(chrF over de,es,fr,it→en and en→de)/100`;
+`sel (ASR+ST) = (sel (ASR) + sel (ST))/2`, `sel (ASR)` unchanged. The
+zero-shot related group ST carried in the first draft is out.
+
+Scores (checkpoint-6310; lower better):
+
+| arm | sel (ASR) | sel (ST) | sel (ASR+ST) |
+|---|---|---|---|
+| eurollm1.7b-ins | 0.0563 | 0.3878 | **0.2220** |
+| eurollm1.7b-base | 0.0646 | 0.3951 | 0.2299 |
+| qwen35-2b-base | 0.0858 | 0.3811 | 0.2335 |
+| llama1b-base | 0.0614 | 0.4069 | 0.2342 |
+| llama1b-ins | 0.0851 | 0.3976 | 0.2413 |
+| qwen35-2b-ins | 0.1067 | 0.3832 | 0.2449 |
+
+- EuroLLM-ins leads by 0.0079 over EuroLLM-base and by 0.0115 over third
+  place; the README's noise band is 0.002–0.010, so the lead is real but not
+  large.
+- **qwen35-2b-base vs llama1b-base (0.0007) is unresolved**: it swaps when
+  en→de is dropped from the ST median and when ST is folded into the ASR sum.
+  en→de counts German twice and rests on a single 100-clip probe; that is the
+  price of the trained-directions-only instruction.
+- Cells that were "not entered" are now scored from the same logs as the other
+  arms: IFT CER (5-lang) .0498 / .0521, FLEURS-24 per-language CER, and the
+  per-direction X→en chrF. Jobs 47883097 (ASR, `score.py`) and 47883090 /
+  47883105 (X→en chrF); llama1b-base reproduced its published values in both.
+
+Action needed: none for the docs. `charts/results_master.csv` is the
+eval-owner's; these six rows still need to reach it through `charts/master.py`.
+
+---
+
 ## 2026-10-23 — Claude (worker session, en→X audit) — The 17-point EuroLLM lead on en→X is language following, not boilerplate; EuroLLM rows and retention entered
 
 Context: the PI asked whether EuroLLM's en→X chrF (42.9 ins / 37.6 base against
