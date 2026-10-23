@@ -455,6 +455,8 @@ and ST two: adding the ST groups to the same sum would weight ASR 60/40 on no
 principled basis. Folding them in that way instead —
 `(3.1·sel(ASR) + 1.5·ST-train + 0.6·ST-related)/5.2` — gives the same order
 (.1985 < .2038 < .2105 < .2175), so the choice is not load-bearing here.
+Neither is the related group: restricting ST to the four trained directions
+also leaves the order, at .2271 / .2276 / .2382 / .2406.
 
 | arm | de→en | es→en | fr→en | it→en | med (trained) | pt→en | ro→en | nl→en | da→en | sv→en | med (related) | en→de | en→X, 23 targets |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
