@@ -82,6 +82,11 @@ the mean of the retained intervals; p10/p90 are reported beside it, because a
 mean hides a straggler tail and a tail is what a wall-clock estimate has to
 survive.
 
+One line of the startup banner is not a measurement and should be ignored:
+`Num Epochs = 9,223,372,036,854,775,807`. With `num_train_epochs: 1` and a
+pinned `max_steps`, HF derives epochs from the step count and overflows int64.
+The run is bounded by `Total optimization steps`, which is correct.
+
 ### Definitions
 
 With `B` = `batch_duration`, `G` = `grad_accum`, `R` = world size (4 per node):
