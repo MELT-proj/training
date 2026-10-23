@@ -155,6 +155,14 @@ def bench_overrides(recipe: dict, max_steps: int | None = None) -> list[str]:
     profile = plan_arm.DECODER_PROFILES.get(recipe["decoder"], {})
     overrides = [
         f"--model.encoder.name={recipe['encoder']}",
+        # Attention backend of the encoder, and its input window. Whisper takes
+        # exactly 3000 mel frames (flash-eligible); w2v-BERT chunks at 1500 and
+        # is sdpa-only. Both are recipe values so a recipe cannot silently
+        # inherit the other's.
+        f"--model.encoder.attn_implementation={recipe.get('encoder_attn', 'sdpa')}",
+        f"--model.encoder.max_audio_seq_len={recipe.get('max_audio_seq_len', 1500)}",
+        f"--model.adapter._type={recipe.get('adapter', 'mlp')}",
+        f"--model.decoder.attn_implementation={recipe.get('decoder_attn', 'flash_attention_2')}",
         # NOT optional. `ABL-IFT-700.yaml` is a stage-2 config: its model.ckpt
         # points at a stage-1 run directory, and while it is set MELTConfig (and
         # therefore the decoder, the adapter and the vocabulary) come from that
@@ -208,7 +216,7 @@ def bench_overrides(recipe: dict, max_steps: int | None = None) -> list[str]:
         # Identical at every node count, so it does not bias the comparison --
         # but it costs a graph traversal per iteration, which is part of the
         # recipe and therefore part of what is being measured.
-        "--trainer.ddp_find_unused_parameters=true",
+        f"--trainer.ddp_find_unused_parameters={'true' if recipe.get('ddp_find_unused_parameters', True) else 'false'}",
     ]
     return overrides
 

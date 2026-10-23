@@ -1,2 +1,3 @@
 run	nodes	gpus	repeat	steps_used	s_per_step	s_per_step_p10	s_per_step_p90	encoder_fill	audio_s_per_wall_s	audio_h_per_wall_h	tflops_per_gpu_total	mfu_total	mfu_trainable	encoder_share	flops_per_audio_h	fill	gpu_h_per_1k_audio_h	wall_h_25k	gpu_h_25k	wall_h_100k	gpu_h_100k	wall_h_247k	gpu_h_247k	wall_h_330k	gpu_h_330k
 BENCH-ift-qwen-n1	1	4	1	100	30.9093	28.5342	33.5757	0.971975	67.5391	67.5391	19.6484	0.019867	0.019867	0.276195	4.18924e+15	0.869828	59.225	370.156	1480.62	1480.62	5922.5	3657.14	14628.6	4886.06	19544.2
+BENCH-ift-qwen-n2	2	8	1	100	33.2237	30.8392	36.1484	0.972209	125.587	125.587	18.2697	0.0184729	0.0184729	0.276024	4.18966e+15	0.869263	63.7009	199.065	1592.52	796.262	6370.09	1966.77	15734.1	2627.66	21021.3

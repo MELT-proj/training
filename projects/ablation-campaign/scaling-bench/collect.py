@@ -54,9 +54,22 @@ CURRENT_PERF_VERSION = 2
 BUDGETS = (25_000, 100_000, 247_000, 330_000)
 
 
+def static_for(run_name: str, default: Path) -> Path:
+    """The static shape file for a run: ``flops-static-<recipe>.json`` if there
+    is one, else *default*. The recipe is the ``BENCH-<recipe>-n…`` prefix."""
+    match = re.match(r"BENCH-(?P<recipe>.+?)-n\d+", run_name)
+    if match:
+        candidate = default.with_name(f"flops-static-{match['recipe']}.json")
+        if candidate.exists():
+            return candidate
+    return default
+
+
 def load_shape(path: Path) -> dict:
     record = json.loads(path.read_text(encoding="utf-8"))
-    return record["shape"]
+    shape = dict(record["shape"])
+    shape.pop("adapter_total_params", None)  # memory-side figure; FLOPs use the active count
+    return shape
 
 
 def discover(raw: Path) -> list[Path]:
@@ -231,9 +244,14 @@ def main() -> None:
                         help="override the node count read from the directory name")
     args = parser.parse_args()
 
-    shape_kwargs = load_shape(Path(args.static))
+    default_static = Path(args.static)
     rows = [
-        summarise(path, shape_kwargs, args.drop_first, args.nodes)
+        summarise(
+            path,
+            load_shape(static_for(path.parent.name, default_static)),
+            args.drop_first,
+            args.nodes,
+        )
         for path in discover(Path(args.raw))
     ]
 

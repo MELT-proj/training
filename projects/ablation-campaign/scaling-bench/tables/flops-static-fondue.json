@@ -1,0 +1,41 @@
+{
+  "adapter_params": 9451521,
+  "adapter_total_params": 37763073,
+  "decoder": {
+    "body_params": 1394706432,
+    "dim": 2048,
+    "embedding_params": 262144000,
+    "full_attn_layers": 24,
+    "head_params": 262144000,
+    "layers": 24,
+    "name": "utter-project/EuroLLM-1.7B-Instruct",
+    "tied_embeddings": false,
+    "total_params": 1656850432
+  },
+  "encoder": {
+    "chunk_frames": 1500,
+    "conv_flops_per_frame": 0.0,
+    "dim": 1280,
+    "layers": 32,
+    "name": "openai/whisper-large-v3",
+    "params": 636968960
+  },
+  "shape": {
+    "adapter_params": 9451521.0,
+    "adapter_total_params": 37763073.0,
+    "adapter_trainable": true,
+    "decoder_body_params": 1394706432.0,
+    "decoder_dim": 2048,
+    "decoder_full_attn_layers": 24,
+    "decoder_head_params": 262144000.0,
+    "decoder_trainable": true,
+    "encoder_chunk_frames": 1500,
+    "encoder_conv_flops_per_frame": 0.0,
+    "encoder_dim": 1280,
+    "encoder_layers": 32,
+    "encoder_params": 636968960.0,
+    "encoder_trainable": true,
+    "gradient_checkpointing": false,
+    "stack_factor": 1
+  }
+}

@@ -44,6 +44,29 @@ recipes:
     # been measured at 13-21 min in this repo.
     drop_first: 10
 
+  # The configuration Fondue is most likely to train: Whisper-large-v3 encoder
+  # (flash attention 2, its fixed 3000-frame window), EuroLLM-1.7B-Instruct
+  # decoder, MoE adapter, everything trainable, NO gradient checkpointing,
+  # bf16 mixed precision. ift-qwen above is the earlier w2v-BERT/Qwen recipe and
+  # stays as a reference; its points are not comparable with this one.
+  # batch_duration / grad_accum are starting values: the 1-node smoke decides
+  # whether 30 x 20 fits in 64 GB without checkpointing (fallback 20, then 15).
+  - id: fondue
+    config: ABL-IFT-700.yaml
+    decoder: utter-project/EuroLLM-1.7B-Instruct
+    encoder: openai/whisper-large-v3
+    encoder_attn: flash_attention_2
+    max_audio_seq_len: 3000
+    adapter: moe
+    batch_duration: 30
+    grad_accum_steps: 20
+    gradient_checkpointing: false
+    # Unknown until the smoke: the Qwen recipe needed it for its unused encoder
+    # block; EuroLLM + Whisper may not.
+    ddp_find_unused_parameters: false
+    max_steps: 110
+    drop_first: 10
+
 points:
   # acc_debug: priority 10000, 2 h wall, max 8 nodes, and only ONE job
   # submitted at a time -- so these are chained by a polling driver, not by
@@ -58,3 +81,10 @@ points:
   # the one point that cannot be inferred from the others.
   - {id: ift-qwen-n16, recipe: ift-qwen, nodes: 16, qos: acc_ehpc,  time: "02:00:00"}
   - {id: ift-qwen-n32, recipe: ift-qwen, nodes: 32, qos: acc_ehpc,  time: "03:00:00"}
+  # Fondue recipe. 1-node smoke first (see README), then the sweep.
+  - {id: fondue-n1,  recipe: fondue, nodes: 1,  qos: acc_debug, time: "02:00:00"}
+  - {id: fondue-n2,  recipe: fondue, nodes: 2,  qos: acc_debug, time: "02:00:00"}
+  - {id: fondue-n4,  recipe: fondue, nodes: 4,  qos: acc_debug, time: "02:00:00"}
+  - {id: fondue-n8,  recipe: fondue, nodes: 8,  qos: acc_debug, time: "02:00:00"}
+  - {id: fondue-n16, recipe: fondue, nodes: 16, qos: acc_ehpc,  time: "02:00:00"}
+  - {id: fondue-n32, recipe: fondue, nodes: 32, qos: acc_ehpc,  time: "03:00:00"}

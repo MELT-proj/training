@@ -81,16 +81,21 @@ def encoder_numbers(model_name: str, chunk_frames: int) -> dict:
     import torch
     from transformers import AutoConfig
 
+    from melt.modeling.encoder_specs import get_encoder_spec_for_config
+
     config = AutoConfig.from_pretrained(model_name)
+    spec = get_encoder_spec_for_config(config)
     with torch.device("meta"):
-        model = _build_encoder(config)
+        model = spec.unwrap(_build_encoder(config))
 
     return {
         "name": model_name,
         "params": sum(p.numel() for p in model.parameters()),
         "layers": int(getattr(config, "num_hidden_layers", 0)),
         "dim": int(getattr(config, "hidden_size", 0)),
-        "chunk_frames": chunk_frames,
+        # Attention runs over encoder OUTPUT positions: Whisper's 3000-frame
+        # window is 1500 positions after its stride-2 conv.
+        "chunk_frames": int(spec.output_lengths(chunk_frames)),
         # w2v-BERT is fed precomputed features by the processor, so the conv
         # frontend is CPU work in the dataloader, not GPU work in the step.
         "conv_flops_per_frame": 0.0,
@@ -123,10 +128,35 @@ def adapter_params(encoder_dim: int, decoder_dim: int, stack_factor: int = 1, mi
     return fc1 + fc2 + norm + gain
 
 
+def moe_adapter_params(
+    encoder_dim: int,
+    decoder_dim: int,
+    stack_factor: int = 1,
+    num_experts: int = 8,
+    top_k: int = 2,
+    intermediate: int = 1024,
+) -> tuple[int, int]:
+    """(total, active-per-token) parameters of ``MELTMoEAdapter``.
+
+    Mirrors its layer shapes: a bias-free router and ``num_experts`` SwiGLU
+    experts (gate, up, down), plus a LayerNorm and a scalar gain. Only the
+    ``top_k`` routed experts do work for a given frame, so FLOPs use the active
+    count while memory and the optimizer see the total.
+    """
+    router_in = encoder_dim * stack_factor
+    router = router_in * num_experts
+    expert = 2 * router_in * intermediate + intermediate * decoder_dim
+    fixed = 2 * decoder_dim + 1
+    return router + num_experts * expert + fixed, router + top_k * expert + fixed
+
+
 def static(args) -> dict:
     dec = decoder_numbers(args.decoder)
     enc = encoder_numbers(args.encoder, args.chunk_frames)
-    adapter = adapter_params(enc["dim"], dec["dim"], args.stack_factor)
+    if args.adapter == "moe":
+        adapter_total, adapter = moe_adapter_params(enc["dim"], dec["dim"], args.stack_factor)
+    else:
+        adapter = adapter_total = adapter_params(enc["dim"], dec["dim"], args.stack_factor)
 
     shape = {
         "encoder_params": float(enc["params"]),
@@ -135,7 +165,10 @@ def static(args) -> dict:
         "encoder_chunk_frames": enc["chunk_frames"],
         "encoder_trainable": args.encoder_trainable,
         "encoder_conv_flops_per_frame": enc["conv_flops_per_frame"],
+        # FLOPs use the ACTIVE parameters (top-k experts); adapter_total_params
+        # is what memory and the optimizer see.
         "adapter_params": float(adapter),
+        "adapter_total_params": float(adapter_total),
         "adapter_trainable": args.adapter_trainable,
         "decoder_body_params": float(dec["body_params"]),
         "decoder_head_params": float(dec["head_params"]),
@@ -145,7 +178,7 @@ def static(args) -> dict:
         "gradient_checkpointing": args.gradient_checkpointing,
         "stack_factor": args.stack_factor,
     }
-    record = {"shape": shape, "encoder": enc, "decoder": dec, "adapter_params": adapter}
+    record = {"shape": shape, "encoder": enc, "decoder": dec, "adapter_params": adapter, "adapter_total_params": adapter_total}
     out = Path(args.out) if args.out else HERE / "tables" / "flops-static.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -157,7 +190,7 @@ def static(args) -> dict:
         f"(body {dec['body_params'] / 1e9:.4f} + head {dec['head_params'] / 1e9:.4f}, "
         f"{dec['full_attn_layers']}/{dec['layers']} full-attention layers)"
     )
-    print(f"  adapter  {adapter / 1e6:.2f} M")
+    print(f"  adapter  {adapter / 1e6:.2f} M active, {adapter_total / 1e6:.2f} M total ({args.adapter})")
     return record
 
 
@@ -268,6 +301,7 @@ def main() -> None:
     p_static.add_argument("--chunk-frames", type=int, default=1500,
                           help="encoder attention window in frames (max_audio_seq_len)")
     p_static.add_argument("--stack-factor", type=int, default=1)
+    p_static.add_argument("--adapter", choices=("mlp", "moe"), default="mlp")
     p_static.add_argument("--encoder-trainable", action="store_true", default=True)
     p_static.add_argument("--no-encoder-trainable", dest="encoder_trainable", action="store_false")
     p_static.add_argument("--adapter-trainable", action="store_true", default=True)

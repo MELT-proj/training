@@ -574,3 +574,67 @@ def test_emit_is_a_noop_before_any_step_has_boundary(tmp_path):
     logs: dict[str, float] = {}
     stub._perf_emit(logs)
     assert logs == {}
+
+
+def test_whisper_counters_are_in_encoder_positions_not_mel_frames(tmp_path):
+    """Whisper's input is 10 ms mel frames; its stride-2 conv halves them.
+
+    Counting input frames would double the encoder's body FLOPs and the audio
+    positions the decoder is credited with.
+    """
+    pytest.importorskip("torch")
+    from transformers import WhisperFeatureExtractor
+
+    stub = _perf_stub(tmp_path)
+    stub.config.model.encoder.max_audio_seq_len = 3000
+    stub.processor.feature_extractor = WhisperFeatureExtractor()
+    stub._perf_observe_batch(_batch(frames=3000, valid=4000), [20.0, 20.0])
+
+    w = stub._perf_window
+    assert w["enc_padded_frames"] == pytest.approx(2 * 3000 / 2)
+    assert w["enc_valid_frames"] == pytest.approx(4000 / 2)
+    assert w["enc_chunks"] == pytest.approx(2.0)  # one 3000-frame window per cut
+    assert w["dec_positions"] == pytest.approx(200.0 + 4000 / 2)
+
+
+def test_moe_adapter_flops_use_the_active_experts():
+    import calibrate_flops
+
+    total, active = calibrate_flops.moe_adapter_params(1280, 2048, 1, num_experts=8, top_k=2, intermediate=1024)
+    expert = 2 * 1280 * 1024 + 1024 * 2048
+    fixed = 2 * 2048 + 1
+    assert total == 1280 * 8 + 8 * expert + fixed
+    assert active == 1280 * 8 + 2 * expert + fixed
+    assert 3.9 < total / active < 4.1
+
+
+def test_collect_picks_the_static_file_of_the_runs_recipe(tmp_path):
+    import collect
+
+    default = tmp_path / "flops-static.json"
+    default.write_text("{}")
+    (tmp_path / "flops-static-fondue.json").write_text("{}")
+    assert collect.static_for("BENCH-fondue-n4", default).name == "flops-static-fondue.json"
+    assert collect.static_for("BENCH-fondue-n4-r2", default).name == "flops-static-fondue.json"
+    assert collect.static_for("BENCH-ift-qwen-n1", default) == default
+
+
+def test_fondue_recipe_pins_the_requested_configuration():
+    import bench
+
+    cfg = bench.load_config() if hasattr(bench, "load_config") else None
+    if cfg is None:
+        import yaml
+
+        cfg = yaml.safe_load((Path(bench.__file__).parent / "bench.yaml").read_text())
+    recipe = next(r for r in cfg["recipes"] if r["id"] == "fondue")
+    argv = " ".join(bench.bench_overrides(recipe))
+    assert "--model.encoder.name=openai/whisper-large-v3" in argv
+    assert "--model.encoder.attn_implementation=flash_attention_2" in argv
+    assert "--model.encoder.max_audio_seq_len=3000" in argv
+    assert "--model.adapter._type=moe" in argv
+    assert "--model.decoder.attn_implementation=flash_attention_2" in argv
+    assert "--trainer.gradient_checkpointing=false" in argv
+    assert "--model.ckpt=null" in argv
+    for part in ("encoder", "adapter", "decoder"):
+        assert f"--model.{part}.freeze=false" in argv

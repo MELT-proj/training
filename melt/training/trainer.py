@@ -1491,10 +1491,15 @@ class MELTTrainer(Seq2SeqTrainer):
         features = inputs.get("input_features")
         audio_positions = 0.0
         if features is not None:
-            padded = float(features.shape[0]) * float(features.shape[1])
+            # Counted in encoder OUTPUT positions, which is what the transformer
+            # layers run on: Whisper's input is 10 ms mel frames and its stride-2
+            # conv halves them, so input-frame counts would double the encoder's
+            # body FLOPs and the decoder's audio positions. 1 for w2v-BERT.
+            stride = self._perf_encoder_stride()
+            padded = float(features.shape[0]) * float(features.shape[1]) / stride
             window["enc_padded_frames"] = window.get("enc_padded_frames", 0.0) + padded
             mask = inputs.get("features_attention_mask")
-            valid = float(mask.sum()) if mask is not None else padded
+            valid = float(mask.sum()) / stride if mask is not None else padded
             window["enc_valid_frames"] = window.get("enc_valid_frames", 0.0) + valid
             chunk = int(getattr(self.config.model.encoder, "max_audio_seq_len", 0) or 0)
             if chunk > 0:
@@ -1521,6 +1526,18 @@ class MELTTrainer(Seq2SeqTrainer):
         labels = inputs.get("labels")
         if labels is not None:
             window["sup_tokens"] = window.get("sup_tokens", 0.0) + float((labels != -100).sum())
+
+    def _perf_encoder_stride(self) -> float:
+        """Input frames per encoder output position (cached); 1 if unknown."""
+        cached = getattr(self, "_perf_stride", None)
+        if cached is not None:
+            return cached
+        stride = 1
+        extractor = getattr(self.processor, "feature_extractor", None)
+        if extractor is not None:
+            stride = int(get_encoder_spec_for_feature_extractor(extractor).total_stride or 1)
+        self._perf_stride = float(max(stride, 1))
+        return self._perf_stride
 
     def _perf_audio_token_id(self) -> int:
         """Token id MELT injects audio at; cached, and -1 if it cannot be resolved."""
