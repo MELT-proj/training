@@ -149,6 +149,40 @@ deciding to freeze the encoder for Fondue.
    H100 is the 64 GB variant and the SXM/PCIe/NVL parts differ by up to a third,
    so the report will name which denominator its MFU uses.
 
+### Which of these need to run on MN5
+
+Only one of them, and it is worth being precise about why, because "run the
+calibration on artemis first" is the obvious way to save queue time and it is
+half wrong.
+
+**FLOPs are a property of the computation graph, not of the machine.** A 1.4 B ×
+4096 matmul is the same number of FLOPs on an A6000, an H100 or a CPU; clocks,
+bandwidth, power limits and cooling do not enter `FlopCounterMode` at all. So
+`calibrate_flops.py static` (parameter counts, already run) and `count` (the
+analytic constants) can run anywhere — including a laptop with no GPU for the
+static half. Three things could still move the answer, and none of them is the
+GPU:
+
+- *which kernel dispatches* — flash vs efficient-attention vs math SDPA are
+  different code paths. Artemis `dionysus` is 4 × H100, the same sm90 silicon as
+  MN5's `acc` nodes, which is the reason to pin `--partition=h100` rather than
+  land on an A6000;
+- *library version* — the same `.sif` runs both sides;
+- *shapes* — the real risk, and it is shape bias rather than hardware bias: a
+  synthetic 5/15/30 s sequence that does not resemble the padded distribution
+  gives a wrong ratio. This is why the analytic model consumes the trainer's
+  *measured* padded frame counts, and the counter is a cross-check rather than
+  the source of truth.
+
+**`gpu_peak.py` is the opposite case and must run on MN5.** Achievable TFLOP/s
+depends on clocks, power capping, cooling and the exact board variant, so an
+artemis number would be a genuine bias in the MFU denominator.
+
+The practical consequence: `calibrate_flops.py count` takes seconds, the model is
+already built, so fold it into the 1-node MN5 smoke instead of spending a
+separate artemis allocation on it. Artemis stays useful only for iterating on the
+script itself if it breaks.
+
 ## Running it
 
 From `alogin1.bsc.es`, in the repo, after `infra/sync_repo.sh mn5`:
