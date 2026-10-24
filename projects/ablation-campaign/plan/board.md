@@ -15,6 +15,20 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-24 — Claude (scaling-bench session) — measured: Whisper + EuroLLM + MoE, all trainable, no checkpointing, runs at 5.3-6.8% MFU and scales to 32 nodes at 78% efficiency; 100,000 audio hours take ~17 h on 32 nodes
+Context: the PI wanted the sweep on the configuration Fondue will most likely train (Whisper-large-v3 + EuroLLM-1.7B-Instruct + MoE adapter, everything trainable, no gradient checkpointing, flash attention 2), not the w2v-BERT/Qwen recipe the harness started with. The earlier sweep was stopped at n4/n8 and its queued n16/n32 cancelled.
+Finding:
+1. All six points ran on MN5, 110 steps each, bf16, DDP: 1 node 13.3 s/step, 6.75% MFU, 66.8 TFLOP/s per GPU; 2 nodes 15.7 s, 5.72%; 4 nodes 15.8 s, 5.71%; 8 nodes 16.1 s, 5.60%; 16 nodes 16.5 s, 5.45%; 32 nodes 17.1 s, 5.28% (52.2 TFLOP/s per GPU).
+2. **100,000 audio hours: 17.4 d on 1 node, 5.1 d on 4, 2.6 d on 8, 1.3 d on 16, 0.7 d (~17 h) on 32.** About 17-21 GPU-h per 1,000 audio hours, against ~59 for the w2v-BERT/Qwen recipe (1.99% MFU at 1 node).
+3. Scaling efficiency against 1 node: 85% at 2-4 nodes, 83% at 8, 81% at 16, 78% at 32. The first step off one node costs ~15%; each later doubling costs a few percent.
+4. 30 x 20 did not fit: it ran out of memory in the first forward (no checkpointing leaves ~26 GB of 64 GB for activations; Whisper pads every cut to a 30 s window). The sweep uses `batch_duration 15` x `grad_accum 40`, which keeps 600 s of audio per rank per step. lhotse always admits one cut, so a 15 s budget overshoots to ~133% of nominal; the audio counters come from the masks, so the rates are unaffected, but `plan_arm`'s step derivation would over-count steps by that factor at this setting.
+5. `ddp_find_unused_parameters=true` is needed (top-2 routing leaves an expert with no tokens on some rank), and its graph traversal is in the numbers. The decoder's flash attention 2 is confirmed in the job log (a log line added in `train.py`).
+6. Perf counters were fixed for Whisper: they count encoder output positions, not 10 ms mel frames. Results for w2v-BERT are unchanged.
+What it changes: the wall-time question for Fondue is answered for this recipe: 32 nodes finishes 100,000 audio hours in under a day. The MFU is low (5-7% with Whisper's padding counted as work; only ~35-43% of encoder positions are real audio), which is a cost-efficiency finding, not a wall-time problem.
+Action needed: PI to say whether the remaining time goes to a profile of where the step goes (Whisper padding, the MoE adapter's per-expert loop, all-reduce exposure) and the loader-only arm, or whether the recipe is fixed enough to stop here.
+
+---
+
 ## 2026-10-23 — Claude (scaling-bench session) — a harness for TFLOP/s, MFU and wall-time vs node count; the arithmetic predicts ~2% MFU, which is the thing to explain
 Context: the PI asked for a debug campaign that estimates the codebase's efficiency and the wall time for a 100,000-audio-hour run at 4/8/16/32 nodes. Nothing in the repo measured per-step time except tqdm, and no FLOPs or MFU existed anywhere. Built `projects/ablation-campaign/scaling-bench/` (README, bench.yaml/bench.py, flops.py, collect.py, calibrate_flops.py, dataloader_bench.py, gpu_peak.py) plus an opt-in `run.perf_logging` in `MELTTrainer`. **Nothing has been run on a GPU yet**; the numbers below are the prediction the sweep exists to test.
 Finding:

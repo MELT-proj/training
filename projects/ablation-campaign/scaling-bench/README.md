@@ -17,8 +17,8 @@ answerable with one sweep:
   from the configs, or synthetic-batch timing)"* and *"a dataloader-only (CPU)
   benchmark vs world_size"*. Both are arms of this campaign.
 
-**Status (2026-10-24): measured on the Fondue recipe at 1 / 2 / 4 / 8 nodes;
-16 and 32 are queued on `acc_ehpc`.** The prediction below was made for the
+**Status (2026-10-24): measured on the Fondue recipe at 1 / 2 / 4 / 8 / 16 / 32
+nodes.** The prediction below was made for the
 earlier w2v-BERT/Qwen recipe, which is kept as a reference arm.
 
 ## Results
@@ -35,14 +35,16 @@ trainable parameters. 110 steps per point, first 10 discarded.
 | 2 | 8 | 15.7 | 15.0-16.3 | 405 | 56.6 | 5.72% | 19.7 | 10.3 d | 85% |
 | 4 | 16 | 15.8 | 15.1-16.6 | 810 | 56.5 | 5.71% | 19.8 | 5.1 d | 85% |
 | 8 | 32 | 16.1 | 15.5-16.6 | 1588 | 55.4 | 5.60% | 20.2 | 2.6 d | 83% |
-| 16 | 64 | pending | | | | | | | |
-| 32 | 128 | pending | | | | | | | |
+| 16 | 64 | 16.5 | 15.7-17.3 | 3091 | 53.9 | 5.45% | 20.7 | 1.3 d | 81% |
+| 32 | 128 | 17.1 | 16.4-17.7 | 5984 | 52.2 | 5.28% | 21.4 | 0.7 d | 78% |
 
 Reading it:
 
-- **Scaling is linear after the first step to multi-node.** Step time is flat
-  from 2 to 8 nodes (15.7 -> 16.1 s); the one-time 15% cost is the gradient
-  all-reduce leaving the node. Wall time then falls in proportion to nodes.
+- **Scaling is close to linear.** Step time rises slowly from 13.3 s (1 node)
+  to 15.7 s (2) and then only to 17.1 s at 32 nodes. The first step off a
+  single node costs ~15% (the gradient all-reduce leaves the node); each
+  doubling after that costs another ~1-4%. 100,000 audio hours take **~17 h on
+  32 nodes** (0.7 d) and ~35 h on 16.
 - **MFU is 5.6-6.8%, with Whisper's padding counted as work.** Only ~35-43% of
   encoder positions are real audio, because every cut is padded to a 30 s window.
   That is the honest hardware number; it is not training-useful work.
