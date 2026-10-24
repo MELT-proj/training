@@ -17,11 +17,55 @@ answerable with one sweep:
   from the configs, or synthetic-batch timing)"* and *"a dataloader-only (CPU)
   benchmark vs world_size"*. Both are arms of this campaign.
 
-**Status: built, not yet run.** Nothing here has produced a measurement. The
-tables in `tables/` are the artifact of `calibrate_flops.py static` (parameter
-counts, which are real) plus a synthetic round-trip through `collect.py` that
-reproduces the hand-computed anchor. Read the numbers below as the *prediction*
-the campaign is built to test.
+**Status (2026-10-24): measured on the Fondue recipe at 1 / 2 / 4 / 8 nodes;
+16 and 32 are queued on `acc_ehpc`.** The prediction below was made for the
+earlier w2v-BERT/Qwen recipe, which is kept as a reference arm.
+
+## Results
+
+Recipe `fondue` in `bench.yaml`: **Whisper-large-v3** encoder (flash attention
+2, fixed 3000-frame window), **EuroLLM-1.7B-Instruct** decoder (flash attention
+2, confirmed in the job log), **MoE adapter** (8 experts, top-2), everything
+trainable, **no gradient checkpointing**, bf16 mixed precision, DDP. 2.33 B
+trainable parameters. 110 steps per point, first 10 discarded.
+
+| nodes | GPUs | s/step | p10-p90 | audio-h / wall-h | TFLOP/s / GPU | MFU | GPU-h / 1K h | 100K h wall | vs 1 node |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | 4 | 13.3 | 12.6-13.9 | 239 | 66.8 | 6.75% | 16.7 | 17.4 d | 100% |
+| 2 | 8 | 15.7 | 15.0-16.3 | 405 | 56.6 | 5.72% | 19.7 | 10.3 d | 85% |
+| 4 | 16 | 15.8 | 15.1-16.6 | 810 | 56.5 | 5.71% | 19.8 | 5.1 d | 85% |
+| 8 | 32 | 16.1 | 15.5-16.6 | 1588 | 55.4 | 5.60% | 20.2 | 2.6 d | 83% |
+| 16 | 64 | pending | | | | | | | |
+| 32 | 128 | pending | | | | | | | |
+
+Reading it:
+
+- **Scaling is linear after the first step to multi-node.** Step time is flat
+  from 2 to 8 nodes (15.7 -> 16.1 s); the one-time 15% cost is the gradient
+  all-reduce leaving the node. Wall time then falls in proportion to nodes.
+- **MFU is 5.6-6.8%, with Whisper's padding counted as work.** Only ~35-43% of
+  encoder positions are real audio, because every cut is padded to a 30 s window.
+  That is the honest hardware number; it is not training-useful work.
+- **Micro-batch is `batch_duration 15` x `grad_accum 40`, not 30 x 20.** The
+  30 x 20 attempt ran out of memory in the first forward: without checkpointing,
+  ~37 GB of fp32 weights, gradients and Adam state leave ~26 GB for activations.
+  15 x 40 keeps the per-rank audio per step at 600 s.
+- **Batch "fill" reads ~133%, not <100%.** lhotse always admits at least one cut,
+  and cuts reach 60 s, so a 15 s budget regularly overshoots. The audio counters
+  come from the masks, so every rate above is unaffected, but `plan_arm`'s step
+  derivation would over-count steps by roughly this factor at this setting.
+- **`ddp_find_unused_parameters=true` is part of the recipe.** The 1-node smoke
+  died in step 2 without it: top-2 routing leaves an expert with no tokens on
+  some rank in some step. Its graph traversal is included in these numbers.
+
+For reference, the w2v-BERT / Qwen3.5-2B recipe (gradient checkpointing on,
+encoder unfrozen, `find_unused` on, 30 x 20): 1 node 30.9 s/step, 1.99% MFU,
+59.2 GPU-h per 1K h; 2 nodes 33.2 s/step, 1.85%, 63.7. Its n4 run was cancelled
+and n8 stopped partway when the target recipe changed.
+
+Not yet done: a profile of where the step time goes (the largest candidates are
+Whisper's padding, the MoE adapter's per-expert loop, and DDP all-reduce
+exposure), and the loader-only arm.
 
 ## The prediction
 
@@ -253,8 +297,6 @@ This bit twice in one session: a sync was rejected silently behind a redirected
 log, the next submission re-rendered the previous (wrong) override list, and a
 second GPU allocation was spent before anyone noticed. Check the sync's exit
 status, not just that it printed something.
-
-## Files
 
 ## Files
 
