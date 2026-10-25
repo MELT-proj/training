@@ -170,6 +170,23 @@ DECODER_PROFILES = {
         "chat_template_config": "chatml",
         "chat_template_from": "utter-project/EuroLLM-1.7B-Instruct",
     },
+    # The 2512 release of the same pair (read from the checkpoints and the Hub files, 2026-10-25): same
+    # architecture and 128,000-token vocabulary as the originals, longer context (rope theta 1e6). Unlike the
+    # original base, the 2512 base's tokenizer already registers <|im_start|>/<|im_end|> (ids 3 and 4), so nothing
+    # grows the embedding table; their rows are still untrained in the base (embed norm 3e-4 against ~1.3). Its
+    # Instruct sibling keeps its template in chat_template.jinja, and that template is plain ChatML without the
+    # original's empty system block. The base borrows it.
+    "utter-project/EuroLLM-1.7B-Instruct-2512": {
+        "eos_token": "<|im_end|>",
+        "pad_token": "</s>",
+        "chat_template_config": "chatml",
+    },
+    "utter-project/EuroLLM-1.7B-2512": {
+        "eos_token": "<|im_end|>",
+        "pad_token": "</s>",
+        "chat_template_config": "chatml",
+        "chat_template_from": "utter-project/EuroLLM-1.7B-Instruct-2512",
+    },
 }
 
 # Short tags for EXP_NAME. Unknown names fall back to a sanitised slug (see
@@ -190,6 +207,10 @@ DECODER_TAGS = {
     "Qwen/Qwen3.5-2B": "qwen35_2bIns",
     "Qwen/Qwen3.5-2B-Base": "qwen35_2bBase",
     "Qwen/Qwen3.5-4B": "qwen35_4bIns",
+    # Pinned: the default slug cuts "EuroLLM-1.7B-Instruct-2512" to "EuroLLM17BInstru", the original Instruct's tag,
+    # so the two would render the same run name and share an output directory.
+    "utter-project/EuroLLM-1.7B-Instruct-2512": "EuroLLM17B2512Ins",
+    "utter-project/EuroLLM-1.7B-2512": "EuroLLM17B2512Base",
 }
 
 # Wall-clock defaults. 06:00:00 for the 700 h arm: measured
