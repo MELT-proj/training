@@ -31,8 +31,12 @@ DEFAULT_OUT = "/mnt/scratch-nyx/giuseppe/melt/outputs-sft/scoring/summaries"
 DEFAULT_REFS = "/mnt/scratch-artemis/giuseppe/tmp/fleurs-refs24"
 
 
-def select_logs(logs_dir: str, since: str) -> list[tuple[str, dict, str, str]]:
-    """``(path, classification, set name, model)`` of the newest successful SFT-format log per model and set."""
+def select_logs(logs_dir: str, since: str, classify=classify_model) -> list[tuple[str, dict, str, str]]:
+    """``(path, classification, set name, model)`` of the newest successful SFT-format log per model and set.
+
+    ``classify`` maps a log's model path to ``{cond, init, seed, step}`` or None to skip it: ``sft_tables.classify_model``
+    for the A-against-B comparison, ``tier1_tables.classify_arm`` for the MA-utility arms.
+    """
     newest: dict[tuple, tuple] = {}
     for path in sorted(Path(logs_dir).glob("*.eval")):
         if path.name[: len(since)] < since:
@@ -41,7 +45,7 @@ def select_logs(logs_dir: str, since: str) -> list[tuple[str, dict, str, str]]:
         args = log.eval.task_args or {}
         if "format-sft-random" not in str(args.get("format_config") or "") or log.status != "success":
             continue
-        info = classify_model(str(log.eval.model))
+        info = classify(str(log.eval.model))
         if info is None:
             continue
         set_name = Path(str(args.get("frozen_set") or "")).name
@@ -62,18 +66,12 @@ def cached(cache: Path, name: str, compute):
     return result
 
 
-def main() -> None:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--logs-dir", default=DEFAULT_LOGS)
-    p.add_argument("--out-dir", default=DEFAULT_OUT)
-    p.add_argument("--refs-dir", default=DEFAULT_REFS, help="fleurs-<lang>-reference-dev.json for the 24 languages")
-    p.add_argument("--since", default="2026-10-11", help="ignore logs started before this date (file name prefix)")
-    args = p.parse_args()
-
-    out = Path(args.out_dir)
+def collect(logs_dir: str, out_dir: Path, refs_dir: str, since: str, classify=classify_model) -> None:
+    """Write ``summaries.json`` and ``langshare.json`` for the logs ``classify`` accepts (see ``select_logs``)."""
+    out = Path(out_dir)
     cache = out / "cache"
     cache.mkdir(parents=True, exist_ok=True)
-    selected = select_logs(args.logs_dir, args.since)
+    selected = select_logs(logs_dir, since, classify)
     print(f"{len(selected)} logs selected")
     norm, refs = BasicTextNormalizer(), None
     summaries, langshare = [], []
@@ -84,7 +82,7 @@ def main() -> None:
         )
         if "-st-" in set_name:
             if refs is None:
-                refs = load_refs(args.refs_dir, lowercase=True)
+                refs = load_refs(refs_dir, lowercase=True)
 
             def compute_shares(path=path):
                 from collections import defaultdict
@@ -106,6 +104,16 @@ def main() -> None:
     print(
         f"wrote {out / 'summaries.json'} ({len(summaries)} rows) and {out / 'langshare.json'} ({len(langshare)} rows)"
     )
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--logs-dir", default=DEFAULT_LOGS)
+    p.add_argument("--out-dir", default=DEFAULT_OUT)
+    p.add_argument("--refs-dir", default=DEFAULT_REFS, help="fleurs-<lang>-reference-dev.json for the 24 languages")
+    p.add_argument("--since", default="2026-10-11", help="ignore logs started before this date (file name prefix)")
+    args = p.parse_args()
+    collect(args.logs_dir, Path(args.out_dir), args.refs_dir, args.since)
 
 
 if __name__ == "__main__":

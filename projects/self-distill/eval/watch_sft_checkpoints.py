@@ -8,9 +8,12 @@ Run on nyx, where the checkpoints are (or arrive from MN5, see ``pull_mn5_checkp
     python3 watch_sft_checkpoints.py --runs RUN [RUN ...] # these runs instead of the file
 
 The runs come from ``<outputs>/scoring/runs.txt`` (one run directory name per line, ``#`` starts a comment, a
-trailing ``mn5`` marks a run whose checkpoints are pulled from MN5), read again at every poll, so a run added to
-the file is picked up without a restart. A run name must contain ``-from-goldw-`` or ``-from-sd-azeros-``: that
-decides which warm start supplies the tokenizer and processor.
+``mn5`` marks a run whose checkpoints are pulled from MN5), read again at every poll, so a run added to the file is
+picked up without a restart. A run may also say which checkpoints it has, ``<run> mn5 steps=718,1436,2154,2872``: only
+those are scored and the run counts as done when they are, with no final model to wait for. That is for a run cut at a
+step (``run.stop_after_step``, whose root then holds nothing the last checkpoint does not), or a long one scored at a
+few steps and at ``checkpoint-<last>``. A run name must contain ``-from-<start>-``, where ``<start>`` is a key of
+``WARM_STARTS``: that decides which warm start supplies the tokenizer and processor.
 
 Standard library only. Per run it looks for ``checkpoint-N`` at the scheduled steps (default 718, 1436,
 2154, 2872, 4308, 5744, 8616: 1, 2, 3, 4, 6, 8 and 12 sixteenths of 11,499 steps) and for the final
@@ -59,9 +62,16 @@ from pathlib import Path
 
 
 OUTPUTS = Path("/mnt/scratch-nyx/giuseppe/melt/outputs-sft")
+GOLDW_RUN = "GOLDW-700asr-whisperlargeF-qwen35_2bInsF-mlpT-sk5-bd150-ga1-wsd-wus0p03-lr1e3-1000h-s42-2g"
+# The MA-utility study (plan/04-regime.md, Tier 1) fine-tunes from other starts: no MA ("noma"), GOLDW cut and decayed after
+# 120 h / 360 h ("ce120h", "ce360h"), and the CE24 / SD24 / SD-SIFT24 adapter-only runs. A checkpoint carries no processor and
+# all of them share GOLDW-final's tokenizer and processor (the no-MA start is built from the same names, the others loaded
+# theirs from GOLDW-final), so GOLDW-final supplies them all.
+TIER1_STARTS = ("noma", "ce120h", "ce360h", "ce24", "sd24", "sift24")
 WARM_STARTS = {
-    "goldw": "GOLDW-700asr-whisperlargeF-qwen35_2bInsF-mlpT-sk5-bd150-ga1-wsd-wus0p03-lr1e3-1000h-s42-2g",
+    "goldw": GOLDW_RUN,
     "sd-azeros": "S3-azeros_anchor-from-GOLDW-final-mix05-bd30-lr2e4-3000st-s43-2g",
+    **dict.fromkeys(TIER1_STARTS, GOLDW_RUN),
 }
 DEFAULT_STEPS = (718, 1436, 2154, 2872, 4308, 5744, 8616)
 SETS = ("fleurs24-st-xen-dev", "fleurs24-st-enx-dev", "fleurs24-asr-dev")
@@ -188,17 +198,19 @@ def is_complete(target: Target, settle: float, now: float | None = None) -> tupl
 # --- runs and state ---------------------------------------------------------------------------------------
 
 
-def targets_for(run: str, outputs: Path, steps: tuple[int, ...]) -> list[Target]:
-    """The scheduled checkpoints of ``run`` in step order, then its final model."""
+def targets_for(run: str, outputs: Path, steps: tuple[int, ...], final: bool = True) -> list[Target]:
+    """The scheduled checkpoints of ``run`` in step order, then (unless ``final`` is False) its final model."""
     run_dir = outputs / run
-    return [Target(run, s, run_dir / f"checkpoint-{s}") for s in steps] + [Target(run, None, run_dir)]
+    targets = [Target(run, s, run_dir / f"checkpoint-{s}") for s in steps]
+    return targets + [Target(run, None, run_dir)] if final else targets
 
 
 def warm_start_of(run: str, outputs: Path) -> Path:
     """The directory holding the tokenizer and processor files the run started from."""
-    match = re.search(r"-from-(goldw|sd-azeros)-", run)
+    match = re.search(r"-from-(" + "|".join(re.escape(start) for start in WARM_STARTS) + r")-", run)
     if not match:
-        raise ValueError(f"cannot tell the warm start of {run!r}: expected '-from-goldw-' or '-from-sd-azeros-'")
+        expected = " or ".join(f"'-from-{start}-'" for start in WARM_STARTS)
+        raise ValueError(f"cannot tell the warm start of {run!r}: expected {expected}")
     return outputs / WARM_STARTS[match.group(1)]
 
 
@@ -236,20 +248,51 @@ def plan(
     return todo, waiting
 
 
-def read_runs_file(path: Path) -> list[tuple[str, str]]:
-    """``(run directory name, site)`` for each line of the runs file; site is ``mn5`` or empty.
+@dataclass(frozen=True)
+class RunSpec:
+    """One line of the runs file: the run, where it trains, and the checkpoints it has (None: the default schedule)."""
 
-    A line is ``<run directory name> [mn5]``; blank lines and ``#`` comments are skipped.
+    name: str
+    site: str = ""  # "mn5" or ""
+    steps: tuple[int, ...] | None = None
+
+
+def read_run_specs(path: Path) -> list[RunSpec]:
+    """The runs file as ``RunSpec`` rows.
+
+    A line is ``<run directory name> [mn5] [steps=718,1436,...]`` with the two options in either order; blank lines and
+    ``#`` comments are skipped. ``steps=`` names the only checkpoints to score and drops the final model (see the module
+    docstring).
     """
-    runs = []
+    specs = []
     for number, raw in enumerate(path.read_text().splitlines(), 1):
         fields = raw.split("#", 1)[0].split()
         if not fields:
             continue
-        if len(fields) > 2 or (len(fields) == 2 and fields[1] != "mn5"):
-            raise ValueError(f"{path}:{number}: expected '<run directory name> [mn5]', got {raw!r}")
-        runs.append((fields[0], fields[1] if len(fields) == 2 else ""))
-    return runs
+        site, steps, bad = "", None, False
+        for option in fields[1:]:
+            if option == "mn5" and not site:
+                site = option
+            elif option.startswith("steps=") and steps is None:
+                try:
+                    steps = tuple(int(step) for step in option[len("steps=") :].split(","))
+                except ValueError:
+                    bad = True
+                else:
+                    bad = bad or any(step < 1 for step in steps)
+            else:
+                bad = True
+        if bad:
+            raise ValueError(
+                f"{path}:{number}: expected '<run directory name> [mn5] [steps=718,1436,...]', got {raw!r}"
+            )
+        specs.append(RunSpec(fields[0], site, steps))
+    return specs
+
+
+def read_runs_file(path: Path) -> list[tuple[str, str]]:
+    """``(run directory name, site)`` for each line of the runs file; site is ``mn5`` or empty."""
+    return [(spec.name, spec.site) for spec in read_run_specs(path)]
 
 
 def current_runs(args: argparse.Namespace) -> tuple[str, ...]:
@@ -264,6 +307,22 @@ def current_runs(args: argparse.Namespace) -> tuple[str, ...]:
     if not runs:
         raise SystemExit(f"{args.runs_file} lists no runs")
     return runs
+
+
+def current_run_steps(args: argparse.Namespace) -> dict[str, tuple[int, ...]]:
+    """``{run: steps}`` for the runs of the runs file that list their steps; empty when the runs come from ``--runs``."""
+    if args.runs or not args.runs_file.is_file():
+        return {}
+    return {spec.name: spec.steps for spec in read_run_specs(args.runs_file) if spec.steps}
+
+
+def targets_of(
+    run: str, outputs: Path, default_steps: tuple[int, ...], run_steps: dict[str, tuple[int, ...]]
+) -> list[Target]:
+    """The targets of ``run``: its own listed steps alone, else the default schedule and the final model."""
+    if run in run_steps:
+        return targets_for(run, outputs, run_steps[run], final=False)
+    return targets_for(run, outputs, default_steps)
 
 
 # --- talking to artemis -----------------------------------------------------------------------------------
@@ -511,9 +570,10 @@ def show_status(args: argparse.Namespace, steps: tuple[int, ...]) -> None:
     """Print what is on disk and what was submitted. Read-only: the state file is never written from here."""
     state = load_state(args.state)
     refresh_job_states(args, state, None)
+    run_steps = current_run_steps(args)
     for run in current_runs(args):
         print(run)
-        for target in targets_for(run, args.outputs, steps):
+        for target in targets_of(run, args.outputs, steps, run_steps):
             ok, why = is_complete(target, args.settle)
             cells = []
             for s in target.sets:
@@ -622,6 +682,7 @@ class Watcher:
         self.logfile = args.log if live else None
         self.state = load_state(args.state)
         self.runs: tuple[str, ...] = ()
+        self.run_steps: dict[str, tuple[int, ...]] = {}
         self.targets_by_run: dict[str, list[Target]] = {}
         self.ignored: set[str] = set()
         self.last_waiting: str | None = None
@@ -644,11 +705,17 @@ class Watcher:
         except SystemExit as err:  # the runs file vanished or emptied while we were running: keep what we had
             now_runs = self.runs
             log(f"keeping the previous run list: {err}", logfile)
-        if now_runs != self.runs:
-            self.runs = now_runs
-            self.targets_by_run = {run: targets_for(run, args.outputs, self.steps) for run in self.runs}
-            steps = ",".join(map(str, self.steps))
-            log(f"watching {', '.join(self.runs)} for steps {steps} and the final model; state {args.state}", logfile)
+        now_steps = current_run_steps(args)
+        if now_runs != self.runs or now_steps != self.run_steps:
+            self.runs, self.run_steps = now_runs, now_steps
+            self.targets_by_run = {run: targets_of(run, args.outputs, self.steps, now_steps) for run in self.runs}
+            default = ",".join(map(str, self.steps))
+            watching = ", ".join(
+                f"{run} (steps {','.join(map(str, now_steps[run]))})" if run in now_steps else run for run in self.runs
+            )
+            log(
+                f"watching {watching}; the others for steps {default} and the final model; state {args.state}", logfile
+            )
         all_targets = [t for targets in self.targets_by_run.values() for t in targets]
         todo, waiting = plan(all_targets, state, args.settle)
         if todo and self.live:
