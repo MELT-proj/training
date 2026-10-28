@@ -15,6 +15,94 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-23 — Claude (worker session, backbone score) — ST restricted to the trained directions and joined with ASR; EuroLLM's missing cells scored
+
+Context: after the en→X audit below, the PI ruled that the 23-target en→X
+column cannot compare these arms and asked for ST on the languages and
+directions they were trained on, combined with the ASR selection score into
+one metric for choosing a backbone.
+
+Decision: `sel (ST) = 1 − med(chrF over de,es,fr,it→en and en→de)/100`;
+`sel (ASR+ST) = (sel (ASR) + sel (ST))/2`, `sel (ASR)` unchanged. The
+zero-shot related group ST carried in the first draft is out.
+
+Scores (checkpoint-6310; lower better):
+
+| arm | sel (ASR) | sel (ST) | sel (ASR+ST) |
+|---|---|---|---|
+| eurollm1.7b-ins | 0.0563 | 0.3878 | **0.2220** |
+| eurollm1.7b-base | 0.0646 | 0.3951 | 0.2299 |
+| qwen35-2b-base | 0.0858 | 0.3811 | 0.2335 |
+| llama1b-base | 0.0614 | 0.4069 | 0.2342 |
+| llama1b-ins | 0.0851 | 0.3976 | 0.2413 |
+| qwen35-2b-ins | 0.1067 | 0.3832 | 0.2449 |
+
+- EuroLLM-ins leads by 0.0079 over EuroLLM-base and by 0.0115 over third
+  place; the README's noise band is 0.002–0.010, so the lead is real but not
+  large.
+- **qwen35-2b-base vs llama1b-base (0.0007) is unresolved**: it swaps when
+  en→de is dropped from the ST median and when ST is folded into the ASR sum.
+  en→de counts German twice and rests on a single 100-clip probe; that is the
+  price of the trained-directions-only instruction.
+- Cells that were "not entered" are now scored from the same logs as the other
+  arms: IFT CER (5-lang) .0498 / .0521, FLEURS-24 per-language CER, and the
+  per-direction X→en chrF. Jobs 47883097 (ASR, `score.py`) and 47883090 /
+  47883105 (X→en chrF); llama1b-base reproduced its published values in both.
+
+Action needed: none for the docs. `charts/results_master.csv` is the
+eval-owner's; these six rows still need to reach it through `charts/master.py`.
+
+---
+
+## 2026-10-23 — Claude (worker session, en→X audit) — The 17-point EuroLLM lead on en→X is language following, not boilerplate; EuroLLM rows and retention entered
+
+Context: the PI asked whether EuroLLM's en→X chrF (42.9 ins / 37.6 base against
+23.9–25.9) can stand as a comparison. H1: instruct arms prepend boilerplate
+that chrF punishes. H2: EuroLLM really translates better out of English.
+Method: the six `ift-st-enx` logs (2,300 samples each) were dumped, labelled
+by a character-n-gram language identifier trained on the FLEURS references
+(5-fold accuracy 98.5%), and re-scored with a local chrF that reproduces all
+six published macros to the first decimal. No log was modified and nothing was
+re-scored with `melteval`; no en→X number changed.
+
+Finding:
+- **H1 does not hold.** 13,800 generations, none empty, none multi-line, none
+  with an intro or label. Colon-led openings are 0.7–1.4% per arm and
+  sentence-internal. Stripping every leading "clause:" anyway lowers each arm
+  by 0.05–0.08 and moves no rank. So no normalisation rule exists to land in the
+  scorer, and none is proposed.
+- **The gap is the share of outputs in the asked language:** eurollm-ins
+  83.5%, eurollm-base 66.7%, the four older arms 21–32%, whose misses are
+  mostly German (the trained direction, 32–65%) or English (9–24%). Macro chrF:
+  on de the six arms span 56.5–61.5 (EuroLLM does not lead); on de/es/fr/it/pt
+  EuroLLM leads Qwen by about 2–3 and Llama by about 8–10; on the other 18
+  targets the older four sit at 17.5–18.3 and EuroLLM at 32.6 / 39.4.
+- **H2:** where EuroLLM writes the language it is translating the audio
+  (sentence chrF ~49 against 44–47 for the older arms when they do), at
+  mixed fidelity, with drift into invention on hard languages (hr). The older
+  arms' wrong-language outputs are faithful (German answers 57–61 chrF against
+  the German reference of the same sentence; English 79–86 against the source).
+  Quotes and tables in `02-backbones.md` §5, "What the en→X column measures".
+- **Correction:** §5 said bg and el "come out as English" for the older arms. They
+  come out as German (60–100% of clips), English second; "mt as Italian"
+  holds only for qwen35-2b-ins (37%). Rewritten.
+- EuroLLM added to §5: the two rows with the hand-over numbers (IFT CER
+  5-lang and the per-language ASR and X→en cells were not in it and are marked
+  not entered), E-B/E-I columns in the en→X table, and the retention column.
+  Text retention (job 47880299, `acc_debug`, COMPLETED, exports verified):
+  conditioned Δ is negative for both EuroLLM arms (ASR / ST: ins
+  −0.264 / −0.236, base −0.365 / −0.455). Base matches llama1b-base (the †
+  template confound); ins is the odd one, since the other instruct arms are
+  +0.123 to +1.006. Raw Δ is positive and small (ins +0.250 / +0.186, base
+  +0.261 / +0.214). The cause of the ins sign was not investigated.
+
+Action needed: PI — decide whether the 23-target en→X column stays in the
+backbone table (it is a language-following measure on untrained targets, and
+the trained direction en→de shows no EuroLLM lead). Eval-owner agent — ingest
+the new measured numbers through `charts/master.py` (EuroLLM retention deltas;
+en→X language-outcome shares and slice macros if charted); I did not write
+`results_master.csv`.
+
 ## 2026-10-23 — Claude (worker session, backbone scores) — §5 scores only the languages and directions the arms train; the selection metric gains an ST half
 
 Context: the PI changed the basis of comparison. The Tier-1 joint score
