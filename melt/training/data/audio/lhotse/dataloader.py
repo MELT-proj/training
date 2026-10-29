@@ -47,6 +47,7 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 
 
 from .....logging_utils import get_logger
+from .cut_filter import apply_cut_filter, merged_tags, resolve_leaf_rules, validate_config
 from ....memtrace import (
     memstats_requested,
     start_worker_memstats,
@@ -679,8 +680,20 @@ def read_cutset_from_config(config: DictConfig, repeat: bool = True) -> tuple[Cu
         )
         shard_seed = seed
 
+    filter_cfg = _get_config_value(config, "cut_filter", None)
+    if filter_cfg is not None:
+        filter_cfg = (
+            OmegaConf.to_container(filter_cfg, resolve=True)
+            if isinstance(filter_cfg, DictConfig) else dict(filter_cfg)
+        )
+        filter_cfg["rules"] = validate_config(filter_cfg)
+        if filter_cfg.get("scores_root"):
+            filter_cfg.setdefault("datasets_root", os.environ.get("LOCAL_DATASETS_DIR", ""))
+            if not filter_cfg["datasets_root"]:
+                raise ValueError("cut_filter.scores_root needs datasets_root or LOCAL_DATASETS_DIR")
+
     combined, use_iterable, _ = _combine_entries(
-        input_cfg, shuffle, shard_seed, repeat=repeat, indexed=indexed
+        input_cfg, shuffle, shard_seed, repeat=repeat, indexed=indexed, filter_cfg=filter_cfg
     )
 
     return combined, use_iterable
@@ -721,7 +734,8 @@ def _sources_are_indexed(entries: list) -> bool:
 
 def _combine_entries(
     entries: list, shuffle: bool, shard_seed, repeat: bool, indexed: bool | None = None,
-    _where: str = "input_cfg"
+    _where: str = "input_cfg", filter_cfg: dict | None = None,
+    _outer_tags: dict | None = None, _outer_filters: tuple = (),
 ) -> tuple[CutSet, bool, int]:
     """Load one level of ``input_cfg`` and mux its entries together.
 
@@ -765,8 +779,18 @@ def _combine_entries(
                 )
             # The group's leaves are repeated inside the recursion, so the
             # group's own mux is already infinite.
+            group_tags = _get_config_value(source_cfg, "tags", None)
+            group_tags = dict(group_tags) if group_tags else {}
+            group_filter = (
+                (_get_config_value(source_cfg, "cut_filter", None),)
+                if "cut_filter" in source_cfg else ()
+            )
             cuts, child_iterable, n_cuts = _combine_entries(
-                children, shuffle, shard_seed, repeat, indexed, f"{where}.input_cfg"
+                children, shuffle, shard_seed, repeat, indexed, f"{where}.input_cfg",
+                filter_cfg=filter_cfg,
+                # An outer group's tags are applied last, so they override the inner ones.
+                _outer_tags={**group_tags, **(_outer_tags or {})},
+                _outer_filters=(*_outer_filters, *group_filter),
             )
             use_iterable = use_iterable or child_iterable
         elif source_type == "lhotse_shar":
@@ -807,6 +831,30 @@ def _combine_entries(
             # Count before repeating: len() of a repeated CutSet is not the
             # corpus size, and auto-weighting needs the corpus size.
             n_cuts = _count_cuts(cuts, where)
+            # Rules match on the tags the cuts will carry (outer groups win),
+            # never on a property of the corpus. Applied before repeat() so the
+            # leaf keeps its mux weight.
+            if filter_cfg is not None:
+                leaf_tags = _get_config_value(source_cfg, "tags", None)
+                leaf_filter = (
+                    (_get_config_value(source_cfg, "cut_filter", None),)
+                    if "cut_filter" in source_cfg else ()
+                )
+                specs = resolve_leaf_rules(
+                    filter_cfg["rules"],
+                    [*_outer_filters, *leaf_filter],
+                    merged_tags(dict(leaf_tags) if leaf_tags else {}, _outer_tags),
+                )
+                if specs:
+                    cuts = apply_cut_filter(
+                        cuts,
+                        shar_path=shar_path,
+                        n_cuts=n_cuts,
+                        specs=specs,
+                        scores_root=filter_cfg.get("scores_root"),
+                        datasets_root=filter_cfg.get("datasets_root"),
+                        where=where,
+                    )
             if repeat:
                 cuts = cuts.repeat(preserve_id=True)
         # elif source_type == "lhotse_cuts":
