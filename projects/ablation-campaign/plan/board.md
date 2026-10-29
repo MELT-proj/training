@@ -15,6 +15,227 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-29 — Claude (worker session, data) — PR #157: the ASR band is now a generic cut filter (`data.train_ds.cut_filter`)
+Context: PI asked for filtering on any manifest field with a given condition, so ST data can be filtered on ST quality scores too.
+Finding: `asr_filter` is replaced by named rules under `cut_filter.rules`. Each rule matches leaves on their merged tags (`match: {task: st}`; any tag, lists allowed), reads its value from a dotted manifest path (`field: custom.st_qe`, `supervisions.0.custom.x`) or from a sidecar array (`array: wer`, the existing `shar-asr-scores` tree, still judged on the row index before the cut is read), and keeps cuts by `min`/`max`, `in` (fields), or `pct_min`/`pct_max` (arrays), with phases as before. Per-source overrides are keyed by rule name (`cut_filter: {asr_wer: {pct_max: 25}}`, `{asr_wer: false}`, or `false` for every rule). Field rules read every cut before judging it, so a harsh field filter on GPFS should become an array; they cannot take percentiles. The smoke config and checker are ported; the MN5 smoke above ran the old key and was not re-run.
+Action needed: PI reviews the PR. No ST quality score exists in any manifest yet; whoever scores ST picks `custom.<name>` (field rule) or a sidecar array.
+
+---
+
+## 2026-10-23 — Claude (worker session, backbone score) — ST restricted to the trained directions and joined with ASR; EuroLLM's missing cells scored
+
+Context: after the en→X audit below, the PI ruled that the 23-target en→X
+column cannot compare these arms and asked for ST on the languages and
+directions they were trained on, combined with the ASR selection score into
+one metric for choosing a backbone.
+
+Decision: `sel (ST) = 1 − med(chrF over de,es,fr,it→en and en→de)/100`;
+`sel (ASR+ST) = (sel (ASR) + sel (ST))/2`, `sel (ASR)` unchanged. The
+zero-shot related group ST carried in the first draft is out.
+
+Scores (checkpoint-6310; lower better):
+
+| arm | sel (ASR) | sel (ST) | sel (ASR+ST) |
+|---|---|---|---|
+| eurollm1.7b-ins | 0.0563 | 0.3878 | **0.2220** |
+| eurollm1.7b-base | 0.0646 | 0.3951 | 0.2299 |
+| qwen35-2b-base | 0.0858 | 0.3811 | 0.2335 |
+| llama1b-base | 0.0614 | 0.4069 | 0.2342 |
+| llama1b-ins | 0.0851 | 0.3976 | 0.2413 |
+| qwen35-2b-ins | 0.1067 | 0.3832 | 0.2449 |
+
+- EuroLLM-ins leads by 0.0079 over EuroLLM-base and by 0.0115 over third
+  place; the README's noise band is 0.002–0.010, so the lead is real but not
+  large.
+- **qwen35-2b-base vs llama1b-base (0.0007) is unresolved**: it swaps when
+  en→de is dropped from the ST median and when ST is folded into the ASR sum.
+  en→de counts German twice and rests on a single 100-clip probe; that is the
+  price of the trained-directions-only instruction.
+- Cells that were "not entered" are now scored from the same logs as the other
+  arms: IFT CER (5-lang) .0498 / .0521, FLEURS-24 per-language CER, and the
+  per-direction X→en chrF. Jobs 47883097 (ASR, `score.py`) and 47883090 /
+  47883105 (X→en chrF); llama1b-base reproduced its published values in both.
+
+Action needed: none for the docs. `charts/results_master.csv` is the
+eval-owner's; these six rows still need to reach it through `charts/master.py`.
+
+---
+
+## 2026-10-23 — Claude (worker session, en→X audit) — The 17-point EuroLLM lead on en→X is language following, not boilerplate; EuroLLM rows and retention entered
+
+Context: the PI asked whether EuroLLM's en→X chrF (42.9 ins / 37.6 base against
+23.9–25.9) can stand as a comparison. H1: instruct arms prepend boilerplate
+that chrF punishes. H2: EuroLLM really translates better out of English.
+Method: the six `ift-st-enx` logs (2,300 samples each) were dumped, labelled
+by a character-n-gram language identifier trained on the FLEURS references
+(5-fold accuracy 98.5%), and re-scored with a local chrF that reproduces all
+six published macros to the first decimal. No log was modified and nothing was
+re-scored with `melteval`; no en→X number changed.
+
+Finding:
+- **H1 does not hold.** 13,800 generations, none empty, none multi-line, none
+  with an intro or label. Colon-led openings are 0.7–1.4% per arm and
+  sentence-internal. Stripping every leading "clause:" anyway lowers each arm
+  by 0.05–0.08 and moves no rank. So no normalisation rule exists to land in the
+  scorer, and none is proposed.
+- **The gap is the share of outputs in the asked language:** eurollm-ins
+  83.5%, eurollm-base 66.7%, the four older arms 21–32%, whose misses are
+  mostly German (the trained direction, 32–65%) or English (9–24%). Macro chrF:
+  on de the six arms span 56.5–61.5 (EuroLLM does not lead); on de/es/fr/it/pt
+  EuroLLM leads Qwen by about 2–3 and Llama by about 8–10; on the other 18
+  targets the older four sit at 17.5–18.3 and EuroLLM at 32.6 / 39.4.
+- **H2:** where EuroLLM writes the language it is translating the audio
+  (sentence chrF ~49 against 44–47 for the older arms when they do), at
+  mixed fidelity, with drift into invention on hard languages (hr). The older
+  arms' wrong-language outputs are faithful (German answers 57–61 chrF against
+  the German reference of the same sentence; English 79–86 against the source).
+  Quotes and tables in `02-backbones.md` §5, "What the en→X column measures".
+- **Correction:** §5 said bg and el "come out as English" for the older arms. They
+  come out as German (60–100% of clips), English second; "mt as Italian"
+  holds only for qwen35-2b-ins (37%). Rewritten.
+- EuroLLM added to §5: the two rows with the hand-over numbers (IFT CER
+  5-lang and the per-language ASR and X→en cells were not in it and are marked
+  not entered), E-B/E-I columns in the en→X table, and the retention column.
+  Text retention (job 47880299, `acc_debug`, COMPLETED, exports verified):
+  conditioned Δ is negative for both EuroLLM arms (ASR / ST: ins
+  −0.264 / −0.236, base −0.365 / −0.455). Base matches llama1b-base (the †
+  template confound); ins is the odd one, since the other instruct arms are
+  +0.123 to +1.006. Raw Δ is positive and small (ins +0.250 / +0.186, base
+  +0.261 / +0.214). The cause of the ins sign was not investigated.
+
+Action needed: PI — decide whether the 23-target en→X column stays in the
+backbone table (it is a language-following measure on untrained targets, and
+the trained direction en→de shows no EuroLLM lead). Eval-owner agent — ingest
+the new measured numbers through `charts/master.py` (EuroLLM retention deltas;
+en→X language-outcome shares and slice macros if charted); I did not write
+`results_master.csv`.
+
+## 2026-10-23 — Claude (worker session, backbone scores) — §5 scores only the languages and directions the arms train; the selection metric gains an ST half
+
+Context: the PI changed the basis of comparison. The Tier-1 joint score
+averages over all 24 ASR languages and all 23 ST directions each way, but
+these arms train X→en for four sources and en→X for one, so most of that mass
+is zero-shot and dilutes the comparison. The instruction was to keep the
+campaign selection metric and add ST to it, restricted to the directions the
+mix trains plus the related sources the metric already weights.
+
+Decision: `sel (ASR+ST) = (sel (ASR) + sel (ST)) / 2`. `sel (ASR)` is the
+metric of `README.md` unchanged. `sel (ST)` maps X→en chrF to `1 − chrF/100`
+and applies the same group medians and weights to the metric's own languages:
+trained de/es/fr/it→en at 1.5, related pt/ro/nl/da/sv→en at 0.6. en→de is the
+only trained en→X direction and is reported but not scored (it would count
+German twice and rest on one 100-clip direction). Folding ST into the existing
+sum as two more groups instead gives the same order, and adding en→de as a
+fifth trained direction leaves it unchanged — both recorded in
+`selection-metric/scores/backbones-sel-asr-st-2026-10-23.txt`.
+
+Result: 0.2311 / 0.2319 / 0.2403 / 0.2439 (llama-base / qwen-base / llama-ins
+/ qwen-ins). The leading pair is a tie at 0.0008. The ST half more than
+reverses the ASR-only order of llama-ins (0.0851) and qwen-base (0.0858): their
+ST scores are 0.3956 and 0.3780, and qwen-base's X→en medians lead on both
+groups (63.1 vs 60.9 trained, 60.0 vs 59.4 related). Only the leading pair
+against qwen-ins clears the metric's 0.010 noise bound.
+
+Caveats worth carrying into the paper: the metric was frozen 2026-09-23 before
+any of these numbers, and this extension was defined 2026-10-23 after four arms
+had been scored, so the extended ordering is exploratory — the ASR-only column
+is kept beside it; and no in-domain X→en set exists for these arms, so the ST
+half has no ID group and one fewer language in its trained group than ASR's.
+
+Action needed: none from anyone else. EuroLLM's `sel (ST)` and per-language
+rows stay pending until its IFT reaches `checkpoint-6310`
+(47783768/47783769).
+
+## 2026-10-22 — Claude (worker session, backbone scores) — Backbone table gains en→X chrF, the joint ASR+ST score and per-language tables; en→X is untrained except en→de
+
+Context: reviewing the §5 scores. Two gaps: the table had no en→X column, and
+its aggregate (the campaign selection metric) is ASR-only. The PI's improved
+score from the MA-utility study was adopted as the headline on 2026-10-21
+(`tier1_joint.py`, PR #160): `joint = (100 − asr24 + X→en chrF + en→X chrF)/3`
+with lowercase chrF and `asr24` the geometric mean of min(CER,1) over the 24 EU
+languages.
+
+Finding: `fleurs24-st-enx-dev` (23 targets × 100) existed only in melt-eval's
+x-to-y branch and as a frozen set on **artemis**; MN5 has neither the spec nor a
+set. The four IFT checkpoints were copied from MN5 and scored on artemis (jobs
+338939–338942, each 2,300/2,300 samples, 0 errors). Two method notes:
+`inspect eval` cannot score a multi-target set (the pooled corpus BLEU/chrF
+scorer raises "Mixed target languages: ['es','fr']"), so the runs use
+`--no-score` and are scored afterwards with `melteval st-metrics`; and §5's
+FLEURS-24 CER column is the mean of the eval log's grouped `cer_<lang>`, which
+is unclipped, while `score.py` clips at 1.0 — the per-language table uses the
+log's values so its mean row reproduces the column.
+
+Result: joint 51.7 / 50.4 / 50.6 / 50.3 (llama-base / llama-ins / qwen-base /
+qwen-ins). en→X chrF (cased) 22.5 / 23.1 / 24.4 / 23.7. The en→X detail is the
+substantive finding, and it is a property of the mixture rather than of the
+decoders: `build_campaign_config.py` keeps one en→de probe (CoVoST2, 429.9 h,
+9.6% of the group draws, the only en→X direction among the five training
+languages — the CoVoST2 en→et/lv/sl/sv sets are staged but outside the grid).
+That probe scores 56–62 chrF; every other target is 0.5–50, with bg 0.7,
+el 0.6, mt 15–20 — the models answer in English, Italian or a hallucination
+rather than the requested language. Irish X→en (18–19 chrF for every arm) is
+degenerate English repetition, not translation. Note the probe buys little:
+trained de sits only ~4–5 chrF above untrained es/fr/it.
+
+Action needed: none. EuroLLM rows (en→X, joint, per-language) stay pending —
+its IFT is still resuming towards `checkpoint-6310` (47783768/47783769).
+
+## 2026-10-22 — Claude (worker session, text retention) — Every finished IFT arm loses raw language prior; Qwen loses about twice what Llama does
+
+Context: decision-rule item 3 of `02-backbones.md` §4. Re-ran the §3.7 text
+prior on the four completed IFT `checkpoint-6310`s. Those are MELT
+checkpoints, so a new standalone exporter
+(`projects/ablation-campaign/text_prior_export.py`) writes each decoder as a
+plain causal LM; every exported tensor was sha256-checked against its source
+(146/146 keys for Llama, 320/320 for Qwen), loaded with
+`AutoModelForCausalLM`, and its tokenizer produced byte-identical ids and
+chat renders to the pre-IFT one. Full tables, per-language breakdown, paths
+and job IDs in [`text-retention.md`](text-retention.md).
+
+Finding — Δ BPC post − pre (positive = less retained):
+
+| arm | ASR raw | ASR cond | ST raw | ST cond |
+|---|---|---|---|---|
+| llama1b-base | +0.671 | −0.058 | +0.211 | −0.315 |
+| llama1b-ins | +0.779 | +0.677 | +0.194 | +0.123 |
+| qwen35-2b-base | +1.044 | +0.628 | +0.321 | +0.009 |
+| qwen35-2b-ins | +1.133 | +1.006 | +0.326 | +0.332 |
+| EuroLLM (both) | pending | pending | pending | pending |
+
+- Control: all 24 numbers (six backbones × two sets × raw/conditioned)
+  reproduce §3.7 to <0.001 except the two Llama-Instruct conditioned cells,
+  which come in 0.025 / 0.008 lower because the
+  Llama-3.2 template renders today's date and §3.7 ran on 2026-09-16; an A/B
+  on 300 samples gives 1.9129 with the September date vs 1.8754 with today's.
+  Conditioned deltas above are taken against the same-day control, raw
+  deltas against §3.7.
+- One line: raw prior degrades in every finished arm, by roughly twice as
+  much for Qwen as for Llama; the only conditioned improvement is
+  llama1b-base, and that is the base decoder learning the chat template, not
+  retaining more language — its raw row is the retention number.
+
+Action needed: PI — the interpretation is theirs; also whether the base
+arms' conditioned cell should be reported as raw instead. EuroLLM is pending:
+its resumed runs (47783768, 47783769, 36 h) are still queued and only
+`checkpoint-3608` exists; it will be measured the same way at 6,310.
+
+## 2026-10-22 — Claude (worker session, backbones) — Qwen IFT scored (.0858 base, .1066 ins); Llama and Qwen tie on X→en; EuroLLM OOM'd a third time at bd 25 and resumes with gradient checkpointing
+
+Context: the four finished arms (Llama and Qwen, base and instruct) now have their full evaluation round; EuroLLM has been retried twice since the 10-19 entry. The §5 table of `02-backbones.md` is filled from these numbers.
+
+Finding:
+1. **Qwen IFT finished both arms** (47464247/48, 6,310 steps, 2 d 9 h on 2 nodes) and is scored: selection **.0858** (base) and **.1066** (instruct), against Llama's .0614 and .0850. In-domain WER (mean of the five training languages, 600 clips each): Qwen-base 8.27, Qwen-ins 8.70, Llama-ins 9.13, Llama-base 9.39. On FLEURS-24 dev CER it inverts: Llama-base **.3571**, Qwen-ins .4219, Qwen-base .4350, Llama-ins .4448. No arm is best on both, which is the decision rule's item 1 in the PI's hands.
+2. **X→en does not separate them.** Macro-mean over 23 directions, 100 samples each: chrF++ 44.2 (Qwen-ins) to 44.7 (Llama-ins) cased, 48.2 to 48.6 lowercase; base and instruct are within 0.5 of each other in both families. Full rows in `selection-metric/scores/backbones-st-xen-2026-10-22.txt`. Qwen's ST logs were scored with 47783772.
+3. **EuroLLM OOM'd a third time.** The bd 25 × ga 48 resume (47683539/40) died at 09:13Z on 10-22 at step 3,752, on the same 3.82 GiB fp32-logits allocation at ~61 GB. It also ran at **52 s/step** (tqdm), against 21 s/step for the original bd 75 × ga 16, so halving the micro-batch both failed to shrink the offending batch and cost 2.5× the step time. Do not retry that shape.
+4. **Resumed 47783768 (ins) / 47783769 (base)** from checkpoint-3608 with the **original bd 75 × ga 16 plus `--trainer.gradient_checkpointing true`**, 36 h limit. This is the fix the Qwen rows already use; it is a memory change only, and bd 75 also matches the sampler state saved at 3,608. Expected ~27 s/step, so ~20 h for the 2,558 steps left. Both were pending at 10:50Z.
+5. **Selection scores, 9 runs:** `selection-metric/scores/backbones-ma-and-ift-2026-10-22.txt` (every MA arm and the four finished IFT arms, raw `score.py` output). Note MA llama1b-base is 1.0000 from 2,555/3,000 runaway in-domain generations — that checkpoint is unusable as an MA arm, though its IFT recovered.
+6. **`~/eval-main` on MN5** (melt-eval main, has `st_metrics.py`) is what `st-metrics` must be run from, inside the spbleu eval image. The login node has no `inspect_ai`.
+
+Action needed: PI — the gate, provisionally moved to Mon 10-26 while EuroLLM finishes, needs item 1's choice between in-domain and zero-shot weighting; text retention is still unmeasured (no exporter for a MELT checkpoint into `melteval text-prior`).
+
+---
+
 ## 2026-10-20 (later) — Claude (worker session, data) — ASR score band: arrays built and staged, MN5 smoke passed across a phase switch and a resume (PR open)
 Context: PI asked for the arrays on nyx, staged on MN5, and a short run testing the multi-phase approach with different sources.
 Finding:

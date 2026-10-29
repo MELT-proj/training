@@ -6,6 +6,10 @@
 #
 #   INIT=goldw   GOLDW-final: the gold-CE ASR warm start (encoder and decoder were frozen there)
 #   INIT=sd      the self-distilled warm start; S3 azeros_anchor unless SD_CKPT says otherwise
+#   INIT=none    no warm start, no modality alignment: no --model.ckpt, so train.py builds the model the way
+#                launch_goldw.sh did before GOLDW's alignment, Whisper-large-v3 and the decoder as the hub ships
+#                them under a freshly initialised adapter (seeded by SEED), with the same processor and tokenizer.
+#                The run name says "noma"
 #   MIX=hr5      SFT-HR5.yaml    en/de/fr/es/it ASR, X->en and en->X for de/fr/es/it
 #   MIX=eu24     SFT-EU24.yaml   all 24 EU languages ASR and speech translation, the same total hours
 #
@@ -25,6 +29,10 @@
 #
 # Inputs (environment):
 #   INIT, MIX              required, see above
+#   STOP_AFTER_STEP        end the run after this optimizer step, a checkpoint saved there (run.stop_after_step).
+#                          The LR schedule stays that of MAX_STEPS, so the steps trained are the first steps of the
+#                          full run and RESUME=1 can carry it on. Unset (the default): the run goes to MAX_STEPS and
+#                          this script prints and passes nothing different
 #   SITE                   infra/runners/sites/<site>.sh                         (default mn5)
 #   MELT_NODES             nodes                                                 (default 2)
 #   MELT_GPUS_PER_NODE     pinned: SLURM_GPUS_ON_NODE lies on MN5's whole-node acc (default 4)
@@ -62,6 +70,7 @@
 # directory, which then resumes from the newest checkpoint-* and never makes the check.
 #
 #   DRY_RUN=1 INIT=goldw MIX=eu24 bash projects/self-distill/sft/launch_sft.sh
+#   DRY_RUN=1 INIT=none MIX=eu24 STOP_AFTER_STEP=2872 bash projects/self-distill/sft/launch_sft.sh
 #   MELT_TIME=48:00:00 INIT=sd MIX=hr5 bash projects/self-distill/sft/launch_sft.sh
 #   RESUME=1 MELT_TIME=48:00:00 INIT=sd MIX=hr5 bash projects/self-distill/sft/launch_sft.sh
 #
@@ -83,7 +92,7 @@ cd "$REPO_ROOT"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
-INIT="${INIT:?set INIT=goldw|sd}"
+INIT="${INIT:?set INIT=goldw|sd|none}"
 MIX="${MIX:?set MIX=hr5|eu24}"
 SITE="${SITE:-mn5}"
 SEED="${SEED:-1337}"
@@ -126,8 +135,11 @@ case "$INIT" in
         if [[ "$(basename "$CKPT")" =~ ^S[0-9]+-([a-z]+)(_anchor)?- ]]; then
             DERIVED_TAG="sd-${BASH_REMATCH[1]}"
         fi ;;
-    *) die "unknown INIT=$INIT (goldw|sd)" ;;
+    none) CKPT=""; DERIVED_TAG=noma ;;
+    *) die "unknown INIT=$INIT (goldw|sd|none)" ;;
 esac
+INIT_ARGS=(--model.ckpt "$CKPT")
+[[ "$INIT" != none ]] || INIT_ARGS=()
 INIT_TAG="${INIT_TAG:-$DERIVED_TAG}"
 
 # The derived schedule. Exact rational arithmetic: total_hours is a rounded decimal and a float
@@ -157,6 +169,12 @@ EVAL_STEPS="${EVAL_STEPS:-$(( MAX_STEPS / 32 ))}"
 (( EVAL_STEPS >= 1 )) || EVAL_STEPS=1
 STEPS_TAG=""
 [[ "$MAX_STEPS" == "$DERIVED_STEPS" ]] || STEPS_TAG="-st${MAX_STEPS}"
+STOP_ARGS=()
+if [[ -n "${STOP_AFTER_STEP:-}" ]]; then
+    [[ "$STOP_AFTER_STEP" =~ ^[1-9][0-9]*$ ]] || die "STOP_AFTER_STEP=$STOP_AFTER_STEP is not a positive integer"
+    (( STOP_AFTER_STEP <= MAX_STEPS )) || die "STOP_AFTER_STEP=$STOP_AFTER_STEP is beyond MAX_STEPS=$MAX_STEPS: the run would end first"
+    STOP_ARGS=(--run.stop_after_step "$STOP_AFTER_STEP")
+fi
 EXP_NAME="${EXP_NAME:-SFT-${MIX^^}-from-${INIT_TAG}-bd${BATCH_DURATION}-ga${GRAD_ACCUM}-${WORLD_SIZE}g-s${SEED}${STEPS_TAG}}"
 
 # The weights and model config come from model.ckpt, but train.py still builds a processor from
@@ -241,7 +259,7 @@ CMD=(
     --run.exp_name "$EXP_NAME"
     --trainer.output_dir "/workspace/outputs/${EXP_NAME}"
     "${RUN_DIR_ARGS[@]}"
-    --model.ckpt "$CKPT"
+    ${INIT_ARGS[@]+"${INIT_ARGS[@]}"}
     --model.master_dtype float32
     "${STACK_OVERRIDES[@]}"
     --model.adapter.stack_factor 5
@@ -257,11 +275,16 @@ CMD=(
     --trainer.seed "$SEED"
     --data.train_ds.seed "$SEED"
     --data.train_ds.shard_seed "$SEED"
+    ${STOP_ARGS[@]+"${STOP_ARGS[@]}"}
     "$@"
 )
 
 echo "[launch_sft] ${EXP_NAME}"
-echo "[launch_sft] init:  ${CKPT}"
+if [[ "$INIT" == none ]]; then
+    echo "[launch_sft] init:  none (the hub's Whisper and decoder weights, a fresh adapter seeded ${SEED})"
+else
+    echo "[launch_sft] init:  ${CKPT}"
+fi
 echo "[launch_sft] mix:   ${CONFIG} (${TOTAL_HOURS} h)"
 echo "[launch_sft] world: ${MELT_NODES} nodes x ${MELT_GPUS_PER_NODE} GPUs = ${WORLD_SIZE}; ${BATCH_DURATION} s x ${GRAD_ACCUM} accum = $(( BATCH_DURATION * GRAD_ACCUM * WORLD_SIZE )) s of audio per optimizer step"
 echo "[launch_sft] steps: max ${MAX_STEPS} (decay ${DECAY_STEPS}), eval every ${EVAL_STEPS}, save every ${SAVE_STEPS}, every checkpoint kept; seed ${SEED}"
@@ -270,6 +293,7 @@ if [[ "${RESUME:-0}" == "1" ]]; then
 else
     echo "[launch_sft] mode:  fresh run into /workspace/outputs/${EXP_NAME} (absent or empty on this host)"
 fi
+(( ${#STOP_ARGS[@]} == 0 )) || echo "[launch_sft] stop:  after step ${STOP_AFTER_STEP}, a checkpoint saved there; the LR schedule stays that of the ${MAX_STEPS} steps"
 
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
     echo "[DRY_RUN] MELT_TRAIN_MODULE=${MELT_TRAIN_MODULE} MELT_NODES=${MELT_NODES} MELT_GPUS_PER_NODE=${MELT_GPUS_PER_NODE} MELT_QOS=${MELT_QOS:-<site default>} MELT_TIME=${MELT_TIME:-<unset>}"

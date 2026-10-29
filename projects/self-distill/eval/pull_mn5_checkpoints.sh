@@ -7,8 +7,9 @@
 #   bash pull_mn5_checkpoints.sh [--dry-run] [--parallel N] [--steps "718 1436 ..."] [--runs-file FILE] [run ...]
 #
 # Runs: the names given on the command line, else the lines marked "mn5" in the runs file (default:
-# scoring/runs.txt next to the SFT outputs, the file the watcher reads too; a line is "<run directory name> [mn5]").
-# Default steps: 718 1436 2154 2872 4308 5744 8616 (1, 2, 3, 4, 6, 8 and 12 sixteenths).
+# scoring/runs.txt next to the SFT outputs, the file the watcher reads too; a line is
+# "<run directory name> [mn5] [steps=718,1436,...]"). Default steps: 718 1436 2154 2872 4308 5744 8616 (1, 2, 3, 4, 6, 8
+# and 12 sixteenths). A run whose line lists steps= is pulled at those steps only, unless --steps is given, which wins.
 #
 # For each run and step it
 #   1. skips the checkpoint when the nyx copy already carries .transfer_complete;
@@ -29,6 +30,8 @@ MN5_HOST="${MN5_HOST-mn5transfer}"
 MN5_OUTPUTS="${MN5_OUTPUTS:-/gpfs/scratch/epor48/outputs}"
 DEST="${DEST:-/mnt/scratch-nyx/giuseppe/melt/outputs-sft}"
 STEPS="718 1436 2154 2872 4308 5744 8616"
+STEPS_GIVEN=""
+declare -A RUN_STEPS=()
 PARALLEL=2
 DRY_RUN=""
 RUNS_FILE="${DEST}/scoring/runs.txt"
@@ -37,7 +40,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run) DRY_RUN=1 ;;
         --parallel) PARALLEL="${2:?}"; shift ;;
-        --steps) STEPS="${2:?}"; shift ;;
+        --steps) STEPS="${2:?}"; STEPS_GIVEN=1; shift ;;
         --runs-file) RUNS_FILE="${2:?}"; shift ;;
         -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
         -*) echo "unknown option $1" >&2; exit 2 ;;
@@ -47,9 +50,20 @@ while [[ $# -gt 0 ]]; do
 done
 if [[ ${#RUNS[@]} -eq 0 ]]; then
     [[ -f "$RUNS_FILE" ]] || { echo "ERROR: no runs given and no runs file ${RUNS_FILE}" >&2; exit 2; }
-    # the lines whose second field is "mn5", comments stripped
-    while read -r name site; do
-        if [[ "$site" == "mn5" ]]; then RUNS+=("$name"); fi
+    # the lines marked "mn5", comments stripped; a "steps=718,1436" word gives that run its own steps
+    while read -r name options; do
+        [[ -n "$name" ]] || continue
+        mark="" listed=""
+        for word in $options; do
+            case "$word" in
+                mn5) mark=mn5 ;;
+                steps=*) listed="${word#steps=}" ;;
+            esac
+        done
+        if [[ "$mark" == mn5 ]]; then
+            RUNS+=("$name")
+            [[ -z "$listed" ]] || RUN_STEPS["$name"]="${listed//,/ }"
+        fi
     done < <(sed -e 's/#.*//' "$RUNS_FILE")
     [[ ${#RUNS[@]} -gt 0 ]] || { echo "ERROR: ${RUNS_FILE} has no run marked mn5" >&2; exit 2; }
 fi
@@ -120,6 +134,8 @@ export MN5_HOST MN5_OUTPUTS DEST DRY_RUN
 
 jobs=()
 for run in "${RUNS[@]}"; do
-    for step in $STEPS; do jobs+=("${run} ${step}"); done
+    run_steps="$STEPS"
+    [[ -n "$STEPS_GIVEN" || -z "${RUN_STEPS[$run]:-}" ]] || run_steps="${RUN_STEPS[$run]}"
+    for step in $run_steps; do jobs+=("${run} ${step}"); done
 done
 printf '%s\n' "${jobs[@]}" | xargs -P "$PARALLEL" -L 1 bash -c 'pull_one "$1" "$2"' _

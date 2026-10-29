@@ -384,11 +384,370 @@ Ranked, in this order, with the noise estimate from the seed replicates:
 
 ## 5. Results
 
-| arm | MA-stage WER (5-lang mean) | FLEURS-24 CER (MA) | IFT CER (5-lang) | FLEURS-24 CER (IFT) | X→en chrF | text retention | notes |
+| arm | MA-stage WER (5-lang mean, %) | FLEURS-24 CER (MA) | IFT CER (5-lang) | FLEURS-24 CER (IFT) | sel (ASR) | sel (ST) | sel (ASR+ST)³ | text retention | notes |
+|---|---|---|---|---|---|---|---|---|---|
+| llama1b-base | runaway¹ | runaway¹ | .0500 | .3571 | 0.0614 | 0.4069 | 0.2342 | −0.058 / −0.315 † | MA unusable; IFT recovers it |
+| llama1b-ins | 11.52 | .6680 | .0477 | .4448 | 0.0851 | 0.3976 | 0.2413 | +0.677 / +0.123 |  |
+| qwen35-2b-base | 10.28 | .6191 | **.0431** | .4350 | 0.0858 | **0.3811** | 0.2335 | +0.628 / +0.009 | 2 nodes, bd 30 |
+| qwen35-2b-ins | 9.87 | .6547 | .0473 | .4219 | 0.1067 | 0.3832 | 0.2449 | +1.006 / +0.332 | 2 nodes, bd 30 |
+| eurollm1.7b-base | not scored² | — | .0521 | .365 | 0.0646 | 0.3951 | 0.2299 | −0.365 / −0.455 † | resumed IFT, `checkpoint-6310` |
+| eurollm1.7b-ins | 10.88 | .6661 | .0498 | **.335** | **0.0563** | 0.3878 | **0.2220** | −0.264 / −0.236 | resumed IFT, `checkpoint-6310` |
+
+Read the columns as follows (all numbers from melt-eval on the saved checkpoint,
+never from the in-training history). The columns left of `sel (ASR)` describe
+the runs; the comparison is the three `sel` columns. `sel (ASR)` is the
+pre-registered metric and keeps its related group; `sel (ST)` scores only the
+five speech-translation directions the IFT mix trains, and `sel (ASR+ST)` is
+their equal-weighted mean (defined under "Selection score with ST" below).
+
+- **WER and CER means** are unweighted means over the five training languages, on
+  the frozen selection sets (600 in-domain clips per language), not the medians the
+  selection metric uses. WER and CER differ by the reference length; the selection
+  metric's per-language quantity is CER.
+- **FLEURS-24 CER** is the mean over the 24 EU languages of `fleurs26-dev200`, so
+  ru and uk are excluded here; including them raises every IFT figure by 0.054–0.073.
+- **sel (ASR)** is the selection metric of `selection-metric/README.md`, unchanged:
+  `(1.0·med(ID) + 1.5·med(OOD-train) + 0.6·med(OOD-related)) / 3.1` over clipped
+  per-language CER on the frozen selection sets. Post-IFT for all six arms. Raw
+  output (per-language CER, group medians, runaways) in
+  `selection-metric/scores/backbones-ma-and-ift-2026-10-22.txt`.
+- **sel (ST)** and **sel (ASR+ST)** add speech translation on the five
+  directions the mix trains (`de,es,fr,it`→en and en→de); defined in
+  "Selection score with ST" below, next to the per-direction chrF they are
+  built from.
+- **Text retention** is "ASR cond Δ / ST cond Δ" in bits per character,
+  post-IFT minus pre-IFT (positive = less retained), measured with the §3.7
+  instrument on `checkpoint-6310` after exporting the decoder to a bare causal
+  LM (`text_prior_export.py`). Full tables, per-language breakdown, same-day
+  controls and job IDs in [`text-retention.md`](text-retention.md). EuroLLM was
+  measured last (job 47880299, 2026-10-23). eurollm1.7b-ins is the one
+  instruct arm with negative conditioned deltas (the other two are +0.123 to
+  +1.006), and the cause was not investigated; eurollm1.7b-base is negative
+  like llama1b-base (†). The raw deltas (+0.250 / +0.186 ins, +0.261 / +0.214
+  base) are positive like everyone else's, and much smaller.
+- † The base arms' conditioned delta is confounded by learning the chat template
+  (their pre-IFT conditioned number is dominated by template unfamiliarity,
+  §2). Their raw deltas (+0.671 ASR / +0.211 ST for llama1b-base) are the clean
+  retention numbers.
+- ¹ 2,555 of 3,000 in-domain generations run away (per-sample CER > 1): the Llama-Base
+  MA weights do not transcribe, so both MA columns are meaningless for that arm.
+- ² EuroLLM-Base MA ran away on 4–7 of the WER scale and was never scored; the IFT
+  stage starts from a staged checkpoint-47730 of that arm and repairs its ChatML rows.
+
+### Selection score with ST
+
+³ This section defines `sel (ST)` and `sel (ASR+ST)`. They compare the arms
+only on the languages and directions the IFT mix actually trains. The ST half
+was narrowed to those directions on 2026-10-23 at the PI's instruction, after
+the 23-target en→X column was found to measure language following on
+zero-shot targets rather than translation quality ("What the en→X column
+measures", below).
+
+- **ASR — unchanged** (the pre-registered metric): ID `en,de,es,fr,it`
+  in-domain; OOD-train `en,de,es,fr,it` on FLEURS; OOD-related
+  `pt,ro,nl,da,sv` on FLEURS; clipped per-language CER, group medians,
+  weights 1.0 / 1.5 / 0.6.
+- **ST**: per direction `s_l = 1 − chrF_l/100`, lowercase plain chrF, 100
+  clips per direction, on the five directions the mix trains:
+  - X→en for `de,es,fr,it` (YODAS Granary `ast`, 4.7–10.5% of group draws
+    each);
+  - en→de (CoVoST2, 429.9 h, 9.6% of group draws).
+
+  `sel (ST) = 1 − med(chrF over the five)/100`. The zero-shot related group
+  (`pt,ro,nl,da,sv`→en) that a first draft of this section carried at weight
+  0.6 is not in the score.
+- **Headline**: `sel (ASR+ST) = (sel (ASR) + sel (ST)) / 2`, lower is better.
+
+The two halves are weighted equally: folding ST into the ASR sum would make
+the score 3.1:1 ASR-dominant on no principled basis. That choice is not free —
+under the folded form `(3.1·sel(ASR) + sel(ST))/4.1` the order is the same
+except that llama1b-base and qwen35-2b-base swap (see the sensitivity bullet
+below).
+
+| arm | de→en | es→en | fr→en | it→en | en→de | med (five) | sel (ST) |
 |---|---|---|---|---|---|---|---|
-| llama1b-base | | | | | | | |
-| llama1b-ins | | | | | | | |
-| qwen35-2b-base | | | | | | | |
-| qwen35-2b-ins | | | | | | | |
-| eurollm1.7b-base | | | | | | | |
-| eurollm1.7b-ins | | | | | | | |
+| llama1b-base | 63.1 | 56.7 | 62.1 | 59.3 | 56.5 | 59.3 | 0.4069 |
+| llama1b-ins | 63.1 | 56.9 | 61.5 | 60.2 | 57.3 | 60.2 | 0.3976 |
+| qwen35-2b-base | 65.2 | 58.5 | 64.2 | 61.9 | 61.5 | 61.9 | 0.3811 |
+| qwen35-2b-ins | 65.3 | 58.7 | 63.4 | 61.7 | 59.5 | 61.7 | 0.3832 |
+| eurollm1.7b-base | 64.2 | 58.3 | 63.6 | 60.5 | 59.5 | 60.5 | 0.3951 |
+| eurollm1.7b-ins | 65.2 | 58.3 | 63.5 | 61.2 | 59.9 | 61.2 | 0.3878 |
+
+Lowercase plain chrF throughout (`melteval st-metrics --lowercase`); cased
+macro-means for the four older arms run 3.2–3.3 points lower and are in
+`selection-metric/scores/backbones-st-xen-2026-10-22.txt` (EuroLLM was scored
+lowercase only). The median of
+`1 − chrF/100` is `1 − med(chrF)/100`, so the score can be recomputed from
+this table to within rounding: `sel (ST) = 1 − med(five)/100`.
+
+- **What the score resolves.** EuroLLM-ins leads (.2220), then EuroLLM-base
+  (.2299), qwen35-2b-base (.2335), llama1b-base (.2342), llama1b-ins (.2413),
+  qwen35-2b-ins (.2449). The EuroLLM pair leads by .0079: above the 0.002
+  floor of the eval-noise band the metric's README records, below its 0.010
+  ceiling. Every other gap is at most .0071, and qwen35-2b-base against
+  llama1b-base (.0007) is unresolved — it swaps under both sensitivity checks
+  below.
+- **No ST in-domain twin.** No in-domain X→en set exists for these arms, so
+  the ST half has no ID group to weight at 1.0; all five directions are
+  FLEURS. Every training language appears, but German appears twice (next
+  bullet).
+- **en→de is scored here (changed 2026-10-23).** It is the only trained en→X
+  direction (CoVoST2, 429.9 h, 9.6% of group draws) and the PI asked for ST on
+  the trained directions only. Two costs are visible in the table: German is
+  counted twice (de→en and en→de), and its en→de half rests on a single
+  100-clip probe. Dropping en→de from the median — `sel (ST)` over the four
+  X→en directions — gives joint scores .2271 / .2382 / .2276 / .2406 / .2221
+  / .2163 in the table's row order: every arm improves by .003–.008 and the
+  qwen35-2b-base / llama1b-base pair swaps. Replacing the median with the mean
+  of the five changes no order.
+- **Exploratory ordering.** The ASR metric was frozen 2026-09-23, before any
+  of these numbers existed, precisely so a ranking could not be tuned to them.
+  The ST half was defined, and then narrowed, on 2026-10-23, after four arms
+  had been scored. The ASR-only score is the pre-registered one and is kept in
+  the table beside the extended one so the difference stays visible.
+- The Tier-1 joint score of the MA-utility study (`joint =
+  (100 − asr24 + X→en + en→X)/3`, `projects/self-distill/eval/tier1_joint.py`,
+  adopted 2026-10-21) is not used here: it averages over all 24 ASR languages
+  and all 23 directions each way, and these arms train X→en for four sources
+  and en→X for one, so most of its mass is zero-shot.
+
+EuroLLM's rows were added 2026-10-23 once its resumed IFT reached
+`checkpoint-6310`. Its ASR cells come from `selection-metric/score.py` on the
+same logs as the other four arms, in a run that also reproduced llama1b-base's
+published 0.0614 (job 47883097). Its per-direction X→en chrF come from
+`melteval st-metrics --group-by src_lang --lowercase` on the MN5 X→en logs, in
+a run that reproduced llama1b-base's published cells to the decimal (job
+47883090; the other three arms job 47883105); en→de comes from the artemis
+en→X logs. `IFT CER (5-lang)` for both arms is the mean of the five in-domain
+selection-set CERs, the same quantity the other rows use.
+
+### Per language
+
+Languages on rows, arms on columns: **L-B** Llama-3.2-1B (base), **L-I**
+Llama-3.2-1B-Instruct, **Q-B** Qwen3.5-2B-Base, **Q-I** Qwen3.5-2B (instruct),
+**E-B** EuroLLM-1.7B (base), **E-I** EuroLLM-1.7B-Instruct. The EuroLLM cells
+were entered 2026-10-23 from the same logs as the other four arms.
+
+These tables are context, not the comparison. `sel (ASR)` uses en, de, es,
+fr, it (ID and OOD-train) and pt, ro, nl, da, sv (OOD-related); `sel (ST)` uses
+de, es, fr, it→en and en→de. The remaining rows are reported so a reader can
+see what the untrained languages do, and are not part of any ranking.
+
+**ASR — FLEURS-24 dev CER (%), 200 clips per language.** These are the eval
+logs' own per-language CERs, unclipped: a language where the model runs away
+sits above 100% instead of being capped, which is what makes the `mean` row
+equal to the FLEURS-24 CER column above. Bold marks the best arm in the row.
+
+| lang | L-B | L-I | Q-B | Q-I | E-B | E-I |
+|---|---|---|---|---|---|---|
+| en | **3.3** | 3.7 | 4.2 | 4.2 | 3.8 | 3.4 |
+| de | 3.0 | 2.7 | **2.4** | 2.9 | 3.2 | 3.4 |
+| es | 1.7 | 1.8 | **1.6** | 1.7 | 3.3 | **1.6** |
+| fr | 3.2 | 3.1 | **2.4** | 2.6 | 2.8 | 2.6 |
+| it | 1.6 | 1.6 | **1.5** | 1.6 | 1.7 | 3.2 |
+| pt | 8.6 | 9.6 | 11.4 | 18.4 | **6.3** | 6.6 |
+| ro | 13.0 | 18.5 | 31.0 | 43.0 | **11.3** | 13.3 |
+| nl | 24.7 | 29.2 | 40.9 | 37.5 | 20.4 | **19.2** |
+| da | 22.3 | 37.3 | 35.3 | 50.1 | **19.4** | 28.3 |
+| sv | 15.7 | 30.1 | 24.5 | 40.8 | **12.7** | 16.5 |
+| cs | 50.7 | 58.3 | 58.2 | 48.8 | **24.0** | 24.1 |
+| sk | 40.9 | 53.9 | 35.3 | 32.9 | **21.5** | 26.0 |
+| pl | 32.8 | 66.1 | 76.8 | 65.5 | **14.4** | 16.2 |
+| hr | **16.8** | 31.6 | 32.4 | 31.2 | 30.1 | 32.8 |
+| sl | **21.4** | 35.0 | 42.6 | 27.9 | 29.8 | 39.3 |
+| hu | 50.4 | 64.2 | 84.3 | 75.0 | **47.0** | 65.7 |
+| fi | 33.0 | 49.9 | 40.6 | 55.6 | **28.7** | 31.7 |
+| et | 18.8 | 30.2 | 34.5 | **17.5** | 24.1 | 32.1 |
+| lt | 38.2 | 49.1 | 51.3 | 41.8 | **32.8** | 50.6 |
+| lv | 34.7 | 35.8 | 34.5 | **26.2** | 47.4 | 63.3 |
+| ga | 94.1 | 93.7 | 93.3 | **92.2** | 108.4 | 111.2 |
+| mt | 68.6 | 73.7 | 81.4 | 74.4 | 89.1 | **65.0** |
+| bg | **105.8** | 146.3 | 106.7 | 110.7 | 113.2 | 114.8 |
+| el | 153.6 | 142.3 | 116.9 | 110.1 | 108.9 | **104.4** |
+| **mean** | 35.7 | 44.5 | 43.5 | 42.2 | 33.5 | 36.5 |
+
+**ST X→en — lowercase chrF, 100 clips per source.** The rows that enter
+`sel (ST)` are de, es, fr, it; pt, ro, nl, da, sv are zero-shot context (the
+ASR half still weights them, the ST half no longer does). `ga` is the outlier
+for every arm (18–20 against 39–66 elsewhere): the outputs are degenerate
+English repetitions
+("...the church of the church of the church..."), not translations, so that
+row says nothing about the arms' relative quality.
+
+| src | L-B | L-I | Q-B | Q-I | E-B | E-I |
+|---|---|---|---|---|---|---|
+| de | 63.1 | 63.1 | 65.2 | **65.3** | 64.2 | 65.2 |
+| es | 56.7 | 56.9 | 58.5 | **58.7** | 58.3 | 58.3 |
+| fr | 62.1 | 61.5 | **64.2** | 63.4 | 63.6 | 63.5 |
+| it | 59.3 | 60.2 | **61.9** | 61.7 | 60.5 | 61.2 |
+| pt | 65.0 | 65.7 | **66.0** | 65.5 | 65.4 | 65.9 |
+| ro | 57.5 | 58.6 | 60.0 | 59.3 | 60.2 | **61.0** |
+| nl | 53.1 | 53.2 | **53.7** | 53.4 | 53.3 | **53.7** |
+| da | 57.9 | 59.4 | 59.3 | 60.2 | 60.3 | **60.7** |
+| sv | 61.7 | 61.3 | 62.0 | 62.1 | **62.6** | 62.5 |
+| cs | 52.7 | 53.7 | 53.8 | 53.6 | 54.8 | **54.9** |
+| sk | 54.0 | 54.6 | 53.6 | 53.3 | **55.7** | 55.1 |
+| pl | 51.4 | 51.2 | 50.2 | 50.2 | 51.9 | **52.0** |
+| hr | 52.6 | 52.9 | 54.2 | 52.8 | 55.3 | **56.1** |
+| sl | 44.8 | 46.1 | 44.3 | 44.9 | **47.4** | 46.4 |
+| hu | 43.5 | 44.5 | 41.0 | 39.7 | 45.3 | **46.6** |
+| fi | 44.2 | 45.2 | 40.0 | 40.8 | 46.8 | **47.2** |
+| et | 39.7 | 42.5 | 37.0 | 39.4 | 42.7 | **43.1** |
+| lt | 40.5 | 39.1 | 37.3 | 38.3 | **42.0** | 40.3 |
+| lv | 40.3 | 39.5 | 37.8 | 38.4 | **43.0** | 41.8 |
+| ga | 18.3 | 18.5 | 18.9 | 15.8 | **19.6** | 19.2 |
+| mt | 39.0 | 39.7 | 39.8 | 38.5 | 41.5 | **42.3** |
+| bg | 54.4 | 52.7 | 55.0 | 54.7 | 55.3 | **55.6** |
+| el | 49.0 | 48.8 | 47.5 | 47.4 | **50.7** | 50.5 |
+| **mean** | 50.5 | 50.8 | 50.5 | 50.3 | 52.2 | 52.3 |
+
+**ST en→X — lowercase chrF, 100 clips per target.** **E-B** EuroLLM-1.7B
+(base), **E-I** EuroLLM-1.7B-Instruct, added 2026-10-23; the other four columns
+are unchanged. Only `de` was trained: `build_campaign_config.py` keeps a single
+en→de probe (CoVoST2, 429.9 h — 9.6% of the mixture's group draws) because that
+is the only en→X direction among the five training languages; the CoVoST2 en→X
+sets staged for et/lv/sl/sv are outside the grid and are not in the render.
+Every other target is zero-shot. The older four arms mostly answer in German
+(the trained direction) or in English; "What the en→X column measures" below
+quantifies it. The near-zero bg/el cells are non-Latin targets answered in a
+Latin script, where chrF has no n-gram overlap to find.
+
+| tgt | L-B | L-I | Q-B | Q-I | E-B | E-I |
+|---|---|---|---|---|---|---|
+| de | 56.5 | 57.3 | **61.5** | 59.5 | 59.5 | 59.9 |
+| es | 44.6 | 45.3 | 50.4 | 49.9 | 50.3 | **51.2** |
+| fr | 45.2 | 49.8 | 57.4 | 57.2 | 60.3 | 60.3 |
+| it | 41.4 | 41.7 | 48.4 | 48.8 | **50.9** | 50.7 |
+| pt | 41.1 | 46.3 | 48.3 | 46.6 | 56.0 | **56.4** |
+| ro | 24.7 | 30.7 | 27.5 | 23.0 | 44.4 | **53.4** |
+| nl | 26.6 | 27.5 | 27.1 | 26.9 | **47.8** | 46.4 |
+| da | 27.0 | 27.3 | 27.4 | 27.4 | **55.9** | 54.8 |
+| sv | 26.8 | 26.5 | 26.9 | 26.7 | **55.7** | 55.1 |
+| cs | 17.1 | 17.1 | 18.5 | 17.2 | 42.9 | **44.9** |
+| sk | 17.8 | 17.5 | 19.2 | 17.8 | 35.2 | **47.6** |
+| pl | 17.7 | 16.7 | 17.3 | 16.9 | **42.4** | 42.2 |
+| hr | 19.7 | 18.8 | 22.2 | 19.4 | 19.2 | **35.6** |
+| sl | 18.7 | 18.4 | 21.1 | 21.2 | 38.0 | **45.0** |
+| hu | 15.7 | 15.4 | 15.6 | 15.9 | 39.1 | **39.3** |
+| fi | 17.6 | 17.3 | 17.6 | 17.6 | 44.5 | **44.6** |
+| et | 20.4 | 20.5 | 18.9 | 18.3 | 42.1 | **43.6** |
+| lt | 17.2 | 16.5 | 15.7 | 14.0 | 19.0 | **43.6** |
+| lv | 16.8 | 15.8 | 16.2 | 16.2 | 23.4 | **41.6** |
+| ga | 16.5 | 16.3 | 16.7 | 15.8 | 17.0 | **19.5** |
+| mt | 18.6 | 18.5 | 19.5 | 19.9 | 19.2 | 19.9 |
+| bg | 0.7 | 0.7 | 0.7 | 0.7 | 0.6 | **17.6** |
+| el | 0.6 | 0.6 | 0.6 | 0.5 | 0.8 | **13.7** |
+| **mean** | 23.9 | 24.5 | 25.9 | 25.1 | 37.6 | 42.9 |
+
+### What the en→X column measures
+
+Added 2026-10-23 after EuroLLM scored 42.9 / 37.6 on the 23-target column
+against 23.9–25.9 for the other four. Two explanations were put to the data:
+(H1) the instruct arms prepend boilerplate ("Sure, here is the translation:")
+that chrF charges as errors; (H2) EuroLLM translates better out of English.
+All numbers below are from the same six logs the column is computed from
+(`/mnt/scratch-artemis/giuseppe/melt-data/eval-logs/ift-st-enx/`, 2,300
+samples each, `--no-score` runs), re-derived with a local chrF that reproduces
+all six published macros to the first decimal.
+
+**H1, boilerplate: not present, so no normalisation was applied.** The
+prompt is the bare tag (`[st es 7.9s]`) and every arm emits a single line of
+text (lowercase, apart from 54 EuroLLM samples with a capitalised proper noun),
+13,800 generations in all: none empty, none multi-line, none
+carrying an intro sentence or a language label. Leading "clause:" openings
+exist in 0.7–1.4% of generations (15–32 per arm) and every one inspected is
+sentence-internal ("miller disse: …"); the reference texts have that shape at
+a comparable rate (40 of 2,300, 1.7%). A deliberately over-eager rule (strip any
+leading clause up to a colon, no phrase list) lowers every arm by
+0.05–0.08 chrF and changes no rank. A stock-phrase search hit 2–10 samples
+per arm, all of them content words ("aquí" inside a Spanish translation, "it
+certainly wasn't fair"), none genuine. Paired bootstrap over clips (300
+resamples): ins − base +5.36 [+4.85, +5.84]; EuroLLM-base − qwen35-2b-base
++11.71 [+11.18, +12.18]. The order of the older four is unchanged by the strip
+rule and their adjacent gaps are 0.6–0.75 chrF; the intervals resample clips
+only.
+
+**What the gap is made of: whether the output is in the language asked for.**
+Each generation was labelled with a character-n-gram language identifier
+trained on the FLEURS references (5-fold accuracy 98.5%; the weak spots are
+cs/sk/sl/hr, 92–94%). Share of the 2,300 samples:
+
+| arm | asked language | German | English | other wrong language | degenerate |
+|---|---|---|---|---|---|
+| llama1b-base | 21.2% | 58.2% | 19.7% | 0.5% | 0.4% |
+| llama1b-ins | 24.0% | 64.6% | 9.3% | 0.9% | 1.2% |
+| qwen35-2b-base | 31.5% | 32.3% | 24.4% | 6.8% | 4.9% |
+| qwen35-2b-ins | 25.1% | 51.0% | 12.0% | 8.0% | 3.8% |
+| eurollm-base | 66.7% | 0.8% | 32.1% | 0.0% | 0.3% |
+| eurollm-ins | 83.5% | 2.3% | 13.5% | 0.2% | 0.5% |
+
+("Degenerate" is a compression-ratio or length-blowup rule: runs like
+"je je je …".) The four older arms produce the asked language mainly for the
+targets whose language the mix trains as speech output or that sit next to it
+(de, es, fr, it, pt); EuroLLM does it for most of the other 18 as well
+(`eurollm-ins`: 92–100% on cs, da, et, fi, hu, lt, lv, nl, pl, pt, ro, sk, sl,
+sv; 80% hr; 33% bg, 25% el, 16% ga, 3% mt).
+
+Macro chrF by slice shows where the 17 points sit:
+
+| arm | de | de, es, fr, it, pt (5) | other 18 targets |
+|---|---|---|---|
+| llama1b-base | 56.5 | 45.7 | 17.8 |
+| llama1b-ins | 57.3 | 48.1 | 17.9 |
+| qwen35-2b-base | 61.5 | 53.2 | 18.3 |
+| qwen35-2b-ins | 59.5 | 52.4 | 17.5 |
+| eurollm-base | 59.5 | 55.4 | 32.6 |
+| eurollm-ins | 59.9 | 55.7 | 39.4 |
+
+On the trained direction the six arms are within 5 points and EuroLLM does
+not lead. Where every arm writes the asked language, EuroLLM's lead over the
+Qwen arms is about 2–3 chrF, over Llama about 8–10. On the other 18 targets the four
+older arms sit at 17.5–18.3, which is what a faithful output in the wrong
+language scores against the reference (Latin-script n-gram overlap), and
+EuroLLM sits at 32.6 and 39.4.
+
+**H2, translation or fluent nonsense: translation, of mixed fidelity.**
+Content survives the wrong language. The older arms' German answers to
+non-German targets score 56.6–61.5 chrF against the German reference of the
+same source sentence, and their English answers 79.3–86.1 against the source
+transcript (EuroLLM-base 88.4: it transcribes). So the audio is understood and
+the language tag is not obeyed. When the language is right, sentence chrF
+averages 43.7–46.7 for the older arms and 48.6–49.2 for EuroLLM. Aligned
+clips (all six arms, `en→hr` unless noted; sample ids
+12-000022 and 12-000024 for hr, 01-000010 and 01-000011 for fr):
+
+- Source "The East African islands are in the Indian Ocean off the eastern
+  coast of Africa."; reference "Istočnoafrički otoci smješteni su u Indijskom
+  oceanu, uz istočnu obalu Afrike." llama1b-base, llama1b-ins, qwen35-2b-base
+  and qwen35-2b-ins: "die ostafrikanischen inseln liegen im indischen ozean
+  vor der ostküste afrikas." eurollm-base: "the east african islands are in the
+  indian ocean off the east coast of africa." eurollm-ins: "ostale afričke
+  otoke nalaze se u indijskom oceanu, u blizini istočnog kontinenta." — Croatian
+  and on topic, with errors ("ostale", "istočnog kontinenta").
+- Same target, a longer clip about the Portuguese rebuilding a town:
+  llama1b-ins "portugals je je je je …" and qwen35-2b-base "portugals uni je
+  uni je …" run away; eurollm-ins writes Croatian that drifts into invention
+  ("… opustošen i prebačen u novo ime u potragu za novim gradom u 17. stol…").
+  Fluent-but-unrelated text does occur for EuroLLM on the hard languages; it is
+  the minority outcome there.
+- `fr`: on the clips read, all six arms translate. EuroLLM renders "tear gas" as "gaz
+  lacrymogène" and "land of Canaan" as "pays de Canaan" where the others leave
+  "tear gas" / "land of" in English. One
+  eurollm-ins sample is English-contaminated: "free more bombs explose in
+  government buildings in a period of two hours."
+
+**What this shows and does not show.** The column is dominated by whether an arm
+writes the asked language on targets the mix does not train. On the trained
+direction the six arms span 56.5–61.5 (en→de: qwen35-2b-base 61.5 highest,
+EuroLLM-ins 59.9, EuroLLM-base 59.5). It does not show why EuroLLM follows the
+tag: a stronger multilingual decoder prior is consistent with the data (it
+follows the tag for languages the mix never trains as speech output) but was not
+isolated here. It says nothing about X→en. What to conclude from it belongs to
+the PI.
+
+Method and caveats: language labels come from a classifier built here, not from
+a library; near-misses inside the cs/sk/sl/hr group (6–8%) are possible, and it
+counts garbled-but-Croatian-looking text as "asked language". The bootstrap
+resamples clips only (not systems or seeds), and the same source sentences recur
+across targets. The analysis scripts and the labelled dump live in the session
+scratch directory and are not committed.

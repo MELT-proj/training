@@ -33,6 +33,7 @@ from transformers.trainer_utils import get_last_checkpoint
 from .. import ddp
 from ..logging_utils import configure_logging, get_logger
 from ..modeling import MELTConfig, MELTForCausalLM, MELTProcessor
+from .callbacks import StopAfterStep, stop_after_step_from_config
 from .config import (
     config_to_dict,
     expand_env_vars_in_config,
@@ -398,6 +399,9 @@ def main(cfg: DictConfig) -> None:
     # Create training arguments
     targs = Seq2SeqTrainingArguments(**trainer_args_dict(cfg))
 
+    # Off by default. Checked here, before the model loads, so a bad value costs seconds.
+    stop_after_step = stop_after_step_from_config(cfg.run, targs.max_steps)
+
     ##########################
     ## PROCESSOR SETUP
     ##########################
@@ -457,6 +461,9 @@ def main(cfg: DictConfig) -> None:
         processor=processor,
         compute_metrics=compute_metrics
     )
+    if stop_after_step is not None:
+        trainer.add_callback(StopAfterStep(stop_after_step))
+        logger.info(f"The run ends after step {stop_after_step} of {targs.max_steps} (run.stop_after_step)")
 
     # Determine checkpoint to resume from.
     # - True  → pass through so HF Trainer auto-detects the last checkpoint in output_dir.
