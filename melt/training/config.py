@@ -216,6 +216,10 @@ data:
     total_hours: null
     total_cuts: null
     force_estimate: null
+    # Per-source, step-aware filter rules on any per-cut value (manifest field
+    # or sidecar array; off when null). See
+    # melt/training/data/audio/lhotse/cut_filter.py.
+    cut_filter: null
     batch_size: null
     batch_duration: 120.0
     quadratic_duration: null
