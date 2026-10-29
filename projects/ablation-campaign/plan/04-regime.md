@@ -232,8 +232,10 @@ Everything submitted on 10-21 is read by Sat 10-24 to Sun 10-25.
 
 ## 7. Results
 
-| point | MA objective | MA h | step | WER HR5 | CER other-19 | X→en HR4 / other | en→X HR4 / other | selection | GPU-h |
-|---|---|---|---|---|---|---|---|---|---|
+**Decided 2026-10-29 (PI): no MA. Fondue is a single-stage full fine-tune
+from the Hub components (MA budget 0 h); Tier 2 is not run.** Final
+readout below the interim one.
+
 First readout, 2026-10-21. Steps 718 / 2,872 unless marked (A and B
 also show step 0). WER and CER are fractions; lower is better for WER, CER
 and selection. ST cells are chrF, "HR4 / other-19" at each step in turn.
@@ -286,3 +288,48 @@ Selection score at 718 / 1,436 / 2,154 / 2,872:
   no-MA seed if the PI wants one, decide it.
 - **Caveat:** T0's Whisper keeps the hub's F16, while A's was rounded to
   bf16 (§3).
+
+**Final readout (2026-10-23; T0, T3 and T5 run to step 11,499).** The
+headline is the joint ASR+ST score adopted 2026-10-21: equal thirds of
+100 − ASR-24 (geometric-mean CER over the 24 languages, %), mean X→en chrF
+over 23 sources and mean en→X chrF over 23 targets (`self-distill/eval/tier1_joint.py`).
+Higher is better; the seed spread at 718-2,872 is 0.32. The gate was
+registered on 10-21, before any late read: D = joint(MA start) − joint(T0)
+on identical batches; **MA is out if A and T5 have both lost their lead**.
+
+| arm | MA h | 718 | 1,436 | 2,154 | 2,872 | 4,308 | 5,744 | 8,616 | 11,499 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| T0 | 0 | 60.49 | 62.03 | 62.19 | 62.21 | 62.72 | 62.58 | 62.52 | 64.16 |
+| T0' | 0 | 60.23 | 61.63 | 61.73 | 62.51 | | | | |
+| T1 | 120 | 59.88 | 61.91 | 62.23 | 62.43 | | | | |
+| T2 | 360 | 60.79 | 62.42 | 62.40 | 62.38 | | | | |
+| A | 1,000 | 60.80 | 62.30 | 62.32 | 62.74 | 62.91 | 62.61 | 62.67 | 64.09 |
+| A' | 1,000 | 61.16 | 61.97 | 62.17 | 62.44 | | | | |
+| B | 1,050 | 60.51 | 62.55 | 62.57 | 62.52 | | | | |
+| T3 | 3,700 | 61.24 | 62.56 | 62.48 | 62.64 | 63.03 | 62.62 | 62.28 | 64.03 |
+| T4 | 3,700 | 61.62 | 62.35 | 62.56 | 62.74 | | | | |
+| T5 | 3,700 | 61.80 | 62.48 | 62.72 | 62.85 | 63.19 | 62.63 | 62.56 | 64.23 |
+
+- **MA is out.** D at 11,499 is −0.07 (A), +0.07 (T5) and −0.13 (T3); the
+  stable-phase means (4,308 / 5,744 / 8,616) are +0.13, +0.19 and +0.04, all
+  inside the 0.32 spread. At 11,499 ASR-24 CER is 5.00 / 5.06 / 5.03 / 4.98 %
+  (T0 / A / T3 / T5), and X→en and en→X are within 0.3 chrF of no MA.
+- **What MA buys is a head start.** A and A' lead T0 and T0' by
+  +0.62 / +0.31 / +0.29 / +0.23 at 718 / 1,436 / 2,154 / 2,872 (pooled); T5
+  leads by +1.31 at 718 and nothing from 5,744 on. The WSD decay (from step
+  9,200) lifts every arm by ~1.5 and erases what is left. A's MA costs
+  ~29 GPU-h, CE24's and SIFT24's starts ~108 and ~195, for a head start worth
+  6-20 GPU-h of fine-tuning.
+- **Format:** T5 − T3 = +0.21 at 11,499, inside the spread: SIFT24 does no
+  better than CE24.
+- **Stability:** T0 shows one single-step gradient-norm spike with no loss
+  response, so there is no stability case for a short MA either (§5 row 1).
+- **Cost:** 1,002 GPU-h (the PI's go covered 648; the T3/T5 continuations,
+  decided 10-21, 354, of which 12 lost to a GPU fault).
+- **Caveats:** one seed at the end of the schedule; T0's Whisper keeps the
+  hub's F16 (§3); the stack is Whisper + Qwen3.5-2B-Instruct + MLP, not
+  Fondue's (EuroLLM-1.7B-Instruct + MoE), which Raclette's no-MA start checks
+  (`06` §4). The in-trainer generation of T0 and T0' ran every clip to the
+  length cap (fixed in PR #165; offline scores are unaffected).
+- Readout, figures and the cost table: nyx
+  `/mnt/scratch-nyx/giuseppe/ma-utility-check/readouts/2026-10-23-final/`.

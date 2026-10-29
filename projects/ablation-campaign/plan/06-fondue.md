@@ -102,21 +102,26 @@ Checkpoint cadence bounds a failure's cost; keep two checkpoints.
 
 *Re-plan 2026-10-14 (`timeline.md`, PI to confirm): the freeze is split.
 The MA rows freeze Thu 2026-10-29, the IFT rows Wed 2026-11-04.*
+*Re-plan 2026-10-29 (PI): there is no MA stage, so there are no MA rows.
+Everything except the LR and the filter thresholds freezes with Raclette's
+submission (~Mon 11-02); the LR and the backbone are confirmed at the IFT
+freeze (~Thu 11-05).*
 
 | decision | options | informed by | status |
 |---|---|---|---|
-| backbone | week-5 winner | `02-backbones.md` §4, plus the Qwen throughput | open |
-| audio stack, frame rate | week-6 confirmation | `03-audio-stack.md` | open |
+| backbone | week-5 winner | `02-backbones.md` §4, plus the Qwen throughput | **EuroLLM-1.7B-Instruct, provisional (PI, 2026-10-29).** Best joint ASR+ST score of the six arms (`02` §5) and the only backbone with measured throughput on the Fondue stack. EuroLLM-1.7B-Instruct-2512 (PR #163, IFT queued) may replace it at the IFT freeze if it wins clearly: same vocabulary and tokenisation |
+| audio stack, frame rate | week-6 confirmation | `03-audio-stack.md` | **settled 2026-10-29 (PI):** Whisper-large-v3 + MoE adapter (8 experts, top-2), 10 Hz (stack 5), as the backbone arms and the scaling bench ran it (board 2026-10-19) |
 | regime | full fine-tune, nothing frozen, no LoRA | PI, 2026-10-20 (`04-regime.md` restructured) | settled |
 | language set | EU-24 + ru + uk (+ ca?) | Russian probe, `05-language-ladder.md` | ru, uk in (settled); ca open |
 | mixture weights | two-tier alpha/beta (the config builder already implements it); values to choose | ladder and repetition probe | **drafted 2026-09-18:** alpha=0.5/beta=0.5 for MA (the paper's own pretraining setting, arXiv:2509.14128 §3.3.1); alpha=0.2/beta=0.5 for IFT (the paper's named fine-tuning-stage alpha). Reasoning and the concrete boost/repetition numbers this implies (e.g. mt's ASR tail at ~53× its 12.3 unique h under MA's weights) are in `fondue-ma-draft.yaml` and `fondue-ift-draft.yaml`. Not frozen — the repetition probe and ladder may move it. |
 | epochs for the tail | 1–4× repetition of languages under 100 h | repetition probe | open |
-| MA data budget and stage split | no MA, a short MA, or MA at the knee of the hours curve, with its objective (CE, SD-mix, SIFT) | the MA utility study (`04-regime.md` §5, Tier 1 read Mon 10-26); default if it is late: CE MA on the EU24 pool, decay triggered by the first readout | open, read 10-26 |
-| effective batch and LR | batch ~ one audio hour per step; LR from Raclette | Raclette | open |
-| topology | 8 nodes × 4 GPUs; 16 nodes as contingency. **`grad_accum` follows the backbone, not the node count:** the Llama IFT arms run 4, every Qwen arm in `campaign.yaml` runs 20, and the two differ 5× in effective batch. §2's Llama row is a `grad_accum 4` extrapolation and its Qwen rows are `grad_accum 20` measurements; do not read one against the other | scaling test, and the backbone row above | open |
-| FLEURS in the training pool | FLEURS **train** in or out; FLEURS **test + validation** stay the benchmark either way | see §3.1 | **PI said out (2026-09-20); re-opened the same day on new evidence — needs one more call** |
+| MA data budget and stage split | no MA, a short MA, or MA at the knee of the hours curve, with its objective (CE, SD-mix, SIFT) | the MA utility study (`04-regime.md` §5, §7) | **settled 2026-10-29 (PI): no MA (0 h).** A single-stage full fine-tune from the Hub components; MA's head start is gone by the end of a schedule far shorter than Fondue's (`04` §7, final readout) |
+| effective batch and LR | batch ~ one audio hour per step; LR from Raclette | Raclette; the step profile (`grad_accum` vs s/step) | open. *10-29:* the scaling bench's 600 audio-s per rank per step is **10.7 audio-h per step at 16 nodes**, not ~1 h; a smaller `grad_accum` shrinks it at a throughput cost the step profile measures. The batch is fixed before Raclette, which runs at it |
+| topology | **16 nodes (PI, 2026-10-29).** Measured on the Fondue stack (`scaling-bench/README.md`): 16.5 s/step, 81% of 1-node efficiency, ~20.7 GPU-h per 1,000 audio-h, so the ~330K h pool is ~6,850 GPU-h, ~4.5 days. *Before 10-29:* 8 nodes × 4 GPUs; 16 nodes as contingency. **`grad_accum` follows the backbone, not the node count:** the Llama IFT arms run 4, every Qwen arm in `campaign.yaml` runs 20, and the two differ 5× in effective batch. §2's Llama row is a `grad_accum 4` extrapolation and its Qwen rows are `grad_accum 20` measurements; do not read one against the other | scaling test, and the backbone row above | open |
+| FLEURS in the training pool | FLEURS **train** in or out; FLEURS **test + validation** stay the benchmark either way | see §3.1 | **settled 2026-10-29 (PI): FLEURS train is in** (it is most of the data for ga, mt and sl). Still to do: the sentence-id overlap audit of §3.1, so the paper can state zero overlap with the frozen test/validation sets |
 | checkpoint and eval cadence | checkpoints every ~6 h of wall clock; in-training generative eval on a FLEURS-24 dev subset of 100 utterances per language, matching the frozen set | eval cost | open — the **subset itself** is drafted: the frozen `fleurs24-asr-dev` set (melt-eval PR #10, 24 EU languages, 100/lang, plus ru/uk once PR #12/13 redeploy). The **cadence** (eval_steps/save_steps) stays open, gated on the batch/topology rows above. |
 | filters | `max_duration 60`, `max_tokens 400`, as the campaign | settled |
+| per-cut quality filter | `data.train_ds.cut_filter` (PR #157): bands on a per-cut score, per source, optionally by phase | survivor hours per language and source for each candidate band | **applies to ASR and ST sources (PI, 2026-10-29); thresholds open**, to iterate before Raclette. Check which ST sources carry a score at all |
 
 ### 3.1 FLEURS in the training pool — the numbers behind the row
 

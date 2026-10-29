@@ -198,6 +198,86 @@ step 718.
 
 ---
 
+## Re-plan of 2026-10-29: no MA, EuroLLM-Instruct, 16 nodes
+
+**This section supersedes the dates in weeks 7-11 below.**
+
+**PI decisions of 10-29** (rows in `06-fondue.md` §3):
+- **No MA.** Fondue is a single-stage full fine-tune from the Hub
+  components. Tier 1's final read: MA's head start is gone by step 11,499
+  for every start (`04` §7). Tier 2 is not run.
+- **Backbone: EuroLLM-1.7B-Instruct, provisional.** EuroLLM-1.7B-Instruct-2512
+  (PR #163) may replace it at the IFT freeze if it wins clearly; it has the
+  same vocabulary and tokenisation, so Raclette's LR carries over.
+- **Adapter: MoE** (Whisper-large-v3 + MoE, 10 Hz).
+- **Topology: 16 nodes.** The scaling bench measured the Fondue stack at
+  16.5 s/step there, ~20.7 GPU-h per 1,000 audio-h (`scaling-bench/README.md`).
+- **FLEURS train is in.** The overlap audit of `06` §3.1 still runs, for
+  the paper.
+- **`cut_filter` applies to ASR and ST sources.** The thresholds are
+  iterated before Raclette.
+- **A profile of the training step** (5-7% MFU) runs on `acc_debug` as a
+  separate task. It also measures s/step against `grad_accum`, which the
+  batch decision needs.
+
+**The batch is the open number.** At 16 nodes the bench's 600 audio-s per
+rank per step is 10.7 audio-h per optimizer step; the plan assumed ~1 h.
+Raclette must run at the batch Fondue uses, so the batch is fixed first,
+from the profile's `grad_accum` fit.
+
+**Estimates at 16 nodes** (bench rate; in-trainer eval and checkpoints add
+~10%):
+
+| run | audio h | GPU-h | wall |
+|---|---|---|---|
+| Raclette, per LR point | ~25K | ~520 | ~8 h compute, ~10 h wall |
+| Raclette, three points | ~75K | ~1,550 | concurrently 48 nodes, or sequentially ~30 h |
+| Fondue | ~330K | ~6,850 | ~4.5 days compute: two segments under the 3-day wall |
+
+The budget position was not re-read on 10-29: `bsc_acct` on MN5 reports
+`epor32` by default, not `epor48`. On 10-19 ~40,000 GPU-h remained. Since
+then roughly 2-3K GPU-h have gone (the MA study 1,002, the EuroLLM-2512 arms
+~460, the scaling bench and the backbone IFT tails), against the ~8.5K that
+the plan below needs. Compute is not the constraint.
+
+**MN5 scratch is.** Group `epor48` is at 18.85 of 19.53 TB (soft quota) on
+10-29. Fondue and Raclette checkpoints need several hundred GB. The PI's
+cleanup (optimizer states of finished runs, ~1.36 TB, plus the MA study's
+leftovers) comes before Raclette.
+
+| when | what |
+|---|---|
+| Thu 10-29 – Sun 11-01 | Merge PR #165 (from-scratch eval stops at the turn end, decodes greedily); Raclette and Fondue run from a clone at or after it. Render the Fondue IFT config: EuroLLM-1.7B-Instruct + MoE + Whisper, all trainable, no MA, FLEURS in, Canary-style weights by language and corpus (PI 10-20). `cut_filter`: survivor hours per language and source for candidate bands, and which ST sources carry a score. FLEURS overlap audit (CPU). MN5 scratch cleanup (PI). The step profile (cold agent, `acc_debug`). |
+| Fri 10-30 – Mon 11-02 | **Full-scale dry run** of that config on `acc_debug`: config, dataloader on the full pool with FLEURS and the filter, bucket bins, startup time, host RAM, exposure audit. **Resume-chain test**, 2 nodes: stop, then resume via `--dependency=afterany` with `run.defer_optimizer_load` (the first real test of `b37823b`). |
+| Mon 11-02 | Batch fixed from the profile; config frozen except LR and backbone. **Raclette submitted**: three LR points × ~25K h at 16 nodes, from scratch (also the no-MA check on the Fondue stack). |
+| Mon 11-02 – Thu 11-05 | EuroLLM-2512 IFTs land (queue permitting) and are scored. Raclette read. |
+| **Thu 11-05: IFT freeze** | LR from Raclette; backbone confirmed (Instruct or Instruct-2512). **Fondue submitted.** |
+| ~11-06 – ~11-13 | Fondue: ~4.5 days of compute in two segments, plus queue waits. |
+| ~11-13 – Wed 11-25 | ~12 days of buffer: room to restart Fondue once if it fails early. Otherwise the postponed paper experiments (ladder, prompt sweep, seeds) on spare hours. Off-boarding copies roll as runs finish. |
+| Wed 11-25 / Mon 11-30 | Last submission / allocation ends: the final checkpoint is copied off MN5 and verified. |
+
+**Update 10-30.**
+- PR #165 merged (`5b087f1`), so Raclette's and Fondue's clone must be at or
+  after it.
+- The PI's cleanup is done: `epor48` scratch is at 17.58 of 19.53 TB.
+- The EuroLLM-2512 IFTs (Instruct and base) are both pending. SLURM
+  estimates they start Mon 11-02 ~11:00 with 56 h walls, so the scores can
+  land as late as Wed 11-04 evening, one day before the freeze.
+- The step profile sends the `grad_accum` fit first, by Sat 10-31.
+- Open for the PI: the scaling bench and the profile measure
+  `stack_factor` 1 (50 Hz into the decoder), but the campaign's MoE recipe
+  is 10 Hz (`stack_factor` 5). Raclette and Fondue follow the campaign's
+  10 Hz. The bench rates are then conservative, and the profile's split
+  between per-step and per-micro-batch cost has to be re-read at 10 Hz.
+- `cut_filter`: the only ST source with a per-cut score is SPITE (English
+  CV16 and GigaSpeech audio, MT into 9 targets, BLASER 2.0 and xCOMET-XL).
+  The X→en pool and CoVoST2 have none. A BLASER gate at 5.0 is strict on
+  this data: on audio vs the English transcript it keeps ~45% of CV16, which
+  is aligned by construction, and ~8% of GigaSpeech. The thresholds are
+  explored in the "Cut Filter Thresholds" page.
+
+---
+
 ## Blocked / waiting
 
 Carried here 2026-09-18 when `00-status.md` was retired. Findings live on
@@ -753,7 +833,8 @@ plus the Whisper QK-norm Conformer cell.
       no-MA and A (to step 2,872). ~644 GPU-h. **Submitted 10-20 18:50Z** (PI's go): T0 (42 h wall), T0', A', T3-T5 (11 h walls); T1 and T2 submitted 10-20 after their decay branches passed the LR check: all eight queued.
       T6 dropped (PI 10-20). Decay branches done on hades. Scored on artemis as each
       checkpoint lands. Read Mon 10-26.
-- [ ] **No-MA IFT on the Fondue stack** (`04` §3): the winning backbone's IFT
+      *Done 10-23:* T0, T3 and T5 were run to 11,499; MA's lead is gone for every start (`04` §7). PI 10-29: no MA.
+- [ ] ~~**No-MA IFT on the Fondue stack**~~ folded into Raclette 10-29 (Raclette starts from scratch). (`04` §3): the winning backbone's IFT
       config without its MA checkpoint, submitted when the backbone is called.
 - [ ] ~~**MA:IFT ratio sweep under the winning regime**~~ retired 10-20 (PI: `04` restructured). (`04-regime.md` §6),
       submitted Sat 10-24: IFT from the 0/100/300/700 h MA points, plus the
@@ -773,7 +854,7 @@ plus the Whisper QK-norm Conformer cell.
       10-23: config resolves, dataloader builds, bucket bins on the full
       distribution, startup time, exposure audit, host-RAM trace. A failure
       here moves the MA freeze.
-- [ ] **MA throughput at 8 vs 16 nodes** on the Fondue MA config (short
+- [x] ~~**MA throughput at 8 vs 16 nodes**~~ no MA; superseded by the scaling bench (board 10-24, 1-32 nodes on the Fondue IFT stack). On the Fondue MA config (short
       runs). If flat, Fondue's MA runs on 16 nodes. Prior from the crossing
       (board 10-15): no wall-time gain from 1->2 or 2->4 nodes, but with a
       different adapter per node count, so not a clean test; something
@@ -781,8 +862,8 @@ plus the Whisper QK-norm Conformer cell.
 - [ ] **Resume chain tested on a short 2-node run from a checkpoint**
       (`--dependency=afterany`): also the first real test of `b37823b`.
       Needed before Raclette (10-27).
-- [ ] **Quantify FLEURS in or out of the Fondue pool**, carried from week 2,
-      so the PI can make that call by 10-29.
+- [x] **Quantify FLEURS in or out of the Fondue pool**, carried from week 2,
+      so the PI can make that call by 10-29. *10-29:* PI: in. The overlap audit (`06` §3.1) is still to run.
 - [ ] **Tier-1 starts ready by Wed 10-21** (`04` §3, checklist in §6): the two GOLDW decay
       branches on artemis `hades`, 2 GPUs as GOLDW (check the resume takes the `max_steps` /
       `num_decay_steps` overrides), `launch_sft.sh` building a no-MA start,
@@ -807,12 +888,12 @@ and frozen: backbone, stack, prompt, language set, mixture, MA data budget
 and stage split, MA batch and LR, filters, FLEURS in/out, `min_lr_scale`.
 
 ### Track A — GPU
-- [ ] **Raclette** (`06-fondue.md` §4). *10-20:* it no longer waits for a ratio sweep (retired). Submitted Tue 10-27 after the ratio
+- [ ] **Raclette** (`06-fondue.md` §4). *10-29:* from scratch, at 16 nodes, submitted ~Mon 11-02 (re-plan of 10-29). *10-20:* it no longer waits for a ratio sweep (retired). Submitted Tue 10-27 after the ratio
       sweep is read: three LR points at ~25K h on the Fondue IFT batch and
       topology (24 nodes if all three run at once). Read by Tue 11-03.
-- [ ] **Fondue MA submitted Thu 10-29** (*10-20:* Mon 10-26 to Tue 10-27, if `04` keeps MA; its length is set by the decay trigger): ~5 days on 8 nodes, less on 16 if
+- [ ] ~~**Fondue MA submitted Thu 10-29**~~ retired 10-29 (PI: no MA). (*10-20:* Mon 10-26 to Tue 10-27, if `04` keeps MA; its length is set by the decay trigger): ~5 days on 8 nodes, less on 16 if
       the scaling check was flat. Chain of 3-day segments.
-- [ ] **MA utility study, Tier 2**, only if Tier 1 shows an effect that
+- [ ] ~~**MA utility study, Tier 2**~~ not run: no MA effect survives (`04` §7). Only if Tier 1 shows an effect that
       survives step 718 (`04` §3): CE and SD-mix from scratch on EU24 at
       120 / 360 / 1,000 h, plus their fine-tunes. ~500 GPU-h.
 - [ ] ~~**Ladder IFT tiers 10, 30, 100**~~ postponed 10-20 (PI: the ladder is a paper experiment, off the path to Fondue).
@@ -820,7 +901,7 @@ and stage split, MA batch and LR, filters, FLEURS in/out, `min_lr_scale`.
       to drop if the queue is tight and the backbone is Qwen-class.
 
 ### Track B — preparation
-- [ ] Fill the MA rows of `06-fondue.md` §3 and mark them frozen (10-29).
+- [x] ~~Fill the MA rows of `06-fondue.md` §3 and mark them frozen (10-29).~~ No MA rows: `06` §3 updated 10-29.
 - [ ] **Off-boarding plan** (`06-fondue.md` §7), carried from week 5: what
       leaves MN5, where it lands, who verifies. Copying starts this week,
       rolling, as arms finish.
@@ -835,7 +916,7 @@ decoder LR (Raclette), ASR:ST allocation, IFT mixture, checkpoint and eval
 cadence, topology.
 
 ### Track A — GPU
-- [ ] **Fondue IFT starts** when MA ends (~11-05). Llama-class: ~8 days on 8
+- [ ] **Fondue IFT starts** *10-29:* no MA; submitted at the IFT freeze ~Thu 11-05, 16 nodes, ~4.5 days (re-plan of 10-29). Was: when MA ends (~11-05). Llama-class: ~8 days on 8
       nodes. Qwen-class: 16 nodes from the start (~11.5 days).
 - [ ] ~~**Ladder tiers 300 and 700**~~ postponed 10-20 (PI: the ladder is a paper experiment, off the path to Fondue). The two mixed-tier runs, the repetition
       probe (two runs), the Russian probe (two runs).
