@@ -47,6 +47,9 @@
 #  10. adapter._type: mlp, matching the stage-1 checkpoint. Inert while
 #      model.ckpt is set (the architecture is read from the checkpoint) but
 #      wrong if this config is ever run without it.
+#  11. model.master_dtype: float32 -- fp32 master weights for the decoder this
+#      stage trains. A stage-1 checkpoint written by a DDP run would otherwise
+#      load all bf16 and train in pure bf16; see the comment at the key.
 
 # =============================================================================
 # Run Configuration (non-TrainingArguments settings)
@@ -111,6 +114,16 @@ model:
   #
   # Container path: OUTPUT_DIR is bound to /workspace/outputs.
   ckpt: /workspace/outputs/MA-700asr-w2vbF-llama1bInsF-mlpT-s42-8g-md60
+
+  # fp32 master weights for the decoder this stage trains. A stage-1 run on DDP
+  # under transformers 5 leaves a bf16 decoder and `dtype: bfloat16` in its
+  # config.json; from_pretrained applies that to the WHOLE model and DDP does not
+  # upcast, so without this key the decoder trains in pure bf16 and every AdamW
+  # update below half a bf16 ulp of its weight is lost (at lr 2e-5 about 65% of
+  # this decoder never moves). The checkpoint above predates that and is already
+  # fp32, so here the key changes nothing -- but it is what a stage-1 checkpoint
+  # from any later DDP run needs, and the memory figures in this file assume it.
+  master_dtype: float32
 
 # =============================================================================
 # Data Configuration

@@ -1,0 +1,142 @@
+# Selection metric on the 2,100 h audio-stack crossing: the 11 cells that had finished (the five QK-norm cells were still training).
+# Scored 2026-10-12 from melt-eval JSON logs of each run's final checkpoint (selection-metric/submit_crossing_eval.sh), one seed per
+# cell; eval code is training main ad9171c on PYTHONPATH inside the v3 eval image. Lower is better.
+# The grid is not uniform. Adapter LR: whisper-conformer and w2vb-conformer 1e-3, every other cell 2e-3. QK-norm: off in all 11
+# (it does not apply to mlp and moe). Read each score with its LR next to it.
+
+== ma2100-whisper-conformer
+  ID           median 0.0605   en=0.052 de=0.061 es=0.040 fr=0.064 it=0.074
+  OOD-train    median 0.0401   en=0.045 de=0.040 es=0.037 fr=0.049 it=0.025
+  OOD-related  median 0.5037   pt=0.219 ro=0.504 nl=0.457 da=0.596 sv=0.754
+  OOD-latin    median 1.0000   cs=1.000* sk=1.000* pl=1.000* hr=1.000* sl=1.000* hu=1.000* fi=1.000* et=1.000* lt=0.931 lv=0.968 ga=1.000* mt=1.000*
+  OOD-script   median 1.0000   bg=1.000* el=1.000* ru=1.000* uk=1.000*
+  score 0.1364   (* = clipped at 1)
+  runaway generations (per-sample CER > 1, report only, not in the score):
+    ID      5/3000   en=1/600 (3% of errors, CER without 0.051)  es=1/600 (1% of errors, CER without 0.039)  fr=1/600 (0% of errors, CER without 0.064)  it=2/600 (3% of errors, CER without 0.072)
+    FLEURS  661/5171   bg=40/200 (47% of errors, CER without 0.916)  cs=36/200 (57% of errors, CER without 0.579)  da=3/200 (15% of errors, CER without 0.515)  el=56/200 (64% of errors, CER without 0.905)  et=33/200 (60% of errors, CER without 0.514)  fi=49/200 (69% of errors, CER without 0.550)  ga=40/200 (63% of errors, CER without 0.670)  hr=31/200 (53% of errors, CER without 0.576)  hu=61/200 (74% of errors, CER without 0.593)  lt=25/200 (51% of errors, CER without 0.550)  lv=32/200 (58% of errors, CER without 0.510)  mt=33/200 (58% of errors, CER without 0.554)  nl=3/171 (16% of errors, CER without 0.390)  pl=31/200 (52% of errors, CER without 0.688)  ro=2/200 (5% of errors, CER without 0.485)  ru=59/200 (62% of errors, CER without 0.927)  sk=36/200 (62% of errors, CER without 0.581)  sl=27/200 (52% of errors, CER without 0.617)  sv=16/200 (43% of errors, CER without 0.473)  uk=48/200 (54% of errors, CER without 0.924)
+
+== ma2100-whisper-moe
+  ID           median 0.0610   en=0.051 de=0.065 es=0.039 fr=0.061 it=0.100
+  OOD-train    median 0.0423   en=0.044 de=0.041 es=0.042 fr=0.046 it=0.028
+  OOD-related  median 0.5309   pt=0.234 ro=0.680 nl=0.371 da=0.602 sv=0.531
+  OOD-latin    median 1.0000   cs=1.000* sk=1.000* pl=1.000* hr=1.000* sl=1.000* hu=1.000* fi=1.000* et=0.932 lt=1.000* lv=1.000* ga=1.000* mt=1.000*
+  OOD-script   median 1.0000   bg=1.000* el=1.000* ru=1.000* uk=1.000*
+  score 0.1429   (* = clipped at 1)
+  runaway generations (per-sample CER > 1, report only, not in the score):
+    ID      12/3000   en=2/600 (4% of errors, CER without 0.049)  es=2/600 (2% of errors, CER without 0.038)  fr=1/600 (1% of errors, CER without 0.061)  it=7/600 (27% of errors, CER without 0.073)
+    FLEURS  895/5171   bg=83/200 (69% of errors, CER without 0.914)  cs=40/200 (62% of errors, CER without 0.608)  da=5/200 (17% of errors, CER without 0.513)  el=66/200 (66% of errors, CER without 0.903)  es=1/200 (30% of errors, CER without 0.030)  et=33/200 (67% of errors, CER without 0.386)  fi=63/200 (78% of errors, CER without 0.494)  ga=81/200 (82% of errors, CER without 0.678)  hr=36/200 (59% of errors, CER without 0.610)  hu=80/200 (82% of errors, CER without 0.588)  lt=36/200 (65% of errors, CER without 0.524)  lv=39/200 (66% of errors, CER without 0.461)  mt=49/200 (72% of errors, CER without 0.531)  pl=29/200 (50% of errors, CER without 0.703)  pt=1/200 (6% of errors, CER without 0.221)  ro=14/200 (41% of errors, CER without 0.435)  ru=83/200 (72% of errors, CER without 0.928)  sk=35/200 (62% of errors, CER without 0.578)  sl=44/200 (69% of errors, CER without 0.601)  sv=3/200 (14% of errors, CER without 0.462)  uk=74/200 (69% of errors, CER without 0.918)
+
+== ma2100-whisper-mlp
+  ID           median 0.0651   en=0.053 de=0.072 es=0.040 fr=0.065 it=0.083
+  OOD-train    median 0.0392   en=0.046 de=0.039 es=0.031 fr=0.044 it=0.024
+  OOD-related  median 0.6051   pt=0.239 ro=0.605 nl=0.368 da=0.669 sv=0.631
+  OOD-latin    median 1.0000   cs=1.000* sk=0.958 pl=1.000* hr=0.864 sl=1.000* hu=1.000* fi=0.954 et=0.712 lt=1.000* lv=1.000* ga=1.000* mt=0.986
+  OOD-script   median 1.0000   bg=1.000* el=1.000* ru=1.000* uk=1.000*
+  score 0.1571   (* = clipped at 1)
+  runaway generations (per-sample CER > 1, report only, not in the score):
+    ID      10/3000   de=1/600 (15% of errors, CER without 0.062)  en=1/600 (2% of errors, CER without 0.052)  es=2/600 (3% of errors, CER without 0.039)  fr=2/600 (1% of errors, CER without 0.064)  it=4/600 (14% of errors, CER without 0.072)
+    FLEURS  713/5171   bg=46/200 (48% of errors, CER without 0.914)  cs=42/200 (68% of errors, CER without 0.566)  da=9/200 (30% of errors, CER without 0.493)  el=52/200 (59% of errors, CER without 0.899)  et=23/200 (58% of errors, CER without 0.347)  fi=38/200 (69% of errors, CER without 0.386)  ga=49/200 (65% of errors, CER without 0.645)  hr=20/200 (43% of errors, CER without 0.559)  hu=69/200 (80% of errors, CER without 0.507)  lt=36/200 (66% of errors, CER without 0.468)  lv=37/200 (65% of errors, CER without 0.461)  mt=33/200 (56% of errors, CER without 0.535)  pl=34/200 (57% of errors, CER without 0.646)  pt=3/200 (17% of errors, CER without 0.202)  ro=10/200 (32% of errors, CER without 0.438)  ru=68/200 (66% of errors, CER without 0.923)  sk=26/200 (53% of errors, CER without 0.528)  sl=40/200 (64% of errors, CER without 0.566)  sv=11/200 (34% of errors, CER without 0.445)  uk=67/200 (61% of errors, CER without 0.913)
+
+== ma2100-mhubert-mlp
+  ID           median 0.1713   en=0.171 de=0.178 es=0.108 fr=0.198 it=0.154
+  OOD-train    median 0.1544   en=0.131 de=0.154 es=0.108 fr=0.190 it=0.156
+  OOD-related  median 0.6697   pt=0.571 ro=0.619 nl=0.670 da=0.929 sv=0.802
+  OOD-latin    median 0.9513   cs=1.000* sk=0.815 pl=1.000* hr=1.000* sl=0.855 hu=1.000* fi=1.000* et=0.903 lt=0.898 lv=0.694 ga=1.000* mt=0.759
+  OOD-script   median 1.0000   bg=1.000* el=1.000* ru=1.000* uk=1.000*
+  score 0.2596   (* = clipped at 1)
+  runaway generations (per-sample CER > 1, report only, not in the score):
+    ID      24/3000   de=6/600 (21% of errors, CER without 0.143)  en=4/600 (22% of errors, CER without 0.135)  es=2/600 (4% of errors, CER without 0.104)  fr=8/600 (17% of errors, CER without 0.166)  it=4/600 (9% of errors, CER without 0.141)
+    FLEURS  583/5171   bg=61/200 (61% of errors, CER without 0.921)  cs=31/200 (55% of errors, CER without 0.641)  da=19/200 (44% of errors, CER without 0.586)  de=1/200 (15% of errors, CER without 0.131)  el=36/200 (47% of errors, CER without 0.908)  en=1/200 (12% of errors, CER without 0.116)  et=21/200 (51% of errors, CER without 0.516)  fi=30/200 (57% of errors, CER without 0.521)  ga=44/200 (65% of errors, CER without 0.636)  hr=28/200 (58% of errors, CER without 0.534)  hu=56/200 (69% of errors, CER without 0.663)  it=3/200 (37% of errors, CER without 0.099)  lt=20/200 (44% of errors, CER without 0.584)  lv=11/200 (30% of errors, CER without 0.534)  mt=17/200 (38% of errors, CER without 0.514)  nl=9/171 (25% of errors, CER without 0.529)  pl=35/200 (56% of errors, CER without 0.676)  pt=6/200 (20% of errors, CER without 0.471)  ro=12/200 (26% of errors, CER without 0.493)  ru=46/200 (47% of errors, CER without 0.920)  sk=18/200 (39% of errors, CER without 0.561)  sl=16/200 (42% of errors, CER without 0.550)  sv=15/200 (40% of errors, CER without 0.526)  uk=47/200 (52% of errors, CER without 0.923)
+
+== ma2100-mhubert-moe
+  ID           median 0.1598   en=0.128 de=0.166 es=0.103 fr=0.188 it=0.160
+  OOD-train    median 0.1298   en=0.100 de=0.145 es=0.115 fr=0.213 it=0.130
+  OOD-related  median 0.8009   pt=0.579 ro=0.966 nl=0.801 da=1.000* sv=0.801
+  OOD-latin    median 1.0000   cs=1.000* sk=0.871 pl=1.000* hr=1.000* sl=1.000* hu=1.000* fi=1.000* et=1.000* lt=0.917 lv=0.798 ga=1.000* mt=0.854
+  OOD-script   median 1.0000   bg=1.000* el=1.000* ru=1.000* uk=1.000*
+  score 0.2694   (* = clipped at 1)
+  runaway generations (per-sample CER > 1, report only, not in the score):
+    ID      19/3000   de=4/600 (18% of errors, CER without 0.137)  en=2/600 (6% of errors, CER without 0.120)  es=2/600 (12% of errors, CER without 0.091)  fr=6/600 (16% of errors, CER without 0.160)  it=5/600 (14% of errors, CER without 0.138)
+    FLEURS  726/5171   bg=56/200 (64% of errors, CER without 0.915)  cs=35/200 (59% of errors, CER without 0.617)  da=22/200 (51% of errors, CER without 0.570)  de=1/200 (15% of errors, CER without 0.125)  el=43/200 (52% of errors, CER without 0.906)  es=1/200 (10% of errors, CER without 0.104)  et=34/200 (65% of errors, CER without 0.495)  fi=51/200 (71% of errors, CER without 0.490)  fr=2/200 (14% of errors, CER without 0.185)  ga=55/200 (71% of errors, CER without 0.640)  hr=28/200 (60% of errors, CER without 0.521)  hu=71/200 (77% of errors, CER without 0.648)  it=2/200 (28% of errors, CER without 0.094)  lt=22/200 (48% of errors, CER without 0.558)  lv=19/200 (41% of errors, CER without 0.532)  mt=22/200 (47% of errors, CER without 0.524)  nl=14/171 (43% of errors, CER without 0.516)  pl=48/200 (69% of errors, CER without 0.660)  pt=9/200 (26% of errors, CER without 0.447)  ro=30/200 (59% of errors, CER without 0.479)  ru=35/200 (44% of errors, CER without 0.922)  sk=26/200 (49% of errors, CER without 0.530)  sl=29/200 (60% of errors, CER without 0.521)  sv=19/200 (45% of errors, CER without 0.504)  uk=52/200 (54% of errors, CER without 0.930)
+
+== ma2100-mhubert-conformer
+  ID           median 0.2294   en=0.229 de=0.205 es=0.145 fr=0.249 it=0.235
+  OOD-train    median 0.2422   en=0.249 de=0.242 es=0.171 fr=0.332 it=0.176
+  OOD-related  median 1.0000   pt=1.000* ro=1.000* nl=0.746 da=1.000* sv=1.000*
+  OOD-latin    median 1.0000   cs=1.000* sk=1.000* pl=1.000* hr=1.000* sl=1.000* hu=1.000* fi=1.000* et=1.000* lt=1.000* lv=1.000* ga=1.000* mt=1.000*
+  OOD-script   median 1.0000   bg=1.000* el=1.000* ru=1.000* uk=1.000*
+  score 0.3847   (* = clipped at 1)
+  runaway generations (per-sample CER > 1, report only, not in the score):
+    ID      30/3000   de=2/600 (12% of errors, CER without 0.183)  en=9/600 (20% of errors, CER without 0.187)  es=4/600 (8% of errors, CER without 0.134)  fr=6/600 (14% of errors, CER without 0.217)  it=9/600 (26% of errors, CER without 0.178)
+    FLEURS  1269/5171   bg=64/200 (65% of errors, CER without 0.921)  cs=58/200 (71% of errors, CER without 0.706)  da=46/200 (66% of errors, CER without 0.622)  de=2/200 (13% of errors, CER without 0.214)  el=56/200 (61% of errors, CER without 0.904)  en=3/200 (29% of errors, CER without 0.180)  es=2/200 (16% of errors, CER without 0.145)  et=57/200 (74% of errors, CER without 0.640)  fi=70/200 (77% of errors, CER without 0.665)  fr=4/200 (27% of errors, CER without 0.249)  ga=101/200 (88% of errors, CER without 0.678)  hr=41/200 (65% of errors, CER without 0.613)  hu=96/200 (82% of errors, CER without 0.753)  it=3/200 (31% of errors, CER without 0.124)  lt=45/200 (66% of errors, CER without 0.676)  lv=70/200 (80% of errors, CER without 0.633)  mt=70/200 (80% of errors, CER without 0.572)  nl=12/171 (32% of errors, CER without 0.554)  pl=38/200 (58% of errors, CER without 0.726)  pt=43/200 (63% of errors, CER without 0.559)  ro=46/200 (67% of errors, CER without 0.557)  ru=91/200 (77% of errors, CER without 0.918)  sk=50/200 (68% of errors, CER without 0.641)  sl=53/200 (73% of errors, CER without 0.610)  sv=57/200 (72% of errors, CER without 0.605)  uk=91/200 (76% of errors, CER without 0.923)
+
+== ma2100-mms1b-mlp
+  ID           median 0.2491   en=0.359 de=0.249 es=0.163 fr=0.284 it=0.216
+  OOD-train    median 0.3348   en=0.439 de=0.335 es=0.212 fr=0.382 it=0.166
+  OOD-related  median 0.9426   pt=0.883 ro=0.819 nl=0.943 da=1.000* sv=1.000*
+  OOD-latin    median 1.0000   cs=1.000* sk=1.000* pl=1.000* hr=1.000* sl=1.000* hu=1.000* fi=1.000* et=1.000* lt=1.000* lv=1.000* ga=1.000* mt=1.000*
+  OOD-script   median 1.0000   bg=1.000* el=1.000* ru=1.000* uk=1.000*
+  score 0.4248   (* = clipped at 1)
+  runaway generations (per-sample CER > 1, report only, not in the score):
+    ID      38/3000   de=4/600 (12% of errors, CER without 0.220)  en=18/600 (39% of errors, CER without 0.227)  es=2/600 (5% of errors, CER without 0.155)  fr=6/600 (9% of errors, CER without 0.260)  it=8/600 (16% of errors, CER without 0.185)
+    FLEURS  816/5171   bg=61/200 (63% of errors, CER without 0.919)  cs=32/200 (51% of errors, CER without 0.704)  da=23/200 (52% of errors, CER without 0.603)  de=4/200 (33% of errors, CER without 0.228)  el=49/200 (62% of errors, CER without 0.906)  en=4/200 (48% of errors, CER without 0.233)  es=2/200 (22% of errors, CER without 0.167)  et=47/200 (70% of errors, CER without 0.640)  fi=38/200 (60% of errors, CER without 0.628)  fr=4/200 (29% of errors, CER without 0.276)  ga=55/200 (71% of errors, CER without 0.671)  hr=43/200 (67% of errors, CER without 0.616)  hu=44/200 (65% of errors, CER without 0.696)  it=1/200 (13% of errors, CER without 0.146)  lt=49/200 (71% of errors, CER without 0.666)  lv=29/200 (57% of errors, CER without 0.640)  mt=26/200 (49% of errors, CER without 0.600)  nl=16/171 (43% of errors, CER without 0.607)  pl=38/200 (61% of errors, CER without 0.714)  pt=20/200 (47% of errors, CER without 0.534)  ro=16/200 (41% of errors, CER without 0.534)  ru=53/200 (55% of errors, CER without 0.920)  sk=26/200 (47% of errors, CER without 0.650)  sl=38/200 (62% of errors, CER without 0.639)  sv=36/200 (64% of errors, CER without 0.584)  uk=62/200 (62% of errors, CER without 0.925)
+
+== ma2100-mms1b-moe
+  ID           median 0.3008   en=0.347 de=0.301 es=0.201 fr=0.386 it=0.253
+  OOD-train    median 0.3320   en=0.359 de=0.332 es=0.308 fr=0.526 it=0.180
+  OOD-related  median 0.9339   pt=0.883 ro=0.934 nl=0.914 da=1.000* sv=1.000*
+  OOD-latin    median 1.0000   cs=1.000* sk=1.000* pl=1.000* hr=1.000* sl=1.000* hu=1.000* fi=1.000* et=1.000* lt=1.000* lv=1.000* ga=1.000* mt=1.000*
+  OOD-script   median 1.0000   bg=1.000* el=1.000* ru=1.000* uk=1.000*
+  score 0.4384   (* = clipped at 1)
+  runaway generations (per-sample CER > 1, report only, not in the score):
+    ID      51/3000   de=8/600 (20% of errors, CER without 0.247)  en=9/600 (27% of errors, CER without 0.258)  es=5/600 (15% of errors, CER without 0.174)  fr=17/600 (30% of errors, CER without 0.282)  it=12/600 (21% of errors, CER without 0.204)
+    FLEURS  937/5171   bg=67/200 (68% of errors, CER without 0.915)  cs=45/200 (68% of errors, CER without 0.685)  da=25/200 (55% of errors, CER without 0.600)  de=4/200 (26% of errors, CER without 0.255)  el=57/200 (64% of errors, CER without 0.902)  en=3/200 (24% of errors, CER without 0.276)  es=6/200 (43% of errors, CER without 0.181)  et=40/200 (65% of errors, CER without 0.625)  fi=42/200 (64% of errors, CER without 0.633)  fr=8/200 (43% of errors, CER without 0.314)  ga=62/200 (74% of errors, CER without 0.676)  hr=47/200 (68% of errors, CER without 0.631)  hu=61/200 (72% of errors, CER without 0.680)  it=2/200 (15% of errors, CER without 0.154)  lt=40/200 (66% of errors, CER without 0.660)  lv=30/200 (55% of errors, CER without 0.631)  mt=37/200 (62% of errors, CER without 0.598)  nl=18/171 (43% of errors, CER without 0.597)  pl=46/200 (65% of errors, CER without 0.694)  pt=22/200 (47% of errors, CER without 0.534)  ro=25/200 (51% of errors, CER without 0.537)  ru=65/200 (68% of errors, CER without 0.921)  sk=39/200 (63% of errors, CER without 0.639)  sl=41/200 (65% of errors, CER without 0.620)  sv=37/200 (66% of errors, CER without 0.587)  uk=68/200 (67% of errors, CER without 0.919)
+
+== ma2100-w2vb-moe
+  ID           median 0.3808   en=0.529 de=0.381 es=0.270 fr=0.499 it=0.331
+  OOD-train    median 0.4139   en=0.740 de=0.405 es=0.414 fr=0.865 it=0.326
+  OOD-related  median 1.0000   pt=1.000* ro=1.000* nl=1.000* da=1.000* sv=1.000*
+  OOD-latin    median 1.0000   cs=1.000* sk=1.000* pl=1.000* hr=1.000* sl=1.000* hu=1.000* fi=1.000* et=1.000* lt=1.000* lv=1.000* ga=1.000* mt=1.000*
+  OOD-script   median 1.0000   bg=1.000* el=1.000* ru=1.000* uk=1.000*
+  score 0.5166   (* = clipped at 1)
+  runaway generations (per-sample CER > 1, report only, not in the score):
+    ID      81/3000   de=12/600 (21% of errors, CER without 0.305)  en=22/600 (32% of errors, CER without 0.378)  es=7/600 (13% of errors, CER without 0.238)  fr=29/600 (36% of errors, CER without 0.343)  it=11/600 (17% of errors, CER without 0.281)
+    FLEURS  1196/5171   bg=72/200 (66% of errors, CER without 0.922)  cs=40/200 (63% of errors, CER without 0.707)  da=40/200 (63% of errors, CER without 0.647)  de=6/200 (24% of errors, CER without 0.318)  el=76/200 (74% of errors, CER without 0.905)  en=14/200 (51% of errors, CER without 0.392)  es=10/200 (38% of errors, CER without 0.270)  et=44/200 (66% of errors, CER without 0.654)  fi=50/200 (66% of errors, CER without 0.646)  fr=19/200 (57% of errors, CER without 0.416)  ga=59/200 (69% of errors, CER without 0.709)  hr=65/200 (77% of errors, CER without 0.663)  hu=90/200 (82% of errors, CER without 0.739)  it=6/200 (30% of errors, CER without 0.236)  lt=48/200 (70% of errors, CER without 0.689)  lv=55/200 (74% of errors, CER without 0.654)  mt=38/200 (62% of errors, CER without 0.642)  nl=21/171 (50% of errors, CER without 0.620)  pl=61/200 (73% of errors, CER without 0.728)  pt=36/200 (58% of errors, CER without 0.653)  ro=34/200 (59% of errors, CER without 0.572)  ru=90/200 (75% of errors, CER without 0.922)  sk=53/200 (71% of errors, CER without 0.684)  sl=45/200 (66% of errors, CER without 0.657)  sv=46/200 (69% of errors, CER without 0.678)  uk=78/200 (71% of errors, CER without 0.925)
+
+== ma2100-w2vb-mlp
+  ID           median 0.3912   en=0.496 de=0.391 es=0.285 fr=0.460 it=0.389
+  OOD-train    median 0.4352   en=0.640 de=0.413 es=0.435 fr=0.960 it=0.297
+  OOD-related  median 1.0000   pt=1.000* ro=1.000* nl=1.000* da=1.000* sv=1.000*
+  OOD-latin    median 1.0000   cs=1.000* sk=1.000* pl=1.000* hr=1.000* sl=1.000* hu=1.000* fi=1.000* et=1.000* lt=1.000* lv=1.000* ga=1.000* mt=1.000*
+  OOD-script   median 1.0000   bg=1.000* el=1.000* ru=1.000* uk=1.000*
+  score 0.5303   (* = clipped at 1)
+  runaway generations (per-sample CER > 1, report only, not in the score):
+    ID      81/3000   de=14/600 (24% of errors, CER without 0.306)  en=20/600 (25% of errors, CER without 0.387)  es=9/600 (15% of errors, CER without 0.246)  fr=18/600 (23% of errors, CER without 0.370)  it=20/600 (28% of errors, CER without 0.293)
+    FLEURS  1183/5171   bg=80/200 (73% of errors, CER without 0.921)  cs=46/200 (68% of errors, CER without 0.722)  da=39/200 (62% of errors, CER without 0.659)  de=5/200 (22% of errors, CER without 0.333)  el=60/200 (64% of errors, CER without 0.911)  en=11/200 (45% of errors, CER without 0.378)  es=8/200 (39% of errors, CER without 0.276)  et=43/200 (67% of errors, CER without 0.651)  fi=57/200 (72% of errors, CER without 0.661)  fr=25/200 (63% of errors, CER without 0.408)  ga=62/200 (74% of errors, CER without 0.712)  hr=60/200 (74% of errors, CER without 0.669)  hu=76/200 (79% of errors, CER without 0.729)  it=2/200 (16% of errors, CER without 0.251)  lt=54/200 (75% of errors, CER without 0.675)  lv=41/200 (67% of errors, CER without 0.656)  mt=44/200 (65% of errors, CER without 0.632)  nl=23/171 (55% of errors, CER without 0.639)  pl=52/200 (67% of errors, CER without 0.731)  pt=47/200 (66% of errors, CER without 0.639)  ro=39/200 (64% of errors, CER without 0.585)  ru=87/200 (74% of errors, CER without 0.923)  sk=42/200 (61% of errors, CER without 0.676)  sl=47/200 (72% of errors, CER without 0.643)  sv=51/200 (74% of errors, CER without 0.655)  uk=82/200 (72% of errors, CER without 0.928)
+
+== ma2100-w2vb-conformer
+  ID           median 0.7566   en=0.764 de=0.757 es=0.720 fr=0.785 it=0.724
+  OOD-train    median 1.0000   en=0.882 de=1.000* es=1.000* fr=1.000* it=0.948
+  OOD-related  median 1.0000   pt=1.000* ro=1.000* nl=1.000* da=1.000* sv=1.000*
+  OOD-latin    median 1.0000   cs=1.000* sk=1.000* pl=1.000* hr=1.000* sl=1.000* hu=1.000* fi=1.000* et=1.000* lt=1.000* lv=1.000* ga=1.000* mt=1.000*
+  OOD-script   median 1.0000   bg=1.000* el=1.000* ru=1.000* uk=1.000*
+  score 0.9215   (* = clipped at 1)
+  runaway generations (per-sample CER > 1, report only, not in the score):
+    ID      112/3000   de=23/600 (21% of errors, CER without 0.643)  en=17/600 (13% of errors, CER without 0.685)  es=22/600 (19% of errors, CER without 0.619)  fr=27/600 (24% of errors, CER without 0.645)  it=23/600 (19% of errors, CER without 0.624)
+    FLEURS  1359/5171   bg=73/200 (57% of errors, CER without 0.931)  cs=49/200 (51% of errors, CER without 0.864)  da=38/200 (59% of errors, CER without 0.762)  de=29/200 (49% of errors, CER without 0.677)  el=70/200 (62% of errors, CER without 0.920)  en=6/200 (22% of errors, CER without 0.714)  es=39/200 (58% of errors, CER without 0.656)  et=46/200 (58% of errors, CER without 0.819)  fi=44/200 (55% of errors, CER without 0.804)  fr=19/200 (41% of errors, CER without 0.697)  ga=32/200 (45% of errors, CER without 0.802)  hr=64/200 (69% of errors, CER without 0.821)  hu=79/200 (73% of errors, CER without 0.859)  it=26/200 (42% of errors, CER without 0.649)  lt=56/200 (66% of errors, CER without 0.827)  lv=68/200 (71% of errors, CER without 0.827)  mt=66/200 (70% of errors, CER without 0.805)  nl=31/171 (52% of errors, CER without 0.753)  pl=54/200 (61% of errors, CER without 0.822)  pt=61/200 (70% of errors, CER without 0.784)  ro=45/200 (58% of errors, CER without 0.751)  ru=114/200 (80% of errors, CER without 0.939)  sk=50/200 (61% of errors, CER without 0.832)  sl=40/200 (55% of errors, CER without 0.819)  sv=50/200 (61% of errors, CER without 0.823)  uk=110/200 (74% of errors, CER without 0.935)
+
+checkpoint                    ID  OOD-train  OOD-related  OOD-latin  OOD-script   score  runaway-ID  runaway-FLEURS
+ma2100-whisper-conformer  0.0605     0.0401       0.5037     1.0000      1.0000  0.1364      5/3000        661/5171
+ma2100-whisper-moe        0.0610     0.0423       0.5309     1.0000      1.0000  0.1429     12/3000        895/5171
+ma2100-whisper-mlp        0.0651     0.0392       0.6051     1.0000      1.0000  0.1571     10/3000        713/5171
+ma2100-mhubert-mlp        0.1713     0.1544       0.6697     0.9513      1.0000  0.2596     24/3000        583/5171
+ma2100-mhubert-moe        0.1598     0.1298       0.8009     1.0000      1.0000  0.2694     19/3000        726/5171
+ma2100-mhubert-conformer  0.2294     0.2422       1.0000     1.0000      1.0000  0.3847     30/3000       1269/5171
+ma2100-mms1b-mlp          0.2491     0.3348       0.9426     1.0000      1.0000  0.4248     38/3000        816/5171
+ma2100-mms1b-moe          0.3008     0.3320       0.9339     1.0000      1.0000  0.4384     51/3000        937/5171
+ma2100-w2vb-moe           0.3808     0.4139       1.0000     1.0000      1.0000  0.5166     81/3000       1196/5171
+ma2100-w2vb-mlp           0.3912     0.4352       1.0000     1.0000      1.0000  0.5303     81/3000       1183/5171
+ma2100-w2vb-conformer     0.7566     1.0000       1.0000     1.0000      1.0000  0.9215    112/3000       1359/5171
+
+score = (1*ID + 1.5*OOD-train + 0.6*OOD-related) / 3.1; lower is better
+runaway-* = samples with per-sample CER > 1 (report only, not in the score)

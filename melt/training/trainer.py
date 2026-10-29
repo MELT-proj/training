@@ -68,6 +68,22 @@ def _one_line(text: str) -> str:
     return " ".join(text.split())
 
 
+def load_before_first_step(optimizer, load) -> None:
+    """Call ``load()`` once, right before the first ``optimizer.step()``, instead of now.
+
+    *optimizer* is a ``torch.optim.Optimizer`` or the ``accelerate`` wrapper around one. The call happens inside the step, ahead of
+    its update, so what ``load`` puts into the optimizer (its state and parameter groups) is what that first step uses.
+    """
+    inner = getattr(optimizer, "optimizer", optimizer)
+    handle = None
+
+    def hook(*_):
+        handle.remove()
+        load()
+
+    handle = inner.register_step_pre_hook(hook)
+
+
 def _fsdp2_module_class():
     """Return ``torch.distributed.fsdp.FSDPModule``, or None if unavailable.
 
@@ -482,6 +498,19 @@ class MELTTrainer(Seq2SeqTrainer):
             config is not None and config.get("run", {}).get("memory_preallocation", False)
         )
         self._preallocation_done = False
+        self._defer_optimizer_load = bool(
+            config is not None and config.get("run", {}).get("defer_optimizer_load", False)
+        )
+
+        # trainer.ddp_gradient_as_bucket_view (config.py). Trainer.__init__ has built
+        # the accelerator but train() has not wrapped the model in DDP yet, so the DDP
+        # kwargs can still change here; training_step makes zero_grad keep the views.
+        self._grad_bucket_view = bool(
+            config is not None and config.get("trainer", {}).get("ddp_gradient_as_bucket_view", False)
+        )
+        if self._grad_bucket_view:
+            self.accelerator.ddp_handler.gradient_as_bucket_view = True
+            logger.info("DDP gradients are views into the allreduce buckets (trainer.ddp_gradient_as_bucket_view)")
 
     # ------------------------------------------------------------------
     # Training entry point override: capture resume path for sampler
@@ -533,6 +562,26 @@ class MELTTrainer(Seq2SeqTrainer):
             # super().train(), so by here the sampler state is already on disk
             # and the workers have nothing left to report (issue #63).
             self._shutdown_dataloaders()
+
+    def _load_optimizer_and_scheduler(self, checkpoint: str | None) -> None:
+        """Load the optimizer and scheduler state of a resume, at the first optimizer step if ``run.defer_optimizer_load`` is on.
+
+        A resumed run puts AdamW's state (two fp32 copies of the model, 18.9 GiB here) on the GPU before its first micro-batch. A fresh
+        run has none until its first ``optimizer.step()``, and its first accumulation window does without: the gradients of the
+        micro-batches before the first synchronised backward are fresh tensors beside DDP's buckets, one more model-sized copy
+        (9.4 GiB). With the state already resident that window no longer fits a 64 GB card, and every rank dies at its first step.
+        Deferring the load puts the state where a fresh run creates it, so the resume follows the memory of the run it continues.
+        """
+        if checkpoint is None or not self._defer_optimizer_load:
+            super()._load_optimizer_and_scheduler(checkpoint)
+            return
+        logger.info(
+            "run.defer_optimizer_load: the optimizer and scheduler state of %s load at the first optimizer step",
+            checkpoint,
+        )
+        load_before_first_step(
+            self.optimizer, lambda: super(MELTTrainer, self)._load_optimizer_and_scheduler(checkpoint)
+        )
 
     # ------------------------------------------------------------------
     # Dataloader teardown
@@ -1426,6 +1475,15 @@ class MELTTrainer(Seq2SeqTrainer):
             self._batch_cuts_history.append(len(langs))
         if self._perf:
             self._perf_observe_batch(inputs, durations)
+
+        if self._grad_bucket_view and not getattr(model, "_melt_zero_grad_in_place", False):
+            # Trainer clears gradients with model.zero_grad() after every optimizer step,
+            # which sets them to None: the next accumulation then builds fresh gradients
+            # beside DDP's buckets and the bucket views save nothing. Zeroing in place keeps
+            # .grad the bucket view. Every parameter gets a gradient on every step (DDP runs
+            # with find_unused_parameters=False), so AdamW sees the same updates.
+            model.zero_grad = functools.partial(torch.nn.Module.zero_grad, model, set_to_none=False)
+            model._melt_zero_grad_in_place = True
 
         if not self._preallocation_done:
             self._run_preallocation(model)

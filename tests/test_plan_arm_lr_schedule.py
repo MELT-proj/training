@@ -53,7 +53,9 @@ def test_wsd_derives_its_decay_tail_from_this_arms_own_steps():
     kwargs = json.loads(_value(plan, "--trainer.lr_scheduler_kwargs"))
 
     assert kwargs["num_decay_steps"] == round(0.2 * plan.steps)
-    assert kwargs["min_lr_ratio"] == 0.1
+    # The floor comes from optimization.min_lr_scale (melt/training/config.py),
+    # so a config can change it without a second, disagreeing copy here.
+    assert "min_lr_ratio" not in kwargs
     assert kwargs["decay_type"] == "cosine"
 
 
@@ -92,22 +94,19 @@ def test_unknown_scheduler_is_refused():
         plan_arm.plan(_axes(lr_scheduler="one_cycle"))
 
 
-def test_warmup_ratio_forces_warmup_steps_to_zero():
-    """ABL-MA-700-asr.yaml sets warmup_steps: 20, which silently wins."""
-    with open(CONFIG) as fh:
-        cfg = yaml.safe_load(fh)
-    assert plan_arm.get(cfg, "trainer.warmup_steps")  # the trap this guards
-
+def test_warmup_ratio_is_emitted_as_a_fractional_warmup_steps():
+    """transformers 5 dropped `warmup_ratio`; it was silently ignored (no warmup)."""
     plan = plan_arm.plan(_axes(warmup_ratio="0.03"))
 
-    assert _value(plan, "--trainer.warmup_ratio") == "0.03"
-    assert _value(plan, "--trainer.warmup_steps") == "0"
+    assert "--trainer.warmup_ratio" not in plan.overrides
+    assert _value(plan, "--trainer.warmup_steps") == "0.03"
 
 
 def test_warmup_ratio_is_tagged():
     plan = plan_arm.plan(_axes(warmup_ratio="0.03"))
 
-    assert "wu0p03" in plan.exp_name.split("-")
+    assert "wus0p03" in plan.exp_name.split("-")
+    assert "wu0p03" not in plan.exp_name.split("-")
 
 
 def test_campaign_accepts_both_as_grid_fields():

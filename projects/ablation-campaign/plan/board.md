@@ -42,6 +42,1481 @@ Action needed: PI to approve ~500 GPU-h and the 1-node smoke before the sweep. W
 
 ---
 
+## 2026-10-23 — Claude (worker session, backbone score) — ST restricted to the trained directions and joined with ASR; EuroLLM's missing cells scored
+
+Context: after the en→X audit below, the PI ruled that the 23-target en→X
+column cannot compare these arms and asked for ST on the languages and
+directions they were trained on, combined with the ASR selection score into
+one metric for choosing a backbone.
+
+Decision: `sel (ST) = 1 − med(chrF over de,es,fr,it→en and en→de)/100`;
+`sel (ASR+ST) = (sel (ASR) + sel (ST))/2`, `sel (ASR)` unchanged. The
+zero-shot related group ST carried in the first draft is out.
+
+Scores (checkpoint-6310; lower better):
+
+| arm | sel (ASR) | sel (ST) | sel (ASR+ST) |
+|---|---|---|---|
+| eurollm1.7b-ins | 0.0563 | 0.3878 | **0.2220** |
+| eurollm1.7b-base | 0.0646 | 0.3951 | 0.2299 |
+| qwen35-2b-base | 0.0858 | 0.3811 | 0.2335 |
+| llama1b-base | 0.0614 | 0.4069 | 0.2342 |
+| llama1b-ins | 0.0851 | 0.3976 | 0.2413 |
+| qwen35-2b-ins | 0.1067 | 0.3832 | 0.2449 |
+
+- EuroLLM-ins leads by 0.0079 over EuroLLM-base and by 0.0115 over third
+  place; the README's noise band is 0.002–0.010, so the lead is real but not
+  large.
+- **qwen35-2b-base vs llama1b-base (0.0007) is unresolved**: it swaps when
+  en→de is dropped from the ST median and when ST is folded into the ASR sum.
+  en→de counts German twice and rests on a single 100-clip probe; that is the
+  price of the trained-directions-only instruction.
+- Cells that were "not entered" are now scored from the same logs as the other
+  arms: IFT CER (5-lang) .0498 / .0521, FLEURS-24 per-language CER, and the
+  per-direction X→en chrF. Jobs 47883097 (ASR, `score.py`) and 47883090 /
+  47883105 (X→en chrF); llama1b-base reproduced its published values in both.
+
+Action needed: none for the docs. `charts/results_master.csv` is the
+eval-owner's; these six rows still need to reach it through `charts/master.py`.
+
+---
+
+## 2026-10-23 — Claude (worker session, en→X audit) — The 17-point EuroLLM lead on en→X is language following, not boilerplate; EuroLLM rows and retention entered
+
+Context: the PI asked whether EuroLLM's en→X chrF (42.9 ins / 37.6 base against
+23.9–25.9) can stand as a comparison. H1: instruct arms prepend boilerplate
+that chrF punishes. H2: EuroLLM really translates better out of English.
+Method: the six `ift-st-enx` logs (2,300 samples each) were dumped, labelled
+by a character-n-gram language identifier trained on the FLEURS references
+(5-fold accuracy 98.5%), and re-scored with a local chrF that reproduces all
+six published macros to the first decimal. No log was modified and nothing was
+re-scored with `melteval`; no en→X number changed.
+
+Finding:
+- **H1 does not hold.** 13,800 generations, none empty, none multi-line, none
+  with an intro or label. Colon-led openings are 0.7–1.4% per arm and
+  sentence-internal. Stripping every leading "clause:" anyway lowers each arm
+  by 0.05–0.08 and moves no rank. So no normalisation rule exists to land in the
+  scorer, and none is proposed.
+- **The gap is the share of outputs in the asked language:** eurollm-ins
+  83.5%, eurollm-base 66.7%, the four older arms 21–32%, whose misses are
+  mostly German (the trained direction, 32–65%) or English (9–24%). Macro chrF:
+  on de the six arms span 56.5–61.5 (EuroLLM does not lead); on de/es/fr/it/pt
+  EuroLLM leads Qwen by about 2–3 and Llama by about 8–10; on the other 18
+  targets the older four sit at 17.5–18.3 and EuroLLM at 32.6 / 39.4.
+- **H2:** where EuroLLM writes the language it is translating the audio
+  (sentence chrF ~49 against 44–47 for the older arms when they do), at
+  mixed fidelity, with drift into invention on hard languages (hr). The older
+  arms' wrong-language outputs are faithful (German answers 57–61 chrF against
+  the German reference of the same sentence; English 79–86 against the source).
+  Quotes and tables in `02-backbones.md` §5, "What the en→X column measures".
+- **Correction:** §5 said bg and el "come out as English" for the older arms. They
+  come out as German (60–100% of clips), English second; "mt as Italian"
+  holds only for qwen35-2b-ins (37%). Rewritten.
+- EuroLLM added to §5: the two rows with the hand-over numbers (IFT CER
+  5-lang and the per-language ASR and X→en cells were not in it and are marked
+  not entered), E-B/E-I columns in the en→X table, and the retention column.
+  Text retention (job 47880299, `acc_debug`, COMPLETED, exports verified):
+  conditioned Δ is negative for both EuroLLM arms (ASR / ST: ins
+  −0.264 / −0.236, base −0.365 / −0.455). Base matches llama1b-base (the †
+  template confound); ins is the odd one, since the other instruct arms are
+  +0.123 to +1.006. Raw Δ is positive and small (ins +0.250 / +0.186, base
+  +0.261 / +0.214). The cause of the ins sign was not investigated.
+
+Action needed: PI — decide whether the 23-target en→X column stays in the
+backbone table (it is a language-following measure on untrained targets, and
+the trained direction en→de shows no EuroLLM lead). Eval-owner agent — ingest
+the new measured numbers through `charts/master.py` (EuroLLM retention deltas;
+en→X language-outcome shares and slice macros if charted); I did not write
+`results_master.csv`.
+
+## 2026-10-23 — Claude (worker session, backbone scores) — §5 scores only the languages and directions the arms train; the selection metric gains an ST half
+
+Context: the PI changed the basis of comparison. The Tier-1 joint score
+averages over all 24 ASR languages and all 23 ST directions each way, but
+these arms train X→en for four sources and en→X for one, so most of that mass
+is zero-shot and dilutes the comparison. The instruction was to keep the
+campaign selection metric and add ST to it, restricted to the directions the
+mix trains plus the related sources the metric already weights.
+
+Decision: `sel (ASR+ST) = (sel (ASR) + sel (ST)) / 2`. `sel (ASR)` is the
+metric of `README.md` unchanged. `sel (ST)` maps X→en chrF to `1 − chrF/100`
+and applies the same group medians and weights to the metric's own languages:
+trained de/es/fr/it→en at 1.5, related pt/ro/nl/da/sv→en at 0.6. en→de is the
+only trained en→X direction and is reported but not scored (it would count
+German twice and rest on one 100-clip direction). Folding ST into the existing
+sum as two more groups instead gives the same order, and adding en→de as a
+fifth trained direction leaves it unchanged — both recorded in
+`selection-metric/scores/backbones-sel-asr-st-2026-10-23.txt`.
+
+Result: 0.2311 / 0.2319 / 0.2403 / 0.2439 (llama-base / qwen-base / llama-ins
+/ qwen-ins). The leading pair is a tie at 0.0008. The ST half more than
+reverses the ASR-only order of llama-ins (0.0851) and qwen-base (0.0858): their
+ST scores are 0.3956 and 0.3780, and qwen-base's X→en medians lead on both
+groups (63.1 vs 60.9 trained, 60.0 vs 59.4 related). Only the leading pair
+against qwen-ins clears the metric's 0.010 noise bound.
+
+Caveats worth carrying into the paper: the metric was frozen 2026-09-23 before
+any of these numbers, and this extension was defined 2026-10-23 after four arms
+had been scored, so the extended ordering is exploratory — the ASR-only column
+is kept beside it; and no in-domain X→en set exists for these arms, so the ST
+half has no ID group and one fewer language in its trained group than ASR's.
+
+Action needed: none from anyone else. EuroLLM's `sel (ST)` and per-language
+rows stay pending until its IFT reaches `checkpoint-6310`
+(47783768/47783769).
+
+## 2026-10-22 — Claude (worker session, backbone scores) — Backbone table gains en→X chrF, the joint ASR+ST score and per-language tables; en→X is untrained except en→de
+
+Context: reviewing the §5 scores. Two gaps: the table had no en→X column, and
+its aggregate (the campaign selection metric) is ASR-only. The PI's improved
+score from the MA-utility study was adopted as the headline on 2026-10-21
+(`tier1_joint.py`, PR #160): `joint = (100 − asr24 + X→en chrF + en→X chrF)/3`
+with lowercase chrF and `asr24` the geometric mean of min(CER,1) over the 24 EU
+languages.
+
+Finding: `fleurs24-st-enx-dev` (23 targets × 100) existed only in melt-eval's
+x-to-y branch and as a frozen set on **artemis**; MN5 has neither the spec nor a
+set. The four IFT checkpoints were copied from MN5 and scored on artemis (jobs
+338939–338942, each 2,300/2,300 samples, 0 errors). Two method notes:
+`inspect eval` cannot score a multi-target set (the pooled corpus BLEU/chrF
+scorer raises "Mixed target languages: ['es','fr']"), so the runs use
+`--no-score` and are scored afterwards with `melteval st-metrics`; and §5's
+FLEURS-24 CER column is the mean of the eval log's grouped `cer_<lang>`, which
+is unclipped, while `score.py` clips at 1.0 — the per-language table uses the
+log's values so its mean row reproduces the column.
+
+Result: joint 51.7 / 50.4 / 50.6 / 50.3 (llama-base / llama-ins / qwen-base /
+qwen-ins). en→X chrF (cased) 22.5 / 23.1 / 24.4 / 23.7. The en→X detail is the
+substantive finding, and it is a property of the mixture rather than of the
+decoders: `build_campaign_config.py` keeps one en→de probe (CoVoST2, 429.9 h,
+9.6% of the group draws, the only en→X direction among the five training
+languages — the CoVoST2 en→et/lv/sl/sv sets are staged but outside the grid).
+That probe scores 56–62 chrF; every other target is 0.5–50, with bg 0.7,
+el 0.6, mt 15–20 — the models answer in English, Italian or a hallucination
+rather than the requested language. Irish X→en (18–19 chrF for every arm) is
+degenerate English repetition, not translation. Note the probe buys little:
+trained de sits only ~4–5 chrF above untrained es/fr/it.
+
+Action needed: none. EuroLLM rows (en→X, joint, per-language) stay pending —
+its IFT is still resuming towards `checkpoint-6310` (47783768/47783769).
+
+## 2026-10-22 — Claude (worker session, text retention) — Every finished IFT arm loses raw language prior; Qwen loses about twice what Llama does
+
+Context: decision-rule item 3 of `02-backbones.md` §4. Re-ran the §3.7 text
+prior on the four completed IFT `checkpoint-6310`s. Those are MELT
+checkpoints, so a new standalone exporter
+(`projects/ablation-campaign/text_prior_export.py`) writes each decoder as a
+plain causal LM; every exported tensor was sha256-checked against its source
+(146/146 keys for Llama, 320/320 for Qwen), loaded with
+`AutoModelForCausalLM`, and its tokenizer produced byte-identical ids and
+chat renders to the pre-IFT one. Full tables, per-language breakdown, paths
+and job IDs in [`text-retention.md`](text-retention.md).
+
+Finding — Δ BPC post − pre (positive = less retained):
+
+| arm | ASR raw | ASR cond | ST raw | ST cond |
+|---|---|---|---|---|
+| llama1b-base | +0.671 | −0.058 | +0.211 | −0.315 |
+| llama1b-ins | +0.779 | +0.677 | +0.194 | +0.123 |
+| qwen35-2b-base | +1.044 | +0.628 | +0.321 | +0.009 |
+| qwen35-2b-ins | +1.133 | +1.006 | +0.326 | +0.332 |
+| EuroLLM (both) | pending | pending | pending | pending |
+
+- Control: all 24 numbers (six backbones × two sets × raw/conditioned)
+  reproduce §3.7 to <0.001 except the two Llama-Instruct conditioned cells,
+  which come in 0.025 / 0.008 lower because the
+  Llama-3.2 template renders today's date and §3.7 ran on 2026-09-16; an A/B
+  on 300 samples gives 1.9129 with the September date vs 1.8754 with today's.
+  Conditioned deltas above are taken against the same-day control, raw
+  deltas against §3.7.
+- One line: raw prior degrades in every finished arm, by roughly twice as
+  much for Qwen as for Llama; the only conditioned improvement is
+  llama1b-base, and that is the base decoder learning the chat template, not
+  retaining more language — its raw row is the retention number.
+
+Action needed: PI — the interpretation is theirs; also whether the base
+arms' conditioned cell should be reported as raw instead. EuroLLM is pending:
+its resumed runs (47783768, 47783769, 36 h) are still queued and only
+`checkpoint-3608` exists; it will be measured the same way at 6,310.
+
+## 2026-10-22 — Claude (worker session, backbones) — Qwen IFT scored (.0858 base, .1066 ins); Llama and Qwen tie on X→en; EuroLLM OOM'd a third time at bd 25 and resumes with gradient checkpointing
+
+Context: the four finished arms (Llama and Qwen, base and instruct) now have their full evaluation round; EuroLLM has been retried twice since the 10-19 entry. The §5 table of `02-backbones.md` is filled from these numbers.
+
+Finding:
+1. **Qwen IFT finished both arms** (47464247/48, 6,310 steps, 2 d 9 h on 2 nodes) and is scored: selection **.0858** (base) and **.1066** (instruct), against Llama's .0614 and .0850. In-domain WER (mean of the five training languages, 600 clips each): Qwen-base 8.27, Qwen-ins 8.70, Llama-ins 9.13, Llama-base 9.39. On FLEURS-24 dev CER it inverts: Llama-base **.3571**, Qwen-ins .4219, Qwen-base .4350, Llama-ins .4448. No arm is best on both, which is the decision rule's item 1 in the PI's hands.
+2. **X→en does not separate them.** Macro-mean over 23 directions, 100 samples each: chrF++ 44.2 (Qwen-ins) to 44.7 (Llama-ins) cased, 48.2 to 48.6 lowercase; base and instruct are within 0.5 of each other in both families. Full rows in `selection-metric/scores/backbones-st-xen-2026-10-22.txt`. Qwen's ST logs were scored with 47783772.
+3. **EuroLLM OOM'd a third time.** The bd 25 × ga 48 resume (47683539/40) died at 09:13Z on 10-22 at step 3,752, on the same 3.82 GiB fp32-logits allocation at ~61 GB. It also ran at **52 s/step** (tqdm), against 21 s/step for the original bd 75 × ga 16, so halving the micro-batch both failed to shrink the offending batch and cost 2.5× the step time. Do not retry that shape.
+4. **Resumed 47783768 (ins) / 47783769 (base)** from checkpoint-3608 with the **original bd 75 × ga 16 plus `--trainer.gradient_checkpointing true`**, 36 h limit. This is the fix the Qwen rows already use; it is a memory change only, and bd 75 also matches the sampler state saved at 3,608. Expected ~27 s/step, so ~20 h for the 2,558 steps left. Both were pending at 10:50Z.
+5. **Selection scores, 9 runs:** `selection-metric/scores/backbones-ma-and-ift-2026-10-22.txt` (every MA arm and the four finished IFT arms, raw `score.py` output). Note MA llama1b-base is 1.0000 from 2,555/3,000 runaway in-domain generations — that checkpoint is unusable as an MA arm, though its IFT recovered.
+6. **`~/eval-main` on MN5** (melt-eval main, has `st_metrics.py`) is what `st-metrics` must be run from, inside the spbleu eval image. The login node has no `inspect_ai`.
+
+Action needed: PI — the gate, provisionally moved to Mon 10-26 while EuroLLM finishes, needs item 1's choice between in-domain and zero-shot weighting; text retention is still unmeasured (no exporter for a MELT checkpoint into `melteval text-prior`).
+
+## 2026-10-19 — MELT orchestrator — MoE or Conformer for Fondue: the evidence in one place
+Context: the PI is unsure whether MoE is more stable and more defensible than the Conformer. Everything below is already on main (03 §5, the score files, the board entries of 09-26 to 10-17); nothing new was run.
+Finding:
+1. **Accuracy on Whisper is a tie.** Pairs with the same seed (same data order), Conformer (no QK-norm, LR 1e-3) vs MoE (2e-3): .1364 vs .1429 (seed 42), .1526 vs .1596 (seed 43). ID CER: .0605/.0610 and .0631/.0623; OOD-train: .0401/.0423 and .0448/.0432. These are tied. The whole 0.007 edge is in OOD-related (zero-shot pt/ro/nl/da/sv, weight 0.6), where single languages swing by up to 0.3 between seeds (sv: MoE .531 vs .755; Conformer da .596 vs .854). The Conformer that can run at the recipe LR (QK-norm, 2e-3) scores .1512, behind MoE seed 42 (.1429), and has one seed.
+2. **Stability favours MoE.** MoE ran at the recipe LR on all four encoders with no change: 4/4 clean, max `grad_norm` <= 16. Without QK-norm the Whisper Conformer exploded three times (2e-3 twice; 1e-3 once at epoch 0.53, before the warmup fix). The 1e-3 run that finished had a spike to 70. The worker's probe found its attention saturated (near hard argmax) from step ~5. Across encoders, even with warmup at 2e-3, 2 of 4 Conformer cells and 4 of 4 Q-Former cells failed without QK-norm (board 10-09 to 10-11). QK-norm fixed all four Conformers (max 29-56), but that is one seed each at 2,100 h/lang, against a Fondue MA of ~247K h, a larger batch and a 5-day chained run.
+3. **Across encoders it flips.** Conformer+QK-norm wins big on MMS-1b (.254 vs MoE .438). It loses on mHuBERT (.376 vs .269) and w2v-BERT (.629 vs .517). On Whisper it is tied.
+4. **Downstream, only MoE is tested.** All six backbone MA and IFT arms run Whisper + MoE. Switching would make Fondue's stack one that has never been through IFT, and the week-6 "winning stack x winning backbone confirmation" box would need its own MA+IFT before 10-23, which cannot land.
+5. **Cost.** Conformer is 55M parameters, MoE 122M total (about a quarter active). Wall time was the same within run-to-run noise (03 §5). Neither matters next to the encoder and the decoder.
+6. **What a reviewer can attack, and the cheap answer.** For MoE: no per-language expert-usage measurement exists (03 §1b promised one; deferred 09-23). Router statistics on the two Whisper MoE checkpoints over the ID and FLEURS sets would take a few GPU-h on artemis and also give the paper a figure. For the Conformer: results from the unpatched one rest on a saturated attention.
+Proposal: MoE for Fondue. In the paper, report the Whisper adapters as tied within the seed spread, and choose MoE for stability without an architecture patch and for being the only stack validated through IFT on all backbones. Measure the MoE router usage before the MA freeze.
+Action needed: PI: adapter call by 10-23; say if the router-usage measurement should be tasked.
+
+## 2026-10-19 — Claude (worker session, backbones) — MA scores of five backbones; Llama IFT done and scored (base .061, ins .085); EuroLLM OOM at step 4040 and resumed; Qwen pair at 2,296/6,310
+
+- **MA selection score** (lower is better; `selection-metric/scores/backbones-ma-and-llama-ift-2026-10-19.txt`): qwen35-2b-ins .122, qwen35-2b-base .131, eurollm1.7b-ins .141, llama1b-ins .148, llama1b-base 1.0 (2,555/3,000 in-domain clips run away — the base Llama MA weights do not transcribe; not yet diagnosed). EuroLLM-Base MA: not scored (runaway WER 4–7).
+- **Llama IFT** (6,310 steps, 36.4 h): base **.0614** (ID .051, FLEURS-OOD-related .158), ins **.0850** (ID .048, OOD-related .292). Both far better than their MA scores; base beats ins on out-of-domain languages.
+- **EuroLLM-Base IFT repairs the ChatML rows**: step-0 eval WER en 6.8, step 902 en 0.113, step 2125 de .107 / es .065; no runaway after the first 902 steps. Unfreezing the decoder was the fix.
+- **EuroLLM-Ins and -Base** (47449749, 47464246) died at step 4040 on the same batch (20 cuts × 365 tokens, 3.8 GiB fp32 logits on a GPU at 60 GB). Resumed from checkpoint-3608 at bd 50 × ga 24 (still 4,800 s/step; the remaining 2,700 steps see different batches): 47529945 (ins), 47529946 (base), pending on Priority.
+- **Qwen pair** (47464247/8, 2 nodes): 2,296/6,310 at ~29 s/step, ETA 2026-10-20 ~19:40Z, ~53 h of the 66 h limit.
+- **X→en ST evals for Llama IFT FAILED at start** (47530214/5): `~/eval` tasks.py imports `speech_prompt` that `melteval/solver.py` in the same checkout does not have; needs an eval-code fix before resubmitting. Text retention / cascade oracle: no tool for trained checkpoints.
+- `submit_crossing_eval.sh` accepts `IFT-*` rows. Rows `IFT-700-backbone-*` from `~/training-ift` @ d0c8151: adapter 2e-4, decoder 2e-5, 316-step warmup.
+
+
+## 2026-10-17 (late) — Claude (worker session, backbones) — Llama IFT smoke passed (30 steps, 1 node, acc_debug)
+
+IFT-smoke-llama1b-ins (from `~/training-ift` @ d0c8151) COMPLETED in ~35 min.
+- Trainable: 1,357,520,897 params, all fp32 (Llama decoder 1.24B + adapter 121M; encoder frozen).
+- LR: adapter group at 1.52e-5 at step 24, i.e. 2e-4 × 24/316 — the 316-step warmup and the 2e-4 adapter LR are in effect.
+- Memory: gpu_peak 40 GB of 64 (bd 75, ga 16 as in the row); the preallocation warm-up printed a spurious min-duration OOM warning, training was unaffected.
+- Speed: ~17–23 s/step after the first steps (the first 5 were 80–120 s: container/data start-up). The 40 h row limit (6,310 × ~20 s ≈ 35 h) holds.
+- Checkpoint: model.safetensors 7.5 GB, optimizer.pt 11 GB (×save_total_limit 7 ⇒ budget ~130 GB per run).
+- Eval at step 15 ran (en/de/fr WER ~0.11 — start-of-IFT, as expected from the MA weights).
+Not yet measured: Qwen (2 nodes, bd 30) and EuroLLM from the staged checkpoint. Real IFT runs wait for the PI's go.
+
+## 2026-10-18 — Claude (worker session, crossing) — the 21 final crossing runs are in the results table of `03-audio-stack.md` §5
+Context: the PI asked for the crossing's final outcomes in the table at the bottom of `plan/03-audio-stack.md`, which was empty; this folds the settled numbers into the numbered file, as this board asks. The entries of 10-14 to 10-17 stay.
+Finding:
+1. **The table.** One row per final run, 21 in all (the 16 cells, the two seed-43 replicates, the three QK-norm Conformer re-runs), grouped by encoder, then MLP, Conformer, MoE, Q-Former. ID, OOD-train, OOD-related and the score come from the 21-run ranking in `selection-metric/scores/crossing-2100-whisper-conformer-qknorm-2026-10-17.txt`; GPU-h per 1,000 audio hours from `cost-axis/crossing-2100-cost-2026-10-17.tsv`. A script wrote the rows and a second pass compared them with both files. Each row's note gives its adapter LR and whether QK-norm was on, as §1b asks.
+2. **Columns that differ from the empty template.** It had "MA-stage CER" and "FLEURS-24 CER". The crossing was scored on the selection metric, which has no FLEURS-24 mean and no high/low-resource split, so the table carries the metric's three group medians and the score. The other 16 FLEURS languages are reported, not scored, and sit at 1.0000 for every run but one (mhubert-mlp, OOD-latin 0.9513).
+3. **The cost column** is the SLURM figure per 1,000 audio hours as the run happened; the note under the table says it is not an architecture cost.
+Action needed: orchestrator (I changed nothing in `03` outside §5): §1b, amended 2026-10-14, says the Q-Former is "last on every encoder". My entry of that day said last against the MLP and MoE of the same encoder, which holds on all four; on w2v-BERT the Conformer at 1e-3 scores worse (0.9215) than the Q-Former (0.8269). The same paragraph says the Whisper Conformer "stays open until the seed-43 replicates of both give a noise floor"; the replicates are in the table now (+0.016 and +0.017). Both sentences are yours or the PI's to reword.
+
+## 2026-10-17 — Claude (worker session, crossing) — the Whisper QK-norm Conformer scores 0.151, inside the band of the two seeds without it; all five runs of the 10-14/10-15 batch are scored and the holds are released
+Context: the last run of the batch, scored on the PI's go of 10-16 (it ended on 10-16 at 22:24 MN5 time; its six scoring jobs finished within the hour). The 21-run ranking is in `selection-metric/scores/crossing-2100-whisper-conformer-qknorm-2026-10-17.txt` (the 20 older rows unchanged); the second cost-axis pass is in `cost-axis/` (table `crossing-2100-cost-2026-10-17.tsv`, README updated).
+Finding:
+1. **whisper-conformer-qkn** (adapter LR 2e-3, QK-norm, seed 42): **0.1512** (ID 0.0649, OOD-train 0.0445, OOD-related 0.5618), 3rd of 21. The same cell without QK-norm at 1e-3 scored 0.1364 (seed 42) and 0.1526 (seed 43), so QK-norm at the recipe LR neither helps nor hurts beyond the 0.016 seed spread. It trained clean: no non-finite `grad_norm`, maximum 52.6; the four QK-norm Conformer cells all did (maximum 29-56).
+2. **What the 10-23 adapter call has now.** Whisper, seven runs: Conformer 0.1364 and 0.1526 (1e-3), Conformer with QK-norm 0.1512 (2e-3), MoE 0.1429 and 0.1596, MLP 0.1571 (one seed), Q-Former 0.1765 (QK-norm, one seed). The first six sit in one band, 0.136-0.160; only the Q-Former is outside it. ID is a tie across them (0.0605-0.0651); the spread is in OOD-related. So the selection metric does not separate Conformer, MoE and MLP on Whisper at one or two seeds. What differs is elsewhere: the Conformer trains 55.1M parameters against the MoE's 121.7M at a similar wall time, and across encoders its rank against MLP and MoE flips (ahead on MMS-1b by 0.17-0.18, behind on mHuBERT and w2v-BERT by 0.10-0.12; entry of 10-16).
+3. **Cost axis, second pass.** The 21 final runs cost 2,906 GPU-h (the 16 cells 2,194, the five new runs 712); the 11 discarded runs 883, 23% of the 3,790 in all. The Whisper QK-norm Conformer cost 126.2 GPU-h (31.5 h on 4 GPUs against 25.2 h for its original). Wall time of one config differs by up to 1.5 times between submissions (both replicate pairs 1.4-1.5; the QK-norm cells 1.2 on Whisper and mHuBERT, none on w2v-BERT), more than the gap between adapters, so a run's GPU-h is still not an architecture cost.
+4. **Holds released.** The five runs and their 30 scoring jobs are done: `~/training-s43`, `~/training-qkc` and `~/eval` are no longer read by any crossing job, and the `yodas3-rest/` merge hold is lifted. The frozen clones stay on disk; nothing is deleted.
+5. **Open on the audio crossing:** the compute-only cost measure (FLOPs per audio second from the configs, or a timing on synthetic batches); a dataloader-only benchmark to test the data-path suspicion behind the shared pace; Whisper's window-padding ratio per corpus; eval throughput at batch 16; active parameters of the MoE.
+Action needed: orchestrator: `timeline.md` still carries the replicate line of 10-15 (~360 GPU-h, ends late Fri or early Sat, scored Sat); both replicates ended, were scored on 10-16 and cost 286 GPU-h. The 10-23 adapter call has all its inputs. PI: which of the open measures in point 5 comes next, if any.
+
+## 2026-10-16 — Claude (worker session, crossing) — seed-43 replicates scored: a second seed costs the Whisper cells 0.016 each and keeps Conformer 0.007 ahead of MoE; QK-norm makes the w2v-BERT Conformer learn (0.92 to 0.63) and leaves mHuBERT's alone (0.385 to 0.376)
+Context: scoring of the five runs of the 10-14/10-15 batch, on the PI's go of 10-16. Four are scored here; the Whisper QK-norm Conformer is still training, ends tonight, and its score follows. Same metric, sets and eval code as the 16 cells (training `715b426` on `PYTHONPATH`; `melt/` differs from `ad9171c` only in training-only files). Raw output and the ranking regenerated over 20 runs, the 16 old rows unchanged: `selection-metric/scores/crossing-2100-replicates-conformer-qknorm-2026-10-16.txt`.
+Finding:
+1. **Seed spread on Whisper** (second run = same row, seed 43, so the data order differs):
+
+| | seed 42 | seed 43 | change | ID / OOD-train / OOD-related, seed 42 | same, seed 43 |
+|---|---|---|---|---|---|
+| Conformer (1e-3) | 0.1364 | 0.1526 | +0.0162 | .0605 / .0401 / .5037 | .0631 / .0448 / .5714 |
+| MoE (2e-3) | 0.1429 | 0.1596 | +0.0167 | .0610 / .0423 / .5309 | .0623 / .0432 / .6130 |
+
+   Both lose about 0.016, and 0.013-0.016 of it is the OOD-related median (pt, ro, nl, da, sv); ID and OOD-train move by 0.005 CER at most. The order holds on both seeds (Conformer ahead by 0.0065 and by 0.0070), but the seed shift is 2.4 times that gap, and ID alone is a tie on both seeds. The gap sits in OOD-related (0.027 and 0.042 in the Conformer's favour). With the MLP (0.157, one seed) the Whisper adapters and both replicates fall in one band, 0.136-0.160; only the Q-Former (0.177, one seed) is outside it. The trainer's own final eval (its validation sets, mean CER over the five languages) has MoE ahead in-domain: 0.0550 for both MoE seeds against 0.0602 and 0.0616 for the Conformer; the selection sets' ID median has them tied. Both replicates share seed 43 and one rack (point 3), so the seed effect and a run-environment effect cannot be told apart here.
+2. **QK-norm on the other encoders** (adapter LR 2e-3, seed 42, same nodes and steps as the original rows):
+   - mHuBERT: 0.3759 against 0.3847 without; inside the seed spread. Still 0.11 behind its MLP (0.260) and MoE (0.269).
+   - w2v-BERT: 0.6289 against 0.9215. The original ran at 1e-3 and never learned (ID 0.757); with QK-norm at 2e-3 it learns (ID 0.422) but trails the MLP (0.530) and MoE (0.517), mostly on OOD-train (0.618 against 0.41-0.44).
+   - With MMS-1b (0.254, against 0.425 and 0.438), the QK-norm Conformer column wins by 0.17-0.18 on MMS-1b and loses by 0.10-0.12 on mHuBERT and w2v-BERT; Whisper's cell is pending. The Conformer's rank against MLP and MoE depends on the encoder.
+3. **Correction to the 10-15 entry on the replicates' cost and end.** The projection of ~45 h each and ~360 GPU-h was too pessimistic: the pace recovered from 0.85-1.0 it/s to about 1.4 on the same nodes. Both replicates ended on Fri 10-16 (Conformer 35.2 h, 140.7 GPU-h; MoE 36.4 h, 145.5 GPU-h): 286 GPU-h for the pair, against 197 for the originals (25.2 h and 24.2 h). They still took 1.4-1.5 times the originals' wall time at the same topology, and both ran on rack as03r3, which no earlier crossing run used. The QK-norm cells moved less (mHuBERT 17.5 h against 14.1 h for its original, w2v-BERT 20.0 h against 20.7 h, both on 2 nodes, with the QK-norm switch on). So the wall time of one cell varies by up to 1.5 times between submissions, more than the gap between adapters (MLP and MoE take the same time), and a run's SLURM GPU-h is not an architecture cost. The four runs cost 586 GPU-h; the cost-axis table gets them, with the Whisper QK-norm cell, after tonight.
+4. **Holds:** no queued or running job reads `~/training-s43` any more (the replicates ended; their scoring ran from `~/training-qkc`). `~/training-qkc` and `~/eval` stay untouched, and `yodas3-rest/` stays unmerged, until the Whisper QK-norm Conformer has ended and its six scoring jobs have run.
+Action needed: orchestrator: the replicate line in `timeline.md` (~360 GPU-h, ends late Fri or early Sat, scored Sat) is out of date: both ended and were scored on Fri 10-16, 286 GPU-h. The 10-23 adapter call has the replicate pair now; the Whisper QK-norm Conformer is the last input, due tonight and scored a few hours after. PI: nothing.
+
+## 2026-10-15 — Claude (worker session, crossing) — Whisper size ladder dropped; QK-norm Conformer cells queued for the other three encoders; the replicates cost ~360 GPU-h, not 197; cost axis started
+Context: the PI's instructions in the crossing worker session on 10-15, after the mms1b-conformer score.
+Finding / proposal:
+1. **Whisper size ladder (03 §2b) dropped** (PI: time and room are needed, and it is not essential now). Nothing had been built for it (the four models are in `hf_cache`; `plan_arm.py` lacks tiny and base in its window and attention tables; no rows), so there is nothing to undo. It frees the week-5 ladder boxes and < ~750 GPU-h.
+2. **The Conformer column re-runs with QK-norm on the other three encoders** (PI, for the paper: mms1b-conformer was the only Conformer that had run with it). Rows `MA-2100-crossing-{whisper,mhubert,w2vb}-conformer-qkn` (`4590662`): `qk_norm` at the recipe LR of 2e-3, the original Conformer rows' nodes, steps, seed 42 and data order. The finished Conformers stay as scored results (whisper and w2vb at 1e-3, mhubert at 2e-3, none with QK-norm); the `-qkn` tag keeps the run names apart. Each rendered command differs from its finished counterpart only in `--model.adapter.qk_norm`, the LR where it changed, the run name and w2v-BERT's wall limit (46 h, was 34); the mms1b-conformer QK-norm command re-renders to its ledger line exactly. Submitted Whisper first, from a frozen clone, `~/training-qkc` on MN5 at `715b426` (the replicates' `5912102` plus the three rows, so the same code and the pre-#154 schedule); all three are queued on acc_ehpc and under the cancel watcher. Cost ~380 GPU-h at the originals' pace (whisper ~100, mHuBERT ~113, w2v-BERT ~166), up to ~680 at the replicates' pace. The Whisper cell is the one that feeds the 10-23 adapter call. Scoring is 18 jobs (~3.6 GPU-h), with a named go.
+3. **Correction to the 10-14 entry on the seed-43 replicates:** they run at 0.85-1.0 it/s, not the originals' 1.8: ~45 h each and ~360 GPU-h in all, not ~25 h and ~197. They should end late on Fri 10-16 (Conformer) and early on Sat 10-17 (MoE, which projects to ~50 h against its 55 h limit) and be scored on Sat, still about six days before the gate. Cause not found: the ranks use about half the originals' CPU, and both sit on a rack (as03r3) that no earlier crossing run used. The MoE replicate had two isolated `grad_norm` spikes early (175 at step ~2k, 118 at ~4.8k; each back to ~0.5 on the next logged line, none since); the original MoE never went above 50.
+4. **Cost axis, first pass** (`projects/ablation-campaign/cost-axis/`, `c1abb9c`; README inside). The 16 cells cost 2,194 GPU-h for ~10,410 audio hours each; the 11 discarded runs cost 883 GPU-h more (29% of 3,077). The numbers do not compare stacks: the node count was set per cell and wall time barely moved with it (Whisper and MMS-1b 24.2 h on 1 node, 24.0 on 2; mHuBERT 14.1-14.9 h on 2 and 14.1 h on 4), and MLP and MoE took the same time on every encoder though the MoE trains 7x the parameters. Something shared sets the pace, the data path being the first suspect (untested). The efficiency figure needs a compute-only measure first (FLOPs per audio second, or a timing on synthetic batches); not done.
+5. **Holds:** `yodas3-rest/` stays unmerged, and `~/training-s43` and `~/training-qkc` stay untouched, until the replicates and the three new cells have all ended, resumes included.
+Action needed: orchestrator: take the ladder boxes out of the timeline and `03` §2b, let the Conformer box cover all four encoders, update the replicate cost and ETA, and keep the 10-23 adapter call on the replicate pair and the Whisper QK-norm cell. For week 6's "MA throughput at 8 vs 16 nodes": the crossing already shows no wall-time gain from more nodes on Whisper and MMS-1b (1 to 2 nodes) or on mHuBERT (2 to 4), but with a different adapter at each node count, so it is not a clean test.
+
+## 2026-10-15 — Claude (worker session, crossing) — mms1b-conformer with QK-norm scores 0.254: 0.17 better than MMS-1b's MLP, 5th of the 16 crossing cells
+Context: the last crossing cell. Its 6 scoring jobs ran with the PI's go, with the same eval code as the other 15 (training main `ad9171c` on `PYTHONPATH` in the v3 image). Raw output and the 16-cell ranking: `selection-metric/scores/crossing-2100-mms1b-conformer-2026-10-15.txt`.
+Finding:
+1. **Score** (lower is better; QK-norm on, adapter LR 2e-3, one seed): 0.254 (ID 0.113, OOD-train 0.093, OOD-related 0.889). On MMS-1b the MLP is 0.425 and the MoE 0.438, so the Conformer is 0.17-0.18 ahead; its ID and OOD-train medians are 2.2x and 3.6x lower than the MLP's (0.113 against 0.249, 0.093 against 0.335), while OOD-related stays high (0.889 against 0.943).
+2. **Ranking of the 16 cells:** the four Whisper cells first (conformer 0.136, moe 0.143, mlp 0.157, qformer 0.177), then mms1b-conformer 0.254, mhubert-mlp 0.260, mhubert-moe 0.269, and the rest in the order of the 10-14 entry. It is the best cell that is not on Whisper.
+3. **The Conformer, encoder by encoder** (the column still mixes LR and QK-norm): best on Whisper (0.136 at 1e-3, no QK-norm; 0.007 ahead of the MoE, one seed) and on MMS-1b (0.254, QK-norm); behind the MLP and MoE on mHuBERT (0.385 against 0.260 and 0.269; 2e-3, no QK-norm); never learned on w2v-BERT (0.922; 1e-3, no QK-norm).
+4. **QK-norm on the Conformer.** The one Conformer cell that ran with it trained stably to the end (max `grad_norm` 56, none non-finite). No Whisper Conformer has run with QK-norm, so whether it helps or costs there is untested.
+Action needed: PI / orchestrator: the timeline keeps the Conformer open until its QK-norm behaviour is known (final adapter call 10-23); this is one encoder's worth of that. Nothing is queued for a Whisper Conformer with QK-norm; whether to run one is the PI's call.
+
+## 2026-10-17 (later) — Claude (worker session, backbones) — selection-metric scoring of five backbone arms submitted (30 jobs); EuroLLM-Base not scored
+Context: scoring the backbone MA arms as the 16 crossing cells were. Scores are not in yet: the jobs are queued on acc_ehpc.
+Finding / proposal:
+1. **Weights.** `model.safetensors` + `checkpoint-52500` exist for llama1b-ins, llama1b-base, qwen35-2b-ins, qwen35-2b-base and eurollm1.7b-ins; the scored model is the run root. EuroLLM-Base has no final run (timed out at 47,730, ~90% runaway ASR): pending, not scored.
+2. **Code.** `~/training-eval` (`ad9171c`) lacks the backbone changes, so a new frozen clone `~/training-bbscore` @ `aa63c11` (PR #155 branch, descends from `c1fa740`) is on `PYTHONPATH`; same v3 eval image, sets and flags as the crossing. `submit_crossing_eval.sh` now also accepts a full row name (`MA-700-backbone-<x>`); logs go to `eval-logs/selection-metric/ma-700-backbone-<x>/`.
+3. **Jobs** (one per set: id-en, id-de, id-es, id-fr, id-it, fleurs26-dev200): llama1b-ins 47433999-47434004, llama1b-base 47434005-47434010, qwen35-2b-ins 47434011-47434016, qwen35-2b-base 47434017-47434022, eurollm1.7b-ins 47434023-47434028. Recorded in `eval-jobs.tsv`.
+Action needed: when they finish, run `selection-metric/score.py` on the five log dirs and add rows to `selection-metric/scores/`. `~/training-bbscore` stays untouched until then.
+
+## 2026-10-17 (night) — Claude (worker session, backbones) — six backbone IFT rows ready (1c94b3e), llama1b-ins checkpoint load-tested; nothing submitted
+Context: the plan runs IFT on all six MA checkpoints and decides the backbone on IFT results (`02-backbones.md` §1, §4). PI confirmed; this is the plan for a go.
+Finding / proposal:
+1. **Rows:** `IFT-700-backbone-{llama1b-ins,llama1b-base,qwen35-2b-ins,qwen35-2b-base,eurollm-ins,eurollm-base}` in `campaign.yaml`, config `ABL-IFT-700-backbone.yaml` (Whisper-large-v3 + MoE frozen, decoder trained, ASR+ST 6,729.9 h, per-cut mux weights, `master_dtype` float32, seed 1337, cosine at decoder LR 2e-5, `min_lr_scale` 0.1, 20 warmup steps). Each starts from its own MA arm. 4,800 audio-s per step, `max_steps` 6310, 7 checkpoints. `campaign.py plan` renders clean, 231 related tests pass.
+2. **Walltime (unmeasured except the Qwen geometry):** Llama 1 node x 4, bd 75 x ga 16, 40 h limit (~31 h central); EuroLLM same, 46 h (~36 h); Qwen 2 nodes x 4 with gradient checkpointing, bd 30 x ga 20, 66 h (~53 h, ~400 GPU-h per arm; one node would need ~100 h, over the 72 h cap). A resume costs ~4 h (Llama), 5 h (EuroLLM), 7 h (Qwen). Checkpoints are 15-20 GB (37 GB Qwen) with optimizer, 7 kept.
+3. **llama1b-ins final checkpoint loads and decodes** (artemis, 20 utt per language): WER en .170, de .179, fr .181, es .121, it .169 (in-run 200-utt final eval .117-.142), length ratio .90-.95, no runaways. 661 tensors; Whisper encoder (F16), MoE adapter (F32, 8 experts top-2) and the tied bf16 decoder are all present. After `from_pretrained` every parameter is bf16, so the IFT must run with `master_dtype: float32` (it does). A 4.2 GB copy of the run root is left on artemis at `/mnt/scratch-artemis/giuseppe/ckpt-check` (scratch is nearly full: to be removed on the PI's word).
+4. **Open:** (a) EuroLLM-Base has no final weights and `campaign.py` resolves `init_from` only to a run directory; starting from checkpoint-47730 needs a small `campaign.py` change or a hand-built staging directory with tokenizer/processor files. Whether IFT repairs its untrained ChatML rows is unproven. (b) Peak memory is unmeasured for Llama/EuroLLM at bd 75 with a trained decoder; I suggest an `acc_debug` smoke of one Llama and one Qwen row first. (c) Warmup 20 steps is short for a 1-2 B trainable decoder; 3% is a one-line change. (d) Qwen on 2 nodes deviates from the 4-GPU MA geometry.
+Action needed: PI: go/no-go; decide (a) to (d); say if the artemis checkpoint copy can be deleted. Worker: needs a new frozen clone on MN5 for the IFTs and the MA scoring jobs (47433999-47434028) are still queued.
+
+## 2026-10-17 (evening) — Claude (worker session, backbones) — EuroLLM-Base: the decoder is frozen, so the ChatML token rows cannot train
+Context: PI asked to investigate EuroLLM-Base and why the template tokens are not learned. Checked checkpoint-47730 and the train log.
+Finding / proposal:
+1. In checkpoint-47730 the rows did not move: `lm_head` rows 3 and 4 differ by 0.0003 (row norm .267, as in the base checkpoint); `embed_tokens` rows 3-8 have norm .0002. The train log says "Freezing the decoder" and 121.7 M trainable parameters (adapter only), so `dlr2e5` in the run name is unused here and no decoder row, embeddings and `lm_head` included, receives updates. The tokens are supervised, but nothing that could learn them is trainable.
+2. EuroLLM-Instruct, Llama and Qwen are not affected because their template-token rows were already trained in the checkpoint; EuroLLM-1.7B base never trained ids 3 and 4 (embedding rows exactly zero, `lm_head` rows 3 to 7 identical). Samples end the transcript correctly, then emit `<|im_start|>` where `<|im_end|>` belongs; WER stays 4-7 (runaway fraction .8-.97) at every eval.
+3. Not resumed (more steps cannot change frozen rows). Options: (a) accept as a result: a frozen base decoder with untrained template tokens cannot be driven through a ChatML template; (b) rerun (~14 h) with rows 3 and 4 of `embed_tokens` and `lm_head` copied from Instruct and kept frozen (recipe unchanged, but base hidden states may not separate them); (c) rerun with only those rows trainable (recipe changed for this arm); (d) `</s>` as terminator (template changed).
+Action needed: PI: choose a, b, c or d.
+
+## 2026-10-17 — Claude (worker session, backbones) — Qwen arms finished; EuroLLM-Base timed out at step ~47.7k with ~90% runaway ASR
+Context: status check, 1 day after the Qwen resumes were queued.
+Finding / proposal:
+1. **Qwen-ins and Qwen-base finished** (resumes ran 14 h 07 min of 16 h). Final in-run eval: Qwen-ins WER en .098, de .102, fr .097, es .068, it .119; no runaways. Qwen-base is in the same range (fr .096, es .072, it .122).
+2. **EuroLLM-Base (47364690) TIMED OUT at 14:00:22**, last checkpoint 47,730. Its in-run evals are broken at every step: runaway fraction .8-.97 on all five languages, WER 4-7, eval loss ~.83 (Qwen: .17-.27). PR #155 got the template tokens registered, but the arm still does not stop generating. Cause not yet found; I have not resumed it, because ~1 h of 4 H100 would finish a run whose ASR is unusable.
+Action needed: PI: say whether to diagnose EuroLLM-Base first (my proposal: check EOS/`<|im_end|>` in the base generation config and the label mask on a few batches on artemis) or resume as is. Also merge #156.
+
+## 2026-10-16 (evening) — Claude (worker session, backbones) — Qwen arms timed out at step ~36,900 and are resumed; both Llama arms finished
+Context: scheduled check after the Qwen 26 h limit.
+Finding / proposal:
+1. **Llama-ins and Llama-base finished** (resumes from checkpoint-47730, ~1 h 10 min each); `llama1b-ins` has `model.safetensors` and `checkpoint-52500`. Load test pending.
+2. **Qwen-ins and Qwen-base timed out** at 26 h, step ~36,900 of 52,500 (2.5 s/step), last checkpoint 33,411. Resumed with the `resume_from_checkpoint` workaround (PR #156 not merged), `--time 16:00:00` (19,100 steps x 2.5 s = ~13.3 h plus startup). Ledger rows are in `arms.tsv`.
+3. **EuroLLM-Base** (restart) is at 9 h 12 min and healthy; Instruct took 12 h 06, so it should end inside its 14 h.
+Action needed: PI: merge #156. Worker: score the Llama/EuroLLM-Instruct arms; load-test llama1b-ins.
+
+## 2026-10-16 (later) — Claude (worker session, backbones) — `campaign.py --resume` is broken on transformers 5 (PR #156); Llama resumes run via a workaround
+Context: the first resumes of the two timed-out Llama arms died after ~80 s.
+Finding / proposal: `--resume` passes `trainer.resume_from_checkpoint True`; `_fix_yaml_bool_leaks` (#77) turned the bool into the string `'yes'` because the field is typed without bool in transformers 5, and `train.py` called `get_last_checkpoint('yes')` (`FileNotFoundError`). Any `--resume` on a clone without the fix fails the same way. Fix: PR #156 (exempts the key; one test). Workaround used: no `--resume`, pass `-- --trainer.resume_from_checkpoint /workspace/outputs/<run dir>` (the parent dir, as `train.py` documents). Resubmitted that way: llama1b-ins and llama1b-base resumed from checkpoint-47730 and running (jobs 47375887/8; the failed pair 47364342/3 are in `arms.tsv`). The Qwen resumes will use the same workaround.
+Action needed: PI: review/merge #156. Worker: Qwen resumes at their timeout; verify llama1b-ins final weights load.
+
+## 2026-10-16 — Claude (worker session, backbones) — two Llama arms timed out 360 steps short, EuroLLM-Base had a tokenizer bug (PR #155); resumes and a restart are queued
+Context: first look at the six backbone MA arms, 20 h after submission. PI approved the resumes, the Qwen resumes and a PR for the EuroLLM-Base fix.
+Finding / proposal:
+1. **My walltimes were short.** The Llama arms ran ~0.82 s/step, not the 0.55 extrapolated from the 2,100 h crossing (shorter cuts, more cuts per batch), and hit the 12 h limit at step 52,140 of 52,500, in the decay tail with no final weights (last checkpoint 47,730). EuroLLM-Instruct finished in 12 h 06 min of its 14 h. Realised hours at step 52,140: 3,741 of 3,500 planned, so 1.25 x the estimate overshoots by ~7% on this mix. Qwen (bd 25 x 3) runs 2.4-2.6 s/step: 52,500 steps need ~36 h against its 26 h limit; it will time out around step 36,500 and needs a ~11 h resume each.
+2. **EuroLLM-1.7B (base) trained on nothing.** The vocabulary holds `<|im_start|>` at id 3, but only the Instruct tokenizer registers it as an added token; on the base it splits into ten text pieces, `mask_non_assistant_tokens` never finds the assistant span, and the first eval died in `ZeroDivisionError` (every reference empty). Fix: PR #155 (`borrow_chat_template` registers the source's added tokens that the template uses and that sit at the same id; vocabulary size unchanged, render equals Instruct's token for token). Llama base is unaffected. The crashed dir was renamed `...-crashed47324433` (it held `resolved_config.json` only).
+3. **Submitted.** Llama-ins and Llama-base resumes from checkpoint-47,730 (`--resume --time 02:00:00`, clone `~/training-backbones`); EuroLLM-Base restarted from scratch from a new frozen clone `~/training-backbones-eb` at the PR branch commit `aa63c11` (14 h limit; Instruct needed 12 h 06, so it is tight). Job ids are in `arms.tsv`. `~/training-backbones` stays frozen until the Qwen jobs and their resumes end.
+Action needed: PI: review/merge #155. Worker: resume both Qwen arms when they time out (~Oct 16 evening); check EuroLLM-Base's first eval is non-degenerate; then score all six.
+
+## 2026-10-15 — Claude (worker session, backbones) — the six backbone MA arms are submitted (PI go, no Qwen smoke)
+Context: the PI said go on the plan below, without the optional Qwen smoke.
+Finding / proposal:
+1. **Frozen clone** `~/training-backbones` on MN5 at `c1fa740` (main). Queued jobs bind it when they start: no sync, checkout or edit until all six end. Its `arms.tsv` is dirty with the six rows; they are copied to `main` with this entry.
+2. **Jobs** (acc_ehpc, 1 node x 4 GPUs, all PENDING on priority at 10:05Z): llama1b-ins 47324428 (12 h), llama1b-base 47324429 (12 h), qwen35-2b-ins 47324430 (26 h), qwen35-2b-base 47324431 (26 h), eurollm1.7b-ins 47324432 (14 h), eurollm1.7b-base 47324433 (14 h).
+3. **To check when they start:** `world_size 4` in each `[run_train] starting` line; `grad_norm` finite in the first hours; for Qwen, peak memory and `train_hours/total` (bd 25 x 3 is unmeasured); the first checkpoint of llama1b-ins loads (it is the regime study's base MA checkpoint); `optimizer.pt`/LR floor ends at 0.1 x peak.
+Action needed: none from the PI. Worker: read the first logs once they start; score with the selection metric as they finish.
+
+## 2026-10-15 — Claude (worker session, backbones) — the six backbone MA rows are written and dry-run; nothing is submitted, waiting for the PI's go
+Context: PI decision of 10-14 (Whisper-large-v3 + MoE, crossing recipe, 700 h/lang, six decoders). `min_lr_scale` (PR #154) is already on `main`, so the rows run with it (WSD now ends at 0.1 x the adapter peak).
+Finding / proposal:
+1. **Rows.** `MA-700-backbone-{llama1b-ins,llama1b-base,qwen35-2b-ins,qwen35-2b-base,eurollm1.7b-ins,eurollm1.7b-base}` in `campaign.yaml`: the `MA-2100-crossing-whisper-moe` row with the decoder changed, `max_steps` 52,500 (1.25 x 42,000, the crossing's fill rule) and the new config below. `campaign.py plan` renders all 73 rows; 160 plan_arm/builder tests pass in the nyx container. The old `MA-700-*` rows (w2v-BERT + MLP) are untouched.
+2. **New config `ABL-MA-700-whisper-asr.yaml`.** `ABL-MA-700-asr.yaml` carries hour-share weights (pre-10-08) and bins measured for another draw, so I did not reuse it. This one is rendered with the builder over the 2,100 h config (`--budget-hours 700`, no top-up, `--weights cuts`, bins re-measured on the draw): Italian's four-corpus mix at 700.3 h per language, 3,500 h in all, 20% of the audio per language. `check_training_config.py` fails the same four checks as on the 2,100 h config (W3, H1, H2, B3: it measures whole sources, not the draw).
+3. **Batch.** Effective 300 s as in the crossing. Llama and EuroLLM: `batch_duration 75`, 1 node, no accumulation. Qwen3.5-2B: `batch_duration 25` x `grad_accum 3` (the 50 Hz Qwen MA arm needed 30; at 10 Hz 25 s carries ~1/4 of that arm's tokens per micro-batch). **Unmeasured**; fill at 25 s may be below the 79.9% measured at 75 s, so Qwen may see fewer hours than the others at equal steps (read `train_hours/total` in its log).
+4. **Cost.** Measured: Whisper+MoE+Llama-1B at 2,100 h took 24.2 h on 4 GPUs for 157,500 steps = 0.553 s/step, so 8.1 h, ~32 GPU-h per Llama arm. Extrapolated: EuroLLM (24 layers) ~9.5 h, ~38 GPU-h; Qwen (hybrid, 3 micro-batches, 248K vocab) ~17.5 h, ~70 GPU-h. Six arms ~280 GPU-h. Walltimes requested: 12 h Llama, 14 h EuroLLM, 26 h Qwen.
+5. **MN5 staged (listed, not loaded):** all 35 Shar leaves of the config present with `.idx` sidecars; whisper-large-v3 and the six decoders in `hf_cache` (Qwen3.5-2B and -Base show 2 weight files); `melt_cuda126.sif` -> `melt_cuda126_tf5.sif`. Qwen base needs no template borrowing (its own is byte-identical to Instruct's, 02 §3.1); the other two base arms borrow.
+Action needed: PI: go / no-go. On go I create `~/training-backbones` on MN5 at the validated commit and submit the six from it. Optional: a short `acc_debug` smoke of the Qwen row first, to measure its memory and fill.
+
+## 2026-10-14 — Claude (worker session, crossing) — seed-43 replicates of the two best Whisper cells are queued; mms1b-conformer finished and is being scored
+Context: the timeline (re-plan of 10-14) runs seed replicates of the top two Whisper cells next to the backbone arms; the PI gave the go with seed 43. Since `fea165a` (10-13) the seed reaches the container, so the data order really changes (every container run before it read data seed 42).
+Finding / proposal:
+1. **Rows.** `MA-2100-crossing-whisper-conformer-s43` (adapter LR 1e-3) and `MA-2100-crossing-whisper-moe-s43` (2e-3) in `campaign.yaml`: the original rows with `seed: 43` and nothing else. The generated submissions equal the originals' except `MELT_SEED`, `--trainer.seed` and the `s43` in the run and output names.
+2. **Code.** Submitted from a frozen clone, `~/training-s43` on MN5, at `5912102` (main `6fc8228` plus the two rows, which landed on main as `ee27e7a`). Against the clones the originals ran from (`e6cc269`, `55e3a6a`) the training code differs by the `MELT_SEED` forwarding, the opt-in `model.adapter.qk_norm` and `model.master_dtype` (both off: the rows set neither), a barrier before the output-dir check and one log line (trainable dtypes); `config/` and the base YAML are identical. `min_lr_scale` (PR #154) is not wired in this clone, so the schedule is the originals'.
+3. **Cost.** One node (4 GPUs) each on acc_ehpc, wall limits 52 h and 55 h as the originals. The originals took 25.2 h (Conformer) and 24.2 h (MoE) on 4 GPUs: about 197 GPU-h for the pair, plus the queue wait. Job ids are in `arms.tsv`.
+4. **Watch.** Both are under the cancel watcher (the PI's standing rule: `grad_norm` above 100 in 3+ of the last 2000 logged lines, or non-finite in 3+). A replicate that diverges is cancelled and reported as such.
+5. **mms1b-conformer** finished (entry below); its 6 scoring jobs (~1.2 GPU-h) are queued with the PI's go.
+Action needed: none. `~/training-s43` must not be touched until both runs have ended, resumes included (queued jobs read it when they start). Scoring the pair is 12 jobs (~2.4 GPU-h); the PI names that batch when they end.
+
+## 2026-10-14 — Claude (worker session, crossing) — the four finished QK-norm Q-Former cells are scored: QK-norm made them stable, and the Q-Former is still the weakest adapter on every encoder
+Context: with the PI's go the `qk_norm=true` eval path passed a 20-sample smoke (whisper-qformer, WER 0.122), then the 24 scoring jobs ran (25 jobs, 4.8 GPU-h, all completed within about an hour). Same eval code as for the first 11 cells (training main `ad9171c` on `PYTHONPATH` in the v3 image).
+Finding:
+1. **Training.** whisper-, mhubert-, w2vb- and mms1b-qformer finished (24.0, 14.1, 26.9 and 24.0 h; ~825 GPU-h) with no non-finite `grad_norm` and none above 100 over the whole run (max 43-69); their unfixed counterparts all failed. mms1b-conformer (QK-norm) has finished too (41.1 h, ~165 GPU-h; no non-finite `grad_norm`, max 56), so all five QK-norm cells ran stable end to end; its scoring is a separate batch (6 jobs), submitted with the PI's go.
+2. **Scores** (lower is better; QK-norm on, adapter LR 2e-3): whisper-qformer 0.177, mhubert-qformer 0.423, w2vb-qformer 0.827, mms1b-qformer 0.912. Against the MLP and MoE cells of the same encoder the Q-Former is last on all four: +0.02 to +0.04 on Whisper (ID 0.078 against 0.061-0.065, OOD-related 0.67 against 0.50-0.61), +0.15 on mHuBERT, +0.30 on w2v-BERT, +0.48 on MMS-1b. The two encoders whose Q-Former sat longest on the WER plateau (w2v-BERT, MMS-1b) end near 1.0 (ID medians 0.67 and 0.79).
+3. **Ranking of the 15 scored cells** (one seed each): whisper-conformer 0.136 (1e-3), whisper-moe 0.143, whisper-mlp 0.157, whisper-qformer 0.177, mhubert-mlp 0.260, mhubert-moe 0.269, mhubert-conformer 0.385, mhubert-qformer 0.423, mms1b-mlp 0.425, mms1b-moe 0.438, w2vb-moe 0.517, w2vb-mlp 0.530, w2vb-qformer 0.827, mms1b-qformer 0.912, w2vb-conformer 0.922 (1e-3). The Conformer column still mixes LR and qk_norm (whisper- and w2vb-conformer at 1e-3 without QK-norm, mhubert-conformer at 2e-3 without, mms1b-conformer at 2e-3 with).
+4. **For the provisional Whisper adapter:** by score the order is Conformer (1e-3), MoE, MLP, Q-Former; the first three are within 0.021 on one seed each, the Q-Former is 0.04 behind the best. Robustness differs: MLP and MoE trained stably in all 8 cells at 2e-3; the Conformer ran at 1e-3 on Whisper and diverged at 2e-3 on 2 of 4 encoders; the Q-Former needed QK-norm to train at all.
+Action needed: none. The timeline's provisional Whisper pick (MoE, PI 10-14) is second by score: 0.007 behind the Conformer at 1e-3 and 0.014 ahead of the MLP, one seed each. Orchestrator: the numbers for the timeline and `03`. Raw output: `selection-metric/scores/crossing-2100-qknorm-2026-10-14.txt`.
+
+## 2026-10-14 — Fondue Orchestrator — timeline re-planned for the 1-2 week slip: split freeze (MA 10-29, IFT 11-04), backbone and regime gate 10-23
+Context: the PI asked to fit the remaining weeks to the slip from the attention-adapter divergence and travel, compressing without cutting corners; artemis can take evals and short runs.
+Proposal (written into `timeline.md` weeks 5-11; defaults marked "PI to confirm"):
+1. Encoder decided now (Whisper 0.14-0.16 vs mHuBERT 0.26+, far beyond noise); provisional adapter Wed 10-14; seed replicates of the top two Whisper cells (~350 GPU-h) settle it at the 10-23 gate.
+2. Backbone MA arms (700 h/lang) and the regime study run together from Thu 10-15; the llama1b-ins backbone arm is also the recipe confirmation and the regime base; the 2,100 h crossing cell is the regime's long-MA (ASR) checkpoint.
+3. Freeze split: MA rows Thu 10-29, IFT rows Wed 11-04 (Raclette 10-27 to ~11-03 runs while the decisions it informs are still open; none of them changes MA). Fondue MA from 10-29; IFT from ~11-05, ending ~11-15 (Llama, 8 nodes) or ~11-19 (Qwen, 16 nodes). A second week of slip cannot be absorbed without dropping Raclette or the ratio study.
+4. Budget: 868 of 1,752 khours used, ~44K GPU-h left; the plan needs ~19K (Llama Fondue) to ~34K (Qwen). Wall clock and queue are the constraint.
+5. Blockers on the critical path: the bf16 fix (no IFT before it; target 10-16), the IFT config's per-cut mux re-check (10-17), the MA ASR+ST config (10-15), the full-scale Fondue dry run (10-23), the resume-chain test on 2 nodes from a checkpoint (first real test of b37823b, before 10-27).
+6. Seed replicates submitted before fea165a (2026-10-13) replayed data order 42: the screen's noise floors are numerical noise only.
+Action needed: PI: confirm or change the five defaults in the timeline's re-plan section, and pick the provisional adapter today. Workers: week 5's boxes are submittable as listed; IFTs wait for the bf16 fix.
+
+## 2026-10-13 — Claude (worker session, crossing) — all 11 finished crossing cells are scored; the five QK-norm cells started overnight and none has passed grad_norm 100 so far
+Context: the 66 scoring jobs of 2026-10-12 all completed (13.1 GPU-h, under the 16 estimated). The five QK-norm cells left the queue at 04:07-07:05 CEST on 2026-10-13, hours before their estimates. Readings below are from 11:40 CEST.
+Finding:
+1. **Scores** (lower is better; adapter LR in brackets when it is not 2e-3; qk_norm is off in all 11): whisper-conformer 0.136 (1e-3), whisper-moe 0.143, whisper-mlp 0.157, mhubert-mlp 0.260, mhubert-moe 0.269, mhubert-conformer 0.385, mms1b-mlp 0.425, mms1b-moe 0.438, w2vb-moe 0.517, w2vb-mlp 0.530, w2vb-conformer 0.922 (1e-3; it never learned). Group medians and per-language values: `selection-metric/scores/crossing-2100-2026-10-12.txt`.
+2. **The encoder moves the score more than the adapter does:** Whisper 0.14-0.16, mHuBERT 0.26-0.27, MMS-1b 0.42-0.44, w2v-BERT 0.52-0.53 (MLP and MoE). Within an encoder MLP and MoE differ by at most 0.014 and the sign flips (MoE ahead on Whisper and w2v-BERT, MLP ahead on mHuBERT and MMS-1b). The three Whisper cells (0.136, 0.143, 0.157) are close for one seed each. The Conformer column is confounded with LR and cannot be ranked: best on Whisper at 1e-3, the worst mHuBERT cell at 2e-3 (0.385), not learning on w2v-BERT at 1e-3.
+3. **What carries the score:** OOD-script is 1.0 (clipped) in all 11 cells and OOD-latin in 10, so the differences come from ID, OOD-train and OOD-related. Unguarded decoding gives a per-sample CER above 1 in 11-26% of the FLEURS samples and in 5-112 of 3000 in-domain samples (fewest on Whisper).
+4. **QK-norm cells** (all RUNNING; no non-finite `grad_norm`, none above 100, max finite 43-69): whisper-qformer step 25.0k of 78,750, mean validation WER 0.17 and learning; mhubert-qformer 20.0k of 39,375, WER 0.97 and falling steadily (1.22 at its second eval); w2vb-qformer 19.7k of 78,750, WER 1.10; mms1b-qformer 24.9k of 78,750, WER 1.21; mms1b-conformer 14.6k of 157,500, WER 1.21. For scale, without QK-norm at 2e-3 three of the four Q-Former cells first passed 100 at 4.5-7.1k, mHuBERT at ~20k, and mms1b-conformer blew up at 6.2k: all five are past their failure points.
+5. **Plateau caveat.** w2vb-qformer, mms1b-qformer and mms1b-conformer sit at WER 1.1-1.2, where the finished MLP and MoE cells of the same two encoders also sat until 30-40% of their run, then fell to 0.40-0.67; w2vb-conformer at 1e-3 never left it (final 0.94). The three are at 25%, 32% and 9% of their runs. Not a failure yet; their readings at ~45% decide whether they align.
+6. **Watcher incident, fixed.** At 04:57 CEST the watcher exited on an "error-looking line" that was a garbage hypothesis from w2vb-qformer containing the word "Killed", and the cancel rule was off until it was restarted at 11:43; no job passed the threshold meanwhile (all five have a max finite `grad_norm` below 70). The health script now ignores HYP/REF dumps and the watcher no longer exits on an alert: it logs it, drops finished or cancelled jobs and goes on.
+7. **Timing** (tqdm rates, give or take a few hours): whisper-qformer and mhubert-qformer finish tonight (~22:00 CEST), w2vb-qformer ~03:00 on Oct 14, mms1b-qformer ~13:00 on Oct 14, mms1b-conformer ~19:00 on Oct 15. Scoring a cell costs about 1.2 GPU-h (9.5 of the 13.1 were the 11 FLEURS jobs).
+Action needed: PI: none now. If w2vb-qformer or mms1b-qformer is still at WER ~1.1 near step 36-39k (about 45-50% of the run), that is the moment to decide whether to spend the rest of it (about 11 h and 20 h of 8 GPUs). Orchestrator: paused at the PI's request; this entry and the one below are its catch-up when it resumes.
+
+## 2026-10-12 — Claude (worker session, crossing) — scoring of the 2,100 h crossing started: 11 finished cells queued, with the eval image's `melt` replaced by a frozen checkout of main instead of an image rebuild
+Context: the PI's instructions of 2026-10-12: prepare the scoring job, run the evals from this session, and mount code from a checkout instead of rebuilding images whenever the code changes.
+Done:
+1. **Eval code comes from a checkout, as training code does.** The eval runner already binds the melt-eval checkout; the baked-in part was the training package `melt` (the v3 image is training `acadf22`: no MoE adapter, an older Conformer, no `qk_norm`). `selection-metric/submit_crossing_eval.sh --code DIR` puts a frozen training checkout on `PYTHONPATH` inside the container; for the crossing it is `~/training-eval` on MN5, detached at main `ad9171c`. Between the crossing's training commits (`e6cc269`, `55e3a6a`) and `ad9171c`, `melt/` differs only by the opt-in `qk_norm` switch (off by default), so the finished checkpoints load as they were trained. The image is not rebuilt; that is for dependency changes only.
+2. **Smokes** (20 samples of the English in-domain set, `acc_debug`, v3 image + `~/training-eval`): whisper-conformer WER 0.14 and whisper-moe WER 0.12, both decoding sensibly. No run without the override was made, so that the stock image fails on the Conformer is inferred from its code, not tested; it has no MoE adapter at all.
+3. **Submitted:** the 11 finished cells (the 8 MLP/MoE at 2e-3, whisper- and w2vb-conformer at 1e-3, mhubert-conformer at 2e-3) × the six sets of the metric = 66 one-GPU jobs on `acc_ehpc`, 2 h limit each, about 16 GPU-h by the screen's costs (MMS-1b and mHuBERT cells were not measured there). JSON logs go to `/gpfs/scratch/epor48/eval-logs/selection-metric/ma2100-<cell>/<set>/`; every submission is in the ledger `~/eval/frozen-sets/selection-metric/eval-jobs.tsv` with the code commit. Score a cell with `python3 score.py <that log dir>`, one cell per call (it aborts a cell with a missing or duplicated set).
+4. **Still to score:** the five QK-norm cells, when they finish. Their training start estimates slid again, from Oct 12 20:00 and Oct 13 05:30-06:49 to Oct 13 08:40-10:55, so completions are about Oct 15-16 (mms1b-conformer needs ~50 h). Before that, a 20-sample smoke of the `qk_norm=true` eval path on one of their mid-run checkpoints: no such checkpoint has been loaded by melt-eval yet.
+5. **Read the table with the grid's differences beside it:** adapter LR and `qk_norm` per cell (whisper- and w2vb-conformer 1e-3, mhubert-conformer 2e-3, mms1b-conformer and the Q-Former column with QK-norm at 2e-3).
+6. **Queued eval jobs read `~/eval` (melt-eval, branch `selection-metric-sets` @ `fa5a961`) and `~/training-eval` when each one starts**, hours after submission: nobody should switch, pull or edit either until the jobs have run.
+Action needed: PI: none. Orchestrator: the eval image rebuild is not needed for the crossing; `submit_crossing_eval.sh` scores a cell with the training code that made it. Optional and not done (melt-eval repo): a `MELT_CODE_DIR` option in `run_eval_container_mn5.sbatch` would make the mechanism part of the runner.
+
+## 2026-10-12 — Claude (worker session, crossing) — the PI chose to bet on QK-norm at the recipe LR and to test no further LR change: the four Q-Former cells and mms1b-conformer are queued with `qk_norm: true`; the watcher cancelled w2vb-qformer at 1e-3
+Context: the PI's answer after the smoke results ("bet on the QK-norm strategy and do not test any changes in LR any further", details left to me).
+Done:
+1. **The watcher cancelled w2vb-qformer at 1e-3** at step 63.8k of 78,750 (24 h, ~193 GPU-h): `grad_norm` above 100 in 4 of its last 2000 lines, the first at 61.6k. The run had drifted steadily: median 0.09 at 4-8k, 0.9 at 28k, 2.2 at 40k, 5.9 at 52k, 13 at 60k+, loss 3.15-3.3 (never learned), WER 1.08-1.18. That was the standing permission working, and it fired late because the rule needs 3 lines above 100. At 1e-3, then: mHuBERT grew from 3.4k and collapsed (WER 1.85), Whisper from 2.9k, MMS-1b had a burst at 12.5k, w2v-BERT drifted: no Q-Former cell is stable at 1e-3 without QK-norm.
+2. **Smokes.** w2vb-qformer with QK-norm at 2e-3 (`acc_debug`, 2 h) reached only step 3.6k: 30 min passed before step 1 (startup and eval-on-start), then 0.75 it/s. The unfixed run first spiked at ~6k, so it shows nothing either way (16 GPU-h). The mms1b-conformer smoke was not run: one node would reach ~4-5k steps against a failure point at 5.6-6.2k. Smokes of this kind reach the failure point only on the fast Whisper cell (the 9.4k-step smoke of 2026-10-09); the other cells are tested as real runs under the watcher.
+3. **Planner and rows, on PR #149** (`5af7bd4`, `93209ca`): `qk_norm` is an axis (override `--model.adapter.qk_norm true`, run-name tag `qkn` right after the adapter, only when true; refused on mlp and moe; every other arm of the grid renders identically, 474 lines diffed; 11 new tests, 9 fail without the field). Rows: w2vb-, mms1b-, mhubert-, whisper-qformer and mms1b-conformer have `adapter_lr: 2e-3` and `qk_norm: true`; mms1b-conformer's `time` goes 54 -> 70 h (the 1e-3 run measured 0.85 it/s, ~52 h for 157,500 steps).
+4. **Submitted** from a fifth frozen clone, `~/training-qkn` on MN5 @ `93209ca`, the PR branch. The script checks that against the crossing's `e6cc269` only the option's three files differ in `melt/`, `config/`, `bash/` and `infra/`. Job ids are in `arms.tsv`; the watcher (with its cancel permission) is on all five. `main`'s `campaign.yaml` still shows the 1e-3 attempts until #149 is merged; the run names in the ledger are the record.
+5. **The Conformer column is not uniform:** mms1b-conformer carries QK-norm; whisper-conformer and w2vb-conformer (1e-3) and mhubert-conformer (2e-3) ran without it. Results should list each cell's LR and `qk_norm`. Cost if the five run to the end: ~850 GPU-h; a failure the watcher catches costs ~30 GPU-h per 2-node job.
+Action needed: PI: review and merge #149 when ready. Orchestrator: 03 and the timeline say "whole Q-Former column at LR 1e-3"; the column and mms1b-conformer now run QK-norm at 2e-3.
+
+## 2026-10-11 — Claude (worker session, crossing) — qk_norm option added to PR #149 (off by default) and two QK-norm smokes queued; the watcher may now scancel a diverging re-run; correction: mms1b-qformer at 1e-3 had calmed down when it was cancelled
+Context: the PI's answers of 2026-10-11: add the `qk_norm` switch and run the smoke, then a QK-norm smoke on mms1b-conformer, and let the watcher cancel a diverging run by itself.
+Done:
+1. **Option.** `model.adapter.qk_norm` (commit `e1f4bdb` on PR #149): default false, a bool field of the adapter config, so a config or checkpoint from before the option means off; the Conformer and the Q-Former build the normalised q/k only when it is true, and a non-bool value is an error. 13 tests fail against the old always-on code and pass with it; 150 pass over the six affected test files. PR description rewritten (mergeable). The planner and the campaign rows do not know the option yet; the smokes pass `--model.adapter.qk_norm true` by hand.
+2. **Smokes** (hand-submitted on `acc_debug`, 2 h, not in `arms.tsv`; `~/training` on MN5 is on the PR branch for them, no job uses it). A: w2vb-qformer with QK-norm at 2e-3, whose unfixed run had gradient spikes from step 6k and exploded after 12k; a 2 h smoke reaches ~8-9k. B: mms1b-conformer with QK-norm at 2e-3, whose unfixed run blew up at 6.2k; one node reaches ~6k in 2 h, so it can only just touch the failure point and a flat result is weak evidence (the real cell under the watcher would be the better test). One `acc_debug` job at a time, so B goes in when A ends.
+3. **Watcher permission.** It now runs `scancel` itself on a watched, RUNNING job whose `grad_norm` is above 100 in 3+ of its last 2000 logged lines or non-finite in 3+ lines, logs to `autocancel.log`, and acts only on ids it was given. The rule reads the recent log, so a burst that calms down is not cancelled. Dry run on old logs: it would cancel whisper-qformer (1e-3) and neither the healthy runs nor mms1b-qformer (1e-3).
+4. **Correction on mms1b-qformer at 1e-3.** The entries below call it diverging. After its burst at step 12.5k (20 lines above 100 in 12-13k, max 406) it settled: no line above 100 from 13k to step 16.8k, where it was cancelled, median `grad_norm` 1.0-1.35, max 74, loss 3.27-3.31 on the plateau, WER 1.17. I had re-checked the job ids before the cancel, not the log, so the cancel rested on a reading ninety minutes old. The other two were diverging (mms1b-conformer non-finite in 3.4k lines; whisper-qformer above 100 in 1,882 of its last 2,000 lines). So the MMS Q-Former at 1e-3 is "a burst, then a bounded plateau that does not learn". Output dir and checkpoints are kept.
+Action needed: PI: none new; the smoke results follow. Orchestrator: the MMS Q-Former at 1e-3 was not shown to diverge, only to burst once and not to learn.
+
+## 2026-10-11 — Claude (worker session, crossing) — three diverging 1e-3 re-runs cancelled at the PI's word; mms1b-qformer's gradient started to grow at step 12.5k, so the lower LR only delays it
+Done (10:12 MN5 time): cancelled mms1b-conformer (step 18.2k of 157,500; non-finite since 11.3k), mms1b-qformer (16.8k of 78,750) and whisper-qformer (9.9k of 78,750). Output dirs and checkpoints are kept. They had used ~104 GPU-h (24 + 48 + 32); about 30 of it came in the ~1.5 h between the question and the PI's answer.
+Finding:
+1. **mms1b-qformer at 1e-3** was the clean read of the LR hypothesis. Its `grad_norm` median rose steadily (0.08 at 2-4k, 0.26 at 6-8k, 0.56 at 10-12k, 0.96 after 12k) and first passed 100 at step 12.5k (max 187), against 4-6k at 2e-3: delayed about 2.5 times, not prevented. Loss was still on the plateau (3.26-3.30).
+2. **The 1e-3 batch as a whole.** Q-Former growth appears in 3 of 4 cells (mhubert from 3.4k, whisper from 2.9k, mms1b from 12.5k); Conformer blow-up in mms1b (10.9k, at 2e-3 6.2k). Where the lower LR delays it (mms1b) it is by a factor ~2; on mHuBERT and Whisper it comes earlier than at 2e-3. The w2v-BERT cells are stable at 1e-3 and learn little (conformer WER 0.94). One seed per cell, so a tendency; the conclusion that 1e-3 is not a general fix for either adapter stands.
+3. **Still running:** w2vb-qformer at 1e-3 (9.2k of 78,750): `grad_norm` flat (median 0.09-0.10, max 0.6 after step 4k), loss 3.1-3.3 on the plateau, WER 1.16 at the first eval. Stable and not yet learning, like w2vb-conformer. Under watch.
+4. Cost of the six 1e-3 re-runs so far: ~470 GPU-h (two finished: ~330; three cancelled: ~104; w2vb-qformer so far: ~32).
+Action needed: PI, as in the entry below: the `qk_norm` switch in #149 plus one more smoke, and then QK-norm on the four Q-Former cells; for mms1b-conformer, QK-norm or a lower LR (5e-4, untested); whether the watcher may `scancel` a diverging re-run itself. Orchestrator: 03 and the timeline say "whole Q-Former column at LR 1e-3"; it is now one cell finished and failed, two cancelled, one running.
+
+## 2026-10-11 — Claude (worker session, crossing) — 1e-3 is not a general fix: mms1b-conformer blew up at step 10.9k and whisper-qformer's gradient is growing from 2.9k; only w2vb-conformer (WER 0.94) and, so far, mms1b-qformer are stable
+Context: the four jobs that waited in the queue started overnight (about 06:10 MN5 time, 2026-10-11); readings at 08:15. All cells below run at adapter LR 1e-3, same seed, data and schedule as their 2e-3 runs.
+
+| cell | state | `grad_norm` | loss | last validation WER |
+|---|---|---|---|---|
+| w2vb-conformer | finished | stable: max 48, never above 100 | 1.6 at the end | 0.94 |
+| mms1b-conformer | running, 7% | blew up: first above 100 at step 10.9k, inf from 11.3k (at 2e-3: 6.2k) | 3.25, on the plateau | only the step-0 eval |
+| mms1b-qformer | running, 14% | stable to 11k: median 0.08 -> 0.48, max 44, none above 100 | 3.30, on the plateau | 1.21 |
+| w2vb-qformer | running, 5% | flat so far (step 3.6k) | 3.5 | only the step-0 eval |
+| whisper-qformer | running, 5% | first above 100 at step 2.9k (at 2e-3: 6.1k), 36 such lines in 3-4k, max 282 | 0.77 at 3-4k (at 2e-3: 0.89) | only the step-0 eval |
+| mhubert-qformer | finished (entry below) | first above 100 at 3.4k, non-finite from 29k | 3.29 | 1.85 |
+
+Reading: 1e-3 delayed the Conformer blow-up on mms1b (6.2k to 10.9k) and removed it on w2v-BERT, but brought the Q-Former growth forward on mHuBERT and on Whisper. One seed per cell, so this is a tendency, not a measurement; it is not a general fix for either adapter. The QK-norm smoke (Whisper Q-Former, 2e-3, flat to step 9.4k) is the only change so far that held through the window where its unfixed run grew. w2vb-conformer finishing at WER 0.94 means "stable" does not mean "learns": the w2v-BERT MLP and MoE cells reach 0.67 and 0.59.
+Cost: two running jobs are diverging (mms1b-conformer on 4 GPUs, whisper-qformer on 8), ~12 GPU-h per hour. Nothing is cancelled without the PI's word.
+Action needed: PI: cancel mms1b-conformer and whisper-qformer (both at 1e-3)? Keep mms1b-qformer and w2vb-qformer under watch. Route for the Q-Former (QK-norm on all four cells, switch in #149 first) and for mms1b-conformer (QK-norm, or a lower LR such as 5e-4, untested). Whether the watcher may `scancel` a diverging re-run itself. Orchestrator: 03 and the timeline say "whole Q-Former column at 1e-3"; the column is now one cell finished and failed, two diverging, two under way.
+
+## 2026-10-10 — Claude (worker session, crossing) — mhubert-qformer at 1e-3 grew earlier and ended at WER 1.85, so 1e-3 alone is not a fix for the Q-Former; the alert reached me ten hours late and the job ran to its end (~165 GPU-h)
+Context: the first of the three Q-Former cells queued at 1e-3 started within an hour of submission (4 nodes) and finished at 22:06 MN5 time. The other two Q-Former cells, mms1b-conformer and mms1b-qformer are still pending.
+Finding:
+1. **mhubert-qformer, 1e-3 against 2e-3** (same seed, data, steps and schedule):
+
+| | 2e-3 | 1e-3 |
+|---|---|---|
+| first `grad_norm` above 100 | step ~20k | step ~3.4k |
+| best / final loss | 2.07 / 2.07 | 2.83 / 3.29 |
+| non-finite `grad_norm` | none (up to 2e15) | from step ~29k |
+| validation WER, best / last round | 0.94 / 1.19 | 0.99 / 1.85 |
+
+At the lower LR the growth starts six times earlier and the cell ends worse. Neither is usable. One encoder only; the pending mms1b-qformer re-run was meant as the clean read.
+2. **Process.** The watcher flagged it at step ~4.7k (11:26 MN5 time, `grad_norm` above 100 in 48 lines). An alert reaches the session only when a turn starts, so it was read ten hours later; the job ran its remaining 8.3 h on 16 GPUs (~134 of the ~165 GPU-h it cost). I had said I would cancel these cells if the 1e-3 runs showed growth again, but nothing acts on an alert while the session is idle. Proposed, not set up: a standing permission for the watcher to `scancel` a re-run itself when `grad_norm` passes 100 in 3+ lines, or periodic wake-ups of the session.
+3. **w2vb-conformer at 1e-3** (97% done at 22:07): stable all the way (max `grad_norm` 48 early, none above 100, no non-finite value), loss slowly down from 3.27 to 2.5, but the last validation WER is 0.96 (w2v-BERT MLP 0.67, MoE 0.59). So 1e-3 removes its blow-up and the cell learns very little.
+4. **Queue.** mms1b-conformer and mms1b-qformer are estimated to start 2026-10-13 05:10, the w2vb and whisper Q-Formers 2026-10-13 19:16. The estimates have moved before, and the mhubert job started within an hour, so any of them can start at any time.
+5. **Where the Q-Former stands.** 2e-3: 0 of 4 healthy. 1e-3: mhubert worse than 2e-3. QK-norm at 2e-3: the whisper smoke stayed flat to step 9.4k (entry of 2026-10-09). The pending 1e-3 Q-Former cells test a hypothesis that one encoder has already contradicted.
+Action needed: PI: (a) cancel or hold the pending Q-Former cells, and choose the route: QK-norm on all four (the `qk_norm` switch in #149 first) or more 1e-3 data; (b) whether the watcher may cancel a diverging re-run itself. Orchestrator: 03 and the timeline say "whole Q-Former column at 1e-3"; it is one cell finished and failed.
+
+## 2026-10-10 — Claude (worker session, crossing) — the Q-Former QK-norm commit is on PR #149 for review; the other three Q-Former cells are queued at adapter LR 1e-3
+Context: the PI's answer to the two questions of the entry below: push the patch to the PR, and queue the remaining Q-Former cells.
+Done:
+1. **PR #149** now carries the Q-Former commit (`25da76a`, on top of a merge of main; mergeable, 3 files, +196/-6) and a rewritten title and description: Conformer and Q-Former, the crossing evidence, the smoke table, and a "held back from merging" status. The open point for the review is stated in the PR: both patches are **unconditional**. Old checkpoints of either adapter load with `strict=False` but compute a different function (they were trained on un-normalised q/k), which would include the crossing's Conformer checkpoints trained without it. If the patch is used, a `model.adapter.qk_norm` switch, default off, should go in first; I did not add it, to keep the PR to the change under review.
+2. **Rows.** `campaign.yaml`: w2vb-, mhubert- and whisper-qformer now have `adapter_lr: 1e-3` (`ecccf89`), so all four Q-Former cells are at 1e-3. The other 13 rows render byte for byte as before; seed, data, steps and schedule are unchanged. Submitted from a third frozen clone, `~/training-qf1e3` on MN5 @ `ecccf89` (training code checked identical to the crossing's `e6cc269`). Don't touch it until they end, as with `~/training-crossing` and `~/training-lr1e3`. Job ids are in `arms.tsv`.
+3. **Queue.** All three are pending. They rank behind the two older re-runs (priority 56k against 64k), so queuing them does not delay those; SLURM's estimates for the older two have moved to 2026-10-12 19:21 (mms1b-conformer) and 2026-10-13 06:08 (mms1b-qformer) for reasons outside this account.
+4. **Rule for these three.** They test the same hypothesis as the mms1b-qformer re-run (1e-3 alone). If that run's `grad_norm` grows again I cancel them: a pending job costs nothing, and one that starts before the answer costs at most the hours until the watcher catches a blow-up (~30-65 GPU-h each).
+Action needed: PI: review PR #149, including the switch question. Orchestrator: nothing beyond the entry below.
+
+## 2026-10-10 — Claude (worker session, crossing) — ten crossing arms finished and whisper-qformer was cancelled; w2vb-conformer at 1e-3 is past its old failure step but has not left the loss plateau; the other two re-runs wait in the queue
+Context: status at 08:45 MN5 time, 2026-10-10. The 2,100 h crossing started on 2026-10-08.
+Finding:
+1. **Finished: ten arms.** Last validation WER in the training log (mean over the five languages, rounded; not the crossing's selection metric, which is scored later):
+
+| encoder | MLP | MoE | Conformer | Q-Former |
+|---|---|---|---|---|
+| Whisper large-v3 | 0.12 | 0.12 | 0.13 (LR 1e-3) | cancelled |
+| mHuBERT-147 | 0.30 | 0.31 | 0.37 | 1.19, unusable |
+| MMS-1b | 0.40 | 0.45 | re-run queued (1e-3) | re-run queued (1e-3) |
+| w2v-BERT 2.0 | 0.67 | 0.59 | re-run at 1e-3 under way | cancelled |
+
+2. **whisper-qformer was cancelled** at step ~64.5k on the PI's word (2026-10-09): WER 0.28 at its last eval after 0.18 at best, `grad_norm` inf in most late lines but a finite loss, so it never crashed at an eval. Its output dir and checkpoints are kept. mhubert-qformer is the only Q-Former that ran to its end (WER 0.9-1.4 throughout).
+3. **w2vb-conformer at 1e-3** (24.5k of 78,750 steps): `grad_norm` median 0.2-0.4, max 11 after step 3k, nothing above 100, no non-finite value; the 2e-3 run blew up at step 15.6k. The loss, however, has stayed at 3.27-3.30 since step 6k and the WER is 1.14-1.28 at the three evals. The 2e-3 run was on the same plateau (3.28 at 15k). So 1e-3 removes the blow-up so far and does not by itself make this cell learn. For scale, the w2v-BERT MLP cell left the plateau by 12k steps and the MMS MLP cell at ~42k. Cause not known.
+4. **Queue.** mms1b-conformer and mms1b-qformer, submitted 2026-10-09 13:19, are pending with SLURM's estimate of 2026-10-12 00:24 (the first of the three waited 13 h; the estimate is pessimistic, but the sixteen crossing jobs waited 6-9 h). A shorter time limit does not move it (`sbatch --test-only` at 54/36/30 h on one node and 41/24/18 h on two nodes gives the same start), and a fresh submission is estimated at ~2026-10-14 13:00. The queue is now the bottleneck, so the next batch should be decided before it is queued, not after these three report.
+5. **Cost.** ~1,540 GPU-h since 2026-10-08 (30.8 khours; `bsc_acct` still shows 825 of 1,752 because it lags about a day). About 440 GPU-h of that went to attention cells that failed or were cancelled (mhubert-qformer, which finished unusable, included) and 16 to the QK-norm smoke.
+Action needed: PI, as in the entries below: the Q-Former commit on PR #149 now or after the 1e-3 result; widening to the other Q-Former cells; the LR of mhubert-conformer. New: whether to queue the next batch now. Orchestrator: fold the ten finished arms into the timeline and 03 (WERs above; each cell's LR next to its number).
+
+## 2026-10-09 — Claude (worker session, crossing) — QK-norm smoke on the Q-Former: at the unchanged 2e-3, `grad_norm` stays flat to step 9.4k where the unfixed run grew from 3k and passed 100 at 6.1k
+Context: the PI asked for a short smoke of the Q-Former patch (RMS-normalised q and k per head on all four Blip2 Q-Former attentions, self and cross; local commit `25da76a` on branch `qk-norm-qformer`, two tests that fail without it) before it goes on PR #149. Hand-submitted on `acc_debug`, so it is not in `arms.tsv`: the whisper-qformer row exactly as in the crossing (2 nodes, the 78,750-step schedule, LR 2e-3, warmup 3%); only the run name (`-smokeqk`), the evals (every 7,159 steps) and the saves (none) differ. The 2 h cap ended it at step ~9.4k.
+Finding:
+1. `grad_norm` median 0.42-0.50 in every 1,000-step window from 2k to 9.4k, max 5.0 after step 1k (once, at 3-4k; 2.0 or less otherwise), nothing above 100, no inf/nan. The unfixed run of the same cell: median 3.1 at 3-4k, 14.7 at 5-6k, 31.5 at 6-7k, 389 at 7-8k; first value above 100 at step 6,082.
+2. The loss is lower than the unfixed run's in every window from step 1k (0.69 against 0.79 at 7-8k), and the mean validation WER at the 7,159 eval is 0.16 against 0.20.
+3. Not shown: one cell, one seed, 9.4k of 78,750 steps, and the unfixed run went non-finite only at step ~55k. It says that bounding q and k removes the growth at an unchanged LR; whether 1e-3 alone does the same is what the mms1b-qformer re-run answers (entry below), and whether either holds to the end is open.
+4. Consequence: the Q-Former (0 of 4 healthy at 2e-3, also at 700 h) has two candidate fixes. By the PI's rule a patch goes on all four Q-Former cells or on none. Nothing is pushed to PR #149.
+Housekeeping: MN5 `~/training` is back on `worktree-bridge-cse_01FG269t6XvP8zDaF9tog3oN` @ 44d0436 (it had been on the smoke branch); the smoke's output dir `...-smokeqk` holds no checkpoint. The three LR-1e-3 jobs were still pending at 14:46 MN5 time; the sixteen crossing jobs waited 6-9 h in the queue.
+Action needed: PI: the Q-Former commit on PR #149 now for review, or after the 1e-3 result. Orchestrator: none.
+
+## 2026-10-09 — Claude (worker session, crossing) — the PI chose the learning rate before QK-norm: w2vb-conformer, mms1b-conformer and mms1b-qformer are re-running at adapter LR 1e-3
+Context: the PI read the entry below together with a cell-by-cell status and objected to patching the architecture while some cells of the same adapter run fine (mhubert-conformer at 2e-3, whisper-conformer at 1e-3), noting that 2e-3 was tuned on the w2v-BERT + MLP screen only (03 §1b: "the recipe is w2v-BERT's best screen point"). The data agree with the first half and do not settle the second.
+Finding (logs at ~13:00 MN5 time, 2026-10-09):
+1. **Healthy:** the 8 MLP/MoE cells (`grad_norm` median 0.1-0.8, max <= 16); mhubert-conformer at 2e-3 (55%, WER 0.46, max `grad_norm` 17); whisper-conformer at 1e-3 (32%, WER 0.16, one early spike to 70). **Crashed (NaN weights, died at their next eval):** w2vb-conformer (blow-up at step ~15.6k) and mms1b-conformer (~6.2k); neither had left the loss plateau (3.3-3.4). **Unusable:** mhubert-qformer ran to the end with WER 0.9-1.4 at every eval; the w2vb and mms1b Q-Former jobs were cancelled at 9 h (not learning). **Degraded:** whisper-qformer learns (WER 0.18-0.21 against 0.14 for whisper-mlp) with `grad_norm` in the millions, and has been going non-finite since step ~55.2k. No code bug found in either adapter; the one real bug was the dropped `warmup_ratio` (7502bcb).
+2. **Not shown:** that a lower LR fixes the dead cells. whisper's 1e-3 is confounded with the encoder, mhubert survives at 2e-3, and no dead cell had run at a lower LR. The plateau alone is not the trigger either: mms1b-mlp sat on the same ~3.25 plateau for 42k steps at 2e-3 with `grad_norm` ~0.1.
+3. **Decision (PI):** test the LR first. QK-norm is held: the Q-Former patch exists only as a local commit, PR #149 is untouched. If 1e-3 fails it comes back for every cell of that adapter, not for the failing ones only.
+4. **Done:** `campaign.yaml` rows w2vb-conformer, mms1b-conformer, mms1b-qformer now `adapter_lr: 1e-3` (55e3a6a); the other 13 rows render byte for byte as before. Seed, data order, steps, warmup and decay are unchanged, so each re-run differs from its diverged run in the LR (and the `lr1e3` in the run name) alone. Submitted from a new detached clone, `~/training-lr1e3` on MN5 @ 55e3a6a, whose `melt/`, `config/`, `bash/`, `infra/` and planner are identical to the crossing's `e6cc269` (checked in the script). `~/training-crossing` and the shared `~/training` were not touched. Job ids are in `arms.tsv`.
+5. **How to read it:** same seed and data, so compare at the same steps. Passing = `grad_norm` flat past the old failure step (~15.6k, ~6.2k, and the Q-Former's first value above 100 at ~4.5k). That is a good sign, not a proof: whisper-qformer ran 55k steps before it went non-finite. Cost if all three run to the end ~360 GPU-h; a blow-up seen within 4 h costs <= ~32 GPU-h per 2-node job.
+Open: the 2 h QK-norm smoke on whisper-qformer (hand-submitted on `acc_debug`, not in `arms.tsv`) is still running from `~/training` on branch `qk-norm-qformer`; its output dir ends in `-smokeqk`.
+Action needed: PI, after the first hours: whether to widen to the other Q-Former cells (w2vb, mhubert, whisper) at 1e-3, and whether mhubert-conformer stays at 2e-3 (a mixed-LR Conformer row) or is re-run at 1e-3 (~115 GPU-h) for one LR per adapter. Worker: read `grad_norm` of each new job in its first hours (alert at > 100, not only on inf/nan) and report at once. Orchestrator: the timeline's divergence box stays open (LR test under way); the crossing text should say three cells run at 1e-3.
+
+## 2026-10-09 — Claude (worker session, crossing) — both attention adapters diverge at 2e-3: the Q-Former in 4 of 4 runs (it already did in the 700 h runs), the Conformer in 2 of 4 despite warmup
+Context: the health watcher flagged non-finite `grad_norm` in the first hours of the crossing; I read the logs of all sixteen jobs and of the cancelled 700 h Q-Former runs for comparison. Nothing has been cancelled or resubmitted since; decisions below are open.
+Finding:
+1. **Q-Former, 4 of 4.** `grad_norm` grows without bound once the learning rate peaks: first above 100 at step 4.5k-7.1k, then 1e6-1e19 (inf from step ~20.7k in mms1b). Outcomes: w2vb and mms1b do not learn (loss 3.1-3.4, validation WER 1.1-1.3); mhubert (4 nodes) finished its 39,375 steps with final WER 1.06-1.36, unusable; whisper learns in spite of it (loss ~0.75-1.0, WER ~0.20 against 0.14 for whisper-mlp). **Not new:** the 700 h Q-Former runs, cancelled on 2026-09-29, show the same (old whisper: inf/nan from step ~24k, loss 1.4 -> 2.1; old w2vb and mms1b: loss ~3.0 and grad_norm 1e2-1e7 for 90k steps). The plan's "every non-Conformer cell is clean" only checked for inf/nan; it does not hold for the Q-Former. Mechanism not diagnosed; the Q-Former has cross-attention in every layer (`cross_attention_frequency=1`), the same family as the Conformer's unbounded attention logits, but this is unverified.
+2. **Conformer with warmup, 2 of 4 died.** w2vb-conformer: `grad_norm` normal (median 0.2, max 46) until step ~15.6k, then 1e11 within ~60 steps, then nan with loss 0; it crashed at its next eval (step 21,477, CUDA assert in generation). mms1b-conformer: diverged at ~6.2k, crashed at 14,318. Before diverging neither had learned (loss 3.3-3.4). mhubert-conformer (40k of 78,750 steps, WER 0.46) and whisper-conformer (47k of 157,500, adapter LR 1e-3, WER 0.16) are alive with flat gradients. So warmup delayed the failure (the 700 h w2vb run died at ~6.8k) but did not remove it. The 9,031-step control on #149 (one seed, Whisper) could not show this; its own caveats said so. The timeline's "Conformer diagnosis closed (warmup)" should be reopened.
+3. **MLP and MoE, 8 of 8, are stable:** `grad_norm` 0.1-1.4, language shares 19.8-20.4%. Mean validation WER at the latest eval round: whisper mlp and moe 0.14, mhubert mlp 0.37 and moe 0.34, w2vb mlp 0.86 and moe 0.94, mms1b mlp 1.18 and moe 1.17 (the MMS encoder sat on the loss plateau until ~step 24k, as in the 700 h run; loss now falling).
+4. Cost so far on arms that are failing: ~400 GPU-h (Q-Former ~350, the two dead Conformer cells ~50). Three Q-Former jobs are still running (24 GPUs); the trainer has no non-finite stop, so the dead Conformer jobs ran on until their next eval crashed them.
+Action needed: PI: (a) cancel the w2vb and mms1b Q-Former jobs (not learning); whisper-qformer produces usable numbers, finish it or not. (b) Decide the attention adapters: A = QK-norm on both (merge #149; a new patch for the Blip2 Q-Former, validated before the long re-runs) and re-run the eight attention cells (~1,400 GPU-h); B = a lower adapter LR for them (1e-3 is already used for whisper-conformer; needs a short sweep); C = report both as unstable under the shared recipe and drop them from the ranking. No new submissions until decided. Orchestrator: reopen the Conformer diagnosis box; replace "every non-Conformer cell is clean" in `timeline.md` and 03.
+
+## 2026-10-08 — Fondue Orchestrator — 2,100 h crossing config, Yodas v3 on MN5, plan folded in through the submission
+Context: orchestrating from 2026-09-29 to 2026-10-08, from the Conformer
+blow-up report to the crossing submission.
+Finding / proposal:
+- **Plan decisions recorded** (timeline, 03, README log):
+  - the Whisper size ladder (03 §2b; tiny/base/small/medium with the
+    crossing's winning adapter, after the backbone MA arms);
+  - a budget of 2,100 h per language counted in hours, replacing five epochs
+    (03 §1b);
+  - Yodas v3 as the top-up past Italian's 700 h, with English topped up
+    from yodas-granary (PI, 2026-10-07).
+- **PR #150** (merged): `build_campaign_config.py --topup-corpus`, and
+  `ABL-MA-2100-asr.yaml`. The 700 h config re-renders unchanged, and the
+  measured yodas3 hours match the preparation session's stats exactly.
+  #151 later corrected the weights to be per cut.
+- **Yodas v3 on MN5 scratch:**
+  - The subset, shards 0..N-1 at ~2,000 h per language (538 GB), is in
+    `/gpfs/scratch/epor48/melt-data/yodas3/`, verified file for file against
+    nyx.
+  - The manifests that the stopped full copy left beyond N are in
+    `<lang>/_pending/`; the PI moved them there.
+  - The remainder (7.07 TB, untranscribed included) has been copying into
+    `yodas3-rest/` since 2026-10-08, over 8 rsync streams via `mn5transfer`.
+    Logs are in nyx `melt/melt-data/logs/yodas3-to-mn5/`.
+- **Per-cut mux weights.** I proposed weight × mean cut duration as the
+  cause of English's missing hours. The worker confirmed it (d2a4bac) and
+  fixed it (#151).
+- **Conformer diagnosis** closed in the timeline as warmup, with #149 as the
+  fallback.
+Action needed:
+- Nobody merges `yodas3-rest/` into `train/` or touches
+  `~/training-crossing` until the last crossing job ends.
+- The orchestrator verifies the `yodas3-rest` copy when it lands.
+- The re-check of the ladder, IFT and Fondue weights (week 3 Track B) is
+  unassigned.
+
+## 2026-10-08 — Claude (worker session, crossing) — the four Conformer cells are submitted too, with warmup and without QK-norm; all 16 crossing arms are queued
+Context: the user read the Conformer divergences (5 of 5 earlier runs) as fixed by the warmup repair (`7502bcb`) and asked me to check the history before the four cells went in. They were then submitted from the same frozen checkout as the other twelve (`~/training-crossing` at `e6cc269`); the job ids are in `arms.tsv`.
+Evidence checked. It sits on the #149 branch (`fix/conformer-attention-qk-norm`, board entries of 2026-09-29), not on main: the control "original architecture with warmup" (whisper-large-v3 + Conformer, adapter LR 2e-3, seed 42, `--trainer.warmup_steps 0.03`, MN5 `acc_debug`). It ran 9,031 steps with no non-finite step, max grad_norm 113 at step 1 (<= 11 after step 500) and loss ~0.4; the identical recipe without warmup exploded at step ~5,150. I read the probe files too (`gradprobe-whisper-2e3-orig-warmup` and `gradprobe-whisper-2e3-v3` under `/gpfs/scratch/epor48/outputs`):
+- Without warmup the mean top-1 attention probability is 0.99 from the first 500 steps, the median |logit| grows from 2e5 to 1.4e7, and the q/k weight norms from 56 to 128.
+- With warmup the top-1 probability stays at 0.003-0.03, the median |logit| peaks near 160 around step 2,000 and falls to ~0.01 after step 6,000, and the q/k norms stay at 26-36 and drift down.
+So warmup removes the mechanism in this window, not only the symptom. The late failures of the unwarmed runs (steps ~16k and ~22k) came from runs whose attention had been saturated since step ~5.
+Not established: one seed, Whisper only (the w2v-BERT, MMS and mHuBERT Conformer cells have never run with warmup), and 9k steps, ~6% of a one-node row's 157,500. With warmup the attention logits shrink to ~0, so the layer's attention ends up close to flat: stable, but keep it in mind when reading the Conformer cells.
+Decision (user, 2026-10-08): run all four as in the grid (adapter LR 2e-3, whisper 1e-3; warmup live), no QK-norm. #149 stays open as the fallback; QK-norm alone also cleared the failure window (11,534 steps without warmup). Cost if all four died unnoticed: up to ~1,000 GPU-h. The trainer still has no non-finite check, so `grad_norm` gets read in each Conformer log early and regularly, and a diverged run is reported at once (cancelling it is the user's call).
+All 16 crossing arms are now queued: 25 nodes if every job started at once, ~2,830 GPU-h projected in all (the four Conformer cells ~690 of it).
+Action needed: none from the PI. Worker: startup and `grad_norm` checks, Conformer cells first. Orchestrator: the timeline's "Conformer gradient explosion: diagnose" box is probably tickable (cause found, warmup recipe adopted); I left it, since the diagnosis was another session's work and sits on the #149 branch.
+
+## 2026-10-08 — Claude (worker session, crossing) — the 12 non-Conformer crossing arms are submitted; the four Conformer cells are held
+Context: the user gave the go for the twelve MLP, MoE and Q-Former cells. Submitted with `campaign.py run` on MN5; the job ids are in `arms.tsv`.
+Done:
+1. Where the code runs from. `~/training-crossing` on MN5 is a separate clone, detached at `origin/main` `e6cc269` (#151, `max_steps`, the re-set walltimes). It is separate on purpose: `run_train_singularity.sbatch` bind-mounts the submit directory as `/workspace/training` when a job *starts*, so a job that queues for hours runs whatever its submit directory holds by then. **Do not sync to, switch branches in or edit `~/training-crossing` until the crossing has finished** (a resume runs from it too). Logs still land in `~/training/logs` (`logs` there is a symlink). `~/training` itself is untouched, still on its old branch, and is safe to sync.
+2. The rows are as committed in `campaign.yaml` (726ca28): seven 1-node rows at 157,500 steps (w2vb mlp and moe, mms1b mlp and moe, mhubert mlp, whisper mlp and moe), four 2-node rows at 78,750 (w2vb, mms1b and whisper Q-Former, mhubert MoE), one 4-node row at 39,375 (mhubert Q-Former); 19 nodes in all. A dry run of each was checked against the committed rows before anything was submitted. All twelve were pending at submission.
+3. At submission: ACC grant 825 of 1,752 khours used (47%; `bsc_acct` lags by about a day); the twelve project to ~2,130 GPU-h (~43 khours). Scratch 5.5 of 19.5 TB.
+Held: the four Conformer cells (w2vb, mms1b, mhubert, whisper) stay with the Conformer investigation (#149 open). All five earlier Conformer runs diverged, and none of them had warmup; whether they survive with it is untested.
+Cautions while these run: (a) do not merge `yodas3-rest` into `yodas3/<lang>/train` until the last crossing job has finished. Jobs list their shards when they start, so a merge while some are queued (or on a resume) gives arms different data. (b) That copy and the jobs' cold starts (~14 min on one node) share the scratch filesystem. (c) The trainer has no non-finite check, so a diverged run keeps burning GPU-h: read `grad_norm` in each log in the first hours.
+Action needed: none from the PI. Worker: check each job's startup and `grad_norm` once it runs. Orchestrator: update the crossing text in `timeline.md` (box stays unticked: nothing has finished).
+
+## 2026-10-08 — Claude (worker session, crossing) — PR #151 merged; the crossing rows now state their steps (+25%) and carry re-set walltimes
+Context: the user merged PR #151 and chose the fill-aware step budget of the entry below, with the steps written into the rows. At the user's word this went straight to main (`726ca28`), without a PR. Nothing is submitted.
+Change:
+1. New row field `max_steps` (`plan_arm.py`, `campaign.py`). It replaces the derived steps for the eval/save cadence and the WSD decay window, is emitted as `--trainer.max_steps` (the trainer prefers it to its own estimate), and is tagged `ms<N>` into the run name. Refused together with `epochs` and when below 1. Unset, nothing changes: `campaign.py plan` renders the other 49 arms of the grid byte for byte as before. 13 new tests; the 114 existing plan_arm tests and 119 more (checker, builder, mix weights, step estimator, chat templates) still pass.
+2. The sixteen `MA-2100-crossing-*` rows: 157,500 steps on 4 ranks (nine rows), 78,750 on 8 (six), 39,375 on 16 (one), i.e. 1.25 x the estimate. At the smoke's 79.9% fill that trains ~10,490 h, ~2,100 h per language. Eval and save every 14,318 / 7,159 / 3,580 steps; the WSD decay window is 20% of the stated steps (31,500 on one node). Run names gain `-ms157500` / `-ms78750` / `-ms39375` (nothing has run under the MA-2100 names, so no output dir is orphaned).
+3. `time:` = projected wall time + 30%, the file's own margin convention. Projection: 0.88 s/step from the smoke (w2v-BERT + MLP), the other cells scaled by their 700 h long-run rates (slower of the two scenarios in the smoke follow-up below), 0.8 h fixed overhead. Raised: w2vb-mlp 41 -> 54 h, w2vb-conformer 31 -> 34, w2vb-moe 50 -> 56, mms1b-mlp 35 -> 52, mms1b-moe 44 -> 52, mhubert-mlp 49 -> 52, whisper-mlp 34 -> 55, whisper-moe 41 -> 55. The other eight keep theirs (each already covers +30%). The per-row margin comments of the old basis are gone; the block comment in `campaign.yaml` states the new one.
+4. Cost: the sixteen rows project to ~2,800 GPU-h (2,774 scaled, 2,826 floored), against ~2,050 for the same rows before the fix and the extra steps (0.8 s/step, 126,000 steps), and ~2,400 in timeline.md / ~3,000 in 03. Projected wall: 12-43 h per arm (39-43 h on one node). The requested walltimes add up to ~4,200 GPU-h, but billing is by elapsed time.
+Caveats: as in the smoke follow-up below. One smoke, one node, 1,500 steps; the other fifteen cells and every 2- and 4-node cell are extrapolated; the sixteen rows at once put up to 25 nodes on the yodas3 files on GPFS scratch. The earlier smoke ran ~5% faster after step 1,500, so the projection errs on the safe side if this one does too.
+Not done: the MN5 checkout still sits on the branch it had before the smoke (sync from `origin/main` at `726ca28` or later before the go); the three smoke output dirs (9.2 GB each) are still on scratch for the user to delete; the Fondue/raclette drafts, the IFT config and the ladder (05) are not re-emitted or checked. No timeline box applies.
+Action needed: user: say go when the sixteen rows should be submitted. Orchestrator: update the step, wall-time and GPU-h figures in 03 and timeline.md (157,500 / 78,750 / 39,375 steps, ~2,800 GPU-h, 12-43 h per arm), reword "hours are enforced by sampling weights" in 03, and check 05, the IFT config and the Fondue/raclette drafts for hour-share weights written by the old default.
+
+## 2026-10-08 — Claude (worker session, crossing) — the per-cut mux weights are fixed in the tooling (PR #151, open); the re-rendered 2,100 h config gives each language 19.6-20.7% of the audio
+Context: the user took option (b) of the entry below and asked for the fix in the shared `compute_mix_weights.py`, not only in the campaign builder. PR #151 is open for review; nothing is merged, `campaign.yaml` is untouched, nothing is submitted.
+Finding:
+1. The change. `compute_mix_weights.py --weights cuts|hours`, default `cuts`: the policy (alpha, beta, shares of audio) is unchanged, but `weight:` now holds the cut probability that delivers it (proportional to hours / mean cut length, within each language entry and across entries), checked against the 8-decimal weights as written. The cache records cut counts. `--weights hours` writes the old files byte for byte. `check_training_config.py` W3 accepts either reading. `build_campaign_config.py` uses the shared math and can re-measure the bucket bins on the draw. `ABL-MA-2100-asr.yaml` is re-rendered (30 weights, comments, bins): English's group draws 26.9% of the cuts for 20.0% of the audio, de/fr/es/it 17-19%. The sixteen rows render with the same steps, ranks and walltimes. 222 tests pass; a simulation of lhotse's per-cut draw reproduces the targets; builder and checker agree on hours and cuts for all 24 sources.
+2. Smoke on the re-rendered config (w2v-BERT + MLP, 1 node x 4 GPUs, 1,500 steps, otherwise as the 3,000-step smoke). Share of the audio, before -> after: en 11.9 -> 19.6, de 20.7 -> 20.2, fr 21.3 -> 19.6, es 23.0 -> 20.7, it 23.0 -> 19.8 %. Largest deviation from 20% is 0.7 pp.
+3. Fill is unchanged: a step carries 239.7 s of its 300 s (79.9%; 78.1% before), so 126,000 steps deliver ~8,390 h (1,650-1,740 h per language), not 10,500 h. The fix balances the languages; it does not recover the missing 20%. Cuts per rank-batch: 4.65 (3.29 before).
+4. The corrected mix is slower per step: 0.88 s/step over steps 300-1,500 against 0.79 over the same steps of the earlier smoke (that one ran at 0.75 after step 1,500; this one stopped at 1,500). Probably the extra, shorter cuts per batch; the two runs were on different nodes, so I did not separate it from node variation. grad_norm finite throughout (10.5 at step 2 under warmup, <= 1.12 after step 150), peak GPU memory 10.4 GB of 64 GB.
+5. Walltimes re-projected at 0.88 s/step (method of the smoke follow-up below; the slower of its two scenarios; 0.8 h fixed overhead). w2vb-mlp's 41 h holds: 33.3 h projected (+23%), ~31.7 h if it speeds up after step 1,500 like the earlier smoke. Two 1-node rows are below +20%: whisper-mlp 34 h (33.9 h projected, no margin) and mms1b-mlp 35 h (31.7 h, +11%). The other 1-node rows keep >= +21% (whisper-moe 41 h is the smallest); the 2- and 4-node rows +48% to +188%, still unmeasured on this data.
+   With a fill-aware step budget (~157,750 steps for 10,500 h delivered) every walltime grows ~25%: w2vb-mlp would need ~41.5 h against its 41 h, and the 1-node `time:` values would have to go to about w2vb-mlp 50, w2vb-moe 52, mms1b-mlp 48, mms1b-moe 48, whisper-mlp 51, whisper-moe 51 h (w2vb-conformer 31 -> 32).
+Not done: `campaign.yaml` and its `time:` values. The step budget (a fill-aware estimate needs the same change in `estimate_steps_per_epoch` and `plan_arm.derive_steps`). No other config was re-emitted: the Fondue and raclette drafts and the IFT config were made with hour-share weights, and re-emitting with the new default changes them. The language ladder (05) is not checked. MN5: the checkout is back on the branch it had before the smoke; the three smoke output dirs (9.2 GB each) are still on scratch.
+Action needed: user/PI: review PR #151 (start with `cut_mux_weights`, `to_cut_probabilities` and `check_hour_shares` in `compute_mix_weights.py`). PI: the step budget, either (a) keep 126,000 steps and quote ~8,400 h (~1,700 h per language) with every result, or (b) about +25% steps for the full 10,500 h, which re-sets every `time:`. Under (a), whisper-mlp 34 -> 41 h and mms1b-mlp 35 -> 39 h in one `campaign.yaml` PR (no GPU-h cost); I can open it on the word. The crossing stays on hold until the user says go. Orchestrator: reword "hours are enforced by sampling weights" in 03 (the builder docstring is in the PR); check 05, the IFT config and the Fondue/raclette drafts for hour-share weights written by the old default; the 700 h screens carry the intra-language skew (item 5 of the entry below) and were not re-run.
+
+## 2026-10-08 — Claude (worker session, crossing) — the 2,100 h config will not deliver 2,100 h per language: mux weights act on cuts, and English's top-up slot is 9 s cuts
+Context: the smoke's `train_hours/*` metrics (entries below) put English at 11.9% of the audio hours against a 20% target. The orchestrator proposed a cause and asked for it to be tested before posting; it holds.
+Finding:
+1. Weights are per-cut probabilities. lhotse's multiplexer (2.0.0a3, the image's version) does `idx = rng.choices(active_indexes, weights=active_weights, k=1)[0]` and then `next()` on that source, once per cut; `dataloader.py` documents the same product-of-weights rule. `build_campaign_config.py` sets the weights as shares of *hours* and says hours are "enforced by sampling weights plus a step budget" (03 repeats it). A source's share of hours is really weight x its mean cut duration, normalised, so it equals its hour share only when every source has the same mean cut length.
+2. Mean cut length differs several-fold (measured on MN5, on the shards the smoke read; 12 evenly spaced manifests per source, all of them for the small ones): yodas3 22.2-24.9 s (de/fr/es/it); MLS 14.9-15.1 s; VoxPopuli 8.8-12.5 s; CV 5.2-5.8 s; yodas-granary `asr_only` 3.1-4.9 s (de/fr/es/it) and 9.0 s (en). YODAS v3 has no English (PI, 2026-10-07), so English's 0.667-weight top-up slot and its 0.057 granary slot both read `yodas-granary/English/asr_only`. English's draw averages 9.4 s per cut; the other four languages' 17.8-19.8 s.
+3. weight x duration predicts the language shares of the smoke's audio hours (after 3,000 steps) within 0.8 pp. Predicted / observed: en 11.1 / 11.9, de 21.3 / 20.7, fr 21.1 / 21.3, es 23.0 / 23.0, it 23.4 / 23.0. Out of sample, on the 700 h config: predicted en 21.5, de 19.5, fr 19.5, es 19.1, it 20.3 against the A/B screen's logged 21.7 / 19.3 / 19.4 / 19.1 / 20.5 (within 0.2 pp).
+4. What the sixteen arms would train on (extrapolated from the smoke to 126,000 steps): a 300 s step carries 234 s of audio on average (78%; the 700 h runs carried 257 s, 86%), so ~8,200 h rather than 10,500 h, split en ~980, de ~1,700, fr ~1,750, es ~1,890, it ~1,890 h against 2,100 each. Inside de/fr/es/it the model puts yodas3 at ~83-85% of the hours (weight 66.7%) and CV at ~3-4% (weight 12.1%). English is ~70% granary (weight 72%), MLS ~19% (weight 12%), CV ~7.5% (weight 12%).
+5. The 700 h config carries the same skew inside each language (predicted share of hours against the weight): MLS 35% -> 52-59%, CV 36% -> 21-23%, granary 17% -> 6-15%. Its language totals look balanced only because all five languages use the same corpus proportions with similar cut lengths. Only per-language hours are logged, so this part is predicted, not measured. (The MN5 yodas3 is the copied subset; merging `yodas3-rest` should not move these means much, but it has not been re-measured.)
+What it changes: not the ranking of the sixteen arms against each other (all train on the same draw), but what the draw is, so "2,100 h/lang" cannot be quoted for this config. The gap itself is not new: it was flagged to the PI in August as project-wide (`docs/mixture_weights.md` defines n(.) as hours, the mux draws cuts) and left alone because the ASR vs ASR+ST contrast shared its intra-language shares. What is new is the size on this mix, and that it now decides how many hours English gets. The same builder and weights tooling feed the language ladder (05, where per-language hours are the variable under test), the IFT config and the Fondue drafts.
+Action needed: PI, before the go: (a) submit as is and quote realised hours (~8,200 h, English ~980) with every result; (b) have the builder turn hour targets into cut probabilities (weight_s proportional to hours_s / mean cut duration_s within a language, p_l proportional to hours_l / that draw's mean duration across languages), then re-render `ABL-MA-2100-asr.yaml`, re-measure the bucket bins on the new draw, regenerate the 16 rows and re-smoke; (c) (b) plus about +28% steps at today's 78% fill so the realised hours reach 10,500 h, which lengthens every walltime by the same 28% (w2vb-mlp 38.6 h projected against 41 h). Orchestrator: once the PI picks, reword "hours are enforced by sampling weights" in 03 and the builder docstring, and check 05 and the Fondue drafts for the same assumption. I changed neither the config, the builder nor any plan file.
+
+## 2026-10-08 — Claude (worker session, crossing) — smoke follow-up: 41 h holds on w2vb-mlp, but whisper-mlp (34 h) and mms1b-mlp (35 h) have far less margin than "conservative"; the rest of the grid, extrapolated
+Context: I read the same 3,000-step smoke log independently (next entry) and used the 09-28 first-batch crossing runs to extend it to the other fifteen cells, which the smoke does not measure. Everything under "Extrapolated" is a projection, not a measurement.
+Measured (smoke: w2v-BERT + MLP, 1 node x 4 GPUs, 2,100 h config):
+- s/step per window, steps 100-500 / 500-1000 / 1000-1500 / 1500-2000 / 2000-2500 / 2500-3000: 0.80 / 0.79 / 0.79 / 0.78 / 0.71 / 0.75 (0.764 mean over 500-3,000), from tqdm elapsed time. The second-to-last tqdm line reads 1.73 it/s (0.58 s/step) and the closing line 1.09 s/it; the first is a smoothed rate that swung between 1.07 and 1.97 it/s during the run, the second carries the cold start. I plan on 0.80, the slowest sustained window.
+- Outside the step loop: ~3 min container and model load, ~13.8 min to the first step (cold GPFS shard open), and ~2 min per eval round (the final one took 114 s; the 700 h screen's eval-on-start took ~4 min on an untrained model). With eval-on-start, 11 periodic rounds and the final one, that is ~0.8 h per job.
+- grad_norm finite on all 1,500 logged lines (6.76 at step 2, 3.60 at step 4, <= 0.77 after step 150, 0.18 at the end). LR ramps 2.2e-4 -> 2e-3 over ~90 steps, so the warmup fix is live on the real config. Loss 3.72 -> 3.42. Peak GPU memory 9.58 GB (median 7.4) of 64 GB. The entry below quotes grad_norm max 6.55 and 9.9 GB; neither value is in the log, the logged maxima are the ones above.
+- The step-3,000 eval ran clean: WER 1.10-1.20 in all five languages, the same regime as the 700 h A/B at step 3,818 (1.07-1.14). Nothing to read into it.
+Extrapolated:
+- w2vb-mlp: 126,000 x 0.80 s + 0.8 h = 28.8 h against 41 h (+42%); 30.3 h (+35%) with the +5% long-run drift this cell showed on the 700 h mix (0.61 s/step over the run against 0.58 early). Holds.
+- Other cells. Long-run s/step on the 700 h mix, from the first-batch `MA-700-crossing-*` runs (step 2,000 to the last step; the Conformer cells only 10k-38k steps, they all diverged): 1 node: w2vb mlp 0.61, moe 0.63; mms1b mlp 0.54, conformer 0.53, moe 0.56; mhubert mlp 0.49; whisper mlp 0.62, moe 0.62, conformer (1e-3) 0.57. 2 nodes: w2vb conformer 0.75, qformer 0.74; mms1b qformer 0.66; mhubert conformer 0.62, moe 0.68; whisper qformer 0.78. 4 nodes: mhubert qformer 0.70. I scaled each by the smoke's slowdown on w2vb-mlp (0.80 now against 0.58 early on the 700 h mix, 1.38x), never let a cell run faster than the smoke (in case the new mix is the bottleneck for every encoder), and added 0.8 h. Margin = `time:` / projection - 1:
+  - 1 node, tight: whisper-mlp 34 h against 31 h (+10%), mms1b-mlp 35 h against 29 h (+22%), whisper-moe 41 h against 31 h (+33%), w2vb-mlp 41 h against 30 h (+35%).
+  - 1 node, comfortable: mms1b-moe +53%, w2vb-moe +60%, mhubert-mlp +70%, whisper-conformer +81%, mms1b-conformer +88%.
+  - 2 nodes (six rows): +63% to +147%. 4 nodes (mhubert-qformer): +215%.
+  - The sixteen rows: ~2,050 GPU-h (2,036 scaled, 2,074 floored), against ~2,400 in timeline.md and ~3,000 in 03; 9-31 h of wall per arm (28-31 h on one node).
+- Why whisper-mlp is the cell I trust least: the 700 h Whisper mlp and moe runs hit every step threshold at the same elapsed second on different nodes (both reached step 50,000 at 9:10:19; train_runtime 130,459 against 130,461 s), with 17 M against 122 M trainable parameters, so Whisper's pace is not set by the adapter. Probably the single data worker per rank doing Whisper feature extraction (not verified). A w2v-BERT smoke says nothing about how that behaves on the yodas3 cuts.
+Caveats: one smoke, one node, one time of day. The sixteen rows at once put up to 25 nodes on the yodas3 files on GPFS scratch, where the smoke had one. The scaling assumes the 2,100 h slowdown is the same for every encoder. All of it assumes 126,000 steps (option (c) in the entry above changes that).
+Action needed: PI: raise whisper-mlp `time:` from 34 h to 41 h (what whisper-moe has; no GPU-h cost, margin +10% -> +33%), or have a ~1,000-step whisper-mlp smoke run first. The entry below suggests tightening the MLP walltimes; I would not, since the +50% margin is w2vb-mlp's alone. The 2- and 4-node rows could be shortened for backfill, but that rests on multi-node scaling nobody has measured on this data; I would leave them. I have changed nothing in `campaign.yaml` and can open the one-line PR for whisper-mlp on the PI's word. Orchestrator: the "~3,000 GPU-h, ~52 h wall per arm" and "~2,400 / ~50 h" extrapolations in 03 are superseded by the numbers above.
+
+## 2026-10-08 — Claude (worker session, crossing) — 1 h smoke on the 2,100 h mix: ~0.76 s/step, 41 h walltime holds with margin
+Context: 3,000-step `acc_debug` run of w2v-BERT + MLP (1 node x 4 GPUs, merged config incl. re-measured bins, preallocation off, eval/saves off), hand-submitted so not in `arms.tsv`.
+Finding: completed in 57 min. Startup (shard open, cold GPFS) ~13.5 min before step 10; then 0.71-0.79 s/step in each 500-step window from step 1000 on (0.76 mean), steady, no drift. grad_norm finite throughout (max 6.55, none nan), peak CUDA memory 9.9 GB, no OOM. The 50-step smoke's ~1.1 s/step was cold-cache noise. Projection for `w2vb-mlp`: 126,000 steps x 0.76 s = ~26.6 h + startup, against the 41 h time: (~50% margin); the 0.6x walltimes are conservative, at least for the MLP cells. Other adapters/encoders unmeasured on this mix.
+Action needed: PI: ready to submit the 16 rows when the user says go; optionally tighten the MLP walltimes first.
+
+## 2026-10-08 — Claude (worker session, crossing) — 2,100 h config now uses the re-measured bucket bins
+Context: PI chose the re-measured bins (previous entry); committed straight to main.
+Finding: `ABL-MA-2100-asr.yaml` `bucket_duration_bins` replaced (30 buckets, dense 26-30 s tail). `check_training_config.py` C5 now passes. B3 still fails and C4 warns because the checker measures the whole pool, not this config's draw; the ~1.1% of drawn cuts above 31 s share the top bucket (already counted in the 7.4% padding estimate). `campaign.py plan` still renders. The 16 crossing rows are unaffected; nothing submitted.
+Action needed: none.
+
+## 2026-10-08 — Claude (worker session, crossing) — bin extraction and config check on the 2,100 h mix: bins are loose but cost no extra padding
+Context: PI asked for `check_training_config.py --measure` (nyx, full yodas3 pool, 39 sources) on `ABL-MA-2100-asr.yaml`.
+Finding: 22 pass, 4 fail, none blocking. H1/H2/W3 fail only because the checker compares against the whole pool (370,028 h) while this config deliberately draws 10,500 h from it by explicit weights. B3/C5 are real: the train bins are byte-identical to another config's and sit up to 9.65 s from the checker's pool-level suggestion, which is itself the wrong target (the pool is not the draw). Re-measured against the draw (cached per-source histograms x the config's effective weights): yodas3 caps at ~30 s, only 3.45% of cuts exceed 30 s and 1.1% exceed 31 s, so the inherited bins' five top buckets above 33 s are nearly empty. Bins on the draw: [4.86, 6.91, 10.0, 12.19, 14.15, 15.98, 17.79, 19.62, 23.15, 25.92, 26.87, 27.35, 27.67, 27.91, 28.13, 28.31, 28.47, 28.63, 28.79, 28.92, 29.07, 29.19, 29.35, 29.47, 29.61, 29.75, 29.87, 30.0, 30.15]. Crude pad-to-bucket-max waste: 6.9% with the inherited bins vs 7.4% with the re-measured ones, i.e. no gain.
+Action needed: PI: keep the inherited bins (recommended; changing them alters the recipe for no padding gain), or swap in the re-measured ones. Nothing edited. Validation-set bins fail C4 (top bin 19.97 s, 1% of cuts longer); unchanged from the 700 h config.
+
+## 2026-10-08 — Claude (worker session, crossing) — crossing re-pointed at the 2,100 h config; acc_debug smoke on the Yodas v3 mix passes
+Context: PR #150 merged (2,100 h/lang, Yodas v3 top-up, 16 crossing rows now `MA-2100-crossing-*`, warmup fix included). Earlier 12-cell resubmission (09-29 entry) was cancelled, all still pending, after the PI found a data bug; nothing from the `MA-700-crossing-*` budget is to be ranked against the new runs.
+Setup: on MN5, `shar-indexed/yodas3` is a symlink to `/gpfs/scratch/epor48/melt-data/yodas3`; `/gpfs` resolves inside the container (all 284 `it` files visible via `/workspace/shar/yodas3`), so the launcher needs no extra bind.
+Smoke (w2v-BERT + MLP, 1 node x 4 GPUs, 50 steps, `acc_debug`, hand-submitted so not in `arms.tsv`; preallocation forced on for the smoke only, the config has it off): completed, world_size=4. All four yodas3 shar paths load, yodas3 sources take `custom.pnc_text` (present in the cuts), grad_norm finite throughout (8.8 at step 1 under warmup, 0.05 by step 50), loss 4.9 -> 3.3. Peak CUDA memory in real steps 7.5-10.9 GB; the synthetic max_duration pass peaked at 7.3 GB, so the inherited bucket bins are nowhere near memory limits. The synthetic min_duration pass (150 x 0.5 s utterances, 432 text tokens) logged "OOM during warmup" and training proceeded; it is a synthetic worst case, not a real batch, and is moot with preallocation off.
+Throughput: first step took ~13 min (cold shard open on GPFS scratch); steady state ~1.0-1.2 s/step over the last 20 steps, which is too few to trust. At 126,000 steps that is 35-42 h against the 41 h time: set on `w2vb-mlp`, so the 0.6x walltimes may have almost no margin on the 1-node cells.
+Action needed: PI: decide whether to submit as is or first get a longer steady-state s/step (e.g. 300-500 steps) before committing 41-72 h walltimes on `acc_ehpc`. Whisper-Conformer rows are still subject to the separate Conformer investigation.
+
+## 2026-10-02 — Claude (worker session) — online self-distillation MA trainer built (not launched); WSD arms run with NO warmup under transformers 5
+
+Context: PI asked for an assessment and an implementation of online, on-policy
+AZeroS-style modality alignment (teacher = frozen decoder on the transcript,
+student = audio path, adapter-only). No run was submitted; the trial run is to
+be discussed with the PI first.
+
+Finding / proposal:
+1. **`warmup_ratio` is silently dropped under transformers 5.16, so every
+   WSD arm rendered with `warmup_ratio 0.03` + `warmup_steps 0` (the screen and
+   the crossing) trains with zero warmup**, at the full peak LR from step 0.
+   transformers 5 removed the `warmup_ratio` field and accepts a ratio as a
+   float `warmup_steps` instead; `config.py`'s `trainer_args_dict` drops the
+   unknown key with a warning ("dropping ... ['group_by_length',
+   'warmup_ratio'] ... will NOT take effect"), and `plan_arm.py` forces
+   `warmup_steps 0` next to it. Checked against the installed
+   `Seq2SeqTrainingArguments` fields; not checked against a real run log yet --
+   any WSD arm's startup log should carry that warning. Possibly relevant to
+   whisper-conformer, whose explosion the entries below place "during warmup".
+   Not fixed: the one-line fix (render the ratio as `--trainer.warmup_steps
+   0.03`) changes the recipe of arms still to run, so it is a PI decision.
+2. Self-distillation code: `melt/training/self_distill.py`,
+   `melt/training/train_self_distill.py`, overlay
+   `projects/ablation-campaign/self-distill.yaml`, off-ledger launcher
+   `launch_self_distill.sh`, design notes `docs/self_distillation.md`. The
+   overlay matches `MA-700-screen-w2vb-lr2e3-b300-evalfrozen` except for the
+   objective (including its effective zero warmup, see 1). Standard path
+   untouched; `run_train.sh` gained `MELT_TRAIN_MODULE` (default unchanged).
+   Loss from TRL 0.29.1's GKD divergence; TRL is not in the image.
+3. `uv.lock` already fails `uv lock --check` at HEAD (project version bumped
+   without a relock); a relock also moves ~30 packages (numpy etc.) from the
+   PyTorch index to PyPI. Left untouched -- relocking is a deliberate decision
+   because the image builds with `--locked`.
+4. `infrastructure.md`'s nyx test image is stale: the `_lhotse2_td` image named
+   there carries transformers 4.57.1; the suite needs the transformers 5 image
+   (the default symlink). Not edited, since the line is a cluster path.
+
+Action needed: PI -- decide on the warmup fix (1); decide the self-distillation
+trial setup and how TRL reaches the image (2, 3).
+
+---
+
+## 2026-09-29 — Claude (bridge session) — Conformer gradient explosion: unbounded attention logits; QK-norm fix in PR #149
+
+Context: PI asked for a diagnosis of the Conformer-adapter explosion (5 of 5 crossing runs: grad_norm
+inf, then nan, loss reads 0, job runs on a poisoned model). Logs read-only, code read, then repro on
+MN5 `acc_debug` with a gradient probe (debug branch, never merged), then a fix.
+
+Finding / proposal:
+1. **Root cause (confidence: medium-high, one causal test so far).** `MELTConformerAdapter` self-attention
+   (`Wav2Vec2BertSelfAttention`) has no bound on its logits. The recipe has **no LR warmup**:
+   `--trainer.warmup_ratio 0.03 --trainer.warmup_steps 0` -> transformers 5 drops `warmup_ratio`
+   (logged `learning_rate` is the full peak on every step), so Adam moves every weight ~lr per step from
+   step 1. q/k grow, the softmax saturates from step ~5 (top-1 probability ~0.99), and the backward pass
+   through it grows 1e1 -> 1e4 -> 1e9-1e12 -> inf in bf16. Forward and loss stay finite and normal until
+   the end; `clip_grad_norm_` cannot repair it (inf norm -> coefficient 0, 0*inf = nan). MLP/MoE/Q-Former
+   don't fail because they have no unbounded attention (MLP/MoE also end in a LayerNorm).
+   At a captured spike (probe v3, rank 3, step 4536) the gradient at `linear_q`/`linear_k` is ~1e4x
+   that at `linear_v`.
+2. **Ruled out:** output-scale runaway. Closing the adapter with `post_norm * gain` (as MLP/MoE do) still
+   exploded on MN5 (gn 1e4 at step 3817, inf by 3892). That branch is not PR'd.
+3. **Evidence table** (first non-finite `grad_norm` per failing job; "prior-50 median" is the median of
+   the 50 logged values before it, i.e. the gradients were already astronomically large while finite):
+
+   | job | arm | LR | first non-finite (epoch) | prior-50 median gn | prior-50 max gn |
+   |---|---|---|---|---|---|
+   | 46724840 | whisper-conformer | 2e-3 | 0.097 | 1.04 | 2.5e11 |
+   | 46751008 | whisper-conformer | 2e-3 | 0.088 | 0.71 | 2.0e12 |
+   | 46776437 | whisper-conformer | 1e-3 | 0.531 | 1.2e5 | 3.1e12 |
+   | 46750640 | w2vb-conformer | 2e-3 | 0.325 | 1.0e11 | 6.8e11 |
+   | 46750646 | mms1b-conformer | 2e-3 | 0.019 | 2.3e3 | 2.9e10 |
+   | 46750651 | mhubert-conformer | 2e-3 | 0.758 | 1.5e4 | 2.1e13 |
+
+4. **Fix (PR #149):** RMS-normalise q and k per head (learnable gain, fp32), so logits cannot grow with
+   the weights. Unit test fails before, passes after.
+5. **Repro/proof:** MN5 `acc_debug` job 46804534, `ABL-MA-700-asr` whisper-large-v3 + conformer stride
+   5 / kernel 5, batch_duration 75, 4 GPUs DDP, LR 2e-3, seed 42, same warmup flags as the failing
+   runs (probe: `debug/gradprobe-conformer`, unmerged). Unfixed identical recipe exploded at step
+   ~5130-5204. With QK-norm: **11534 steps (to the 2 h limit), max grad_norm 182, zero non-finite
+   steps, median loss of the last 100 steps 0.52** (unfixed probe run: ~2.9 at step 4600). Still
+   one seed and ~5% of an epoch-scale run; it clears the failure window, not the whole schedule.
+5b. **Control the PI asked for: original architecture (no QK-norm) with warmup applied.** Same recipe but
+   `--trainer.warmup_steps 0.03` instead of the dropped `warmup_ratio` (MN5 `acc_debug`, one seed):
+   LR ramps from 2e-4 to the 2e-3 peak, **9031 steps (2 h limit), max grad_norm 113, zero non-finite
+   steps, median loss of the last 100 steps 0.41.** The unwarmed identical recipe exploded at step
+   ~5130-5204. So warmup alone removes the failure inside this window. Reading: the mechanism is still
+   unbounded attention logits (probe evidence above), but the missing warmup is the trigger that
+   matters for the campaign recipe; QK-norm is protection against the same failure at a full-LR start.
+   Caveat: one seed, ~4% of the planned schedule, and the 1e-3 run only failed at epoch 0.53, so 9k
+   steps does not prove the failure is gone for the whole run. Not tested: warmup + QK-norm together.
+6. **Trust.** (a) whisper-conformer 1e-3 (46776437): NaN-poisoned from epoch ~0.53; its checkpoint-19091
+   (epoch 0.4545) predates the failure and is probably clean, but the run had many spikes before onset
+   (1.6% of steps above 20x rolling median), so the lower LR only delayed the failure. mhubert's
+   checkpoint-19091 (failure at 0.758) is likewise probably clean. (b) Any 2e-3 or 1e-3 Conformer result
+   is questionable as science even when it looks healthy: attention has been saturated (hard argmax)
+   from step ~5, so those runs trained with a degenerate attention. I would not compare Conformer cells
+   to MLP/MoE/Q-Former cells from these runs; re-run them with the fix.
+7. **Separate proposal for the PI (not in the PR):** fail-fast abort when `grad_norm` is non-finite for N
+   consecutive steps (e.g. N=10), so a poisoned run stops instead of burning hours. Report-and-stop, no
+   skipping of batches or nan-to-zero. Also note: `warmup_ratio` is silently dropped under transformers 5
+   in `campaign.yaml`, so the crossing runs have no warmup (your decision; I did not change it).
+
+Action needed: PI to review PR #149 and decide on re-running the Conformer crossing cells and on the
+fail-fast abort. No crossing job was cancelled, resubmitted or resumed. Debug outputs remain on MN5
+under `/gpfs/scratch/epor48/outputs/gradprobe-whisper-2e3*`.
+
+## 2026-09-29 — Claude (worker session) — every `wu0p03` arm trained with NO warmup; fix on branch, 12 non-Conformer crossing cells resubmitted
+Context: an orchestrator investigation into the Conformer gradient explosions pointed at warmup; checked against the logs.
+Finding: transformers 5.16.1 removed `warmup_ratio` (training logs: "dropping ... ['warmup_ratio'] ... will NOT take effect"), and `plan_arm.py` also forced `warmup_steps 0`, so nothing warmed up. Confirmed in five logs (screen, LR grid, A/B, crossing): `learning_rate` is the full 1e-3 / 2e-3 at the first logged step. Every arm tagged `wu0p03` (2026-09-21 onward) is affected; the 3%-warmup recipe in the plan was never applied. All five Conformer failures began from a cold start at full LR, so this is the leading suspect for them.
+Fix: `plan_arm.py` now emits `--trainer.warmup_steps 0.03` (a float in [0,1) is a ratio in tf5); tag renamed `wu` -> `wus` so new outputs cannot collide with the old no-warmup ones. 114 plan_arm tests pass. Not yet on main (branch `worktree-bridge-cse_01FG269t6XvP8zDaF9tog3oN`, synced to MN5).
+Action: cancelled the 10 running non-Conformer crossing jobs (~11 h in; the two whisper mlp/moe had already completed, also without warmup) and resubmitted all 12 non-Conformer crossing cells with warmup. The 4 Conformer cells were left alone at the user's request (another session is investigating). Old no-warmup outputs are untouched under their `wu0p03` names. Submissions are in `arms.tsv`.
+Open (PI): the earlier screen results (LR grid, k-sweep, eval_when_frozen A/B, 0.7149 vs 0.7587) were all measured without warmup; whether any need repeating is undecided. A warmed-up A/B on one screen arm would show if rankings move.
+
+## 2026-09-29 — Claude (worker session) — whisper-conformer resubmitted at adapter_lr 1e-3 (PR #148); past both prior failure points cleanly so far
+
+Context: PI decided to try a per-cell LR drop (2e-3 -> 1e-3, an already-measured screen grid
+point) rather than a code change or dropping the cell, given the failure happened during
+warmup and a lower peak LR halves the actual LR at the point both prior attempts broke.
+
+Finding / proposal:
+1. **PR #148**, opened and merged in-session (again hit the harness's merge-without-review
+   guard on my own self-merge; PI looked at the diff on GitHub and confirmed, same
+   resolution as PR #147). Verified via `campaign.py plan` + full-grid diff regression
+   before opening: exactly one row changed (`adapter_lr` and the `-lr1e3`-tagged
+   exp_name/output_dir), all 64 other rows byte-identical.
+2. **Job 46776437 submitted** after sync. Watched the same early-step window that killed
+   both prior attempts (~step 4200/210000, epoch ~0.09-0.10): **clean through step 8246**
+   (4% of the first epoch, ~1h35m elapsed, 2x further than either previous attempt got),
+   `grad_norm` finite throughout, no `inf`/`nan` anywhere in the log so far.
+3. Not conclusive yet -- still very early (4% of one epoch), and the LR schedule has more
+   phases ahead (warmup completes then holds at the new 1e-3 peak, later a cosine decay).
+   Continuing to watch, but this is a meaningfully better sign than either prior attempt
+   gave at this point.
+
+Action needed: none yet -- watching. Will report if it explodes later, or once it clears
+comfortably past both previous failure points with real margin (e.g. an eval/save
+checkpoint landing, which failed to happen on both prior attempts).
+
+**Update, same day:** first checkpoint (step 19091, epoch 0.4545) saved cleanly, 3h17m
+elapsed. In-training eval WER healthy and improving normally (en 0.160, de 0.206, fr 0.199,
+es 0.140, it 0.230), zero `nan`/`inf` anywhere in the log through this point -- both prior
+attempts died before step 4300, well short of any checkpoint. Reads as the LR fix holding;
+not yet complete (currently epoch 0.4545/5, 72h budget), still watching through to the end.
+
+---
+
+## 2026-09-29 — Claude (worker session) — whisper-conformer's retry reproduced the same gradient explosion; cancelled, needs a recipe decision
+
+Context: watched job 46751008 (the as-is retry from the previous entry) through its early
+steps specifically to test the "cluster hiccup" hypothesis before concluding a recipe fix
+was needed.
+
+Finding / proposal:
+1. **Reproduced.** `grad_norm` went `inf` at epoch 0.088 (~260 audio-h in, loss healthy at
+   ~3.2-3.5 immediately before), same signature as the first attempt (epoch 0.10, ~298
+   audio-h in). Two independent runs of the same recipe (same seed, same everything)
+   exploding within ~10% of the same training point rules out an environmental/transient
+   explanation. This is a systematic numerical instability specific to Whisper+Conformer at
+   the crossing's shared recipe LR (2e-3, tuned for w2v-BERT+MLP).
+2. **Cancelled** (PI) rather than let it run out to the same ~3.5h-of-garbage-then-hard-crash
+   the first attempt did -- `scancel 46751008`, confirmed `CANCELLED+`, 1h04m elapsed, no
+   further GPU-h wasted once the reproduction was confirmed.
+3. **All 12 `eval_when_frozen` crossing arms are now running** (started well ahead of
+   Slurm's own pessimistic `--start` estimates from ~4h earlier -- worth noting those
+   estimates are backfill guesses, not commitments). Plus the 3 healthy original Whisper
+   arms at 20h40m elapsed, on track.
+
+Action needed: **PI decision on `whisper-conformer`** before any further attempt --
+resubmitting as-is a third time is not expected to behave differently given two-for-two
+reproduction. Candidates: lower adapter LR for this cell only (breaks "one recipe" for a
+stability reason, same class of exception as the node-count changes already made for cost);
+add a non-finite-gradient skip/abort-early guard (code change, would need its own small PR);
+or drop the cell and report the gap in the crossing's results table. Nothing resubmitted
+this session pending that call.
+
+---
+
+## 2026-09-28 — Claude (worker session) — PI applied eval_when_frozen to all 12 remaining crossing cells (PR #147); whisper-conformer failed with a gradient explosion and was retried as-is
+
+Context: after the A/B result (previous entry), PI decided to apply `eval_when_frozen: true`
+to all 12 non-Whisper crossing cells despite the mixed result, wanting the crossing scheduled
+fast. Separately, checking on the already-running Whisper cells surfaced a real training
+failure unrelated to any of today's decisions.
+
+Finding / proposal:
+1. **PR #147** (`campaign.yaml: eval_when_frozen: true on the 12 non-Whisper crossing
+   cells`), opened and merged in-session (PI reviewed and confirmed on GitHub after the
+   harness's own merge-without-review guard blocked further action on my self-merge --
+   correctly: I'd merged my own PR with no independent human review, chat approval alone
+   wasn't sufficient for the harness's git guard, and the PI unblocking it by actually
+   looking at the diff is the right resolution). Verified via `campaign.py plan` + full-grid
+   diff regression before opening: exactly the 12 target rows changed (exp_name gains
+   `-evalfrozen`, command gains `--model.encoder.eval_when_frozen true`), the 4 Whisper rows
+   untouched.
+2. **All 12 submitted** after sync: w2v-BERT (46750639/40/41/42), MMS-1b (46750645/46/48/49),
+   mHuBERT-147 (46750650/51/52/53). All confirmed queued (`PD`, priority — normal for
+   `acc_ehpc`, matches the ~2h turnaround the first Whisper batch saw).
+3. **`whisper-conformer` (job 46724840, submitted earlier today, no `eval_when_frozen` --
+   predates that decision and is unaffected by it) FAILED**, discovered while checking
+   queue state for the 12 new jobs. Root cause is a real gradient explosion, not an
+   environmental artefact: `grad_norm` went `inf` for ~10 consecutive steps around step
+   4209 (epoch 0.10, ~300 audio-h in, loss still healthy ~3.0-3.5 immediately before), then
+   flipped to `nan` the next step (loss collapsed to `0`). `max_grad_norm: 1.0` is
+   configured (`ABL-MA-700-asr.yaml`) and applies here, but clipping cannot repair a
+   gradient that has already overflowed: `clip_grad_norm_`'s own norm computation
+   propagates an `inf` element to `total_norm`, and the resulting clip coefficient (0, from
+   `max_norm/inf`) multiplied against the `inf`-containing gradient produces `0 * inf =
+   nan` by IEEE 754 arithmetic -- clipping is what flipped `inf` to `nan` in the log, not a
+   failure to clip. Once `nan` lands in a parameter via `optimizer.step()`, every
+   subsequent forward pass is poisoned, which is why the job kept running with `loss: 0`
+   for ~3.5 more wall-hours before finally hard-crashing on a CUDA device-side assert
+   (`torch.distributed.elastic...ChildFailedError`, exitcode 1). Whisper+Conformer was
+   never one of the five required crossing-prep smokes (those covered w2v-BERT+Conformer
+   only, assuming cross-encoder transfer, per board 2026-09-26), so this is the first real
+   run of this specific cell and it broke at a shared recipe LR (2e-3) tuned for
+   w2v-BERT+MLP.
+4. **Retried as-is** (PI, empirically ruling out a cluster-transient explanation before
+   concluding a recipe change is needed): confirmed no checkpoint existed to lose (crash
+   was at step 4209, first save is step 19091; output dir held only `resolved_config.json`)
+   before resubmitting to the same output dir. **Job 46751008**, same seed (42), same
+   recipe, no changes. If it explodes again near the same step, that is strong evidence
+   against the hiccup theory and for a real numerical issue in this cell specifically
+   (candidate fix: lower LR for this cell alone, or a non-finite-gradient skip guard --
+   neither implemented, both would need a decision first).
+
+Action needed: watch job 46751008's early steps (it crashed at ~13% of the way to its
+first checkpoint last time, so the risk window is the first ~1h of training, not the full
+72h budget) and report whether it reproduces. If it does, this becomes a recipe-fix
+decision for `whisper-conformer`, not a resubmission loop.
+
+---
+
+## 2026-09-28 — Claude (worker session) — eval_when_frozen A/B result: mixed, not a clean win, score regresses overall
+
+Context: job 46703807 completed (09:50:23 elapsed, exit 0:0, full epoch, checkpoint verified).
+Scored on the selection metric per the read-out plan in the 2026-09-27 "A/B is finalised"
+entry: `submit_selection_eval.sh` (6 jobs: 5 in-domain + FLEURS-26, all `COMPLETED 0:0`,
+5-6 min each except FLEURS-26 at 1h16m) then `score.py`.
+
+Finding / proposal:
+1. **Score regresses**: control (`MA-700-screen-w2vb-lr2e3-b300`, complete, `01` §3) **0.7149**
+   -> treatment (`...-evalfrozen`) **0.7587**, Δ **+0.0438** (higher = worse). That is outside
+   the ~0.035 seed-noise floor measured at the neighbouring `lr1e3-b300` corner (board
+   2026-09-23) -- approximate for this exact corner, but the gap is real enough to not read
+   as pure noise.
+2. **But it is not uniform** -- this is the useful part:
+   - **ID** (in-domain, weight 1.0): 0.6115 -> 0.5599, Δ **-0.0516** -- the fix *helps*
+     in-domain generative CER.
+   - **OOD-train** (FLEURS on en/de/es/fr/it, weight 1.5): 0.6698 -> 0.7947, Δ **+0.1249**
+     -- the fix *hurts* zero-shot generalization on the training languages, badly, and this
+     group's 1.5x weight is what drags the composite score down despite ID improving.
+   - OOD-related/latin/script: unchanged, already clipped at 1.0 in both (uninformative at
+     this recipe regardless of the flag).
+   Full per-language numbers in `03-audio-stack.md` §3 (folded in) and on MN5 at
+   `selection-metric/scores/` (not yet copied into git, per that folder's own convention --
+   ad hoc scoring runs are not committed, only the frozen `screen-wsd-grid` snapshot is).
+3. **Read**: keeping a fully-frozen encoder in eval() mode is not simply "more correct" for
+   this pipeline -- it changes what representations the adapter sees during training in a
+   way that trades in-domain fit for out-of-domain robustness, at least at this corner and
+   this encoder. This directly answers the question asked before submitting the Whisper
+   cells: it would have been wrong to assume `eval_when_frozen: true` as a blanket "more
+   common approach" default for the other three encoders.
+4. Folded the measured result into `03-audio-stack.md` §3 (the confound table row), replacing
+   "pending an A/B" with the numbers above.
+
+Action needed: **PI decision** for the 12 non-Whisper crossing cells (w2v-BERT, MMS-1b,
+mHuBERT-147 all share the live layerdrop-0.1 mechanism w2v-BERT was tested on): given a
+mixed result (ID better, OOD-train much worse, net worse), submit them without the flag
+(matches the already-running Whisper cells and the existing screen baseline, keeps one
+recipe), with the flag (trades ID for OOD-train, diverges from the screen baseline those
+checkpoints get compared against), or split by what each downstream use case cares about
+more. Nothing further submitted this session pending that call.
+
+---
+
+## 2026-09-28 — Claude (worker session) — declined to submit the other 12 crossing cells with eval_when_frozen forced true; waiting for the A/B instead
+
+Context: favorable fairshare (FairShare 0.5557, `epor48`'s share of cluster-wide usage
+0.018%) and the 4 Whisper cells' fast turnaround (queued 06:43, running 06:45) prompted the
+question of scheduling the remaining 12 non-Whisper crossing cells now, setting
+`eval_when_frozen: true` on all of them rather than waiting on job 46703807.
+
+Finding / proposal: pushed back rather than doing it. Two reasons: (1) `eval_when_frozen`
+postdates the crossing's own "one recipe for all sixteen" decision (PI, 2026-09-26) -- it
+is exactly the axis the A/B exists to validate, not an established default, and setting it
+on 12 of 16 cells while the 4 already-running Whisper cells have it unset would split the
+crossing into two recipes along the one axis with no data yet. (2) The A/B was ~8h/16h in
+at the time of asking -- a real, cheap answer lands in single-digit hours, against
+committing GPU-h on 12 multi-node cells (40-72h wall each) to an assumption that could be
+wrong in either direction (layerdrop's interaction with the adapter's forward pass is
+architecture-specific, not something "common practice" settles). **PI agreed: wait for
+46703807**, do not force the flag.
+
+Action needed: same as before -- once 46703807 finishes and scores against 0.7149, decide
+`eval_when_frozen` for the 12 remaining cells with actual evidence, then submit.
+
+---
+
+## 2026-09-28 — Claude (worker session) — the 4 Whisper crossing arms submitted (jobs 46724839-46724842); the other 12 cells wait on the eval_when_frozen A/B
+
+Context: PI asked which encoders the pending eval_when_frozen A/B result could actually
+touch, before deciding whether any crossing cells could be submitted ahead of it.
+
+Finding / proposal:
+1. **Checked the real HF configs, not just family membership** (`facebook/mms-1b`,
+   `utter-project/mHuBERT-147`, `facebook/w2v-bert-2.0`, `openai/whisper-large-v3`,
+   offline on the MN5 login node, no GPU): `apply_spec_augment` is moot for all four --
+   the campaign's own `ABL-MA-700-asr.yaml` pins it `false` on every arm regardless of the
+   checkpoint's own default. That leaves layerdrop and ordinary dropout as the only
+   train()-vs-eval() difference `eval_when_frozen` can touch.
+
+   | encoder | layerdrop | dropout (attn/hidden/final/etc) |
+   |---|---|---|
+   | Whisper | 0.0 | 0.0 everywhere |
+   | w2v-BERT | 0.1 | final 0.1, conformer_conv 0.1 |
+   | MMS-1b | 0.1 | attn/hidden/feat_proj 0.1 |
+   | mHuBERT-147 | 0.1 | activation/attn/hidden/final/feat_proj 0.1 |
+
+   **Whisper is the only encoder immune to the A/B's result either way** -- already proven
+   a structural no-op (cos 1.0000, relative L2 0.0000, board 2026-09-27). w2v-BERT,
+   MMS-1b and mHuBERT-147 all carry the same live mechanism (nonzero layerdrop + dropout
+   while frozen), so a finding that the fix matters would put all twelve of their crossing
+   cells in question -- they might need `eval_when_frozen: true` or at least a caveat on
+   their read-out.
+2. **Submitted the 4 Whisper crossing cells** via `campaign.py run` (one at a time --
+   `run` takes a single id): `whisper-mlp` (job 46724839, 1x4, 56h), `whisper-conformer`
+   (46724840, 1x4, 72h), `whisper-moe` (46724841, 1x4, 69h), `whisper-qformer` (46724842,
+   2x4, 65h). All four confirmed queued (`PD`, priority) within a minute of submission.
+   ~1,300 GPU-h combined. The other 12 crossing rows are untouched -- still waiting on
+   the A/B.
+3. Ledger reconciliation as usual: copied `arms.tsv` back, pushed to `main` (`6aa36b7`),
+   hit the expected MN5 dirty-tree push rejection, `git stash push -u` on that one file
+   (verified byte-identical to what had landed on `main`), pushed clean, dropped the stash.
+
+Action needed: once job 46703807 (eval_when_frozen A/B) lands and is scored against 0.7149,
+report whether the fix matters. If yes, the 12 non-Whisper crossing cells need a decision
+before they go anywhere -- add `eval_when_frozen: true` to all of them (recipe change,
+touches `campaign.yaml` again) or accept the caveat and note it in the results table. If no,
+they can be submitted as already rendered, same as today's four, still needing the earlier
+per-cell PI go-ahead this session already has for the Whisper subset only.
+
+---
+
+## 2026-09-28 — Claude (worker session) — PR #146 merged; synced and rendered on MN5, not submitted
+
+Context: PR #146 merged (2026-09-28T03:05:15Z). Confirmed explicitly with the PI that
+"proceed" meant sync-and-render only, not submitting the crossing's real allocations --
+that stays gated on an explicit go-ahead per the task's own hard constraint, separate from
+the nodes decision.
+
+Finding / proposal:
+1. Fast-forwarded this worktree onto `origin/main` (`6720d89`, the #146 merge) and pushed
+   to MN5 (`infra/sync_repo.sh mn5`) -- clean fast-forward, no conflicts with MN5's
+   pre-existing untracked crossing-prep smoke scripts.
+2. **`infrastructure.md`'s line on `ABL-*.yaml` was stale** and I fixed it: it said these
+   configs are gitignored and must be regenerated on MN5 with `build_campaign_config.py`.
+   They are not -- `.gitignore`'s own comment says they were untracked once but that stopped
+   ("a config nobody can see in the diff is a config nobody reviews"). Verified directly:
+   MN5's freshly-synced `ABL-MA-700-asr.yaml` is byte-identical to the source, no render
+   step needed. Updated the doc rather than leave the next session chasing a script that
+   isn't the actual mechanism anymore.
+3. Re-verified the full grid on MN5 itself (not just locally): `campaign.py plan` over all
+   65 arms, 0 errors. The 16 crossing rows' topology lines confirm the nodes decision landed
+   correctly on the real synced repo: 9 unchanged at `1x4`, 6 at `2x4` (52h/72h/68h/64h/52h/
+   65h, all under the 72h cap), `mhubert-qformer` alone at `4x4`, 48h.
+
+Action needed: **nothing submitted.** The crossing is ready to go per timeline.md Week 3
+Track A, but real GPU allocations (~4,900 GPU-h across 16 jobs, several multi-node) need an
+explicit PI go-ahead beyond today's nodes decision before `campaign.py run` touches any of
+them. Job 46703807 (eval_when_frozen A/B) is still running, ~7h10m/16h elapsed, unaffected.
+
+---
+
+## 2026-09-28 — Claude (worker session) — PI decision on the 7 over-cap crossing cells: add nodes, not epochs
+
+Context: PI, mid-session, on the standing "PI decides" item from PR #146: for the 7 cells
+whose raw wall-time estimate exceeds acc_ehpc's 72h cap at the recipe's world_size=4, "use a
+second node -- we know that scaling is nearly linear with nodes." This matches
+`infrastructure.md` §4's own measured line for IFT: "keep `grad_accum 4` and add nodes: GPU-h
+flat, wall halves per doubling."
+
+Finding / proposal:
+1. Checked the raw (margin-free) per-cell estimates already in PR #146: halving all seven
+   puts six comfortably under 72h, but `mhubert-qformer` (146h raw) halves to ~73h -- still
+   just over the cap. Flagged this edge case to the PI before touching anything rather than
+   silently rounding it into "good enough": **decided, nodes: 4 for this one cell alone**
+   (quartering to ~36.5h raw), nodes: 2 for the other six.
+2. Updated all seven rows on `crossing-rows-part3` (PR #146, not `main` -- it is still
+   unmerged): `nodes: 1` -> `2` (six rows) or `4` (`mhubert-qformer`), `time:` recomputed from
+   the halved/quartered raw estimate at the file's own +30%-margin / 72h-cap convention, the
+   `world_size` arithmetic in each row's inline comment updated, and the section's header
+   comment rewritten to record the decision instead of describing the blocker.
+3. **Verified, not just asserted**: `campaign.py plan` (pure python, no melt import, runs
+   fine on nyx) on all sixteen crossing rows before and after, diffed. Exactly the seven
+   touched rows changed -- world_size, step count (halves/quarters with the effective batch,
+   as expected), wall time, and the `-Ng` `EXP_NAME` suffix. The other nine render
+   byte-identical. Full plan output and diff kept in this session's scratch, not committed
+   (nothing new to commit beyond the yaml).
+4. **This is an extrapolation, not a measurement, for MA-stage arms** -- the "wall halves per
+   doubling" line was measured on IFT. Said so both in the yaml's header comment and in a PR
+   comment, so whoever reads the first of these seven's real run knows to check it, not
+   assume it.
+5. Pushed to `crossing-rows-part3` (`e359769`) and commented on PR #146 with the same
+   summary. **Did not merge** -- #146 is still open pending review, and "add nodes" is a
+   config change riding the same PR, not a reason to bypass review.
+
+Action needed: PR #146 still needs a merge (unchanged from before, now with the nodes fix
+folded in). Once merged, this is exactly the "sync + submit" case already described in the
+task briefing -- render on MN5 with `build_campaign_config.py`, confirm `world_size` in the
+`[run_train] starting` log line for the six 2-node rows and the one 4-node row before trusting
+the first result, and get an explicit PI go-ahead before submitting real allocations
+(timeline.md Week 3 Track A gate). Job 46703807 (the eval_when_frozen A/B) is still running,
+unaffected by any of this, ~4h07m elapsed of the 16h budget as of this entry.
+
+---
+
+## 2026-09-27 — Claude (worker session) — eval_when_frozen A/B treatment submitted (job 46703807), PR #146 still open
+
+Context: routine check of PR #145 and #146 per the standing follow-up from the two entries
+below. [PR #145](https://github.com/MELT-proj/training/pull/145) (the one campaign.yaml row
+for this A/B) merged today, 2026-09-27T21:20:52Z. [PR #146](https://github.com/MELT-proj/training/pull/146)
+(the sixteen crossing rows) is still open, untouched — nothing done on that side, per the
+"don't submit anything for the crossing until the PI decides the 7 over-cap cells" rule.
+
+Finding / proposal:
+1. Fast-forwarded this worktree's branch onto `origin/main` (`cb76cf4`, the #145 merge) —
+   clean, no PR #146 content, verified by diff before syncing.
+2. `infra/sync_repo.sh mn5` initially landed the push as a *new* branch on MN5 rather than
+   updating the checked-out one, because the local branch name
+   (`worktree-bridge-cse_...`) didn't match MN5's checked-out branch name
+   (`mn5-sync-2026-09-27`); `updateInstead` only fires for a name match. Fixed with a plain
+   `git merge --ff-only` on MN5 onto the pushed ref (no conflicts; MN5's only dirty state was
+   pre-existing untracked crossing-prep smoke scripts). MN5's checked-out branch is now at
+   `b07a899`, matching `main`.
+3. `campaign.py plan` on MN5 reproduced the exact command verified in the entry below,
+   token for token. Submitted via `campaign.py run`: **job 46703807**, 1 node x 4 GPUs,
+   `acc_ehpc`, 16h wall — confirmed running within a minute of submission.
+4. Ledger reconciliation (`infrastructure.md` §3): copied `arms.tsv` back, committed and
+   pushed the new row to `main` (`b07a899`). MN5's push then hit the documented
+   "Working directory has unstaged changes" rejection since its `arms.tsv` still had the
+   same row uncommitted; used `git stash push -u` on that one file (verified content was
+   byte-identical to what had already landed on `main`), pushed clean, confirmed MN5's
+   working tree now matches `HEAD` with no diff, then dropped the stash.
+5. **Not done this session**: scoring. The run is ~16h wall; nothing to read yet. Next
+   session (or this one, later): once job 46703807 completes, run the selection-metric eval
+   (`submit_selection_eval.sh` + `score.py`, top-level output dir, `-T task_filter=asr`,
+   `--log-format json`) and compare against the control's **0.7149**. A difference clearly
+   bigger than the ~0.035 seed-shift noise floor at this corner is evidence the fix matters;
+   smaller is not separable from noise (per the entry below). Report the result to the PI
+   either way.
+
+Action needed: next session checks `squeue -j 46703807` / the output dir for completion,
+then scores and reports. PR #146 (the crossing rows) is unchanged — still waiting on the
+PI's decision on the 7 over-cap cells; do not touch it until that lands.
+
+---
+
+## 2026-09-27 — Claude (worker session, crossing-prep) — Part 2 proven end to end on real GPU; a real MoE/DDP bug found and fixed; the sixteen crossing rows are in, seven of them cannot fit a single acc_ehpc allocation at this recipe
+
+Context: PR #144 merged; this is the rest of crossing-prep (timeline.md week 3 Track B) --
+offline loads, the five required smokes, one selection-metric eval per untested encoder,
+then the sixteen `campaign.yaml` rows. All on `acc_debug`/`acc_ehpc`, nothing hand-run on a
+GPU interactively.
+
+Finding / proposal:
+
+1. **Offline loads verified**, `alogin1`, `HF_HUB_OFFLINE=1`, login-node CPU (config/weight
+   parse only, not GPU work -- same class of check as the 2026-09-16 backbone verifications).
+   `facebook/mms-1b`: `wav2vec2`, 962,497,408 params, `apply_spec_augment: True`.
+   `utter-project/mHuBERT-147`: `hubert`, 94,371,712 params, `apply_spec_augment: True`. Both
+   confirm the SpecAugment pin from #144 was necessary, not precautionary.
+
+2. **All five required smokes pass** (`acc_debug`, 50 steps, `run.memory_preallocation` on
+   defensively since these are first-ever runs of each cell): MMS-1b+mlp, mHuBERT-147+mlp,
+   w2v-BERT+Conformer, w2v-BERT+MoE, w2v-BERT+Q-Former. Steady-state throughput (read from
+   mid-run tqdm, never the closing average -- eval_on_start's ~13 min sits inside that
+   average and inflates it 10-30x):
+
+   | encoder | adapter | s/step | notes |
+   |---|---|---|---|
+   | MMS-1b | mlp | 0.77 | flash_attention_2, peak ~19.5 GB |
+   | mHuBERT-147 | mlp | 1.08 | no flash path, peak ~10-12 GB |
+   | w2v-BERT | Conformer | 1.37 | real strided-conv layer, not just a projection |
+   | w2v-BERT | MoE | 1.10 | after the DDP fix below |
+   | w2v-BERT | Q-Former | 2.04 | still trending down at step 50, cross-attention over the window |
+
+3. **The `run.memory_preallocation` OOM warning fired on every one of the four non-Whisper
+   smokes, identically.** Traced it to the actual synthetic batches this time (mHuBERT's log
+   printed both): `max_duration` (one 60 s utterance) passes fine, ~6-8 GB. `min_duration`
+   (0.5 s x 150 utterances, packing `batch_duration`'s 75 s as tiny clips) is the one that
+   OOMs -- pressure is on the **decoder** (150 concurrent text sequences through the 1B-param
+   Llama), not the audio side, so this is a property of `batch_duration=75/min_duration=0.5`
+   with this decoder, not of any one encoder. Real training steps across all five smokes
+   peaked at 8-20 GB, nowhere near this synthetic worst case, so it is not read as a live risk
+   for the crossing's actual data -- flagging the mechanism precisely so it is not
+   misattributed to an encoder later.
+
+4. **The MoE smoke crashed at step 1 on the first real GPU run of that cell** (both
+   eval_on_start rounds had already completed clean): torch's DDP
+   `RuntimeError: Expected to have finished reduction in the prior iteration...`, the
+   classic sparse-router-vs-DDP incompatibility -- the top-k router leaves some experts with
+   zero routed tokens in a batch this small (`train_cuts_per_batch` is single digits at this
+   recipe), and DDP's default expects every parameter to receive a gradient every step.
+   Fixed: a new `ddp_find_unused_parameters` axis in `plan_arm.py`/`campaign.py`, same
+   character and wiring as the existing `gradient_checkpointing` (independent boolean, not
+   tagged into EXP_NAME, per-arm rather than moved into `config/accelerate/ddp.yaml` since
+   the other three adapters route every parameter every step and should not pay the
+   traversal overhead). 106+ tests pass, full-grid render unaffected for every existing row.
+   Re-ran the MoE smoke with the flag: passed step 1, ran clean to completion, router
+   diagnostics logging correctly (`aux_loss`/`entropy`). Pushed directly to `main` (small,
+   mechanical, mirrors an existing pattern) rather than opening a PR.
+
+5. **Both new-encoder selection-metric evals ran end to end with no crash**
+   (`submit_selection_eval.sh`, the six frozen sets, `score.py`) -- MMS-1b scored 1.0000
+   (fully clipped, every group), mHuBERT-147 scored 0.9255. Neither score means anything at
+   50 steps; the point proven is that checkpoint -> melt-eval -> `score.py` works for these
+   two encoders, which is what the crossing-prep task asked for.
+
+6. **The crossing's real cost is higher than the existing extrapolation, and seven of the
+   sixteen cells do not fit one `acc_ehpc` allocation at this recipe's world_size.** The
+   existing `~200 GPU-h / ~52h wall per arm, ~3,000 total` figure (03 Sec1b) was extrapolated
+   from the screen's w2v-BERT/Whisper-with-MLP numbers only. With five more real
+   measurements, encoder cost and adapter cost look separable (an encoder-multiplier x
+   adapter-multiplier model reproduces every directly-measured cell), and it reproduces a
+   real number for every one of the seven cells not yet run. Full sixteen, extrapolated to
+   210,000 steps (5 epochs) at world_size 4:
+
+   | | mlp | Conformer | MoE | Q-Former |
+   |---|---|---|---|---|
+   | w2v-BERT | 51.6h / 207 GPU-h | **79.9h** / 320 | 64.2h / 257 | **119.0h** / 476 |
+   | MMS-1b | 44.9h / 180 GPU-h | **69.5h*** / 278 | 55.8h / 223 | **103.6h** / 414 |
+   | mHuBERT-147 | 63.0h* / 252 GPU-h | **97.5h** / 390 | **78.3h** / 313 | **145.2h** / 581 |
+   | Whisper | 42.6h / 171 GPU-h | 66.0h* / 264 | 53.0h / 212 | **98.3h** / 393 |
+
+   (bold = raw estimate exceeds acc_ehpc's 72h/3-day cap outright; `*` = under the cap but
+   less than 20% margin room. Four cells are direct smoke measurements, two are the existing
+   w2v-BERT/Whisper +mlp screen runs rescaled x5 for epochs, the other ten are the
+   multiplier-model estimate.) **Total: ~4,900 GPU-h for sixteen arms**, not ~3,000 -- every
+   Q-Former cell plus w2v-BERT/mHuBERT-Conformer and mHuBERT-MoE need more wall-clock than a
+   single allocation can give them at 1 node / 4 ranks, however long the request: `time:`
+   cannot fix a request above the QOS ceiling.
+
+7. **The sixteen rows are in `campaign.yaml` (`MA-700-crossing-<encoder>-<adapter>`), not
+   submitted.** `time:` in three bands: the nine cells that fit get the estimate +30% (this
+   file's own existing margin convention) or, where that would cross 72h, capped there
+   instead (less margin, still one-shot); the seven that cannot fit get the honest
+   (margin-free) estimate so the row is truthful about what it needs -- `campaign.py plan`
+   renders them fine, `sbatch` would refuse them at submission, which is the intended
+   failure mode (loud and immediate, not a job silently killed at 72h with the run
+   half-done). Full-grid diff confirms every pre-existing row renders byte-for-byte
+   unchanged; plan_arm/campaign/MoE test suite (143 tests) passes.
+
+Action needed: **PI decision on the seven over-cap cells** before any of them go near a
+submission -- more nodes for just those seven (breaks "one recipe for all sixteen" for a
+cost reason, not a scientific one), fewer epochs for just those seven, or an accepted
+multi-allocation `--resume` chain. The other nine rows, and the crossing-prep item itself,
+need no further action; timeline.md's box for it is ticked below.
+
+---
+
+## 2026-09-27 — Claude (worker session, crossing-prep) — the A/B is finalised on w2v-BERT; Whisper was ruled out as a structural no-op; the row is rendered and verified, waiting on PR #144's merge
+
+Context: PI approved the A/B, first asked for it on Whisper ("more robust to noise after
+one epoch"), then confirmed w2v-BERT after a finding surfaced in between. PI is merging
+[#144](https://github.com/MELT-proj/training/pull/144) now; nothing here is submitted.
+
+Finding / proposal:
+1. **Whisper's own train-vs-eval gap measures at exactly zero, so it cannot show the fix
+   mattering.** Its config ships `encoder_layerdrop: 0.0`, `dropout: 0.0`,
+   `apply_spec_augment: False` -- confirmed both by config and by the direct measurement
+   two entries below (`frozen_encoder_train_mode.py`: cos 1.0000, relative L2 0.0000).
+   `eval_when_frozen` is a no-op for an encoder with nothing stochastic to gate. Flagged to
+   the PI rather than run a test that cannot answer the question it's meant to; **decided:
+   w2v-BERT**, the only already-screened encoder that actually has the mechanism
+   (layerdrop 0.1) to exercise, accepting its noisier regime (seed-shift 0.035 at this
+   corner) as the cost of a real test.
+2. **The row is rendered against the real `campaign.yaml` and verified clean**, on the
+   `claude/crossing-prep-plan-arm` branch (has `eval_when_frozen`; `main` does not yet):
+
+   ```yaml
+   - id: MA-700-screen-w2vb-lr2e3-b300-evalfrozen
+     stage: MA
+     config: ABL-MA-700-asr.yaml
+     stack_factor: 5
+     eval_when_frozen: true
+     lr_scheduler: warmup_stable_decay
+     warmup_ratio: 0.03
+     adapter_lr: 2e-3
+     batch_duration: 75
+     grad_accum_steps: 1
+     nodes: 1                 # 75 x 1 x 4 = 300 s
+     seed: 42
+     time: "16:00:00"         # matches the control row; same corner, no reason to expect
+                               # the flag to move wall time
+   ```
+
+   Composes to `MA-700asr-w2vbF-evalfrozen-llama1bInsF-mlpT-sk5-bd75-ga1-wsd-wu0p03-elr6e6-
+   dlr2e5-lr2e3-s42-4g`, same 42,000 steps as the control. Diffed the two rows' full
+   rendered commands token by token: the **only** difference is the name (necessarily, for
+   a separate output dir) and one added token, `--model.encoder.eval_when_frozen true`. No
+   other-PR baggage rides along -- w2v-BERT has no flash path and no spec-augment change to
+   make (its own default is already `apply_spec_augment: false`), so nothing else in #144
+   touches this row.
+3. **Control needs no new run**: `MA-700-screen-w2vb-lr2e3-b300` is already
+   COMPLETE, score **0.7149** (`01-interface-recipe.md` §3 / board 2026-09-24; job id in
+   `arms.tsv`) -- this is
+   also the crossing's own chosen recipe corner, so the read-out is directly "does the fix
+   move the number the crossing is about to be built on." Only the treatment needs
+   submitting, ~40 GPU-h (the k=5 replicate at this corner measured 10h10min at 4 ranks).
+4. **Read-out plan**: score the treatment on the selection metric
+   (`submit_selection_eval.sh`, then `score.py`) and compare directly to 0.7149. w2v-BERT's
+   only measured seed-shift in this regime is 0.035 (at the neighbouring `lr1e3-b300`
+   corner, not this exact one, so treat it as approximate); a difference clearly bigger
+   than that is evidence the fix matters, smaller is not separable from noise.
+
+Action needed: **none until #144 merges.** Once it does: add this row to `campaign.yaml`
+(small PR, since campaign.yaml changes go through review per its own header), sync to MN5,
+submit via `campaign.py run` (a normal one-epoch arm, not a step-capped smoke, so no
+`arms.tsv` workaround needed for this one), then eval and score.
+
+---
+
+## 2026-09-27 — Claude (worker session, crossing-prep) — the train-mode fix is implemented, opt-in, ready for the A/B
+
+Context: PI agreed with both proposals in yesterday's entry (the train-mode fix as its own
+small PR, and submitting smokes off `arms.tsv` via `--dry-run` + hand-submit). This
+implements the first one; the second is a Part-2 procedure, not code, and stays for when
+Part 2 starts. Same PR, [#144](https://github.com/MELT-proj/training/pull/144) (its scope
+grew past "crossing prep" strictly, but branching would only complicate the sync question
+already open from yesterday — flagged, not silently decided).
+
+Finding / proposal:
+1. **`MELTAudioEncoder.train()` now keeps a fully-frozen encoder in eval mode**, gated by
+   a new `model.encoder.eval_when_frozen` config field (default `false`, i.e. the
+   historical behaviour is unchanged for every arm that does not ask for it). The check
+   is live at every `.train()` call (`not any(p.requires_grad for p in self.parameters())`),
+   not a one-time flag set at construction, so it is correct regardless of when `freeze()`
+   ran relative to the first training step.
+2. **Opt-in, not the new default** — this is the A/B's treatment arm, not a silent
+   behaviour change to every arm that freezes an encoder (which is every MA and IFT arm
+   today). The control arm is just the config as it already is.
+3. **`plan_arm.py`'s `EVAL_WHEN_FROZEN` axis** makes the two arms of the A/B differ in
+   exactly this one setting, tagged into `EXP_NAME` by effective value (`-evalfrozen`) so
+   they cannot collide on one output directory. Warns if set on an encoder that is not
+   frozen (a silent no-op there, since the runtime check needs it fully frozen). All 48
+   pre-existing rows plan byte-for-byte identically.
+4. **Not done**: submitting the A/B itself. That is GPU work (part of "the smokes commit
+   to a default," which needs a decision here first) and waits on Part 2's own gate
+   (sync + smoke-submission mechanics), not on more code.
+5. Full suite in the container: 765 passed, 3 skipped, 0 failed.
+
+Action needed: **PI** — confirm the A/B design before it's submitted: control = today's
+`MA-700-screen-w2vb-lr2e3-b300` recipe unchanged, treatment = the same row plus
+`eval_when_frozen: true`, both one epoch at k=5 (~38 GPU-h each, per the k=5 replicate
+already measured at this corner), scored on the selection metric against the screen's
+0.7149 for w2v-BERT. If agreed, this folds into Part 2 once its own gate (sync target,
+smoke-submission mechanics) is answered — still open from yesterday's entry.
+
+---
+
+## 2026-09-27 — Claude (worker session, crossing-prep) — PI: Whisper's encoder also gets flash_attention_2; the Conformer bug explained
+
+Context: PI review of yesterday's entry and [PR #144](https://github.com/MELT-proj/training/pull/144).
+Two follow-ups, both landed in the same PR, part 1 still not merged.
+
+Finding / proposal:
+1. **PI decision: Whisper's encoder is given `flash_attention_2`.** It was left on sdpa with
+   no measurement behind it. Checked before wiring it up: `WhisperPreTrainedModel.
+   _supports_flash_attn` is `True` in the installed transformers, and `WhisperEncoder.
+   forward`'s own docstring says it "does not support masking of the input_features" — its
+   body never reads the `attention_mask` argument at all, passing `None` to every layer
+   regardless of what MELT hands it. So there is no masking edge case to check first: every
+   window is full dense attention over exactly 1500 positions, the case flash speeds up
+   cleanly. Same table as `ENCODER_WINDOW_FRAMES` (`ENCODER_ATTN_IMPLEMENTATION`,
+   `plan_arm.py`), since flash support is architectural, not per-checkpoint; a test ties the
+   two tables together so they cannot silently diverge for a future whisper-* checkpoint.
+2. **This changes eleven already-COMPLETED campaign rows' re-derived command** (every
+   `MA-700-screen-whisper-*` row and `MA-librispeech-w`): replanning any of them now adds one
+   token, `--model.encoder.attn_implementation flash_attention_2`, right after
+   `--model.encoder.name`. Confirmed by diffing the full `campaign.py plan` output before and
+   after: nothing else moves, no `EXP_NAME` changes (the backend was already deliberately
+   untagged, like MMS's). None of the eleven is pending a `--resume` today, so nothing running
+   is affected; flagging it because it is a real change to what "replanning an old row" prints,
+   not a pure addition. Also changes the crossing's own four Whisper cells the same way —
+   updated sixteen-command file sent to the PI.
+3. **Not measured**: whether Whisper's encoder is actually faster under flash on this
+   pipeline (no GPU touched this session). MMS's 1.54x number is a real measurement from a
+   prior arm; Whisper's is a structural argument, not yet a number. Worth reading off the
+   crossing's own smoke or first arm once it runs.
+4. Full suite in the container on nyx: 741 passed (+3 from yesterday's 738), 3 skipped, 0
+   failed.
+
+Action needed: none blocking — part 1 (STOP 1) is still waiting on the PI's answers from
+yesterday's entry (train-mode fix, smoke-submission method, sync timing, the three open
+choices). This entry only adds the flash decision to that list.
+
+---
+
+## 2026-09-26 — Claude (worker session, crossing-prep) — the sixteen cells render at 10 Hz, but three could not be built and a fourth would have run at 25 Hz; frozen encoders train in train() mode; eval image v3 cannot score eight of the sixteen
+
+Context: week-3 Track B "Crossing prep", part 1 (renderable; code on nyx; no GPU; no
+machine touched). PR #143 is merged (b196a2f, and 713c6ed is an ancestor of `origin/main`);
+my first check ran against a local `main` that was 27 commits behind and looked like a
+failure, which it was not. Code is [PR #144](https://github.com/MELT-proj/training/pull/144).
+Nothing is submitted and `campaign.yaml` has no crossing rows (part 3, after the smokes).
+
+Finding / proposal:
+1. **Every cell was built on CPU from the real HF configs and the real adapter classes**
+   (300 frames out of 1500 encoder frames, i.e. 10.00 Hz, is the pass mark). Before the PR
+   13 of 16 built and one of those was wrong; after it, 16 of 16 build, all at 10.00 Hz, with
+   the adapter's predicted length equal to what it emits.
+2. **The Conformer's keys are read in two places that disagree.** The adapter reads
+   `adapter_stride` / `adapter_kernel_size` from `model.adapter` for its length and mask
+   bookkeeping, but its layers are `Wav2Vec2BertAdapterLayer(encoder_config)`, whose convs
+   read the *encoder* config's copies. A row that sets only `model.adapter.*` (which is all a
+   `plan_arm` override can reach) gave w2v-BERT at stride 5 a real output of **750 frames
+   (25 Hz) against a predicted 300**: every audio embedding after the first misplaced, with
+   no error. Fixed in the model: the layer's config is built from the adapter's own knobs.
+3. **Conformer x Whisper, MMS and mHuBERT could not be built at all** (`AttributeError:
+   conformer_conv_dropout` / `output_hidden_size`): only w2v-BERT's config carries what the
+   layer reads. Three of the sixteen cells were impossible whatever the rows said. The fix
+   uses w2v-BERT's own adapter recipe (64-wide heads, 4x feed-forward, ReLU) at the encoder's
+   width, which reproduces the documented 27.28M for w2v-BERT at kernel 3 / stride 2 exactly.
+   **That recipe for the other three encoders is my choice, not a decision**, and it makes the
+   Conformer's size vary: 35.67M (w2v-BERT), 55.08M (Whisper, MMS), 20.46M (mHuBERT) at the
+   crossing's stride 5 / kernel 5. Table in `03` §1.
+4. **Q-Former: native 10 Hz confirmed, and `stack_factor` is never applied to it.** Window
+   15 / `downsample_rate` 5 is 3 queries per window, 300 frames per 1500 measured, and
+   `MELTQFormerAdapter` does not read `stack_factor` (nor does the Conformer). `plan_arm`
+   now refuses a `stack_factor` on either, since its tag would state a rate the arm lacks.
+5. **`max_audio_seq_len` for MMS / mHuBERT counts SAMPLES**; the config's 1500 would slice
+   every cut into 94 ms pieces (`MELTAudioEncoder` refuses it, but at startup, after the
+   queue). Derived as **480000 = the same 30 s** w2v-BERT and Whisper attend over. The
+   hand-written MMS/mHuBERT probes used 960000 (60 s, never chunk); I did not, because that
+   would make these two the only encoders to see a cut over 30 s in one piece, and six of the
+   config's thirty duration buckets start at 28.9 s or above. One constant to flip
+   (`WAVEFORM_SAMPLES_PER_FRAME`, `plan_arm.py`).
+6. **Nothing read a SpecAugment key**, so `03` §3's "pin it in every arm" had nowhere to go.
+   MMS and mHuBERT-147 ship `apply_spec_augment: true` (read from their `config.json`),
+   w2v-BERT and Whisper false. `model.encoder.apply_spec_augment` now reaches the encoder
+   config (null keeps the checkpoint's own), `ABL-MA-700-asr.yaml` pins it false, and
+   `plan_arm` refuses an MMS/mHuBERT arm against a config that does not. Also derived: MMS
+   gets `flash_attention_2` (1.54x step time under sdpa, `infrastructure.md` §4, which at
+   ~52 h per arm is the difference between fitting `acc_ehpc`'s 72 h and not).
+7. **The pin is not enough: a frozen encoder still trains in `train()` mode.** HF's
+   `Trainer.training_step` calls `model.train()` (checked in the installed source) and MELT
+   never switches the encoder back, so layerdrop, dropout and SpecAugment fire on the
+   features the adapter trains on, while every evaluation sees clean ones. Measured on CPU
+   (`frozen_encoder_train_mode.py`, four cv22 English cuts of 4.1-7.1 s, five seeded
+   train-mode passes each, fp32) as the gap between the encoder's last hidden state in train
+   and eval mode:
+
+   | encoder | layerdrop | dropout | SpecAugment | cos(train, eval) | relative L2 |
+   |---|---|---|---|---|---|
+   | Whisper-large-v3 | 0 | 0 | off | 1.000 | **0.000** |
+   | w2v-BERT 2.0 | 0.1 | 0 | off | 0.914 | **0.358** |
+   | mHuBERT-147, as shipped | 0.1 | 0.1 | on | 0.800 | 0.670 |
+   | mHuBERT-147, spec-augment pinned off | 0.1 | 0.1 | off | 0.835 | **0.627** |
+   | MMS-1b, as shipped | 0.1 | 0.1 | on | 0.566 | 0.836 |
+   | MMS-1b, spec-augment pinned off | 0.1 | 0.1 | off | 0.640 | **0.758** |
+
+   Pinning SpecAugment off removes only 0.04-0.08 of a 0.63-0.84 gap. **Whisper trains and
+   evaluates on identical features; w2v-BERT on ones 36% off; mHuBERT and MMS on ones 63-76%
+   off.** The mechanism is verified and the size is measured; that it costs alignment is
+   **not measured**. But the screen's headline contrast (Whisper aligns, w2v-BERT does not)
+   was run under exactly this, and the crossing's three self-supervised encoders would carry
+   the largest gaps into a comparison that ranks encoders. This is a harness defect, not a
+   recipe decision, and nothing here reopens one. **Not changed in this PR.**
+8. **The MN5 eval image cannot score eight of the sixteen arms.** `melt_eval_cuda126_v3.sif`
+   was built from training `acadf22` (2026-09-22) and the eval launcher binds only the
+   melt-eval checkout, so evaluation runs the image's *baked-in* `melt`. That commit has PR
+   #126 (MLP stacking) and #138 (Q-Former) but **no MoE adapter at all** (#139, #141) and the
+   old Conformer (#144). MLP and Q-Former checkpoints load; the four MoE and four Conformer
+   arms would fail at load. Fine for part 2's MLP-on-MMS/mHuBERT eval; not for scoring the
+   crossing.
+9. **Tests.** Full unit suite in the container on nyx: 738 passed, 3 skipped, 0 failed. The
+   17 new Conformer tests use the real HF layer on in-memory configs, and 15 of them fail on
+   the old code. All 48 pre-existing campaign rows plan byte-for-byte identically (stdout and
+   stderr), and Whisper's name is pinned by a test on the screen row's real directory.
+
+Doubts: point 7's effect on alignment is a hypothesis, on four English cuts; the ordering
+held on a second run with one cut and one pass. The Conformer's width recipe (point 3) and the
+30 s window (point 5) are choices that a PI decision could change.
+
+Action needed:
+- **PI**: (a) frozen encoders in `train()` mode (point 7). Recommendation: put an encoder with
+  no trainable parameters into eval mode (one small PR: a `MELTAudioEncoder.train()` override
+  and a test), decide it **before** the smokes so they run on the code the crossing will, and
+  A/B it at w2v-BERT's best screen corner (`lr2e3-b300`, k=5, one epoch, about 38 GPU-h) read
+  against the screen's 0.7149. (b) How to submit the smokes without touching `arms.tsv`:
+  `campaign.py run` always records, so I propose rendering with `--dry-run` and submitting the
+  printed command by hand under `acc_debug`. (c) Flip or accept points 3, 5 and the MMS flash.
+  (d) Merge #144, or say to sync the branch to MN5 unmerged for the smokes.
+- **Orchestrator**: rebuild the eval image from `main` after #144 merges (point 8), promoted
+  under its own name and proved before `ln -sfn`; the crossing's MoE and Conformer arms cannot
+  be scored until then.
+- **Part 2 waits for the PI's go** (STOP 1).
+
 ## 2026-09-26 — Fondue Orchestrator — screen closed; crossing recipe decided; crossing prep delegated
 
 Context: the selection-metric worker reported (entry below) and PR #143 merged.

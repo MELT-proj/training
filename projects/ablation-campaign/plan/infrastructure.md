@@ -43,8 +43,15 @@ anything time-sensitive.
 - W&B runs are created offline; sync with the user's `sync_wandb.sh`
   (marker-aware). Entity `g8a9/melt`, personal by decision; tag debug runs
   `WANDB_TAGS=debug` at creation.
-- Rendered `ABL-*.yaml` configs are gitignored: **regenerate them on MN5**
-  rather than syncing a copy (`build_campaign_config.py`, cache file kept).
+- Rendered `ABL-*.yaml` configs are **tracked in git**, not gitignored --
+  `infra/sync_repo.sh mn5` carries them like any other file, no
+  `build_campaign_config.py` re-run needed on MN5 (verified 2026-09-28: a
+  synced checkout's `ABL-MA-700-asr.yaml` is byte-identical to the source).
+  They used to be gitignored, written to `config/train/`, and regenerated on
+  the cluster; that stopped so a config change shows up in the diff instead
+  of running a stale render silently (`.gitignore`'s own comment on this).
+  Only re-run `build_campaign_config.py` when the data mix itself changes,
+  and commit its `--out` result same as any other file.
 - **melt-eval on MN5 runs in container mode, not the venv** (built and
   smoke-tested 2026-09-22/23, [eval#20](https://github.com/MELT-proj/eval/pull/20);
   see the board entry for the full numbers). The MN5 `VENV_PATH`
@@ -169,7 +176,7 @@ not where this section says, ask the PI and the answer gets added here.
   `checkout --`, stash that one file with a unique tag and **drop the stash
   once the sync lands**; the worktrees share one stash stack, so a forgotten
   entry is another session's hazard.
-- `EXP_NAME` grammar: `{STAGE}-{data}-{encoder}{F|T}-{decoder}{F|T}[-lora]-{adapter}{F|T}[-bdN][-gaN][-skN][-epN][-tt<template>]-{elr}-{dlr}-{lr}-s{seed}-{world}g`.
+- `EXP_NAME` grammar: `{STAGE}-{data}-{encoder}{F|T}[-evalfrozen]-{decoder}{F|T}[-lora]-{adapter}{F|T}[-skN][-csNkN][-hz<rate>][-bdN][-gaN][-epN][-tt<template>][-lid|-nolid][-wsd][-wu<ratio>]-{elr}-{dlr}-{lr}-s{seed}-{world}g`. `hz<rate>` is the declared decoder frame rate (`frame_rate_hz`), the only tag that carries the Q-Former's. `evalfrozen` (`eval_when_frozen`) keeps a fully-frozen encoder in eval mode instead of the historical train() mode -- see `03-audio-stack.md` §3.
 - `build_campaign_config.py` renders the data axis (budget × task) from the
   Italian-anchored corpus template; run it where the data is, keep the
   `--cache` file, never train on a `--sample-shards` render.

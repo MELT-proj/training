@@ -76,3 +76,27 @@ def test_the_sbatch_wrapper_forwards_a_pinned_count():
         r'MELT_GPUS_PER_NODE.*\n?.*container_env GPUS_PER_NODE "\$\{MELT_GPUS_PER_NODE\}"',
         sbatch,
     ), "sbatch must forward MELT_GPUS_PER_NODE into the container as GPUS_PER_NODE"
+
+
+def _forwarded(env: dict[str, str]) -> dict[str, str]:
+    """Run the sbatch wrapper's optional-forwarding loop; return the SINGULARITYENV_ vars it sets."""
+    text = (RUN_TRAIN.parent / "run_train_singularity.sbatch").read_text()
+    start = text.index("for var in HF_HUB_OFFLINE")
+    end = text.index("\ndone", start) + len("\ndone")
+    script = (
+        'container_env() { export "SINGULARITYENV_${1}=${2}"; }\n'
+        f"{text[start:end]}\n"
+        "env | grep '^SINGULARITYENV_' || true\n"
+    )
+    out = subprocess.run(
+        ["bash", "-c", script], env={"PATH": "/usr/bin:/bin", **env}, capture_output=True, text=True, check=True
+    )
+    return dict(line.split("=", 1) for line in out.stdout.splitlines() if line)
+
+
+def test_the_sbatch_wrapper_forwards_melt_seed():
+    """run_train.sh turns MELT_SEED into the data shard_seed, and it reaches the
+    container only through this loop: without it every container run read 42,
+    so a seed replica replayed seed 42's data order."""
+    assert _forwarded({"MELT_SEED": "1337"}).get("SINGULARITYENV_MELT_SEED") == "1337"
+    assert "SINGULARITYENV_MELT_SEED" not in _forwarded({})

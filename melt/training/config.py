@@ -23,6 +23,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -75,6 +76,8 @@ run:
   # not a metric every run should pay for. See
   # projects/ablation-campaign/scaling-bench/README.md.
   perf_logging: false
+  stop_after_step: null   # End the run after this optimizer step, a checkpoint saved there. The LR schedule stays that of trainer.max_steps
+  defer_optimizer_load: false # On a resume, load the optimizer state just before the first optimizer step instead of before the first micro-batch, so that window has a fresh run's GPU memory
 
 # =============================================================================
 # Model Configuration
@@ -94,6 +97,17 @@ model:
     # facebook/mms-1b (and the wav2vec2 family generally) injects position once
     # before the stack instead, leaving vanilla scaled-dot-product attention, so
     # flash_attention_2 is available there.
+    apply_spec_augment: null
+    # null keeps the checkpoint's own setting, which differs: facebook/mms-1b and
+    # utter-project/mHuBERT-147 ship it true (time masking whenever the encoder is in
+    # train mode, and a frozen one is), w2v-BERT and Whisper ship it false. Set it
+    # explicitly to compare encoders.
+    eval_when_frozen: false
+    # false reproduces the historical behaviour: a frozen encoder still runs in
+    # train() mode (HF's Trainer puts the whole model there), so its layerdrop,
+    # dropout and SpecAugment fire on every training step regardless of freeze.
+    # true keeps a fully-frozen encoder (no trainable parameters at all) in eval
+    # mode instead -- see MELTAudioEncoder.train(). Opt-in pending an A/B.
 
   decoder:
     name: Qwen/Qwen2.5-0.5B
@@ -128,6 +142,12 @@ model:
     # feature axis before fc1, lowering the adapter's output frame rate by the
     # same factor. 1 = no stacking (the historical MLP behavior).
     stack_factor: 1
+    # Conformer and Q-Former only: RMS-normalise the query and key projections per
+    # attention head (QK-norm), which bounds the attention logits. false = the
+    # historical adapters. true changes the function the adapter computes, so a
+    # checkpoint only loads right with the value it was trained with; the value is
+    # saved in the model config, and a config without it means false.
+    qk_norm: false
     # MoE only: routed-expert FFN in place of the MLP's single fc pair.
     num_experts: 8
     num_experts_per_tok: 2
@@ -145,6 +165,28 @@ model:
     bias: none
 
   ckpt: null  # Path to checkpoint to resume from
+
+  # The dtype the parameters train in. null keeps what loading gives, which is not
+  # neutral: transformers 5 loads `model.ckpt` with dtype="auto", i.e. the
+  # checkpoint's top-level config.dtype -- the first parameter's, so the DECODER's --
+  # applied to the whole model. A checkpoint saved by a DDP run (decoder bf16 off the
+  # Hub, encoder and adapter fp32) therefore comes up all bf16, and DDP, unlike FSDP,
+  # never upcasts: AdamW then updates bf16 weights in place and an update below half
+  # a bf16 ulp of its weight rounds to nothing (at lr 2e-5, no weight above ~0.008
+  # moves, and norm weights near 1.0 never do). float32 gives a bf16 mixed-precision
+  # run fp32 master weights; compute stays bf16 under autocast. On the `model.ckpt`
+  # path it is handed to from_pretrained, so the fp32 encoder and adapter are not
+  # rounded to bf16 on the way (a cast afterwards would restore the dtype, not the
+  # bits); from scratch it is a cast after construction, which loses nothing.
+  master_dtype: null
+  # Which parameters master_dtype applies to. "all" (the default): the whole model loads
+  # and trains in master_dtype, as described above. "trainable": the model loads as it
+  # comes (dtype="auto" on the `model.ckpt` path, so without the exactness above) and only
+  # the parameters that require a gradient are cast, after the freeze flags are applied.
+  # A frozen backbone keeps its loaded dtype, as in an adapter-only run, where a float32
+  # copy of the frozen decoder would cost memory, and a cast of its weights on every use
+  # under autocast (every decoding step of a frozen teacher).
+  master_dtype_scope: all
 
 # =============================================================================
 # Data Configuration
@@ -285,6 +327,14 @@ trainer:
   dataloader_num_workers: 4
   remove_unused_columns: false
   ddp_find_unused_parameters: false
+  # DDP keeps a flat gradient buffer per bucket next to every parameter's .grad;
+  # true makes the .grad tensors views into those buckets and zeroes them in
+  # place between steps instead of freeing them (freed gradients come back as a
+  # second copy during accumulation), saving one copy of the gradients: 4 bytes
+  # per trainable parameter in fp32, ~9.4 GiB for the 2.5 B Whisper +
+  # Qwen3.5-2B stack. Same arithmetic. Not a TrainingArguments field:
+  # MELTTrainer applies it.
+  ddp_gradient_as_bucket_view: false
   resume_from_checkpoint: null
 
 # =============================================================================
@@ -528,6 +578,9 @@ def _type_accepts_bool(field_type: object) -> bool:
     return False
 
 
+_BOOL_OK_KEYS = frozenset({"resume_from_checkpoint"})
+
+
 def _fix_yaml_bool_leaks(result: dict) -> dict:
     """Undo OmegaConf's YAML 1.1 boolean coercion for string/enum trainer fields.
 
@@ -545,7 +598,13 @@ def _fix_yaml_bool_leaks(result: dict) -> dict:
     hints = typing.get_type_hints(Seq2SeqTrainingArguments)
     fixed = {}
     for key, value in result.items():
-        if isinstance(value, bool) and key in hints and not _type_accepts_bool(hints[key]):
+        # `resume_from_checkpoint True` means "scan output_dir" (campaign.py --resume); train.py reads the bool itself.
+        if (
+            isinstance(value, bool)
+            and key in hints
+            and key not in _BOOL_OK_KEYS
+            and not _type_accepts_bool(hints[key])
+        ):
             spelling = "yes" if value else "no"
             logger.warning(
                 "trainer.%s=%s was parsed as a YAML boolean by the CLI override "
@@ -609,7 +668,7 @@ def trainer_args_dict(cfg: DictConfig) -> dict:
     # prepare_model() (train.py) reads it directly off the raw YAML instead,
     # so it still takes effect -- the warning below would otherwise be wrong
     # for the one key campaign YAMLs actually rely on.
-    dropped_keys = set(result.keys()) - valid_keys - {"overwrite_output_dir"}
+    dropped_keys = set(result.keys()) - valid_keys - {"overwrite_output_dir", "ddp_gradient_as_bucket_view"}
     if dropped_keys:
         logger.warning(
             "trainer_args_dict: dropping %d key(s) from the YAML `trainer:` block that "
@@ -620,6 +679,65 @@ def trainer_args_dict(cfg: DictConfig) -> dict:
         )
     result = {k: v for k, v in result.items() if k in valid_keys}
 
+    return _apply_min_lr_scale(result, cfg)
+
+
+# Where each decaying scheduler takes its LR floor, as a fraction of the peak.
+# `cosine` has no floor in transformers, so it is run as `cosine_with_min_lr`,
+# which is the same curve rescaled to end at the floor instead of at zero.
+_MIN_LR_KWARG = {
+    "cosine_with_min_lr": "min_lr_rate",
+    "warmup_stable_decay": "min_lr_ratio",
+}
+_NO_DECAY_SCHEDULERS = {"constant", "constant_with_warmup"}
+
+
+def _apply_min_lr_scale(result: dict, cfg: DictConfig) -> dict:
+    """Make ``optimization.min_lr_scale`` the LR every schedule ends at.
+
+    The final learning rate of every parameter group is ``min_lr_scale`` times
+    that group's peak LR. ``cosine`` becomes ``cosine_with_min_lr``;
+    ``warmup_stable_decay`` gets ``min_lr_ratio``. A scheduler that cannot
+    floor (``linear``, ...) with a non-zero scale is an error, not a silent
+    decay to zero, and so is a floor passed in ``lr_scheduler_kwargs`` that
+    disagrees with ``min_lr_scale``.
+    """
+    scale = OmegaConf.select(cfg, "optimization.min_lr_scale")
+    sched = result.get("lr_scheduler_type")
+    if scale is None or sched is None or str(sched) in _NO_DECAY_SCHEDULERS:
+        return result
+    scale = float(scale)
+    sched = str(sched)
+    if sched == "cosine":
+        sched = "cosine_with_min_lr"
+    if sched not in _MIN_LR_KWARG:
+        if scale == 0.0:
+            return result
+        raise ValueError(
+            f"optimization.min_lr_scale={scale} but lr_scheduler_type {sched!r} has no "
+            f"LR floor. Use one of {sorted(['cosine', *_MIN_LR_KWARG])}, or set "
+            "optimization.min_lr_scale: 0 to decay to zero."
+        )
+
+    kwargs = result.get("lr_scheduler_kwargs") or {}
+    if isinstance(kwargs, str):
+        kwargs = json.loads(kwargs)
+    kwargs = dict(kwargs)
+    key = _MIN_LR_KWARG[sched]
+    if "min_lr" in kwargs:
+        raise ValueError(
+            "lr_scheduler_kwargs sets an absolute `min_lr`; the floor is "
+            "optimization.min_lr_scale (a fraction of each group's peak LR)."
+        )
+    if key in kwargs and float(kwargs[key]) != scale:
+        raise ValueError(
+            f"lr_scheduler_kwargs.{key}={kwargs[key]} disagrees with "
+            f"optimization.min_lr_scale={scale}; set the floor in one place only."
+        )
+    kwargs[key] = scale
+    result["lr_scheduler_type"] = sched
+    result["lr_scheduler_kwargs"] = kwargs
+    logger.info("LR schedule %s ends at %g x peak LR (optimization.min_lr_scale).", sched, scale)
     return result
 
 

@@ -19,12 +19,14 @@
 #   Data           CONFIG               one YAML per budget x task (~550 lines,
 #                                        rendered by build_campaign_config.py --
 #                                        never write a new one per arm)
-#   Architecture   ADAPTER, ADAPTER_FREEZE, STACK_FACTOR, ENCODER, ENCODER_FREEZE,
-#                  MAX_AUDIO_SEQ_LEN,
+#   Architecture   ADAPTER, ADAPTER_FREEZE, STACK_FACTOR, FRAME_RATE_HZ, ENCODER,
+#                  ENCODER_FREEZE, EVAL_WHEN_FROZEN, QK_NORM, MAX_AUDIO_SEQ_LEN,
 #                  DECODER, DECODER_FREEZE, DECODER_LORA     (2-8 CLI overrides;
-#                  STACK_FACTOR only affects the MLP adapter -- see
-#                  plan_arm.py's ArmAxes and melt/modeling/modeling_melt.py's
-#                  MELTMLPAdapter)
+#                  QK_NORM only affects the Conformer and Q-Former adapters;
+#                  STACK_FACTOR only affects the MLP and MoE adapters, and
+#                  FRAME_RATE_HZ derives it -- or the Conformer's stride/kernel,
+#                  or checks the Q-Former's window -- from one declared rate; see
+#                  plan_arm.py's ArmAxes)
 #   Optimisation   ENCODER_LR, DECODER_LR, ADAPTER_LR         (0-3 CLI overrides)
 #   Batch/accum    BATCH_DURATION, GRAD_ACCUM_STEPS            (0-2 CLI overrides,
 #                                        coupled -- see plan_arm.py's ArmAxes)
@@ -32,6 +34,11 @@
 #                                        independent -- trades recompute for
 #                                        activation memory, DDP's only route to
 #                                        it since FSDP2 gets it from accelerate)
+#   DDP mechanics  DDP_FIND_UNUSED_PARAMETERS                  (0-1 CLI override,
+#                                        independent, not a scientific axis --
+#                                        the MoE adapter's router can leave an
+#                                        expert unused in a small batch, which
+#                                        DDP's default rejects; see ArmAxes)
 #   Duration       EPOCHS                                       (0-1 CLI override,
 #                                        trainer.num_train_epochs -- see the
 #                                        "One epoch" note below)
@@ -91,8 +98,19 @@ ACCELERATE_CONFIG="${ACCELERATE_CONFIG:-config/accelerate/ddp.yaml}"
 ADAPTER="${ADAPTER:-}"
 ADAPTER_FREEZE="${ADAPTER_FREEZE:-}"
 STACK_FACTOR="${STACK_FACTOR:-}"
+# Empty = no decoder frame rate declared. Otherwise plan_arm.py derives the adapter's
+# route to it (stack_factor, or the Conformer's stride and kernel) and tags `hz<rate>`.
+FRAME_RATE_HZ="${FRAME_RATE_HZ:-}"
 ENCODER="${ENCODER:-}"
 ENCODER_FREEZE="${ENCODER_FREEZE:-}"
+# Empty = inherit the config's own value (every ABL-*.yaml today omits the key, i.e.
+# false, the historical behaviour: a frozen encoder still runs in train() mode). See
+# melt/modeling/modeling_melt.py's MELTAudioEncoder.train().
+EVAL_WHEN_FROZEN="${EVAL_WHEN_FROZEN:-}"
+# Empty = inherit the config's own value (every ABL-*.yaml omits the key, i.e. false: the
+# historical adapters). true RMS-normalises the Conformer's and the Q-Former's attention
+# queries and keys per head and tags `qkn` into EXP_NAME. See MELTAdapterConfig.qk_norm.
+QK_NORM="${QK_NORM:-}"
 # Empty = derive from ENCODER (a fixed-window encoder gets the window it
 # demands) and otherwise inherit from CONFIG. See plan_arm.py.
 MAX_AUDIO_SEQ_LEN="${MAX_AUDIO_SEQ_LEN:-}"
@@ -109,6 +127,7 @@ ADAPTER_LR="${ADAPTER_LR:-}"
 BATCH_DURATION="${BATCH_DURATION:-}"
 GRAD_ACCUM_STEPS="${GRAD_ACCUM_STEPS:-}"
 GRADIENT_CHECKPOINTING="${GRADIENT_CHECKPOINTING:-}"
+DDP_FIND_UNUSED_PARAMETERS="${DDP_FIND_UNUSED_PARAMETERS:-}"
 EPOCHS="${EPOCHS:-}"
 TEMPLATE_TASK_OVERRIDE="${TEMPLATE_TASK_OVERRIDE:-}"
 TEMPLATE_SELECTION="${TEMPLATE_SELECTION:-}"
@@ -146,8 +165,9 @@ PLAN="$(python3 "${SCRIPT_DIR}/plan_arm.py" \
     --stage "$STAGE" \
     --world-size "$WORLD_SIZE" \
     --adapter "$ADAPTER" --adapter-freeze "$ADAPTER_FREEZE" \
-    --stack-factor "$STACK_FACTOR" \
+    --stack-factor "$STACK_FACTOR" --frame-rate-hz "$FRAME_RATE_HZ" \
     --encoder "$ENCODER" --encoder-freeze "$ENCODER_FREEZE" \
+    --eval-when-frozen "$EVAL_WHEN_FROZEN" --qk-norm "$QK_NORM" \
     --max-audio-seq-len "$MAX_AUDIO_SEQ_LEN" \
     --lr-scheduler "$LR_SCHEDULER" --warmup-ratio "$WARMUP_RATIO" \
     --decoder "$DECODER" --decoder-freeze "$DECODER_FREEZE" \
@@ -155,6 +175,7 @@ PLAN="$(python3 "${SCRIPT_DIR}/plan_arm.py" \
     --encoder-lr "$ENCODER_LR" --decoder-lr "$DECODER_LR" --adapter-lr "$ADAPTER_LR" \
     --batch-duration "$BATCH_DURATION" --grad-accum-steps "$GRAD_ACCUM_STEPS" \
     --gradient-checkpointing "$GRADIENT_CHECKPOINTING" \
+    --ddp-find-unused-parameters "$DDP_FIND_UNUSED_PARAMETERS" \
     --epochs "$EPOCHS" --template-task-override "$TEMPLATE_TASK_OVERRIDE" \
     --template-selection "$TEMPLATE_SELECTION" \
     --seed "$SEED")" || { echo "ERROR: plan_arm.py failed (see above)" >&2; exit 1; }

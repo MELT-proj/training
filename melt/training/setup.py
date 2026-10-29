@@ -45,11 +45,8 @@ def borrow_chat_template(tokenizer, source_name: str, decoder_name: str) -> None
     Raises:
         ValueError: If *source_name* has no chat template either.
     """
-    borrowed = getattr(
-        AutoTokenizer.from_pretrained(source_name, use_fast=True),
-        "chat_template",
-        None,
-    )
+    source_tokenizer = AutoTokenizer.from_pretrained(source_name, use_fast=True)
+    borrowed = getattr(source_tokenizer, "chat_template", None)
     if not borrowed:
         raise ValueError(
             f"model.decoder.chat_template_from is {source_name!r}, but that checkpoint "
@@ -71,6 +68,28 @@ def borrow_chat_template(tokenizer, source_name: str, decoder_name: str) -> None
             source_name,
         )
     tokenizer.chat_template = borrowed
+
+    # A template's markers must tokenize as they do in the source. EuroLLM-1.7B's vocabulary
+    # holds <|im_start|> at id 3, but only the Instruct tokenizer registers it as an added
+    # token; on the base it splits into ten text pieces, the assistant span is never found
+    # and the arm trains and evaluates on empty targets. Register the source's added tokens
+    # that the template uses and that sit at the same id in this vocabulary (no row is added).
+    vocab = tokenizer.get_vocab()
+    missing = [
+        token
+        for index, token in source_tokenizer.added_tokens_decoder.items()
+        if token.content in borrowed
+        and token.content not in tokenizer.added_tokens_encoder
+        and vocab.get(token.content) == index
+    ]
+    if missing:
+        tokenizer.add_tokens(missing)
+        logger.info(
+            "%s: registered %s from %s as added tokens (already in its vocabulary).",
+            decoder_name,
+            [token.content for token in missing],
+            source_name,
+        )
 
 
 def prepare_processor(cfg: DictConfig) -> MELTProcessor:
@@ -223,13 +242,25 @@ def prepare_melt_config(cfg: DictConfig, processor: MELTProcessor) -> MELTConfig
 
     max_audio_seq_len = encoder_cfg.get("max_audio_seq_len", 1500)
 
+    encoder_kwargs = {"attn_implementation": encoder_cfg.get("attn_implementation", "sdpa")}
+    # SpecAugment time masking is applied by the wav2vec2 family whenever the encoder is
+    # in train mode, and a frozen encoder still is. Checkpoints disagree on the default
+    # (facebook/mms-1b and mHuBERT-147 ship it on; w2v-BERT and Whisper ship it off), so a
+    # comparison across encoders has to pin it. Unset (null) keeps the checkpoint's own.
+    apply_spec_augment = encoder_cfg.get("apply_spec_augment")
+    if apply_spec_augment is not None:
+        encoder_kwargs["apply_spec_augment"] = bool(apply_spec_augment)
+
     config = MELTConfig(
         audio_encoder=encoder_cfg.name,
         text_decoder=decoder_cfg.name,
         adapter_config=adapter_cfg,
-        encoder_kwargs={"attn_implementation": encoder_cfg.get("attn_implementation", "sdpa")},
+        encoder_kwargs=encoder_kwargs,
         decoder_kwargs={"attn_implementation": decoder_cfg.get("attn_implementation", "sdpa")},
         max_audio_seq_len=max_audio_seq_len,
+        # See MELTAudioEncoder.train(): opt-in, default False, so this is a no-op for
+        # every config that does not ask for it.
+        eval_when_frozen=bool(encoder_cfg.get("eval_when_frozen", False)),
     )
 
     config.audio_encoder_config.max_audio_seq_len = max_audio_seq_len

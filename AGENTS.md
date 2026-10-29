@@ -295,3 +295,4 @@ This codebase is an academic-driven effort. Hence, we will likely stop updating 
 ## Rules
 
 - Avoid running `find` on the file system root "\". If you need to find a file, a venv, or else, just a path to who issued the command.
+- Every measured result a chart or table quotes (WER, chrF++, selection score, published baselines) lives in one master table, `projects/ablation-campaign/charts/results_master.csv`: write it only through `projects/ablation-campaign/charts/master.py`, never by hand, and read `projects/ablation-campaign/charts/PROTOCOL.md` before your first write.

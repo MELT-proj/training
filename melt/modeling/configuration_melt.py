@@ -45,6 +45,12 @@ class MELTAdapterConfig(PretrainedConfig):
             Number of consecutive encoder frames the MLP adapter concatenates along
             the feature axis before its first projection (used by MLP adapter). 1
             leaves the frame rate unchanged; k lowers it by k.
+        qk_norm (`bool`, *optional*, defaults to `False`):
+            RMS-normalise the query and key projections of every attention, per head,
+            so the attention logits cannot grow with the projection weights (used by
+            the Conformer and Q-Former adapters). It changes the function the adapter
+            computes, so a checkpoint is only valid with the value it was trained
+            with, which is why it is stored here and a config without it means `False`.
         num_experts (`int`, *optional*, defaults to 8):
             Number of experts (used by MoE adapter).
         num_experts_per_tok (`int`, *optional*, defaults to 2):
@@ -86,6 +92,7 @@ class MELTAdapterConfig(PretrainedConfig):
         adapter_kernel_size=3,
         adapter_stride=2,
         stack_factor=1,
+        qk_norm=False,
         num_experts=8,
         num_experts_per_tok=2,
         moe_intermediate_size=1024,
@@ -95,6 +102,9 @@ class MELTAdapterConfig(PretrainedConfig):
         **kwargs,
     ):
         super().__init__(**kwargs)
+
+        if not isinstance(qk_norm, bool):
+            raise ValueError(f"adapter qk_norm must be true or false, got {qk_norm!r}")
 
         self._type = _type
 
@@ -115,6 +125,9 @@ class MELTAdapterConfig(PretrainedConfig):
         self.layerdrop = layerdrop
         self.adapter_kernel_size = adapter_kernel_size
         self.adapter_stride = adapter_stride
+
+        # Conformer and Q-Former (the adapters with attention)
+        self.qk_norm = qk_norm
 
         # MoE specific
         self.num_experts = num_experts
@@ -192,6 +205,7 @@ class MELTConfig(PretrainedConfig):
         initializer_range: float = 0.02,
         encoder_kwargs: dict = {},
         decoder_kwargs: dict = {},
+        eval_when_frozen: bool = False,
         **kwargs,
     ):
         # Build sub-configs from model identifiers *only* when they are not
@@ -230,6 +244,11 @@ class MELTConfig(PretrainedConfig):
         self.adapter_config = adapter_config
 
         self.initializer_range = initializer_range
+
+        # Whether MELTAudioEncoder should force itself into eval mode whenever it has no
+        # trainable parameters, instead of following whatever mode the outer model is in.
+        # See MELTAudioEncoder.train() for why this exists and is opt-in.
+        self.eval_when_frozen = eval_when_frozen
 
         # Set decoder-related attributes. "ForCausalLM" (not "ForCausalLMLoss")
         # is the actual key in transformers' loss registry -- both keys

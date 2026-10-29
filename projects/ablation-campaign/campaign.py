@@ -46,15 +46,15 @@ LEDGER_PATH = os.path.join(HERE, "arms.tsv")
 # quietly did nothing is exactly how an arm ends up not being the ablation it
 # claims to be.
 AXIS_FIELDS = {
-    "adapter", "adapter_freeze", "stack_factor", "encoder", "encoder_freeze",
-    "max_audio_seq_len", "lr_scheduler", "warmup_ratio",
+    "adapter", "adapter_freeze", "stack_factor", "frame_rate_hz", "encoder", "encoder_freeze",
+    "eval_when_frozen", "qk_norm", "max_audio_seq_len", "lr_scheduler", "warmup_ratio",
     "decoder", "decoder_freeze", "decoder_lora",
     "encoder_lr", "decoder_lr", "adapter_lr",
-    "batch_duration", "grad_accum_steps", "gradient_checkpointing",
+    "batch_duration", "grad_accum_steps", "gradient_checkpointing", "ddp_find_unused_parameters",
     "epochs", "template_task_override", "template_selection",
 }
 POLICY_FIELDS = {
-    "seed", "eval_rounds", "keep_checkpoints", "checkpoint_count",
+    "seed", "eval_rounds", "keep_checkpoints", "checkpoint_count", "max_steps",
     "exp_name", "init_from",
 }
 RUN_FIELDS = {"site", "accelerate", "nodes", "gpus_per_node", "qos", "time"}
@@ -111,7 +111,10 @@ def resolve(row: dict, defaults: dict, arms: list[dict]) -> tuple[ArmAxes, dict]
     # moment a second stage-1 arm exists.
     init_from = merged.get("init_from")
     init_path = None
-    if init_from:
+    if init_from and init_from.startswith("/workspace/outputs/"):
+        # A staged checkpoint (an MA run that left no final weights): the path is taken as is.
+        init_path = init_from
+    elif init_from:
         parent = next((a for a in arms if a["id"] == init_from), None)
         if parent is None:
             die(
@@ -129,6 +132,7 @@ def resolve(row: dict, defaults: dict, arms: list[dict]) -> tuple[ArmAxes, dict]
         eval_rounds=int(merged.get("eval_rounds", ArmAxes.eval_rounds)),
         keep_checkpoints=int(merged.get("keep_checkpoints", ArmAxes.keep_checkpoints)),
         checkpoint_count=merged.get("checkpoint_count"),
+        max_steps=int(merged["max_steps"]) if merged.get("max_steps") is not None else None,
         exp_name=merged.get("exp_name"),
         init_from=init_path,
         **{f: str(merged.get(f, "")) if merged.get(f) is not None else "" for f in AXIS_FIELDS},

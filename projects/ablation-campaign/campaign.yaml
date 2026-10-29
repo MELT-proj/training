@@ -25,6 +25,10 @@
 #     activation memory without changing what a step trains on. DDP's only
 #     route to activation checkpointing -- FSDP2 gets it from accelerate's
 #     own fsdp_activation_checkpointing instead.
+#   - max_steps states a run's length outright instead of deriving it from the
+#     config's total_hours (the estimate assumes full batches). It replaces the
+#     derived steps for the eval/save cadence and the WSD decay window, is
+#     emitted as --trainer.max_steps, and is tagged `ms<N>` into the run name.
 #
 # Every field except `id`, `stage` and `config` is optional and falls back to
 # `defaults:` and then to the base config's own value. An omitted axis means
@@ -821,3 +825,690 @@ arms:
     grad_accum_steps: 1
     seed: 43
     time: "14:00:00"
+
+  # --- eval_when_frozen A/B (03-audio-stack.md; PI 2026-09-27) --------------
+  #
+  # Does keeping a fully-frozen encoder in eval() mode during training change
+  # anything? Same settings as MA-700-screen-w2vb-lr2e3-b300 (already run),
+  # plus the flag. w2v-BERT only: Whisper ships zero dropout/layerdrop/
+  # SpecAugment, so the flag would be a no-op there by construction.
+
+  - id: MA-700-screen-w2vb-lr2e3-b300-evalfrozen
+    stage: MA
+    config: ABL-MA-700-asr.yaml
+    stack_factor: 5
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    eval_when_frozen: true
+    seed: 42
+    time: "16:00:00"
+
+  # --- The audio-stack crossing (03-audio-stack.md Sec2; recipe decided PI, ---
+  # 2026-09-26) -- 4 encoders x 4 adapters, one recipe, every arm at 10 Hz via
+  # frame_rate_hz (derives stack_factor for mlp/moe, stride+kernel for
+  # conformer, and checks the q-former's own window/downsample rate). Each arm
+  # trains on ABL-MA-2100-asr.yaml: 2,100 h per language, 10,500 h in total,
+  # counted in hours rather than epochs (PI, 2026-10-02/10-07), so the rows
+  # carry no `epochs:`. These are new ids (MA-2100-*): the earlier
+  # MA-700-crossing-* five-epoch runs used a different recipe and no warmup,
+  # and their outputs are not to be ranked next to these. max_steps and time:
+  # below were set on 2026-10-08 (see the last paragraph of this comment).
+  # warmup_ratio: 0.03 now takes effect (plan_arm emits it as a fractional
+  # warmup_steps; transformers 5 had been dropping `warmup_ratio`).
+  #
+  # eval_when_frozen: true on the 12 non-Whisper cells (PI, 2026-09-28), after
+  # the A/B on w2v-BERT (job 46703807, board 2026-09-28) came back mixed, not
+  # a clean win -- ID CER improves (-0.0516) but OOD-train FLEURS worsens
+  # badly (+0.1249, weight 1.5x), netting a score regression (0.7149 ->
+  # 0.7587). PI decided to apply it anyway to all three encoders that share
+  # the live layerdrop-0.1 mechanism (w2v-BERT, MMS-1b, mHuBERT-147) rather
+  # than split the crossing's read-out by flag value. Whisper is unaffected
+  # either way (structural no-op, zero layerdrop/dropout) and its 4 cells
+  # already ran without the flag -- not re-run, since it provably does not
+  # change their result (`frozen_encoder_train_mode.py`, board 2026-09-26:
+  # cos 1.0000, relative L2 0.0000 for Whisper specifically).
+  #
+  # nodes: and the first time: values (2026-09-28; time: was re-derived on
+  # 2026-10-08, see the last paragraph): three bands, from the five measured
+  # smokes plus the two existing w2v-bert/whisper +mlp screen runs (rescaled x5
+  # for epochs), extrapolated to the other nine cells by an encoder-multiplier
+  # x adapter-multiplier model (full table on the board):
+  #   - most rows: the estimate +30% margin, matching this file's own
+  #     existing margin convention (the screen's 300s corner: 16h budget on
+  #     ~10.3h measured);
+  #   - a few land within the 30% of acc_ehpc's 72h/3-day cap, so they are
+  #     capped at 72h exactly instead (less margin, but still one-shot);
+  #   - seven rows -- every Q-Former cell, plus the two next-most-expensive
+  #     Conformer cells and one MoE cell -- had a raw estimate ABOVE 72h at
+  #     the recipe's world_size (1 node, 4 ranks). PI decision (2026-09-28):
+  #     add nodes for just these seven, not for the other nine, per the
+  #     measured "keep grad_accum fixed, add nodes: GPU-h flat, wall halves
+  #     per doubling" scaling (infrastructure.md Sec4, measured for IFT, not
+  #     yet for MA -- treat the halving below as extrapolated until the
+  #     first of these seven lands and a real s/step number replaces it).
+  #     Six go to nodes: 2 (world_size 8); mhubert-qformer's raw estimate
+  #     (146h) still cleared 72h at nodes: 2 (~73h), so it alone goes to
+  #     nodes: 4 (world_size 16). Same +30%-margin / 72h-cap convention as
+  #     above, applied to the halved (or quartered) raw estimate.
+  #
+  # max_steps and time: (2026-10-08). The step estimate behind the derived step
+  # count assumes full batches; the 1,500-step smoke of this config measured
+  # 79.9% (239.7 s of the 300 s nominal per step), so each row states 1.25x the
+  # estimate -- 157,500 / 78,750 / 39,375 steps at 4 / 8 / 16 ranks -- which
+  # trains about the budgeted 10,500 h. time: is the projected wall time + 30%
+  # (the margin above): 0.88 s/step measured on the w2v-BERT + MLP cell, scaled
+  # to the other cells by their 700 h long-run rates, plus 0.8 h of fixed
+  # overhead per job. A row keeps its earlier value when that already gives
+  # 30%. The 2- and 4-node cells are scaled the same way and are not measured
+  # on this data (board 2026-10-08).
+  #
+  # adapter_lr and qk_norm (2026-10-12): the recipe's LR is 2e-3, the w2v-BERT + MLP
+  # screen's best point. The attention adapters diverged at it (board 2026-10-09) and
+  # lowering it to 1e-3 only moved the growth earlier or later (board 2026-10-11), so
+  # the PI chose to bet on QK-norm (model.adapter.qk_norm) at 2e-3 and to test no
+  # further LR change: the four Q-Former cells and mms1b-conformer carry
+  # `qk_norm: true`. Cells that already finished keep what they ran with:
+  # whisper-conformer and w2vb-conformer 1e-3, mhubert-conformer 2e-3, all without
+  # QK-norm, so the Conformer column is not uniform; report each cell's LR and
+  # qk_norm next to its result.
+
+  - id: MA-2100-crossing-w2vb-mlp
+    stage: MA
+    config: ABL-MA-2100-asr.yaml
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    eval_when_frozen: true
+    seed: 42
+    max_steps: 157500
+    time: "54:00:00"
+
+  - id: MA-2100-crossing-w2vb-conformer
+    stage: MA
+    config: ABL-MA-2100-asr.yaml
+    adapter: conformer
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 1e-3          # PI 2026-10-09, was 2e-3: diverged at step ~15.6k (board 2026-10-09)
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 2                 # 75 x 1 x 8 = 600 s -- PI 2026-09-28, was 80h raw at nodes: 1
+    eval_when_frozen: true
+    seed: 42
+    max_steps: 78750
+    time: "34:00:00"
+
+  - id: MA-2100-crossing-w2vb-moe
+    stage: MA
+    config: ABL-MA-2100-asr.yaml
+    adapter: moe
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    ddp_find_unused_parameters: true   # the router can leave an expert unused in a small batch (see plan_arm.py's ArmAxes)
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    eval_when_frozen: true
+    seed: 42
+    max_steps: 157500
+    time: "56:00:00"
+
+  - id: MA-2100-crossing-w2vb-qformer
+    stage: MA
+    config: ABL-MA-2100-asr.yaml
+    adapter: qformer
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    qk_norm: true             # PI 2026-10-12: QK-norm at the recipe LR; 2e-3 alone and 1e-3 both failed (board 2026-10-09, 2026-10-12)
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 2                 # 75 x 1 x 8 = 600 s -- PI 2026-09-28, was 119h raw at nodes: 1
+    eval_when_frozen: true
+    seed: 42
+    max_steps: 78750
+    time: "46:00:00"
+
+  - id: MA-2100-crossing-mms1b-mlp
+    stage: MA
+    config: ABL-MA-2100-asr.yaml
+    encoder: facebook/mms-1b
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    eval_when_frozen: true
+    seed: 42
+    max_steps: 157500
+    time: "52:00:00"
+
+  - id: MA-2100-crossing-mms1b-conformer
+    stage: MA
+    config: ABL-MA-2100-asr.yaml
+    encoder: facebook/mms-1b
+    adapter: conformer
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    qk_norm: true             # PI 2026-10-12: QK-norm at the recipe LR; it blew up at 6.2k at 2e-3 and at 10.9k at 1e-3 (board 2026-10-09, 2026-10-11)
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    eval_when_frozen: true
+    seed: 42
+    max_steps: 157500
+    time: "70:00:00"          # was 54: the 1e-3 run measured 0.85 it/s, ~52 h for 157,500 steps; acc_ehpc allows 72
+
+  - id: MA-2100-crossing-mms1b-moe
+    stage: MA
+    config: ABL-MA-2100-asr.yaml
+    encoder: facebook/mms-1b
+    adapter: moe
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    ddp_find_unused_parameters: true   # the router can leave an expert unused in a small batch (see plan_arm.py's ArmAxes)
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    eval_when_frozen: true
+    seed: 42
+    max_steps: 157500
+    time: "52:00:00"
+
+  - id: MA-2100-crossing-mms1b-qformer
+    stage: MA
+    config: ABL-MA-2100-asr.yaml
+    encoder: facebook/mms-1b
+    adapter: qformer
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    qk_norm: true             # PI 2026-10-12: QK-norm at the recipe LR; 2e-3 alone and 1e-3 both failed (board 2026-10-09, 2026-10-11)
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 2                 # 75 x 1 x 8 = 600 s -- PI 2026-09-28, was 104h raw at nodes: 1
+    eval_when_frozen: true
+    seed: 42
+    max_steps: 78750
+    time: "41:00:00"
+
+  - id: MA-2100-crossing-mhubert-mlp
+    stage: MA
+    config: ABL-MA-2100-asr.yaml
+    encoder: utter-project/mHuBERT-147
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    eval_when_frozen: true
+    seed: 42
+    max_steps: 157500
+    time: "52:00:00"
+
+  - id: MA-2100-crossing-mhubert-conformer
+    stage: MA
+    config: ABL-MA-2100-asr.yaml
+    encoder: utter-project/mHuBERT-147
+    adapter: conformer
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 2                 # 75 x 1 x 8 = 600 s -- PI 2026-09-28, was 98h raw at nodes: 1
+    eval_when_frozen: true
+    seed: 42
+    max_steps: 78750
+    time: "38:00:00"
+
+  - id: MA-2100-crossing-mhubert-moe
+    stage: MA
+    config: ABL-MA-2100-asr.yaml
+    encoder: utter-project/mHuBERT-147
+    adapter: moe
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    ddp_find_unused_parameters: true   # the router can leave an expert unused in a small batch (see plan_arm.py's ArmAxes)
+    nodes: 2                 # 75 x 1 x 8 = 600 s -- PI 2026-09-28, was 79h raw at nodes: 1
+    eval_when_frozen: true
+    seed: 42
+    max_steps: 78750
+    time: "31:00:00"
+
+  - id: MA-2100-crossing-mhubert-qformer
+    stage: MA
+    config: ABL-MA-2100-asr.yaml
+    encoder: utter-project/mHuBERT-147
+    adapter: qformer
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    qk_norm: true             # PI 2026-10-12: QK-norm at the recipe LR; 2e-3 alone and 1e-3 both failed (board 2026-10-09, 2026-10-12)
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 4                 # 75 x 1 x 16 = 1200 s -- PI 2026-09-28, was 146h raw at nodes: 1,
+    eval_when_frozen: true
+                              # still ~73h (over cap) at nodes: 2, so this one alone goes to 4
+    seed: 42
+    max_steps: 39375
+    time: "29:00:00"
+
+  - id: MA-2100-crossing-whisper-mlp
+    stage: MA
+    config: ABL-MA-2100-asr.yaml
+    encoder: openai/whisper-large-v3
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    seed: 42
+    max_steps: 157500
+    time: "55:00:00"
+
+  - id: MA-2100-crossing-whisper-conformer
+    stage: MA
+    config: ABL-MA-2100-asr.yaml
+    encoder: openai/whisper-large-v3
+    adapter: conformer
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 1e-3          # PI 2026-09-29, was 2e-3: two runs at 2e-3 (jobs 46724840,
+                              # 46751008) both exploded (grad_norm inf->nan) around step
+                              # ~4200/210000, during warmup, before any checkpoint. 1e-3 is
+                              # an already-measured screen grid point (lr1e3-b300), not a
+                              # new value -- see board 2026-09-29.
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    seed: 42
+    max_steps: 157500
+    time: "52:00:00"
+
+  - id: MA-2100-crossing-whisper-moe
+    stage: MA
+    config: ABL-MA-2100-asr.yaml
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    ddp_find_unused_parameters: true   # the router can leave an expert unused in a small batch (see plan_arm.py's ArmAxes)
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    seed: 42
+    max_steps: 157500
+    time: "55:00:00"
+
+  - id: MA-2100-crossing-whisper-qformer
+    stage: MA
+    config: ABL-MA-2100-asr.yaml
+    encoder: openai/whisper-large-v3
+    adapter: qformer
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    qk_norm: true             # PI 2026-10-12: QK-norm at the recipe LR; 2e-3 alone and 1e-3 both failed (board 2026-10-09, 2026-10-12)
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 2                 # 75 x 1 x 8 = 600 s -- PI 2026-09-28, was 99h raw at nodes: 1
+    seed: 42
+    max_steps: 78750
+    time: "39:00:00"
+
+  # Seed replicates of the two best Whisper crossing cells (timeline week 5): the original rows with seed 43, which changes the
+  # data order (MELT_SEED, forwarded into the container since fea165a) and trainer.seed. Nothing else differs.
+  - id: MA-2100-crossing-whisper-conformer-s43
+    stage: MA
+    config: ABL-MA-2100-asr.yaml
+    encoder: openai/whisper-large-v3
+    adapter: conformer
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 1e-3          # as the original row
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    seed: 43
+    max_steps: 157500
+    time: "52:00:00"
+
+  - id: MA-2100-crossing-whisper-moe-s43
+    stage: MA
+    config: ABL-MA-2100-asr.yaml
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    ddp_find_unused_parameters: true   # the router can leave an expert unused in a small batch (see plan_arm.py's ArmAxes)
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    seed: 43
+    max_steps: 157500
+    time: "55:00:00"
+
+  # QK-norm on the whole Conformer column (PI, 2026-10-15, for the paper's table). The Conformer had run with QK-norm on
+  # MMS-1b only (MA-2100-crossing-mms1b-conformer above); these are the other three encoders at the same setting: qk_norm at the
+  # recipe LR of 2e-3. Nodes, steps, seed and data order are the original Conformer rows'. The originals stay as scored results
+  # (whisper 1e-3, w2vb 1e-3, mhubert 2e-3, none with QK-norm); the `-qkn` tag in the run name keeps the output dirs apart.
+  - id: MA-2100-crossing-whisper-conformer-qkn
+    stage: MA
+    config: ABL-MA-2100-asr.yaml
+    encoder: openai/whisper-large-v3
+    adapter: conformer
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    qk_norm: true
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    seed: 42
+    max_steps: 157500
+    time: "52:00:00"
+
+  - id: MA-2100-crossing-mhubert-conformer-qkn
+    stage: MA
+    config: ABL-MA-2100-asr.yaml
+    encoder: utter-project/mHuBERT-147
+    adapter: conformer
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    qk_norm: true
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 2                 # 75 x 1 x 8 = 600 s, as the original row
+    eval_when_frozen: true
+    seed: 42
+    max_steps: 78750
+    time: "38:00:00"
+
+  - id: MA-2100-crossing-w2vb-conformer-qkn
+    stage: MA
+    config: ABL-MA-2100-asr.yaml
+    adapter: conformer
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    qk_norm: true
+    batch_duration: 75
+    grad_accum_steps: 1
+    nodes: 2                 # 75 x 1 x 8 = 600 s, as the original row
+    eval_when_frozen: true
+    seed: 42
+    max_steps: 78750
+    time: "46:00:00"          # the 1e-3 original took 20.7 h; room for the 1.8x slowdown the seed-43 replicates showed
+
+  # Backbone study (plan/02-backbones.md, timeline week 5): the six decoders of the 2x3 grid on the stack the PI chose on 2026-10-14
+  # (Whisper-large-v3 + MoE, crossing recipe), ASR-only MA at 700 h/lang. Each row is MA-2100-crossing-whisper-moe with the
+  # data budget changed (ABL-MA-700-whisper-asr.yaml: the same builder, per-cut weights, no yodas3 top-up) and nothing else, bar
+  # the decoder. max_steps = 1.25 x the estimate (42,000 at 300 s x 3,500 h), the crossing's fill rule; realised hours are read
+  # from the first run's log. The old MA-700-* rows (w2v-BERT + MLP) are superseded and untouched. Base arms borrow their
+  # instruct sibling's chat template (plan_arm DECODER_PROFILES). MA-700-backbone-llama1b-ins is also the regime study's base
+  # MA checkpoint and the recipe confirmation.
+  - id: MA-700-backbone-llama1b-ins
+    stage: MA
+    config: ABL-MA-700-whisper-asr.yaml
+    decoder: meta-llama/Llama-3.2-1B-Instruct
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    ddp_find_unused_parameters: true   # the router can leave an expert unused in a small batch (see plan_arm.py's ArmAxes)
+    nodes: 1                 # 75 x 1 x 4 = 300 s
+    seed: 42
+    max_steps: 52500
+    time: "12:00:00"
+
+  - id: MA-700-backbone-llama1b-base
+    stage: MA
+    config: ABL-MA-700-whisper-asr.yaml
+    decoder: meta-llama/Llama-3.2-1B
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    ddp_find_unused_parameters: true
+    nodes: 1
+    seed: 42
+    max_steps: 52500
+    time: "12:00:00"
+
+  # Qwen3.5-2B: a smaller micro-batch with accumulation, so the effective batch stays 300 s. The 50 Hz MA arm needed
+  # batch_duration 30 at 50 Hz; at 10 Hz 25 s is ~1/4 of that arm's tokens per micro-batch. Unmeasured at this stack.
+  - id: MA-700-backbone-qwen35-2b-ins
+    stage: MA
+    config: ABL-MA-700-whisper-asr.yaml
+    decoder: Qwen/Qwen3.5-2B
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 25
+    grad_accum_steps: 3      # 25 x 3 x 4 = 300 s
+    gradient_checkpointing: false
+    ddp_find_unused_parameters: true
+    nodes: 1
+    seed: 42
+    max_steps: 52500
+    time: "26:00:00"
+
+  - id: MA-700-backbone-qwen35-2b-base
+    stage: MA
+    config: ABL-MA-700-whisper-asr.yaml
+    decoder: Qwen/Qwen3.5-2B-Base
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 25
+    grad_accum_steps: 3      # 25 x 3 x 4 = 300 s
+    gradient_checkpointing: false
+    ddp_find_unused_parameters: true
+    nodes: 1
+    seed: 42
+    max_steps: 52500
+    time: "26:00:00"
+
+  - id: MA-700-backbone-eurollm1.7b-ins
+    stage: MA
+    config: ABL-MA-700-whisper-asr.yaml
+    decoder: utter-project/EuroLLM-1.7B-Instruct
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    ddp_find_unused_parameters: true
+    nodes: 1
+    seed: 42
+    max_steps: 52500
+    time: "14:00:00"
+
+  - id: MA-700-backbone-eurollm1.7b-base
+    stage: MA
+    config: ABL-MA-700-whisper-asr.yaml
+    decoder: utter-project/EuroLLM-1.7B
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    ddp_find_unused_parameters: true
+    nodes: 1
+    seed: 42
+    max_steps: 52500
+    time: "14:00:00"
+
+  # Backbone study, stage 2 (plan/02-backbones.md): each MA-700-backbone-* arm continued with the decoder trained
+  # (encoder and adapter frozen), ASR + ST at 700 h/lang (ABL-IFT-700-backbone.yaml: per-cut weights, fixed prompt per
+  # task, master_dtype float32, seed 1337). Same for all six: 4,800 audio-s per step, cosine at decoder LR 2e-5 ending at
+  # 0.1x (min_lr_scale), 20 warmup steps, max_steps 6,310 = 1.25 x the estimate of 5,048 (the MA fill rule; ~7,200 h drawn
+  # at 86% fill). The old IFT-700-* rows (w2v-BERT + MLP, hour-share weights) are superseded and untouched.
+  # Batching follows the earlier IFT rows: Llama and EuroLLM at the MA micro-batch (75 s, 16 accumulations, 1 node);
+  # Qwen as IFT-700-qwen35-2b-ins ran (30 s x 20, 2 nodes, checkpointing on; 27.3 s/step measured there).
+  # Unmeasured at this stack: Llama/EuroLLM s/step (17 / 20 assumed) and peak memory. A resume costs the work since the
+  # last checkpoint (~900 steps: 4 h Llama, 5 h EuroLLM, 7 h Qwen) plus ~20 min of startup.
+  - id: IFT-700-backbone-llama1b-ins
+    stage: IFT
+    config: ABL-IFT-700-backbone.yaml
+    init_from: MA-700-backbone-llama1b-ins
+    decoder: meta-llama/Llama-3.2-1B-Instruct
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    batch_duration: 75
+    grad_accum_steps: 16     # 75 x 16 x 4 = 4,800 s
+    gradient_checkpointing: false
+    nodes: 1
+    seed: 1337
+    max_steps: 6310
+    checkpoint_count: 7
+    time: "40:00:00"         # ~31 h at 17 s/step incl. evals
+
+  - id: IFT-700-backbone-llama1b-base
+    stage: IFT
+    config: ABL-IFT-700-backbone.yaml
+    init_from: MA-700-backbone-llama1b-base
+    decoder: meta-llama/Llama-3.2-1B
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    batch_duration: 75
+    grad_accum_steps: 16
+    gradient_checkpointing: false
+    nodes: 1
+    seed: 1337
+    max_steps: 6310
+    checkpoint_count: 7
+    time: "40:00:00"
+
+  - id: IFT-700-backbone-qwen35-2b-ins
+    stage: IFT
+    config: ABL-IFT-700-backbone.yaml
+    init_from: MA-700-backbone-qwen35-2b-ins
+    decoder: Qwen/Qwen3.5-2B
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    batch_duration: 30
+    grad_accum_steps: 20     # 30 x 20 x 8 = 4,800 s
+    gradient_checkpointing: true   # false OOM'd at step 1 in full-decoder DDP
+    nodes: 2                 # one node would need ~100 h, over the 72 h cap
+    seed: 1337
+    max_steps: 6310
+    checkpoint_count: 7
+    time: "66:00:00"         # ~53 h at 30 s/step incl. evals
+
+  - id: IFT-700-backbone-qwen35-2b-base
+    stage: IFT
+    config: ABL-IFT-700-backbone.yaml
+    init_from: MA-700-backbone-qwen35-2b-base
+    decoder: Qwen/Qwen3.5-2B-Base
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    batch_duration: 30
+    grad_accum_steps: 20
+    gradient_checkpointing: true
+    nodes: 2
+    seed: 1337
+    max_steps: 6310
+    checkpoint_count: 7
+    time: "66:00:00"
+
+  - id: IFT-700-backbone-eurollm-ins
+    stage: IFT
+    config: ABL-IFT-700-backbone.yaml
+    init_from: MA-700-backbone-eurollm1.7b-ins
+    decoder: utter-project/EuroLLM-1.7B-Instruct
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    batch_duration: 75
+    grad_accum_steps: 16
+    gradient_checkpointing: false
+    nodes: 1
+    seed: 1337
+    max_steps: 6310
+    checkpoint_count: 7
+    time: "46:00:00"         # ~36 h at 20 s/step incl. evals
+
+  # EuroLLM-Base: the MA run timed out with no final weights. init_from is the staging directory of checkpoint-47730
+  # (relative symlinks to its weights and config, plus the rebuilt base tokenizer and the processor config).
+  - id: IFT-700-backbone-eurollm-base
+    stage: IFT
+    config: ABL-IFT-700-backbone.yaml
+    init_from: /workspace/outputs/MA-700-backbone-eurollm-base-ckpt47730
+    decoder: utter-project/EuroLLM-1.7B
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    batch_duration: 75
+    grad_accum_steps: 16
+    gradient_checkpointing: false
+    nodes: 1
+    seed: 1337
+    max_steps: 6310
+    checkpoint_count: 7
+    time: "46:00:00"

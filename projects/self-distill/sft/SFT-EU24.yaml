@@ -1,0 +1,2364 @@
+# SFT-EU24 -- supervised fine-tuning of Whisper-large-v3 + MLP adapter (stack_factor 5) + Qwen3.5-2B,
+# all three components trainable.
+#
+# Data condition 2 of 2, EU24: all 24 EU languages at HR5's total (6,132.6 h). Every entry draws
+# min(c, what it holds) with the common cap c = 197.741 h, solved by bisection so that the total
+# equals HR5's; entries below c use all their data. One ASR entry per language, one X->en entry per
+# language with data (yodas-granary ast, CoVoST2), one en->X entry per target with data (CoVoST2,
+# Europarl-ST). Same corpus split inside an entry as HR5.
+#
+# TOTAL HOURS: 6,132.6 h over 57 entries (data.train_ds.total_hours). The launcher derives
+# max_steps from it; HR5 and EU24 draw the same total, so they get the same compute.
+#
+# Rendered by projects/self-distill/sft/build_sft_mix.py from SFT-template.yaml. Both conditions are
+# rendered together, because EU24's cap depends on HR5's total. Do not hand-edit: change the template
+# or the script and render again. The script has read a sample of cuts from every source below and
+# resolved each text_field the way the loader does; it refuses to render if one does not resolve.
+#
+# Left out of the mix (build_sft_mix.EXCLUDED):
+#   voxpopuli/hr/train: 47.2% of its cuts (17.0 of 34.8 h) have no transcript, so about half of every draw
+#   would be skipped by the loader; its validation and test splits are the same (38.6% and 49.8%).
+#
+# In the mix with a caveat (the reason is repeated beside each source):
+#   fleurs/ga_ie/train: no pnc_text (no custom block at all), so it trains on the unpunctuated supervision
+#   text; it is 12 h of Irish against 0.6 h of CV22. Under strict_text_field the corpus-wide custom.pnc_text
+#   would raise on every cut.
+#   voxpopuli/{cs,et,fi,hu,lt,nl,pl,ro,sk,sl}/train: went through a generic converter (positional
+#   chunk{N}_item{M} ids that collide across languages, no filter on empty transcripts). 0.2-4.8% of their
+#   cuts have no transcript; the loader skips those (there is no text to mislabel) and their batch slots are
+#   wasted.
+#
+# Validation is the same in both conditions: 20 clips per named set from splits no training source
+# reads. asr_hr is scored on FLEURS because CV22 has no Croatian and 38.6% of VoxPopuli hr
+# validation cuts have no transcript (max_samples is applied before they are dropped).
+#
+# Hours are the unfiltered durations of the manifests, as everywhere else in this repo; the loader
+# then drops cuts outside [min_duration, max_duration].
+
+# =============================================================================
+# Run Configuration (non-TrainingArguments settings)
+# =============================================================================
+run:
+  exp_name: SFT-EU24
+  dry_run: false
+  # One forward+backward at max_duration and one at min_duration before step 1,
+  # logging peak CUDA memory for each. All three components train here, so this
+  # is what turns "does batch_duration fit" into a number in the first minute.
+  # An OOM in the warmup pass is caught and warned about rather than fatal.
+  memory_preallocation: true
+
+# =============================================================================
+# Model Configuration
+# =============================================================================
+# The launcher sets model.ckpt (the warm start) and the stack from the checkpoint
+# and plan_arm's tables; the values below describe the same stack so the file
+# also reads right on its own. While model.ckpt is set the architecture comes
+# from the checkpoint, but attn_implementation is still read from here.
+model:
+  encoder:
+    name: openai/whisper-large-v3
+    freeze: false
+    max_audio_seq_len: 3000 # Whisper takes exactly 30 s of 10 ms mel frames
+    attn_implementation: flash_attention_2
+    apply_spec_augment: false
+
+  decoder:
+    name: Qwen/Qwen3.5-2B
+    attn_implementation: flash_attention_2
+    freeze: false
+    eos_token: <|endoftext|>
+    pad_token: <|text_pad|>
+    audio_token: <|audio|>
+    audio_bos_token: <|audio_bos|>
+    audio_eos_token: <|audio_eos|>
+
+  adapter:
+    _type: mlp
+    freeze: false
+    stack_factor: 5
+
+  ckpt: null # IMPORTANT: set by the launcher (the warm-start checkpoint)
+
+# =============================================================================
+# Data Configuration
+# =============================================================================
+data:
+  sample_rate: 16000
+
+  # Instruction formatting: one prompt per cut, drawn at random from the task's
+  # family in melt/training/data/audio/lhotse/helpers.py TASK_TEMPLATES (the ST
+  # family names the TARGET language, so X->en reads "... to English" and en->X
+  # "... to German"). Validation inherits this, so in-training eval also draws
+  # a random prompt per clip.
+  apply_chat_template: true
+  prompt_template_selection: random
+  # Qwen 3 / 3.5 boundary markers; checked against the tokenizer at startup.
+  chat_template_config: chatml
+
+  # A configured text_field that resolves to nothing raises instead of silently
+  # falling back to the supervision text (which holds different content for
+  # every ST source and for cv22_sidon, whose supervision is empty).
+  strict_text_field: true
+  # Turns the one case strict mode would raise on -- a field empty on a cut that
+  # has other text -- into a logged warning and a skipped cut. Needed because one
+  # such cut (yodas-granary French ast, 1 in 4,000 of its shard) once took down
+  # a whole distributed run, and a resume reaches the same cut again. The build
+  # script audits every source and refuses to render one where this happens on
+  # more than 0.1% of the sampled cuts, so it can only ever absorb stray cuts.
+  skip_text_field_mismatch: true
+
+  train_ds:
+    input_cfg:
+      # `weight` is a per-CUT draw probability: lhotse's mux picks one cut per draw, so a source's
+      # share of the audio is weight x its mean cut length. Each weight is the share of the cuts
+      # that make up the hours listed beside it (hours / mean cut), so those hours are what a run
+      # draws (build_sft_mix.py, compute_mix_weights.cut_mux_weights). A group's weight is its
+      # entry's share of the cuts, a child's weight its share within the entry; the two levels are
+      # muxed separately, so do NOT pre-multiply them.
+      # 57 entries, 6,132.6 h. Common cap c = 197.7415 h.
+      # ASR de: 197.7 h (capped, of 11,128.2 h); 3.1% of the cuts, 3.2% of the audio
+      - type: group
+        weight: 0.0307773818
+        tags:
+          task: asr
+          lang: de
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/German/ast
+            weight: 0.4065007058
+            tags:
+              task: asr
+              lang: de
+            # 83.9 h of 7,429.1 h in yodas-granary, mean cut 8.0 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/german/train
+            weight: 0.1113296695
+            tags:
+              task: asr
+              lang: de
+              text_field: custom.pnc_text
+            # 43.2 h of 1,966.5 h in mls_sidon, mean cut 15.1 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/de/train
+            weight: 0.2058154804
+            tags:
+              task: asr
+              lang: de
+              text_field: custom.metadata.sentence
+            # 30.2 h of 962.7 h in cv22_sidon, mean cut 5.7 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/German/asr_only
+            weight: 0.1958402446
+            tags:
+              task: asr
+              lang: de
+            # 21.7 h of 496.2 h in yodas-granary, mean cut 4.3 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/de/train
+            weight: 0.0700543724
+            tags:
+              task: asr
+              lang: de
+              text_field: custom.pnc_text
+            # 15.8 h of 264.6 h in voxpopuli, mean cut 8.8 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/de_de/train
+            weight: 0.0104595273
+            tags:
+              task: asr
+              lang: de
+              text_field: custom.pnc_text
+              region_code: de_de
+            # 2.9 h of 9.0 h in fleurs, mean cut 10.8 s
+      # ASR en: 197.7 h (capped, of 144,001.2 h); 2.4% of the cuts, 3.2% of the audio
+      - type: group
+        weight: 0.0236644627
+        tags:
+          task: asr
+          lang: en
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/English/asr_only
+            weight: 0.6036553303
+            tags:
+              task: asr
+              lang: en
+            # 108.0 h of 102,457.0 h in yodas-granary, mean cut 9.0 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/english/train
+            weight: 0.2269101552
+            tags:
+              task: asr
+              lang: en
+              text_field: custom.pnc_text
+            # 66.8 h of 39,215.8 h in mls_sidon, mean cut 14.9 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/en/train
+            weight: 0.1271393905
+            tags:
+              task: asr
+              lang: en
+              text_field: custom.metadata.sentence
+            # 14.3 h of 1,798.4 h in cv22_sidon, mean cut 5.7 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/en/train
+            weight: 0.0377938993
+            tags:
+              task: asr
+              lang: en
+              text_field: custom.pnc_text
+            # 7.7 h of 522.6 h in voxpopuli, mean cut 10.3 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/en_us/train
+            weight: 0.0045012247
+            tags:
+              task: asr
+              lang: en
+              text_field: custom.pnc_text
+              region_code: en_us
+            # 0.9 h of 7.5 h in fleurs, mean cut 10.4 s
+      # ASR es: 197.7 h (capped, of 28,200.0 h); 2.8% of the cuts, 3.2% of the audio
+      - type: group
+        weight: 0.0284932781
+        tags:
+          task: asr
+          lang: es
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Spanish/ast
+            weight: 0.4424744350
+            tags:
+              task: asr
+              lang: es
+            # 123.8 h of 25,833.3 h in yodas-granary, mean cut 11.7 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/spanish/train
+            weight: 0.0653899203
+            tags:
+              task: asr
+              lang: es
+              text_field: custom.pnc_text
+            # 23.3 h of 917.7 h in mls_sidon, mean cut 15.0 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Spanish/asr_only
+            weight: 0.3058462822
+            tags:
+              task: asr
+              lang: es
+            # 21.5 h of 779.6 h in yodas-granary, mean cut 2.9 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/es/train
+            weight: 0.1407521770
+            tags:
+              task: asr
+              lang: es
+              text_field: custom.metadata.sentence
+            # 17.4 h of 508.7 h in cv22_sidon, mean cut 5.2 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/es/train
+            weight: 0.0370802608
+            tags:
+              task: asr
+              lang: es
+              text_field: custom.pnc_text
+            # 9.5 h of 151.9 h in voxpopuli, mean cut 10.7 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/es_419/train
+            weight: 0.0084569247
+            tags:
+              task: asr
+              lang: es
+              text_field: custom.pnc_text
+              region_code: es_419
+            # 2.3 h of 8.8 h in fleurs, mean cut 11.3 s
+      # ASR fr: 197.7 h (capped, of 14,370.7 h); 3.1% of the cuts, 3.2% of the audio
+      - type: group
+        weight: 0.0306370982
+        tags:
+          task: asr
+          lang: fr
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/French/ast
+            weight: 0.4458360540
+            tags:
+              task: asr
+              lang: fr
+            # 99.3 h of 11,511.7 h in yodas-granary, mean cut 8.7 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/french/train
+            weight: 0.0789813851
+            tags:
+              task: asr
+              lang: fr
+              text_field: custom.pnc_text
+            # 30.4 h of 1,076.6 h in mls_sidon, mean cut 15.0 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/fr/train
+            weight: 0.2040563435
+            tags:
+              task: asr
+              lang: fr
+              text_field: custom.metadata.sentence
+            # 27.0 h of 850.8 h in cv22_sidon, mean cut 5.2 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/French/asr_only
+            weight: 0.2096766807
+            tags:
+              task: asr
+              lang: fr
+            # 24.8 h of 715.5 h in yodas-granary, mean cut 4.6 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/fr/train
+            weight: 0.0514755931
+            tags:
+              task: asr
+              lang: fr
+              text_field: custom.pnc_text
+            # 13.3 h of 205.7 h in voxpopuli, mean cut 10.1 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/fr_fr/train
+            weight: 0.0099739436
+            tags:
+              task: asr
+              lang: fr
+              text_field: custom.pnc_text
+              region_code: fr_fr
+            # 3.0 h of 10.3 h in fleurs, mean cut 11.6 s
+      # ASR hu: 197.7 h (capped, of 273.8 h); 2.9% of the cuts, 3.2% of the audio
+      - type: group
+        weight: 0.0291270355
+        tags:
+          task: asr
+          lang: hu
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Hungarian/ast
+            weight: 0.3050017961
+            tags:
+              task: asr
+              lang: hu
+            # 80.5 h of 145.3 h in yodas-granary, mean cut 10.8 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/hu/train
+            weight: 0.3975508901
+            tags:
+              task: asr
+              lang: hu
+              text_field: custom.metadata.sentence
+            # 50.3 h of 56.6 h in cv22_sidon, mean cut 5.2 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/hu/train
+            weight: 0.1877034908
+            tags:
+              task: asr
+              lang: hu
+              text_field: custom.pnc_text
+            # 49.1 h of 54.1 h in voxpopuli, mean cut 10.7 s; generic converter: 0.2-4.8% of its cuts have no transcript and are skipped by the loader
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/hu_hu/train
+            weight: 0.0352890527
+            tags:
+              task: asr
+              lang: hu
+              text_field: custom.pnc_text
+              region_code: hu_hu
+            # 9.3 h of 9.3 h in fleurs, mean cut 10.8 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Hungarian/asr_only
+            weight: 0.0744547703
+            tags:
+              task: asr
+              lang: hu
+            # 8.5 h of 8.5 h in yodas-granary, mean cut 4.7 s
+      # ASR it: 197.7 h (capped, of 6,734.1 h); 2.1% of the cuts, 3.2% of the audio
+      - type: group
+        weight: 0.0208221514
+        tags:
+          task: asr
+          lang: it
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Italian/ast
+            weight: 0.3772968649
+            tags:
+              task: asr
+              lang: it
+            # 116.2 h of 6,024.7 h in yodas-granary, mean cut 17.7 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/it/train
+            weight: 0.2585633833
+            tags:
+              task: asr
+              lang: it
+              text_field: custom.metadata.sentence
+            # 23.9 h of 254.7 h in cv22_sidon, mean cut 5.3 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/italian/train
+            weight: 0.0905024118
+            tags:
+              task: asr
+              lang: it
+              text_field: custom.pnc_text
+            # 23.5 h of 247.4 h in mls_sidon, mean cut 14.9 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Italian/asr_only
+            weight: 0.1885177704
+            tags:
+              task: asr
+              lang: it
+            # 16.4 h of 120.2 h in yodas-granary, mean cut 5.0 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/it/train
+            weight: 0.0610042625
+            tags:
+              task: asr
+              lang: it
+              text_field: custom.pnc_text
+            # 13.2 h of 78.1 h in voxpopuli, mean cut 12.4 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/it_it/train
+            weight: 0.0241153071
+            tags:
+              task: asr
+              lang: it
+              text_field: custom.pnc_text
+              region_code: it_it
+            # 4.5 h of 9.0 h in fleurs, mean cut 10.7 s
+      # ASR nl: 197.7 h (capped, of 3,028.3 h); 3.6% of the cuts, 3.2% of the audio
+      - type: group
+        weight: 0.0364538085
+        tags:
+          task: asr
+          lang: nl
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/dutch/train
+            weight: 0.1728523302
+            tags:
+              task: asr
+              lang: nl
+              text_field: custom.pnc_text
+            # 78.8 h of 1,554.2 h in mls_sidon, mean cut 14.9 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Dutch/ast
+            weight: 0.4325159175
+            tags:
+              task: asr
+              lang: nl
+            # 72.8 h of 1,328.1 h in yodas-granary, mean cut 5.5 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/nl/train
+            weight: 0.1075231148
+            tags:
+              task: asr
+              lang: nl
+              text_field: custom.metadata.sentence
+            # 14.7 h of 54.1 h in cv22_sidon, mean cut 4.5 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/nl/train
+            weight: 0.0560733150
+            tags:
+              task: asr
+              lang: nl
+              text_field: custom.pnc_text
+            # 13.6 h of 46.4 h in voxpopuli, mean cut 8.0 s; generic converter: 0.2-4.8% of its cuts have no transcript and are skipped by the loader
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Dutch/asr_only
+            weight: 0.2118410265
+            tags:
+              task: asr
+              lang: nl
+            # 12.3 h of 37.8 h in yodas-granary, mean cut 1.9 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/nl_nl/train
+            weight: 0.0191942959
+            tags:
+              task: asr
+              lang: nl
+              text_field: custom.pnc_text
+              region_code: nl_nl
+            # 5.5 h of 7.7 h in fleurs, mean cut 9.5 s
+      # ASR pl: 197.7 h (capped, of 930.7 h); 3.0% of the cuts, 3.2% of the audio
+      - type: group
+        weight: 0.0304093569
+        tags:
+          task: asr
+          lang: pl
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Polish/ast
+            weight: 0.3747226881
+            tags:
+              task: asr
+              lang: pl
+            # 86.2 h of 663.6 h in yodas-granary, mean cut 9.0 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/polish/train
+            weight: 0.0898525172
+            tags:
+              task: asr
+              lang: pl
+              text_field: custom.pnc_text
+            # 34.1 h of 103.6 h in mls_sidon, mean cut 14.9 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/pl/train
+            weight: 0.1281177662
+            tags:
+              task: asr
+              lang: pl
+              text_field: custom.pnc_text
+            # 33.1 h of 97.7 h in voxpopuli, mean cut 10.1 s; generic converter: 0.2-4.8% of its cuts have no transcript and are skipped by the loader
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/pl/train
+            weight: 0.1481550375
+            tags:
+              task: asr
+              lang: pl
+              text_field: custom.metadata.sentence
+            # 19.9 h of 35.5 h in cv22_sidon, mean cut 5.3 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Polish/asr_only
+            weight: 0.2281250022
+            tags:
+              task: asr
+              lang: pl
+            # 15.4 h of 21.1 h in yodas-granary, mean cut 2.6 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/pl_pl/train
+            weight: 0.0310269889
+            tags:
+              task: asr
+              lang: pl
+              text_field: custom.pnc_text
+              region_code: pl_pl
+            # 9.2 h of 9.2 h in fleurs, mean cut 11.6 s
+      # ASR pt: 197.7 h (capped, of 2,100.9 h); 6.0% of the cuts, 3.2% of the audio
+      - type: group
+        weight: 0.0604513657
+        tags:
+          task: asr
+          lang: pt
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Portuguese/ast
+            weight: 0.2544297384
+            tags:
+              task: asr
+              lang: pt
+            # 103.1 h of 1,641.2 h in yodas-granary, mean cut 8.0 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Portuguese/asr_only
+            weight: 0.6295117664
+            tags:
+              task: asr
+              lang: pt
+            # 41.2 h of 262.2 h in yodas-granary, mean cut 1.3 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/portuguese/train
+            weight: 0.0413554694
+            tags:
+              task: asr
+              lang: pt
+              text_field: custom.pnc_text
+            # 32.3 h of 161.0 h in mls_sidon, mean cut 15.4 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/pt/train
+            weight: 0.0624651913
+            tags:
+              task: asr
+              lang: pt
+              text_field: custom.metadata.sentence
+            # 13.1 h of 26.3 h in cv22_sidon, mean cut 4.1 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/pt_br/train
+            weight: 0.0122378344
+            tags:
+              task: asr
+              lang: pt
+              text_field: custom.pnc_text
+              region_code: pt_br
+            # 8.1 h of 10.2 h in fleurs, mean cut 13.1 s
+      # ASR fi: 193.7 h (all of its data); 2.6% of the cuts, 3.2% of the audio
+      - type: group
+        weight: 0.0259178193
+        tags:
+          task: asr
+          lang: fi
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Finnish/ast
+            weight: 0.7781678861
+            tags:
+              task: asr
+              lang: fi
+            # 155.9 h of 155.9 h in yodas-granary, mean cut 9.2 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/fi/train
+            weight: 0.1009469381
+            tags:
+              task: asr
+              lang: fi
+              text_field: custom.pnc_text
+            # 22.6 h of 22.6 h in voxpopuli, mean cut 10.3 s; generic converter: 0.2-4.8% of its cuts have no transcript and are skipped by the loader
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/fi_fi/train
+            weight: 0.0346484540
+            tags:
+              task: asr
+              lang: fi
+              text_field: custom.pnc_text
+              region_code: fi_fi
+            # 8.8 h of 8.8 h in fleurs, mean cut 11.7 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Finnish/asr_only
+            weight: 0.0594174857
+            tags:
+              task: asr
+              lang: fi
+            # 3.8 h of 3.8 h in yodas-granary, mean cut 2.9 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/fi/train
+            weight: 0.0268192360
+            tags:
+              task: asr
+              lang: fi
+              text_field: custom.metadata.sentence
+            # 2.6 h of 2.6 h in cv22_sidon, mean cut 4.4 s
+      # ASR cs: 160.3 h (all of its data); 2.7% of the cuts, 2.6% of the audio
+      - type: group
+        weight: 0.0272289705
+        tags:
+          task: asr
+          lang: cs
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Czech/ast
+            weight: 0.4190806084
+            tags:
+              task: asr
+              lang: cs
+            # 65.6 h of 65.6 h in yodas-granary, mean cut 6.9 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/cs/train
+            weight: 0.2305431216
+            tags:
+              task: asr
+              lang: cs
+              text_field: custom.pnc_text
+            # 53.6 h of 53.6 h in voxpopuli, mean cut 10.2 s; generic converter: 0.2-4.8% of its cuts have no transcript and are skipped by the loader
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/cs/train
+            weight: 0.2650477503
+            tags:
+              task: asr
+              lang: cs
+              text_field: custom.metadata.sentence
+            # 28.8 h of 28.8 h in cv22_sidon, mean cut 4.8 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/cs_cz/train
+            weight: 0.0342850870
+            tags:
+              task: asr
+              lang: cs
+              text_field: custom.pnc_text
+              region_code: cs_cz
+            # 8.4 h of 8.4 h in fleurs, mean cut 10.8 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Czech/asr_only
+            weight: 0.0510434327
+            tags:
+              task: asr
+              lang: cs
+            # 3.8 h of 3.8 h in yodas-granary, mean cut 3.3 s
+      # ASR ro: 130.6 h (all of its data); 1.6% of the cuts, 2.1% of the audio
+      - type: group
+        weight: 0.0155780571
+        tags:
+          task: asr
+          lang: ro
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/ro/train
+            weight: 0.5171722771
+            tags:
+              task: asr
+              lang: ro
+              text_field: custom.pnc_text
+            # 76.4 h of 76.4 h in voxpopuli, mean cut 11.3 s; generic converter: 0.2-4.8% of its cuts have no transcript and are skipped by the loader
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Romanian/ast
+            weight: 0.2617093398
+            tags:
+              task: asr
+              lang: ro
+            # 32.5 h of 32.5 h in yodas-granary, mean cut 9.5 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/ro_ro/train
+            weight: 0.0616325922
+            tags:
+              task: asr
+              lang: ro
+              text_field: custom.pnc_text
+              region_code: ro_ro
+            # 10.1 h of 10.1 h in fleurs, mean cut 12.6 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Romanian/asr_only
+            weight: 0.0490971497
+            tags:
+              task: asr
+              lang: ro
+            # 5.8 h of 5.8 h in yodas-granary, mean cut 9.0 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ro/train
+            weight: 0.1103886414
+            tags:
+              task: asr
+              lang: ro
+              text_field: custom.metadata.sentence
+            # 5.7 h of 5.7 h in cv22_sidon, mean cut 4.0 s
+      # ASR sv: 110.3 h (all of its data); 2.3% of the cuts, 1.8% of the audio
+      - type: group
+        weight: 0.0225207156
+        tags:
+          task: asr
+          lang: sv
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Swedish/ast
+            weight: 0.7975727010
+            tags:
+              task: asr
+              lang: sv
+            # 90.9 h of 90.9 h in yodas-granary, mean cut 6.1 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/sv-SE/train
+            weight: 0.1201852180
+            tags:
+              task: asr
+              lang: sv
+              text_field: custom.metadata.sentence
+              region_code: sv-SE
+            # 9.1 h of 9.1 h in cv22_sidon, mean cut 4.0 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/sv_se/train
+            weight: 0.0351707662
+            tags:
+              task: asr
+              lang: sv
+              text_field: custom.pnc_text
+              region_code: sv_se
+            # 8.4 h of 8.4 h in fleurs, mean cut 12.6 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Swedish/asr_only
+            weight: 0.0470713148
+            tags:
+              task: asr
+              lang: sv
+            # 1.9 h of 1.9 h in yodas-granary, mean cut 2.2 s
+      # ASR sk: 54.2 h (all of its data); 0.8% of the cuts, 0.9% of the audio
+      - type: group
+        weight: 0.0078439919
+        tags:
+          task: asr
+          lang: sk
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/sk/train
+            weight: 0.4494686481
+            tags:
+              task: asr
+              lang: sk
+              text_field: custom.pnc_text
+            # 30.1 h of 30.1 h in voxpopuli, mean cut 10.2 s; generic converter: 0.2-4.8% of its cuts have no transcript and are skipped by the loader
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/sk/train
+            weight: 0.3113594987
+            tags:
+              task: asr
+              lang: sk
+              text_field: custom.metadata.sentence
+            # 8.9 h of 8.9 h in cv22_sidon, mean cut 4.4 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Slovak/ast
+            weight: 0.1441635971
+            tags:
+              task: asr
+              lang: sk
+            # 8.9 h of 8.9 h in yodas-granary, mean cut 9.4 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/sk_sk/train
+            weight: 0.0828570219
+            tags:
+              task: asr
+              lang: sk
+              text_field: custom.pnc_text
+              region_code: sk_sk
+            # 5.9 h of 5.9 h in fleurs, mean cut 10.8 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Slovak/asr_only
+            weight: 0.0121512342
+            tags:
+              task: asr
+              lang: sk
+            # 0.5 h of 0.5 h in yodas-granary, mean cut 6.0 s
+      # ASR bg: 35.2 h (all of its data); 0.6% of the cuts, 0.6% of the audio
+      - type: group
+        weight: 0.0060781888
+        tags:
+          task: asr
+          lang: bg
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Bulgarian/ast
+            weight: 0.4832258770
+            tags:
+              task: asr
+              lang: bg
+            # 16.7 h of 16.7 h in yodas-granary, mean cut 6.8 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/bg_bg/train
+            weight: 0.1624412632
+            tags:
+              task: asr
+              lang: bg
+              text_field: custom.pnc_text
+              region_code: bg_bg
+            # 9.5 h of 9.5 h in fleurs, mean cut 11.5 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/bg/train
+            weight: 0.2705715222
+            tags:
+              task: asr
+              lang: bg
+              text_field: custom.metadata.sentence
+            # 7.2 h of 7.2 h in cv22_sidon, mean cut 5.2 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Bulgarian/asr_only
+            weight: 0.0837613376
+            tags:
+              task: asr
+              lang: bg
+            # 1.8 h of 1.8 h in yodas-granary, mean cut 4.3 s
+      # ASR lv: 30.5 h (all of its data); 0.6% of the cuts, 0.5% of the audio
+      - type: group
+        weight: 0.0055830200
+        tags:
+          task: asr
+          lang: lv
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/lv/train
+            weight: 0.8538456963
+            tags:
+              task: asr
+              lang: lv
+              text_field: custom.metadata.sentence
+            # 23.3 h of 23.3 h in cv22_sidon, mean cut 5.8 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/lv_lv/train
+            weight: 0.1255130569
+            tags:
+              task: asr
+              lang: lv
+              text_field: custom.pnc_text
+              region_code: lv_lv
+            # 6.5 h of 6.5 h in fleurs, mean cut 11.1 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Latvian/ast
+            weight: 0.0161798822
+            tags:
+              task: asr
+              lang: lv
+            # 0.6 h of 0.6 h in yodas-granary, mean cut 7.6 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Latvian/asr_only
+            weight: 0.0044613646
+            tags:
+              task: asr
+              lang: lv
+            # 0.1 h of 0.1 h in yodas-granary, mean cut 5.0 s
+      # ASR da: 29.0 h (all of its data); 0.5% of the cuts, 0.5% of the audio
+      - type: group
+        weight: 0.0054149747
+        tags:
+          task: asr
+          lang: da
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Danish/ast
+            weight: 0.5876724931
+            tags:
+              task: asr
+              lang: da
+            # 16.7 h of 16.7 h in yodas-granary, mean cut 6.3 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/da_dk/train
+            weight: 0.1511806194
+            tags:
+              task: asr
+              lang: da
+              text_field: custom.pnc_text
+              region_code: da_dk
+            # 7.5 h of 7.5 h in fleurs, mean cut 11.0 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/da/train
+            weight: 0.2209138301
+            tags:
+              task: asr
+              lang: da
+              text_field: custom.metadata.sentence
+            # 4.2 h of 4.2 h in cv22_sidon, mean cut 4.2 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Danish/asr_only
+            weight: 0.0402330573
+            tags:
+              task: asr
+              lang: da
+            # 0.6 h of 0.6 h in yodas-granary, mean cut 3.2 s
+      # ASR lt: 28.4 h (all of its data); 0.5% of the cuts, 0.5% of the audio
+      - type: group
+        weight: 0.0047354876
+        tags:
+          task: asr
+          lang: lt
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/lt/train
+            weight: 0.5820183744
+            tags:
+              task: asr
+              lang: lt
+              text_field: custom.metadata.sentence
+            # 11.7 h of 11.7 h in cv22_sidon, mean cut 5.1 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/lt_lt/train
+            weight: 0.2059751736
+            tags:
+              task: asr
+              lang: lt
+              text_field: custom.pnc_text
+              region_code: lt_lt
+            # 9.8 h of 9.8 h in fleurs, mean cut 12.0 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Lithuanian/ast
+            weight: 0.1526755032
+            tags:
+              task: asr
+              lang: lt
+            # 4.9 h of 4.9 h in yodas-granary, mean cut 8.1 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/lt/train
+            weight: 0.0319798022
+            tags:
+              task: asr
+              lang: lt
+              text_field: custom.pnc_text
+            # 1.3 h of 1.3 h in voxpopuli, mean cut 10.6 s; generic converter: 0.2-4.8% of its cuts have no transcript and are skipped by the loader
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Lithuanian/asr_only
+            weight: 0.0273511466
+            tags:
+              task: asr
+              lang: lt
+            # 0.6 h of 0.6 h in yodas-granary, mean cut 5.7 s
+      # ASR el: 27.0 h (all of its data); 0.3% of the cuts, 0.4% of the audio
+      - type: group
+        weight: 0.0032895017
+        tags:
+          task: asr
+          lang: el
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Greek/ast
+            weight: 0.4282685512
+            tags:
+              task: asr
+              lang: el
+            # 13.8 h of 13.8 h in yodas-granary, mean cut 11.7 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/el_gr/train
+            weight: 0.3245835437
+            tags:
+              task: asr
+              lang: el
+              text_field: custom.pnc_text
+              region_code: el_gr
+            # 10.0 h of 10.0 h in fleurs, mean cut 11.2 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/el/train
+            weight: 0.1952549218
+            tags:
+              task: asr
+              lang: el
+              text_field: custom.metadata.sentence
+            # 2.2 h of 2.2 h in cv22_sidon, mean cut 4.0 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Greek/asr_only
+            weight: 0.0518929833
+            tags:
+              task: asr
+              lang: el
+            # 1.0 h of 1.0 h in yodas-granary, mean cut 6.9 s
+      # ASR et: 24.3 h (all of its data); 0.4% of the cuts, 0.4% of the audio
+      - type: group
+        weight: 0.0038813131
+        tags:
+          task: asr
+          lang: et
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Estonian/ast
+            weight: 0.3796526055
+            tags:
+              task: asr
+              lang: et
+            # 7.9 h of 7.9 h in yodas-granary, mean cut 6.4 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/et_ee/train
+            weight: 0.2139984598
+            tags:
+              task: asr
+              lang: et
+              text_field: custom.pnc_text
+              region_code: et_ee
+            # 7.3 h of 7.3 h in fleurs, mean cut 10.5 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/et/train
+            weight: 0.2910926671
+            tags:
+              task: asr
+              lang: et
+              text_field: custom.metadata.sentence
+            # 6.4 h of 6.4 h in cv22_sidon, mean cut 6.8 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/et/train
+            weight: 0.0713613417
+            tags:
+              task: asr
+              lang: et
+              text_field: custom.pnc_text
+            # 2.3 h of 2.3 h in voxpopuli, mean cut 9.8 s; generic converter: 0.2-4.8% of its cuts have no transcript and are skipped by the loader
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Estonian/asr_only
+            weight: 0.0438949260
+            tags:
+              task: asr
+              lang: et
+            # 0.5 h of 0.5 h in yodas-granary, mean cut 3.5 s
+      # ASR hr: 21.2 h (all of its data); 0.3% of the cuts, 0.3% of the audio
+      - type: group
+        weight: 0.0030191681
+        tags:
+          task: asr
+          lang: hr
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/hr_hr/train
+            weight: 0.3807061929
+            tags:
+              task: asr
+              lang: hr
+              text_field: custom.pnc_text
+              region_code: hr_hr
+            # 11.8 h of 11.8 h in fleurs, mean cut 12.2 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Croatian/ast
+            weight: 0.5905840942
+            tags:
+              task: asr
+              lang: hr
+            # 9.2 h of 9.2 h in yodas-granary, mean cut 6.2 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Croatian/asr_only
+            weight: 0.0287097129
+            tags:
+              task: asr
+              lang: hr
+            # 0.2 h of 0.2 h in yodas-granary, mean cut 3.3 s
+      # ASR sl: 15.3 h (all of its data); 0.2% of the cuts, 0.2% of the audio
+      - type: group
+        weight: 0.0020191994
+        tags:
+          task: asr
+          lang: sl
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/sl_si/train
+            weight: 0.4131578947
+            tags:
+              task: asr
+              lang: sl
+              text_field: custom.pnc_text
+              region_code: sl_si
+            # 7.8 h of 7.8 h in fleurs, mean cut 11.1 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/sl/train
+            weight: 0.3452302632
+            tags:
+              task: asr
+              lang: sl
+              text_field: custom.pnc_text
+            # 6.1 h of 6.1 h in voxpopuli, mean cut 10.4 s; generic converter: 0.2-4.8% of its cuts have no transcript and are skipped by the loader
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/sl/train
+            weight: 0.2416118421
+            tags:
+              task: asr
+              lang: sl
+              text_field: custom.metadata.sentence
+            # 1.5 h of 1.5 h in cv22_sidon, mean cut 3.7 s
+      # ASR ga: 12.7 h (all of its data); 0.1% of the cuts, 0.2% of the audio
+      - type: group
+        weight: 0.0011261686
+        tags:
+          task: asr
+          lang: ga
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/ga_ie/train
+            weight: 0.8389855500
+            tags:
+              task: asr
+              lang: ga
+              region_code: ga_ie
+            # 12.1 h of 12.1 h in fleurs, mean cut 15.3 s; no pnc_text on this leaf: trains on the unpunctuated supervision text
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ga-IE/train
+            weight: 0.1610144500
+            tags:
+              task: asr
+              lang: ga
+              text_field: custom.metadata.sentence
+              region_code: ga-IE
+            # 0.6 h of 0.6 h in cv22_sidon, mean cut 4.0 s
+      # ASR mt: 12.3 h (all of its data); 0.2% of the cuts, 0.2% of the audio
+      - type: group
+        weight: 0.0015957653
+        tags:
+          task: asr
+          lang: mt
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/mt_mt/train
+            weight: 0.6024973985
+            tags:
+              task: asr
+              lang: mt
+              text_field: custom.pnc_text
+              region_code: mt_mt
+            # 9.9 h of 9.9 h in fleurs, mean cut 12.3 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/mt/train
+            weight: 0.3975026015
+            tags:
+              task: asr
+              lang: mt
+              text_field: custom.metadata.sentence
+            # 2.4 h of 2.4 h in cv22_sidon, mean cut 4.5 s
+      # ST de->en: 197.7 h (capped, of 7,612.9 h); 3.2% of the cuts, 3.2% of the audio
+      - type: group
+        weight: 0.0316550057
+        tags:
+          task: st
+          src_lang: de
+          tgt_lang: en
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/German/ast
+            weight: 0.8047627863
+            tags:
+              task: st
+              src_lang: de
+              tgt_lang: en
+              text_field: custom.translation_en
+            # 170.9 h of 7,429.1 h in yodas-granary, mean cut 8.0 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/de_en/train
+            weight: 0.1952372137
+            tags:
+              task: st
+              src_lang: de
+              tgt_lang: en
+            # 26.9 h of 183.8 h in covost2, mean cut 5.2 s
+      # ST es->en: 197.7 h (capped, of 25,946.5 h); 2.2% of the cuts, 3.2% of the audio
+      - type: group
+        weight: 0.0217365734
+        tags:
+          task: st
+          src_lang: es
+          tgt_lang: en
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Spanish/ast
+            weight: 0.8691436106
+            tags:
+              task: st
+              src_lang: es
+              tgt_lang: en
+              text_field: custom.translation_en
+            # 185.5 h of 25,833.3 h in yodas-granary, mean cut 11.7 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/es_en/train
+            weight: 0.1308563894
+            tags:
+              task: st
+              src_lang: es
+              tgt_lang: en
+            # 12.3 h of 113.2 h in covost2, mean cut 5.2 s
+      # ST fr->en: 197.7 h (capped, of 11,776.0 h); 3.0% of the cuts, 3.2% of the audio
+      - type: group
+        weight: 0.0303844573
+        tags:
+          task: st
+          src_lang: fr
+          tgt_lang: en
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/French/ast
+            weight: 0.7771124369
+            tags:
+              task: st
+              src_lang: fr
+              tgt_lang: en
+              text_field: custom.translation_en
+            # 171.7 h of 11,511.7 h in yodas-granary, mean cut 8.7 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/fr_en/train
+            weight: 0.2228875631
+            tags:
+              task: st
+              src_lang: fr
+              tgt_lang: en
+            # 26.0 h of 264.3 h in covost2, mean cut 4.6 s
+      # ST it->en: 197.7 h (capped, of 6,068.9 h); 1.6% of the cuts, 3.2% of the audio
+      - type: group
+        weight: 0.0160254994
+        tags:
+          task: st
+          src_lang: it
+          tgt_lang: en
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Italian/ast
+            weight: 0.7685763930
+            tags:
+              task: st
+              src_lang: it
+              tgt_lang: en
+              text_field: custom.translation_en
+            # 182.2 h of 6,024.7 h in yodas-granary, mean cut 17.7 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/it_en/train
+            weight: 0.2314236070
+            tags:
+              task: st
+              src_lang: it
+              tgt_lang: en
+            # 15.6 h of 44.1 h in covost2, mean cut 5.0 s
+      # ST nl->en: 197.7 h (capped, of 1,335.5 h); 4.4% of the cuts, 3.2% of the audio
+      - type: group
+        weight: 0.0435815102
+        tags:
+          task: st
+          src_lang: nl
+          tgt_lang: en
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Dutch/ast
+            weight: 0.9458347470
+            tags:
+              task: st
+              src_lang: nl
+              tgt_lang: en
+              text_field: custom.translation_en
+            # 190.4 h of 1,328.1 h in yodas-granary, mean cut 5.5 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/nl_en/train
+            weight: 0.0541652530
+            tags:
+              task: st
+              src_lang: nl
+              tgt_lang: en
+            # 7.3 h of 7.3 h in covost2, mean cut 3.7 s
+      # ST pl->en: 197.7 h (capped, of 663.6 h); 2.6% of the cuts, 3.2% of the audio
+      - type: group
+        weight: 0.0261524976
+        tags:
+          task: st
+          src_lang: pl
+          tgt_lang: en
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Polish/ast
+            weight: 1.0000000000
+            tags:
+              task: st
+              src_lang: pl
+              tgt_lang: en
+              text_field: custom.translation_en
+            # 197.7 h of 663.6 h in yodas-granary, mean cut 9.0 s
+      # ST pt->en: 197.7 h (capped, of 1,651.5 h); 3.1% of the cuts, 3.2% of the audio
+      - type: group
+        weight: 0.0310090392
+        tags:
+          task: st
+          src_lang: pt
+          tgt_lang: en
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Portuguese/ast
+            weight: 0.9019183052
+            tags:
+              task: st
+              src_lang: pt
+              tgt_lang: en
+              text_field: custom.translation_en
+            # 187.4 h of 1,641.2 h in yodas-granary, mean cut 8.0 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/pt_en/train
+            weight: 0.0980816948
+            tags:
+              task: st
+              src_lang: pt
+              tgt_lang: en
+            # 10.3 h of 10.3 h in covost2, mean cut 4.0 s
+      # ST fi->en: 155.9 h (all of its data); 2.0% of the cuts, 2.5% of the audio
+      - type: group
+        weight: 0.0201684147
+        tags:
+          task: st
+          src_lang: fi
+          tgt_lang: en
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Finnish/ast
+            weight: 1.0000000000
+            tags:
+              task: st
+              src_lang: fi
+              tgt_lang: en
+              text_field: custom.translation_en
+            # 155.9 h of 155.9 h in yodas-granary, mean cut 9.2 s
+      # ST hu->en: 145.3 h (all of its data); 1.6% of the cuts, 2.4% of the audio
+      - type: group
+        weight: 0.0160283917
+        tags:
+          task: st
+          src_lang: hu
+          tgt_lang: en
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Hungarian/ast
+            weight: 1.0000000000
+            tags:
+              task: st
+              src_lang: hu
+              tgt_lang: en
+              text_field: custom.translation_en
+            # 145.3 h of 145.3 h in yodas-granary, mean cut 10.8 s
+      # ST sv->en: 92.6 h (all of its data); 1.9% of the cuts, 1.5% of the audio
+      - type: group
+        weight: 0.0186792551
+        tags:
+          task: st
+          src_lang: sv
+          tgt_lang: en
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Swedish/ast
+            weight: 0.9615965864
+            tags:
+              task: st
+              src_lang: sv
+              tgt_lang: en
+              text_field: custom.translation_en
+            # 90.9 h of 90.9 h in yodas-granary, mean cut 6.1 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/sv-SE_en/train
+            weight: 0.0384034136
+            tags:
+              task: st
+              src_lang: sv
+              tgt_lang: en
+              src_region_code: sv-SE
+            # 1.8 h of 1.8 h in covost2, mean cut 2.9 s
+      # ST cs->en: 65.6 h (all of its data); 1.1% of the cuts, 1.1% of the audio
+      - type: group
+        weight: 0.0114111335
+        tags:
+          task: st
+          src_lang: cs
+          tgt_lang: en
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Czech/ast
+            weight: 1.0000000000
+            tags:
+              task: st
+              src_lang: cs
+              tgt_lang: en
+              text_field: custom.translation_en
+            # 65.6 h of 65.6 h in yodas-granary, mean cut 6.9 s
+      # ST ro->en: 32.5 h (all of its data); 0.4% of the cuts, 0.5% of the audio
+      - type: group
+        weight: 0.0040769230
+        tags:
+          task: st
+          src_lang: ro
+          tgt_lang: en
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Romanian/ast
+            weight: 1.0000000000
+            tags:
+              task: st
+              src_lang: ro
+              tgt_lang: en
+              text_field: custom.translation_en
+            # 32.5 h of 32.5 h in yodas-granary, mean cut 9.5 s
+      # ST bg->en: 16.7 h (all of its data); 0.3% of the cuts, 0.3% of the audio
+      - type: group
+        weight: 0.0029371381
+        tags:
+          task: st
+          src_lang: bg
+          tgt_lang: en
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Bulgarian/ast
+            weight: 1.0000000000
+            tags:
+              task: st
+              src_lang: bg
+              tgt_lang: en
+              text_field: custom.translation_en
+            # 16.7 h of 16.7 h in yodas-granary, mean cut 6.8 s
+      # ST da->en: 16.7 h (all of its data); 0.3% of the cuts, 0.3% of the audio
+      - type: group
+        weight: 0.0031822317
+        tags:
+          task: st
+          src_lang: da
+          tgt_lang: en
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Danish/ast
+            weight: 1.0000000000
+            tags:
+              task: st
+              src_lang: da
+              tgt_lang: en
+              text_field: custom.translation_en
+            # 16.7 h of 16.7 h in yodas-granary, mean cut 6.3 s
+      # ST el->en: 13.8 h (all of its data); 0.1% of the cuts, 0.2% of the audio
+      - type: group
+        weight: 0.0014087901
+        tags:
+          task: st
+          src_lang: el
+          tgt_lang: en
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Greek/ast
+            weight: 1.0000000000
+            tags:
+              task: st
+              src_lang: el
+              tgt_lang: en
+              text_field: custom.translation_en
+            # 13.8 h of 13.8 h in yodas-granary, mean cut 11.7 s
+      # ST et->en: 11.2 h (all of its data); 0.2% of the cuts, 0.2% of the audio
+      - type: group
+        weight: 0.0020653620
+        tags:
+          task: st
+          src_lang: et
+          tgt_lang: en
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Estonian/ast
+            weight: 0.7134587554
+            tags:
+              task: st
+              src_lang: et
+              tgt_lang: en
+              text_field: custom.translation_en
+            # 7.9 h of 7.9 h in yodas-granary, mean cut 6.4 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/et_en/train
+            weight: 0.2865412446
+            tags:
+              task: st
+              src_lang: et
+              tgt_lang: en
+            # 3.4 h of 3.4 h in covost2, mean cut 6.8 s
+      # ST hr->en: 9.2 h (all of its data); 0.2% of the cuts, 0.1% of the audio
+      - type: group
+        weight: 0.0017830726
+        tags:
+          task: st
+          src_lang: hr
+          tgt_lang: en
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Croatian/ast
+            weight: 1.0000000000
+            tags:
+              task: st
+              src_lang: hr
+              tgt_lang: en
+              text_field: custom.translation_en
+            # 9.2 h of 9.2 h in yodas-granary, mean cut 6.2 s
+      # ST sk->en: 8.9 h (all of its data); 0.1% of the cuts, 0.1% of the audio
+      - type: group
+        weight: 0.0011308181
+        tags:
+          task: st
+          src_lang: sk
+          tgt_lang: en
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Slovak/ast
+            weight: 1.0000000000
+            tags:
+              task: st
+              src_lang: sk
+              tgt_lang: en
+              text_field: custom.translation_en
+            # 8.9 h of 8.9 h in yodas-granary, mean cut 9.4 s
+      # ST lt->en: 4.9 h (all of its data); 0.1% of the cuts, 0.1% of the audio
+      - type: group
+        weight: 0.0007229929
+        tags:
+          task: st
+          src_lang: lt
+          tgt_lang: en
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Lithuanian/ast
+            weight: 1.0000000000
+            tags:
+              task: st
+              src_lang: lt
+              tgt_lang: en
+              text_field: custom.translation_en
+            # 4.9 h of 4.9 h in yodas-granary, mean cut 8.1 s
+      # ST lv->en: 2.7 h (all of its data); 0.1% of the cuts, 0.0% of the audio
+      - type: group
+        weight: 0.0008664624
+        tags:
+          task: st
+          src_lang: lv
+          tgt_lang: en
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/lv_en/train
+            weight: 0.8957454964
+            tags:
+              task: st
+              src_lang: lv
+              tgt_lang: en
+            # 2.1 h of 2.1 h in covost2, mean cut 3.2 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Latvian/ast
+            weight: 0.1042545036
+            tags:
+              task: st
+              src_lang: lv
+              tgt_lang: en
+              text_field: custom.translation_en
+            # 0.6 h of 0.6 h in yodas-granary, mean cut 7.6 s
+      # ST sl->en: 2.0 h (all of its data); 0.1% of the cuts, 0.0% of the audio
+      - type: group
+        weight: 0.0006011104
+        tags:
+          task: st
+          src_lang: sl
+          tgt_lang: en
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/sl_en/train
+            weight: 1.0000000000
+            tags:
+              task: st
+              src_lang: sl
+              tgt_lang: en
+            # 2.0 h of 2.0 h in covost2, mean cut 4.0 s
+      # ST en->de: 197.7 h (capped, of 507.0 h); 3.9% of the cuts, 3.2% of the audio
+      - type: group
+        weight: 0.0393018051
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: de
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_de/train
+            weight: 0.7897423652
+            tags:
+              task: st
+              src_lang: en
+              tgt_lang: de
+            # 138.9 h of 429.9 h in covost2, mean cut 5.4 s
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/europarl_st/en_de/train
+            weight: 0.2102576348
+            tags:
+              task: st
+              src_lang: en
+              tgt_lang: de
+            # 58.8 h of 77.2 h in europarl_st, mean cut 8.5 s
+      # ST en->et: 197.7 h (capped, of 430.1 h); 4.4% of the cuts, 3.2% of the audio
+      - type: group
+        weight: 0.0441869501
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: et
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_et/train
+            weight: 1.0000000000
+            tags:
+              task: st
+              src_lang: en
+              tgt_lang: et
+            # 197.7 h of 430.1 h in covost2, mean cut 5.4 s
+      # ST en->lv: 197.7 h (capped, of 430.1 h); 4.4% of the cuts, 3.2% of the audio
+      - type: group
+        weight: 0.0441873332
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: lv
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_lv/train
+            weight: 1.0000000000
+            tags:
+              task: st
+              src_lang: en
+              tgt_lang: lv
+            # 197.7 h of 430.1 h in covost2, mean cut 5.4 s
+      # ST en->sl: 197.7 h (capped, of 430.1 h); 4.4% of the cuts, 3.2% of the audio
+      - type: group
+        weight: 0.0441864362
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: sl
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_sl/train
+            weight: 1.0000000000
+            tags:
+              task: st
+              src_lang: en
+              tgt_lang: sl
+            # 197.7 h of 430.1 h in covost2, mean cut 5.4 s
+      # ST en->sv: 197.7 h (capped, of 429.7 h); 4.4% of the cuts, 3.2% of the audio
+      - type: group
+        weight: 0.0441872464
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: sv
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_sv-SE/train
+            weight: 1.0000000000
+            tags:
+              task: st
+              src_lang: en
+              tgt_lang: sv
+              tgt_region_code: sv-SE
+            # 197.7 h of 429.7 h in covost2, mean cut 5.4 s
+      # ST en->es: 75.6 h (all of its data); 1.0% of the cuts, 1.2% of the audio
+      - type: group
+        weight: 0.0104968480
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: es
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/europarl_st/en_es/train
+            weight: 1.0000000000
+            tags:
+              task: st
+              src_lang: en
+              tgt_lang: es
+            # 75.6 h of 75.6 h in europarl_st, mean cut 8.6 s
+      # ST en->fr: 75.6 h (all of its data); 1.1% of the cuts, 1.2% of the audio
+      - type: group
+        weight: 0.0105533059
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: fr
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/europarl_st/en_fr/train
+            weight: 1.0000000000
+            tags:
+              task: st
+              src_lang: en
+              tgt_lang: fr
+            # 75.6 h of 75.6 h in europarl_st, mean cut 8.6 s
+      # ST en->pt: 75.5 h (all of its data); 1.1% of the cuts, 1.2% of the audio
+      - type: group
+        weight: 0.0105443390
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: pt
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/europarl_st/en_pt/train
+            weight: 1.0000000000
+            tags:
+              task: st
+              src_lang: en
+              tgt_lang: pt
+            # 75.5 h of 75.5 h in europarl_st, mean cut 8.6 s
+      # ST en->nl: 74.6 h (all of its data); 1.0% of the cuts, 1.2% of the audio
+      - type: group
+        weight: 0.0104284343
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: nl
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/europarl_st/en_nl/train
+            weight: 1.0000000000
+            tags:
+              task: st
+              src_lang: en
+              tgt_lang: nl
+            # 74.6 h of 74.6 h in europarl_st, mean cut 8.6 s
+      # ST en->it: 74.4 h (all of its data); 1.0% of the cuts, 1.2% of the audio
+      - type: group
+        weight: 0.0098143719
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: it
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/europarl_st/en_it/train
+            weight: 1.0000000000
+            tags:
+              task: st
+              src_lang: en
+              tgt_lang: it
+            # 74.4 h of 74.4 h in europarl_st, mean cut 9.1 s
+      # ST en->pl: 73.7 h (all of its data); 1.0% of the cuts, 1.2% of the audio
+      - type: group
+        weight: 0.0103404265
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: pl
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/europarl_st/en_pl/train
+            weight: 1.0000000000
+            tags:
+              task: st
+              src_lang: en
+              tgt_lang: pl
+            # 73.7 h of 73.7 h in europarl_st, mean cut 8.5 s
+      # ST en->ro: 67.5 h (all of its data); 0.9% of the cuts, 1.1% of the audio
+      - type: group
+        weight: 0.0094975436
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: ro
+        input_cfg:
+          - type: lhotse_shar
+            shar_path: ${oc.env:LOCAL_DATASETS_DIR}/europarl_st/en_ro/train
+            weight: 1.0000000000
+            tags:
+              task: st
+              src_lang: en
+              tgt_lang: ro
+            # 67.5 h of 67.5 h in europarl_st, mean cut 8.5 s
+    # Stats. total_hours is the HOURS THE MIX DRAWS (not the size of the pools it
+    # draws from), and total_cuts the matching number of cuts; the trainer turns
+    # total_hours into steps per epoch:
+    #
+    #   steps = total_hours * 3600 / (batch_duration * world_size * grad_accum)
+    #
+    # The launcher pins max_steps from that and sets num_decay_steps = max_steps / 5.
+    # Batches fill to less than batch_duration, so the audio a run really sees is
+    # the train_hours counter in its log, not steps x batch_duration x world_size.
+    total_hours: 6132.59
+    total_cuts: 3011094
+    force_estimate: false
+
+    # Duration filtering
+    min_duration: 0.5
+    max_duration: 60.0
+
+    # Batch settings
+    batch_size: null  # Use batch_duration instead for dynamic batching
+    # Placeholder. Seconds of audio per rank per micro-batch; the smoke test
+    # fixes the value that fits (encoder, adapter and decoder all train here).
+    batch_duration: 60
+    # Deliberately unset: lhotse would charge each cut d + d^2/q, so batch_duration
+    # would budget effective seconds and the derived step count would no longer be
+    # the true number of batches (#96). Unset, the charge is exactly d.
+    quadratic_duration: null
+
+    # Bucketing for efficient batching
+    lhotse_sampler_type: dynamic_bucketing  # One among: dynamic_bucketing, dynamic, bucketing
+    num_buckets: 30
+    buffer_size: 10000
+    # Measured on THIS draw (per-source duration histograms x the weights below,
+    # cuts outside [min_duration, max_duration] removed), by build_sft_mix.py.
+    # A stale set is an OOM, not a throughput nuisance: RE-MEASURE THEM WHENEVER
+    # the mix or max_duration changes (build_sft_mix.py does it on every render).
+    bucket_duration_bins: [2.46, 3.27, 3.88, 4.32, 4.78, 5.15, 5.56, 5.97, 6.34, 6.8, 7.25, 7.8, 8.41, 9.14, 10.0, 10.86, 11.78, 12.78, 13.86, 15.0, 16.26, 17.68, 19.2, 21.24, 24.12, 27.44, 32.7, 36.68, 38.58]
+
+    # Drop cuts whose transcript is pathologically long for their audio: batches
+    # are budgeted by audio seconds, so a short cut with a runaway transcript still
+    # sets the padded width of the whole batch (that is what ended an earlier run
+    # at 77 GB on an 80 GB card). Cuts without custom.num_tokens are kept, not
+    # dropped, so this can never remove a source; it is blind on the ones that
+    # lack the field.
+    max_tokens: 400
+
+    # Sampling
+    shuffle: true
+    drop_last: false
+    seed: 1337
+    # A fixed scalar, not 'randomized': with indexed sources the partitioning
+    # already separates the per-(rank, worker) streams, and the loader ignores
+    # 'randomized' and falls back to `seed` with a warning anyway.
+    shard_seed: 1337
+
+    # DataLoader settings
+    num_workers: 1
+    pin_memory: true
+    prefetch_factor: 32
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+  validation_ds:
+    # Generation-based evaluation costs ~N sequential decoder steps per sample
+    # instead of a single forward, so the full validation set is not affordable.
+    #
+    # NOTE this cap is applied PER NAMED EVAL SET, not per config: every set below
+    # is named, so a run reports eval_<name>_loss (plus WER/CER) per set, and each
+    # set scores 20 clips. materialize_cuts_for_eval applies the cap with a seeded
+    # shuffle, so every run, and both data conditions, score the same clips.
+    max_samples: 20
+    input_cfg:
+      - type: lhotse_shar
+        name: asr_bg
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/bg/validation
+        tags:
+          task: asr
+          lang: bg
+          text_field: custom.metadata.sentence
+        # 4.6 h, 2,932 cuts held out
+      - type: lhotse_shar
+        name: asr_cs
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/cs/validation
+        tags:
+          task: asr
+          lang: cs
+          text_field: custom.metadata.sentence
+        # 12.0 h, 9,410 cuts held out
+      - type: lhotse_shar
+        name: asr_da
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/da/validation
+        tags:
+          task: asr
+          lang: da
+          text_field: custom.metadata.sentence
+        # 3.4 h, 2,630 cuts held out
+      - type: lhotse_shar
+        name: asr_de
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/de/validation
+        tags:
+          task: asr
+          lang: de
+          text_field: custom.metadata.sentence
+        # 2.5 h, 1,897 cuts held out
+      - type: lhotse_shar
+        name: asr_el
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/el/validation
+        tags:
+          task: asr
+          lang: el
+          text_field: custom.metadata.sentence
+        # 1.9 h, 1,694 cuts held out
+      - type: lhotse_shar
+        name: asr_en
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/en/validation
+        tags:
+          task: asr
+          lang: en
+          text_field: custom.metadata.sentence
+        # 27.3 h, 16,401 cuts held out
+      - type: lhotse_shar
+        name: asr_es
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/es/validation
+        tags:
+          task: asr
+          lang: es
+          text_field: custom.metadata.sentence
+        # 26.8 h, 15,893 cuts held out
+      - type: lhotse_shar
+        name: asr_et
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/et/validation
+        tags:
+          task: asr
+          lang: et
+          text_field: custom.metadata.sentence
+        # 5.2 h, 2,823 cuts held out
+      - type: lhotse_shar
+        name: asr_fi
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/fi/validation
+        tags:
+          task: asr
+          lang: fi
+          text_field: custom.metadata.sentence
+        # 2.2 h, 1,767 cuts held out
+      - type: lhotse_shar
+        name: asr_fr
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/fr/validation
+        tags:
+          task: asr
+          lang: fr
+          text_field: custom.metadata.sentence
+        # 24.3 h, 15,048 cuts held out
+      - type: lhotse_shar
+        name: asr_ga
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ga-IE/validation
+        tags:
+          task: asr
+          lang: ga
+          text_field: custom.metadata.sentence
+        # 0.6 h, 526 cuts held out
+      - type: lhotse_shar
+        name: asr_hr
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/hr_hr/validation
+        tags:
+          task: asr
+          lang: hr
+          text_field: custom.pnc_text
+        # 1.0 h, 377 cuts held out
+      - type: lhotse_shar
+        name: asr_hu
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/hu/validation
+        tags:
+          task: asr
+          lang: hu
+          text_field: custom.metadata.sentence
+        # 17.0 h, 11,604 cuts held out
+      - type: lhotse_shar
+        name: asr_it
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/it/validation
+        tags:
+          task: asr
+          lang: it
+          text_field: custom.metadata.sentence
+        # 25.4 h, 15,179 cuts held out
+      - type: lhotse_shar
+        name: asr_lt
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/lt/validation
+        tags:
+          task: asr
+          lang: lt
+          text_field: custom.metadata.sentence
+        # 7.1 h, 5,111 cuts held out
+      - type: lhotse_shar
+        name: asr_lv
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/lv/validation
+        tags:
+          task: asr
+          lang: lv
+          text_field: custom.metadata.sentence
+        # 12.3 h, 7,705 cuts held out
+      - type: lhotse_shar
+        name: asr_mt
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/mt/validation
+        tags:
+          task: asr
+          lang: mt
+          text_field: custom.metadata.sentence
+        # 2.1 h, 1,625 cuts held out
+      - type: lhotse_shar
+        name: asr_nl
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/nl/validation
+        tags:
+          task: asr
+          lang: nl
+          text_field: custom.metadata.sentence
+        # 16.0 h, 12,032 cuts held out
+      - type: lhotse_shar
+        name: asr_pl
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/pl/validation
+        tags:
+          task: asr
+          lang: pl
+          text_field: custom.metadata.sentence
+        # 14.2 h, 9,856 cuts held out
+      - type: lhotse_shar
+        name: asr_pt
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/pt/validation
+        tags:
+          task: asr
+          lang: pt
+          text_field: custom.metadata.sentence
+        # 12.0 h, 9,640 cuts held out
+      - type: lhotse_shar
+        name: asr_ro
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ro/validation
+        tags:
+          task: asr
+          lang: ro
+          text_field: custom.metadata.sentence
+        # 4.2 h, 3,918 cuts held out
+      - type: lhotse_shar
+        name: asr_sk
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/sk/validation
+        tags:
+          task: asr
+          lang: sk
+          text_field: custom.metadata.sentence
+        # 5.8 h, 5,007 cuts held out
+      - type: lhotse_shar
+        name: asr_sl
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/sl/validation
+        tags:
+          task: asr
+          lang: sl
+          text_field: custom.metadata.sentence
+        # 1.5 h, 1,331 cuts held out
+      - type: lhotse_shar
+        name: asr_sv
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/sv-SE/validation
+        tags:
+          task: asr
+          lang: sv
+          text_field: custom.metadata.sentence
+        # 6.1 h, 5,420 cuts held out
+      - type: lhotse_shar
+        name: st_de_en_covost2
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/de_en/dev
+        tags:
+          task: st
+          src_lang: de
+          tgt_lang: en
+        # 20.6 h, 13,474 cuts held out
+      - type: lhotse_shar
+        name: st_es_en_covost2
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/es_en/dev
+        tags:
+          task: st
+          src_lang: es
+          tgt_lang: en
+        # 21.8 h, 13,221 cuts held out
+      - type: lhotse_shar
+        name: st_fr_en_covost2
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/fr_en/dev
+        tags:
+          task: st
+          src_lang: fr
+          tgt_lang: en
+        # 21.8 h, 14,749 cuts held out
+      - type: lhotse_shar
+        name: st_it_en_covost2
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/it_en/dev
+        tags:
+          task: st
+          src_lang: it
+          tgt_lang: en
+        # 14.3 h, 8,930 cuts held out
+      - type: lhotse_shar
+        name: st_nl_en_covost2
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/nl_en/dev
+        tags:
+          task: st
+          src_lang: nl
+          tgt_lang: en
+        # 1.9 h, 1,699 cuts held out
+      - type: lhotse_shar
+        name: st_pt_en_covost2
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/pt_en/dev
+        tags:
+          task: st
+          src_lang: pt
+          tgt_lang: en
+        # 4.4 h, 3,318 cuts held out
+      - type: lhotse_shar
+        name: st_et_en_covost2
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/et_en/dev
+        tags:
+          task: st
+          src_lang: et
+          tgt_lang: en
+        # 2.8 h, 1,576 cuts held out
+      - type: lhotse_shar
+        name: st_lv_en_covost2
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/lv_en/dev
+        tags:
+          task: st
+          src_lang: lv
+          tgt_lang: en
+        # 1.1 h, 1,125 cuts held out
+      - type: lhotse_shar
+        name: st_sl_en_covost2
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/sl_en/dev
+        tags:
+          task: st
+          src_lang: sl
+          tgt_lang: en
+        # 0.5 h, 509 cuts held out
+      - type: lhotse_shar
+        name: st_sv_en_covost2
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/sv-SE_en/dev
+        tags:
+          task: st
+          src_lang: sv
+          tgt_lang: en
+        # 1.1 h, 1,349 cuts held out
+      - type: lhotse_shar
+        name: st_en_de_covost2
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_de/dev
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: de
+        # 26.0 h, 15,485 cuts held out
+      - type: lhotse_shar
+        name: st_en_et_covost2
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_et/dev
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: et
+        # 26.1 h, 15,527 cuts held out
+      - type: lhotse_shar
+        name: st_en_lv_covost2
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_lv/dev
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: lv
+        # 26.1 h, 15,531 cuts held out
+      - type: lhotse_shar
+        name: st_en_sl_covost2
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_sl/dev
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: sl
+        # 26.1 h, 15,531 cuts held out
+      - type: lhotse_shar
+        name: st_en_sv_covost2
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_sv-SE/dev
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: sv
+        # 26.1 h, 15,531 cuts held out
+      - type: lhotse_shar
+        name: st_en_de_europarl
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/europarl_st/en_de/validation
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: de
+        # 3.1 h, 1,320 cuts held out
+      - type: lhotse_shar
+        name: st_en_es_europarl
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/europarl_st/en_es/validation
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: es
+        # 3.0 h, 1,272 cuts held out
+      - type: lhotse_shar
+        name: st_en_fr_europarl
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/europarl_st/en_fr/validation
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: fr
+        # 3.0 h, 1,281 cuts held out
+      - type: lhotse_shar
+        name: st_en_it_europarl
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/europarl_st/en_it/validation
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: it
+        # 2.9 h, 1,122 cuts held out
+      - type: lhotse_shar
+        name: st_en_nl_europarl
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/europarl_st/en_nl/validation
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: nl
+        # 3.0 h, 1,269 cuts held out
+      - type: lhotse_shar
+        name: st_en_pl_europarl
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/europarl_st/en_pl/validation
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: pl
+        # 3.0 h, 1,258 cuts held out
+      - type: lhotse_shar
+        name: st_en_pt_europarl
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/europarl_st/en_pt/validation
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: pt
+        # 3.1 h, 1,294 cuts held out
+      - type: lhotse_shar
+        name: st_en_ro_europarl
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/europarl_st/en_ro/validation
+        tags:
+          task: st
+          src_lang: en
+          tgt_lang: ro
+        # 2.5 h, 1,070 cuts held out
+    # Statistics: the full held-out sets, before max_samples. Both data conditions
+    # render this block identically.
+    total_hours: 480.07
+    total_cuts: 307267
+    force_estimate: true
+
+    # data.strict_text_field is not inherited by eval (resolve_eval_data_config
+    # only carries apply_chat_template/prompt_template/*/chat_template_config),
+    # so it is set explicitly here to match training. skip_text_field_mismatch
+    # travels the same path.
+    strict_text_field: true
+    skip_text_field_mismatch: true
+
+    # Eval prompts are PINNED, not drawn at random like training's: one instruction per task, the
+    # same for every clip, eval step, run and data condition, so eval_<name>_loss and the WER/CER
+    # only move when the model does. validation_ds wins over the data-level keys
+    # (resolve_eval_data_config inherits a key only when validation_ds does not set it), so
+    # training keeps its random draw. Both strings are entries of TASK_TEMPLATES in
+    # melt/training/data/audio/lhotse/helpers.py (asr[1], st[1]), so training has seen them. {lang}
+    # is the clip's language for ASR and the TARGET language for ST (X->en reads "into English").
+    # Quoted: unquoted, the ": " and the braces would be read as YAML mapping syntax.
+    prompt_template_selection: custom
+    prompt_template:
+      asr: "Transcribe the following {lang} audio: {audio_token}"
+      st: "Translate the following audio into {lang}: {audio_token}"
+
+    # Batch composition
+    batch_size: 16
+    batch_duration: null
+
+    buffer_size: 20000
+    shuffle: false
+    drop_last: true
+    min_duration: 0.5
+    # Matches train.
+    max_duration: 60.0
+    num_workers: 0
+    pin_memory: true
+    prefetch_factor: null
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+# =============================================================================
+# Trainer Configuration
+# =============================================================================
+trainer:
+  output_dir: ${oc.env:OUTPUT_DIR}
+  overwrite_output_dir: false
+  resume_from_checkpoint: null
+  seed: 1337
+  do_train: true
+  do_eval: true
+  eval_on_start: true
+  average_tokens_across_devices: true
+
+  # Batch and accumulation
+  per_device_train_batch_size: -1  # Handled by Lhotse, set to 1
+  # Eval does NOT go through Lhotse -- it uses a plain DataLoader, and -1 here
+  # crashes the first eval. 4 is known-good; 16 OOMs on 64 GB H100s, and eval
+  # runs while the optimizer state of all three components is resident.
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 4
+
+  # LR schedule: warmup, a long plateau, then a cosine decay to 0.1x peak over
+  # the last fifth of the run. warmup_steps below 1 is a fraction of max_steps
+  # (transformers 5). num_decay_steps is an absolute step count that depends on
+  # the run's length, so the LAUNCHER sets it (max_steps / 5, as launch_step2.sh
+  # does with --trainer.lr_scheduler_kwargs.num_decay_steps); the scheduler
+  # refuses to build without it, so it cannot be forgotten silently.
+  lr_scheduler_type: warmup_stable_decay
+  warmup_steps: 0.05
+  lr_scheduler_kwargs:
+    min_lr_ratio: 0.1
+    decay_type: cosine
+
+  # Duration: one pass over total_hours, steps DERIVED rather than pinned. The
+  # launcher pins max_steps (see the data.train_ds stats comment for the formula).
+  num_train_epochs: 1
+  max_steps: -1
+
+  # Logging
+  logging_strategy: steps
+  logging_steps: 5
+  report_to: wandb
+
+  # Evaluation
+  eval_strategy: steps
+  eval_steps: 500
+  batch_eval_metrics: true
+
+  # Evaluation decodes with generate() -- greedy, at most this many *new*
+  # tokens (MELT's prompt is audio, so generation_max_length is read as a
+  # new-token budget; see MELTTrainer._generation_kwargs).
+  predict_with_generate: true
+  generation_max_length: 256
+  generation_num_beams: 1
+
+  # Checkpointing. All three components train, so a checkpoint carries weights
+  # and AdamW state for ~3.7 B parameters (tens of GB): keep few.
+  save_strategy: steps
+  save_steps: 1000
+  save_total_limit: 2
+
+  # Performance
+  bf16: true
+  dataloader_num_workers: 4  # Eval-only knob (train workers come from data.train_ds.num_workers)
+  remove_unused_columns: false
+  ddp_find_unused_parameters: false
+
+  max_grad_norm: 1.0
+
+evaluation:
+  compute_metrics: true
+  enable_whisper_normalization: true
+  # Reference/hypothesis pairs printed to stdout and logged to W&B each eval.
+  # 0 disables.
+  log_num_samples: 10
+
+optimization:
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  encoder_lr: 6e-6
+  adapter_lr: 2e-4
+  decoder_lr: 2e-5
+  # Not read by the trainer: the schedule's floor is
+  # trainer.lr_scheduler_kwargs.min_lr_ratio. Kept for parity with SFT-v1.4.0.
+  min_lr_scale: 0.1

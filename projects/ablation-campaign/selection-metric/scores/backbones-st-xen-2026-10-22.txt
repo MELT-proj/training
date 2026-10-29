@@ -1,0 +1,29 @@
+FLEURS-24 X->en dev, IFT-stage backbone arms (whisper-large-v3 encoder + MoE adapter,
+700 h/lang, 6,310 steps). Macro-mean over the 23 translation directions, 100 samples
+per direction, greedily decoded. spBLEU uses flores200; chrF++ is char n-grams 6 + word
+bigrams.
+
+Computed 2026-10-22 with `melteval st-metrics` (melt-eval main, `~/eval-main` on MN5)
+from the saved ST eval logs; the logs, not the training loop, are the source.
+
+model                 case   BLEU  spBLEU   chrF  chrF++
+llama1b-base          cased  17.0   19.0   47.3   44.4
+llama1b-base          lower  21.3   24.8   50.5   48.3
+llama1b-ins           cased  17.5   19.4   47.6   44.7
+llama1b-ins           lower  21.9   25.4   50.8   48.6
+qwen35-2b-base        cased  17.2   19.4   47.2   44.3
+qwen35-2b-base        lower  21.7   25.5   50.5   48.3
+qwen35-2b-ins         cased  17.3   19.4   47.1   44.2
+qwen35-2b-ins         lower  21.8   25.5   50.3   48.2
+
+EuroLLM: no ST eval yet. Its IFT last saved a usable checkpoint at step 3,608 of
+6,310 and is resuming from there (jobs 47783768/47783769, submitted 2026-10-22).
+
+Logs (MN5):
+  llama1b Base    /gpfs/scratch/epor48/eval-logs/ift-st/ift-700-backbone-llama1bBase/
+  llama1b Ins     /gpfs/scratch/epor48/eval-logs/ift-st/ift-700-backbone-llama1bIns/
+  qwen35-2b Base  /gpfs/scratch/epor48/eval-logs/ift-st/ift-700-backbone-qwen35-2bBase/
+  qwen35-2b Ins   /gpfs/scratch/epor48/eval-logs/ift-st/ift-700-backbone-qwen35-2bIns/
+  (one speech-st JSON log each, written 2026-10-19 and 2026-10-21)
+
+st-metrics jobs: 47683614 (both Llama runs), 47783772 (both Qwen runs).

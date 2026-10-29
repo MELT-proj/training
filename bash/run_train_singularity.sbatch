@@ -231,6 +231,10 @@ container_env MASTER_PORT "${MASTER_PORT}"
 # Forward optional host-set vars only when present. WANDB_PROJECT/WANDB_MODE
 # defaults are applied inside run_train.sh, so they are not duplicated here.
 #
+# MELT_SEED becomes the data shard_seed in run_train.sh. Until it was on this
+# list every container run read 42 whatever the host set: a "seed replica"
+# replayed the data order of seed 42 and measured numerical noise only.
+#
 # The MELT_WORKER_* diagnostics and the MALLOC_* knobs have to be forwarded
 # rather than set here: both are read inside the DataLoader worker, which is
 # forked from the rank *inside* the container, so a value that only exists on
@@ -238,7 +242,7 @@ container_env MASTER_PORT "${MASTER_PORT}"
 # particular is how the host tests whether the worker's unbounded growth is a
 # leak or glibc heap fragmentation (MALLOC_MMAP_THRESHOLD_, MALLOC_ARENA_MAX)
 # without touching a line of code.
-for var in HF_HUB_OFFLINE GPU_MEM_MONITORING MELT_SHAR_OPEN_SHARDS \
+for var in HF_HUB_OFFLINE GPU_MEM_MONITORING MELT_SEED MELT_SHAR_OPEN_SHARDS MELT_TRAIN_MODULE \
            MELT_DEBUG_CUT_IDS_DIR MELT_DEBUG_CUT_IDS_MAX_BATCHES MELT_DEBUG_CUT_IDS_EVERY \
            MELT_WORKER_MEMSTATS MELT_WORKER_HEAPDUMP \
            MELT_WORKER_TRACEMALLOC MELT_WORKER_TRACEMALLOC_FRAMES \

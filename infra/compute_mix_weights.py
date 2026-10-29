@@ -27,6 +27,19 @@ corpus distribution inside a language; beta < 1 flattens the language
 distribution. The paper uses alpha = beta = 0.5 for pre-training (and mentions
 alpha = 0.2 for a fine-tuning stage).
 
+HOURS OF AUDIO VERSUS CUTS DRAWN. The policy is stated in hours, but lhotse's
+mux draws one *cut* per pick, so a `weight:` is the probability of drawing a cut
+and a source supplies `weight x its mean cut length` of audio. Writing p_c and
+p_l straight into `weight:` therefore only delivers their hours when every
+source has the same mean cut length, and ours differ ~8x (YODAS v3 ~23 s,
+CommonVoice ~5.5 s, YODAS Granary English ~9 s). With `--weights cuts` (the
+default) the policy's p_cl is taken as each source's intended share of the
+AUDIO and converted to the cut probabilities that deliver it -- proportional to
+hours / mean cut length, renormalised within each language and across languages
+(`to_cut_probabilities`). This needs a cut count per source, which the tool
+records alongside hours. `--weights hours` writes p_c / p_l unchanged, as this
+tool did before 2026-10-08, and warns that the hours are not enforced.
+
 Following the paper, every translation DIRECTION is its own "language" entry:
 ASR German is `de`, while en->de and de->en are the separate entries `en-de` and
 `de-en`. That falls out of the config tags: ASR sources carry `lang`, ST sources
@@ -39,7 +52,7 @@ language-level shares under beta and be upsampled for no reason. The original
 code survives per-cut as `region_code`, or as `src_region_code` /
 `tgt_region_code` on ST sources where either side may carry a locale.
 
-The resulting p_cl values are written straight into each source's `weight:` key.
+The resulting weights are written straight into each source's `weight:` key.
 Lhotse's ``CutSet.mux`` normalises whatever it is given, so the absolute scale
 does not matter, but emitting a proper distribution keeps the config readable.
 
@@ -54,6 +67,10 @@ Usage:
     # write the weights back into the config
     python infra/compute_mix_weights.py --config config/train/SFT-v1.2.7.yaml \
         --emit-yaml weights.yaml
+
+    # the policy's p_c / p_l unchanged (what this tool wrote before 2026-10-08)
+    python infra/compute_mix_weights.py --config config/train/SFT-v1.2.7.yaml \
+        --weights hours --emit-yaml weights.yaml
 """
 
 from __future__ import annotations
@@ -226,14 +243,16 @@ def shar_manifest_files(shar_path: Path) -> list[Path]:
     return [by_shard[k] for k in sorted(by_shard)]
 
 
-def shard_seconds(shard: str) -> float:
-    """Sum top-level cut durations in one JSONL manifest, gzipped or plain.
+def shard_stats(shard: str) -> tuple[float, int]:
+    """(seconds, cuts) in one JSONL manifest, gzipped or plain.
 
     Only the top-level ``duration`` is counted. A regex over the raw text would
     be faster but would also pick up ``duration`` inside each supervision and
-    silently double-count.
+    silently double-count. A line that does not parse, or has no numeric
+    duration, is neither summed nor counted.
     """
     total = 0.0
+    cuts = 0
     opener = gzip.open if str(shard).endswith(".gz") else open
     with opener(shard, "rt", encoding="utf-8") as fh:
         for line in fh:
@@ -244,7 +263,13 @@ def shard_seconds(shard: str) -> float:
                 total += float(json.loads(line)["duration"])
             except (json.JSONDecodeError, KeyError, TypeError, ValueError):
                 continue
-    return total
+            cuts += 1
+    return total, cuts
+
+
+def shard_seconds(shard: str) -> float:
+    """Sum top-level cut durations in one JSONL manifest, gzipped or plain."""
+    return shard_stats(shard)[0]
 
 
 def write_cache(cache: dict, path: Path) -> None:
@@ -271,6 +296,13 @@ def measure_shard(task: tuple[str, str]) -> tuple[str, float]:
     """
     source, shard = task
     return source, shard_seconds(shard)
+
+
+def measure_shard_stats(task: tuple[str, str]) -> tuple[str, float, int]:
+    """Return (source_path, seconds, cuts) for one shard; see :func:`measure_shard`."""
+    source, shard = task
+    seconds, cuts = shard_stats(shard)
+    return source, seconds, cuts
 
 
 # ---------------------------------------------------------------------------
@@ -315,6 +347,125 @@ def compute_weights(sources: list[dict], alpha: float, beta: float) -> list[dict
 
 
 # ---------------------------------------------------------------------------
+# From shares of audio to probabilities of cuts
+# ---------------------------------------------------------------------------
+#
+# lhotse's multiplexer draws one *cut* per pick (``rng.choices`` over the
+# sources, then ``next()`` on the winner), so a mux ``weight`` is the probability
+# of drawing a cut from that source, and a source supplies ``weight x its mean
+# cut length`` of audio per draw. The policy above is stated in hours, so
+# writing its p_c / p_l straight into ``weight:`` only delivers those hours when
+# every source has the same mean cut length. They do not: YODAS v3 segments
+# average ~23 s, CommonVoice ~5.5 s, YODAS Granary English ~9 s. On the
+# campaign's 2,100 h config that gave English 11.9% of the audio instead of 20%.
+# The functions below turn the intended shares of audio into the cut
+# probabilities that deliver them.
+
+HOURS_WEIGHTS_WARNING = (
+    "WARNING: --weights hours. These weights are shares of HOURS, but the loader draws CUTS,\n"
+    "so each source supplies weight x its mean cut length of audio, not its share: sources\n"
+    "with long cuts are over-drawn and the hours listed are not what a run sees. Use\n"
+    "--weights cuts unless you are reproducing an older config."
+)
+
+
+def mean_cut_seconds(hours: float, cuts: int | None, label: str = "source") -> float:
+    """Mean cut length in seconds, from a source's measured hours and cut count."""
+    if not cuts or hours <= 0:
+        raise ValueError(
+            f"No cut count measured for {label}, so its hours cannot be turned into a draw "
+            "probability. Measure it (this tool records cuts whenever it reads a source), "
+            "or use --weights hours."
+        )
+    return hours * 3600.0 / cuts
+
+
+def cut_mux_weights(targets: list[list[float]],
+                    mean_cut: list[list[float]]) -> tuple[list[float], list[list[float]]]:
+    """Mux weights, as cut probabilities, that make every source supply its target audio.
+
+    ``targets[g][i]`` is the (relative) audio that source ``i`` of group ``g`` must
+    supply and ``mean_cut[g][i]`` is its mean cut length in seconds. A source
+    supplies ``probability x mean cut`` of audio per draw, so the probability that
+    delivers a target is ``target / mean cut`` -- the number of cuts that make the
+    target up -- normalised, within a group and across groups. Returns (one
+    weight per group, one weight per source within each group); the product of the
+    two is a source's share of all cuts.
+    """
+    to_draw = [[t / d for t, d in zip(ts, ds)] for ts, ds in zip(targets, mean_cut)]
+    per_group = [sum(row) for row in to_draw]
+    total = sum(per_group)
+    if total <= 0:
+        raise ValueError("Nothing to draw: every target is zero.")
+    return (
+        [n / total for n in per_group],
+        # A group with no target at all is never drawn, so its inner split is moot.
+        [[x / n if n > 0 else 1.0 / len(row) for x in row] for row, n in zip(to_draw, per_group)],
+    )
+
+
+def implied_hour_shares(group_w: list[float], leaf_w: list[list[float]],
+                        mean_cut: list[list[float]]) -> list[list[float]]:
+    """Each source's share of the audio the muxer emits under these weights.
+
+    Per draw a source supplies ``group weight x source weight x mean cut`` seconds.
+    """
+    mass = [[gw * lw * d for lw, d in zip(lws, ds)]
+            for gw, lws, ds in zip(group_w, leaf_w, mean_cut)]
+    total = sum(sum(row) for row in mass)
+    return [[m / total for m in row] for row in mass]
+
+
+def check_hour_shares(targets: list[list[float]], group_w: list[float],
+                      leaf_w: list[list[float]], mean_cut: list[list[float]],
+                      ndigits: int = 8, rel_tol: float = 1e-5) -> None:
+    """Raise ValueError if the weights, rounded as they are written, miss their targets."""
+    want_total = sum(sum(row) for row in targets)
+    got = implied_hour_shares(
+        [round(w, ndigits) for w in group_w],
+        [[round(w, ndigits) for w in row] for row in leaf_w],
+        mean_cut,
+    )
+    for g, (ts, shares) in enumerate(zip(targets, got)):
+        for i, (t, share) in enumerate(zip(ts, shares)):
+            want = t / want_total
+            if want > 0 and abs(share - want) > rel_tol * want:
+                raise ValueError(
+                    f"group {g}, source {i} would supply {share:.6%} of the audio, "
+                    f"not the intended {want:.6%}"
+                )
+
+
+def to_cut_probabilities(sources: list[dict]) -> list[dict]:
+    """Rewrite p_c, p_l and p_cl from shares of the audio into probabilities of drawing a cut.
+
+    Run after :func:`compute_weights`, whose p_cl is the share of the mix's audio
+    the policy wants from each source. The policy's own values stay under
+    ``p_c_hours``, ``p_l_hours`` and ``p_cl_hours``; the emitted ones are what the
+    loader needs. Every source with a non-zero share needs ``hours`` and ``cuts``.
+    """
+    by_lang: dict[str, list[dict]] = defaultdict(list)
+    for s in sources:
+        by_lang[s["lang_key"]].append(s)
+
+    langs = list(by_lang)
+    targets = [[s["p_cl"] for s in by_lang[lang]] for lang in langs]
+    # A source with no share is never drawn; any positive length will do for it.
+    mean_cut = [[mean_cut_seconds(s["hours"], s.get("cuts"), s["path"]) if s["p_cl"] > 0 else 1.0
+                 for s in by_lang[lang]] for lang in langs]
+    group_w, leaf_w = cut_mux_weights(targets, mean_cut)
+    check_hour_shares(targets, group_w, leaf_w, mean_cut)
+
+    for lang, gw, lws, ds in zip(langs, group_w, leaf_w, mean_cut):
+        for s, lw, d in zip(by_lang[lang], lws, ds):
+            s["p_c_hours"], s["p_l_hours"], s["p_cl_hours"] = s["p_c"], s["p_l"], s["p_cl"]
+            s["mean_cut"] = d if s["p_cl"] > 0 else None
+            s["p_l"], s["p_c"] = gw, lw
+            s["p_cl"] = gw * lw
+    return sources
+
+
+# ---------------------------------------------------------------------------
 # Reporting
 # ---------------------------------------------------------------------------
 
@@ -325,7 +476,7 @@ GROUP_TAG_KEYS = ("task", "lang", "src_lang", "tgt_lang")
 
 
 def emit_nemo_group_yaml(sources: list[dict], out: Path,
-                         alpha: float, beta: float) -> None:
+                         alpha: float, beta: float, weights: str = "hours") -> None:
     """Write the mixture as a nested NeMo ``type: group`` input_cfg.
 
     The two tiers of the policy map onto the two levels of the schema: the group
@@ -335,24 +486,42 @@ def emit_nemo_group_yaml(sources: list[dict], out: Path,
 
     This is the same schema NeMo's own ``estimate_data_weights.py`` produces, so
     the emitted file is consumable by NeMo Speech directly as well as by MELT.
+
+    With ``weights="cuts"`` (sources already passed through
+    :func:`to_cut_probabilities`) the same two levels carry cut probabilities.
     """
-    lines = header_comment(sources, alpha, beta) + build_group_block(sources)
+    lines = header_comment(sources, alpha, beta, weights) + build_group_block(sources, weights=weights)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(lines) + "\n")
 
 
-def header_comment(sources: list[dict], alpha: float, beta: float) -> list[str]:
+def header_comment(sources: list[dict], alpha: float, beta: float, weights: str = "hours") -> list[str]:
     n_langs = len({s["lang_key"] for s in sources})
     total_hours = sum(s["hours"] for s in sources)
+    if weights == "cuts":
+        meaning = [
+            "# Weights are CUT probabilities (--weights cuts). lhotse's mux draws one cut per",
+            "# pick, so a corpus supplies weight x its mean cut length of audio. The policy's",
+            "# p_l and p_c (shares of AUDIO hours) are turned into the cut probabilities that",
+            "# deliver them: proportional to hours / mean cut length, renormalised.",
+            "# Group weight   = the language entry's share of the cuts drawn.",
+            "# Child weight   = the corpus's share of the cuts within its language entry.",
+            "# The two levels are muxed separately, so the share of cuts a corpus gets is the",
+            "# product of the two. Do not pre-multiply them.",
+        ]
+    else:
+        meaning = [
+            "# Group weight   = p_l, the language entry's share of the mix.",
+            "# Child weight   = p_c, the corpus's share within its language entry.",
+            "# The two levels are muxed separately, so the sampling probability of a",
+            "# corpus is the product p_l * p_c. Do not pre-multiply them.",
+        ]
     return [
         "# Generated by infra/compute_mix_weights.py — do not hand-edit.",
         "# Two-tier language/corpus balancing, Section 3.3.1 of arXiv:2509.14128,",
         f"# with alpha={alpha} (corpus within language) and beta={beta} (across languages).",
         "#",
-        "# Group weight   = p_l, the language entry's share of the mix.",
-        "# Child weight   = p_c, the corpus's share within its language entry.",
-        "# The two levels are muxed separately, so the sampling probability of a",
-        "# corpus is the product p_l * p_c. Do not pre-multiply them.",
+        *meaning,
         "#",
         "# Do NOT set `reweight_temperature` alongside this file (NeMo only).",
         "# alpha/beta are already baked into the weights below; NeMo would raise",
@@ -363,7 +532,7 @@ def header_comment(sources: list[dict], alpha: float, beta: float) -> list[str]:
     ]
 
 
-def build_group_block(sources: list[dict], indent: int = 0) -> list[str]:
+def build_group_block(sources: list[dict], indent: int = 0, weights: str = "hours") -> list[str]:
     """The nested ``input_cfg:`` block, as lines at the given indent."""
     by_lang: dict[str, list[dict]] = defaultdict(list)
     for s in sources:
@@ -372,12 +541,16 @@ def build_group_block(sources: list[dict], indent: int = 0) -> list[str]:
     def hours_of(lang: str) -> float:
         return sum(s["hours"] for s in by_lang[lang])
 
+    cut_mode = weights == "cuts"
     pad = " " * indent
     lines = [f"{pad}input_cfg:"]
     for lang in sorted(by_lang, key=lambda l: -hours_of(l)):
-        members = sorted(by_lang[lang], key=lambda s: -s["p_c"])
+        # Ordered by the policy's share of the corpus, not by its (cut) weight.
+        members = sorted(by_lang[lang], key=lambda s: -s.get("p_c_hours", s["p_c"]))
+        note = (f" -- {members[0]['p_l']:.1%} of the cuts, {members[0]['p_l_hours']:.1%} of the audio"
+                if cut_mode else "")
         lines.append(f"{pad}  # {lang}: {hours_of(lang):,.1f} h "
-                     f"across {len(members)} corpora")
+                     f"across {len(members)} corpora{note}")
         lines.append(f"{pad}  - type: group")
         lines.append(f"{pad}    weight: {members[0]['p_l']:.8f}")
         # Every member of a group shares these by construction, so reading them
@@ -397,12 +570,16 @@ def build_group_block(sources: list[dict], indent: int = 0) -> list[str]:
                 lines.append(f"{pad}        tags:")
                 for k, v in s["tags"].items():
                     lines.append(f"{pad}          {k}: {v}")
+            if cut_mode:
+                mean = f"mean cut {s['mean_cut']:.1f} s" if s["mean_cut"] else "no share"
+                lines.append(f"{pad}        # {s['hours']:,.1f} h, {mean}, "
+                             f"{s['p_cl_hours']:.1%} of the audio")
     return lines
 
 
 def emit_training_config(sources: list[dict], template: Path, out: Path,
                          alpha: float, beta: float,
-                         exp_name: str | None = None) -> None:
+                         exp_name: str | None = None, weights: str = "hours") -> None:
     """Copy a training config, replacing train_ds.input_cfg with the weighted mix.
 
     The rest of the file is passed through byte for byte. A YAML round-trip
@@ -413,8 +590,8 @@ def emit_training_config(sources: list[dict], template: Path, out: Path,
     lines = text.splitlines()
 
     start, end, indent = _find_block(lines, "train_ds", "input_cfg")
-    block = ([f"{' ' * indent}{c}" for c in header_comment(sources, alpha, beta)]
-             + build_group_block(sources, indent=indent))
+    block = ([f"{' ' * indent}{c}" for c in header_comment(sources, alpha, beta, weights)]
+             + build_group_block(sources, indent=indent, weights=weights))
     lines[start:end] = block
 
     # The mixture's measured hours are better than whatever the template said,
@@ -475,6 +652,13 @@ def main() -> None:
                    help="Corpus-level subsampling factor (paper: 0.5).")
     p.add_argument("--beta", type=float, default=0.5,
                    help="Language-level upsampling factor (paper: 0.5).")
+    p.add_argument("--weights", choices=("cuts", "hours"), default="cuts",
+                   help="What the emitted weights are. 'cuts' (default): probabilities of "
+                        "drawing a cut, set so each source supplies the audio the policy "
+                        "assigns it (hours / mean cut length, renormalised) -- what lhotse's "
+                        "mux needs, since it draws one cut per pick. 'hours': the policy's "
+                        "p_c / p_l as they are, which only deliver those hours when every "
+                        "source has the same mean cut length; for reproducing older configs.")
     p.add_argument("--sample-shards", type=int, default=None,
                    help="Read only the first N shards per source and extrapolate.")
     p.add_argument("--jobs", type=int, default=min(16, (os.cpu_count() or 4)))
@@ -500,9 +684,13 @@ def main() -> None:
     if args.cache.exists() and not args.no_cache:
         cache = json.loads(args.cache.read_text())
 
-    todo = [s["path"] for s in sources
-            if s["path"] not in cache
-            or cache[s["path"]].get("sample") != args.sample_shards]
+    # Cut weights need a cut count per source; an older cache holds hours only.
+    todo = list(dict.fromkeys(
+        s["path"] for s in sources
+        if s["path"] not in cache
+        or cache[s["path"]].get("sample") != args.sample_shards
+        or (args.weights == "cuts" and cache[s["path"]].get("cuts") is None)
+    ))
     if todo:
         tasks: list[tuple[str, str]] = []
         n_shards: dict[str, int] = {}
@@ -521,25 +709,29 @@ def main() -> None:
         remaining = dict(n_read)
         for src in todo:
             if n_read[src] == 0:
-                cache[src] = {"hours": 0.0, "shards": n_shards[src],
+                cache[src] = {"hours": 0.0, "cuts": 0, "shards": n_shards[src],
                               "sample": args.sample_shards}
 
         seconds: dict[str, float] = defaultdict(float)
+        counts: dict[str, int] = defaultdict(int)
         done = 0
         with ProcessPoolExecutor(max_workers=args.jobs) as pool:
             # pool.map preserves input order, and tasks are grouped by source,
             # so a source is finished as soon as its last shard comes back.
-            for src, secs in pool.map(measure_shard, tasks, chunksize=4):
+            for src, secs, n_cuts in pool.map(measure_shard_stats, tasks, chunksize=4):
                 seconds[src] += secs
+                counts[src] += n_cuts
                 remaining[src] -= 1
                 done += 1
                 if remaining[src]:
                     continue
                 total = seconds[src]
+                cuts = counts[src]
                 if args.sample_shards and n_read[src] < n_shards[src]:
                     # Shards within a source are near-uniform: scale by the ratio.
                     total *= n_shards[src] / n_read[src]
-                cache[src] = {"hours": total / 3600.0, "shards": n_shards[src],
+                    cuts = round(cuts * n_shards[src] / n_read[src])
+                cache[src] = {"hours": total / 3600.0, "cuts": cuts, "shards": n_shards[src],
                               "sample": args.sample_shards}
                 print(f"  [{done}/{len(tasks)} shards] {total / 3600.0:10.1f} h "
                       f"{n_shards[src]:6d} shards  {src}", flush=True)
@@ -553,6 +745,7 @@ def main() -> None:
 
     for s in sources:
         s["hours"] = cache[s["path"]]["hours"]
+        s["cuts"] = cache[s["path"]].get("cuts")
         s["shards"] = cache[s["path"]]["shards"]
 
     missing = [s["path"] for s in sources if s["shards"] == 0]
@@ -563,38 +756,56 @@ def main() -> None:
 
     report_locale_folding(sources)
     compute_weights(sources, args.alpha, args.beta)
+    cut_mode = args.weights == "cuts"
+    if cut_mode:
+        try:
+            to_cut_probabilities(sources)
+        except ValueError as exc:
+            sys.exit(f"error: {exc}")
+    else:
+        print(f"\n{HOURS_WEIGHTS_WARNING}")
 
     total_hours = sum(s["hours"] for s in sources)
     n_langs = len({s["lang_key"] for s in sources})
     print(f"\nalpha={args.alpha}  beta={args.beta}  "
           f"{n_langs} language entries  {total_hours:,.1f} h total\n")
 
+    if cut_mode:
+        print("p_cl is the probability of drawing a cut from the source (what is emitted); "
+              "boost is the policy's share of the audio over the source's natural share.\n")
     print(f"{'p_cl':>9} {'nat.share':>10} {'boost':>7} {'hours':>11} "
-          f"{'lang':<10} {'source'}")
+          + (f"{'mean cut':>9} " if cut_mode else "")
+          + f"{'lang':<10} {'source'}")
     for s in sorted(sources, key=lambda x: -x["p_cl"]):
         natural = s["hours"] / total_hours if total_hours else 0.0
-        boost = (s["p_cl"] / natural) if natural > 0 else float("inf")
+        policy = s.get("p_cl_hours", s["p_cl"])
+        boost = (policy / natural) if natural > 0 else float("inf")
+        cut = ((f"{s['mean_cut']:>8.1f}s " if s["mean_cut"] else f"{'-':>9} ") if cut_mode else "")
         print(f"{s['p_cl']:>9.6f} {natural:>10.6f} {boost:>7.2f}x "
-              f"{s['hours']:>11.1f} {s['lang_key']:<10} {s['path']}")
+              f"{s['hours']:>11.1f} {cut}{s['lang_key']:<10} {s['path']}")
 
     if args.emit_yaml:
         lines = ["# Generated by infra/compute_mix_weights.py — do not hand-edit.",
                  f"# Section 3.3.1 of arXiv:2509.14128, alpha={args.alpha}, beta={args.beta}.",
                  "# Maps shar_path -> weight (p_cl). Paste each value into the",
-                 "# matching input_cfg entry as `weight:`.",
-                 "weights:"]
+                 "# matching input_cfg entry as `weight:`."]
+        if cut_mode:
+            lines += ["# p_cl is the probability of drawing a CUT from the source (--weights cuts):",
+                      "# hours / mean cut length, renormalised, so each source supplies the audio",
+                      "# the policy assigns it. Paste these only into a flat (ungrouped) input_cfg."]
+        lines.append("weights:")
         for s in sorted(sources, key=lambda x: x["path"]):
             lines.append(f"  {s['path']}: {s['p_cl']:.8f}")
         args.emit_yaml.write_text("\n".join(lines) + "\n")
         print(f"\nWrote {args.emit_yaml}")
 
     if args.emit_nemo:
-        emit_nemo_group_yaml(sources, args.emit_nemo, args.alpha, args.beta)
+        emit_nemo_group_yaml(sources, args.emit_nemo, args.alpha, args.beta, args.weights)
         print(f"Wrote {args.emit_nemo} (nested group input_cfg)")
 
     if args.emit_config:
         emit_training_config(sources, args.config, args.emit_config,
-                             args.alpha, args.beta, args.exp_name)
+                             args.alpha, args.beta, args.exp_name, args.weights)
         print(f"Wrote {args.emit_config} (full training config)")
 
 

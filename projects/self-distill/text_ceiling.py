@@ -1,0 +1,223 @@
+"""Text-only ceiling of a speech-translation frozen set: the frozen decoder translating the gold transcript.
+
+For every sample of melt-eval ST frozen sets (their ``manifest.jsonl``), the
+speech LLM's own text decoder gets the mirror teacher's prompt -- the student's
+translate instruction with the source-language transcript (``source_text``,
+cased and punctuated) where the audio would be, rendered by
+``build_distill_prompts`` -- and decodes greedily under the trainer's stop and
+vocabulary rules. chrF and BLEU per direction against the set's reference are
+the most a speech model distilled from this teacher could reach on that set,
+from the content side. Samples without ``source_text`` (FLEURS ga) are skipped.
+
+``--task asr`` does the same for an ASR frozen set: the content is the lower-cased
+reference transcript (the form the trainer feeds the teacher), the instruction is the
+repeat one, and the score is chrF plus the share of exact copies per language: the
+ceiling of the transcription rows of the instruction mix.
+
+Two steps, because the training image has no sacrebleu:
+
+    # inside the training image (projects/self-distill/launch_script.sh); the frozen-set
+    # directories must be visible there, e.g. copied under the outputs
+    python projects/self-distill/text_ceiling.py generate --ckpt /workspace/outputs/<GOLDW run> \\
+        --sets /workspace/outputs/sd-text-ceiling/sets/* --out /workspace/outputs/sd-text-ceiling/dev.jsonl
+    # or, for a decoder without a MELT checkpoint: --decoder utter-project/EuroLLM-1.7B-Instruct
+    # anywhere sacrebleu imports (the melt-eval venv); scored as summarize_evals.py scores the speech runs
+    python projects/self-distill/text_ceiling.py score .../dev.jsonl --json .../dev.json
+"""
+
+import argparse
+import json
+import time
+from collections import defaultdict
+from pathlib import Path
+
+
+REPEAT = "Repeat the following content exactly, word for word, and write nothing else.\n\n{audio_token}"
+TRANSLATE = "Translate the following content into {tgt_lang}, and write nothing else.\n\n{audio_token}"
+
+
+def read_rows(set_dir: Path, task: str = "st") -> list[dict]:
+    with open(set_dir / "manifest.jsonl", encoding="utf-8") as f:
+        rows = [json.loads(line) for line in f]
+    if task == "asr":
+        # The content is the reference itself, lower-cased as SpeechToTextDataset does; no target language.
+        rows = [r for r in rows if r.get("task") == "asr" and str(r.get("target") or "").strip()]
+        return [
+            dict(r, source_text=str(r["target"]).strip().lower(), target=str(r["target"]).strip().lower(), tgt_lang="")
+            for r in rows
+        ]
+    return [r for r in rows if r.get("task") == "st" and (r.get("source_text") or "").strip()]
+
+
+def translate(model, processor, rows: list[dict], template: str, batch_size: int, max_new_tokens: int) -> list[str]:
+    """Greedy teacher replies for *rows*, length-sorted batches, as the trainer's teacher rollout decodes."""
+    import torch
+
+    from melt.training.self_distill import build_distill_prompts, distill_vocab_limit
+
+    tokenizer = processor.tokenizer
+    eos = model.text_decoder.generation_config.eos_token_id
+    eos = list(eos) if isinstance(eos, (list, tuple)) else [eos]
+    if tokenizer.eos_token_id is not None:
+        eos.append(tokenizer.eos_token_id)
+    eos_ids = sorted({int(e) for e in eos if e is not None})
+    vocab_limit = distill_vocab_limit(processor)
+    logits_dim = model.text_decoder.get_output_embeddings().weight.shape[0]
+    order = sorted(range(len(rows)), key=lambda i: len(rows[i]["source_text"]))
+    out: list[str] = [""] * len(rows)
+    for start in range(0, len(order), batch_size):
+        idx = order[start : start + batch_size]
+        batch = [rows[i] for i in idx]
+        prompts = build_distill_prompts(
+            processor,
+            [r["source_text"].strip() for r in batch],
+            [r["task"] for r in batch],
+            [r["src_lang"] for r in batch],
+            {"asr": REPEAT, "st": template},
+            teacher_prompt="mirror",
+            tgt_langs=[r["tgt_lang"] for r in batch],
+        )
+        ids = prompts["teacher_prompt_input_ids"].cuda()
+        with torch.inference_mode():
+            gen = model.text_decoder.generate(
+                input_ids=ids,
+                attention_mask=prompts["teacher_prompt_attention_mask"].cuda(),
+                max_new_tokens=max_new_tokens,
+                eos_token_id=eos_ids,
+                pad_token_id=tokenizer.pad_token_id,
+                use_cache=True,
+                suppress_tokens=list(range(vocab_limit, logits_dim)),
+                do_sample=False,
+                temperature=None,
+                top_p=None,
+                top_k=None,
+            )[:, ids.shape[1] :].tolist()
+        for row, i in zip(gen, idx):
+            stop = next((k for k, t in enumerate(row) if t in eos_ids), None)
+            out[i] = tokenizer.decode(row if stop is None else row[:stop], skip_special_tokens=True).strip()
+    return out
+
+
+def load_decoder_only(name: str):
+    """A bare causal LM as the teacher, with just enough of a processor for ``build_distill_prompts``.
+
+    For a decoder that has no MELT checkpoint yet (a candidate teacher): the weights come from the local
+    Hugging Face cache, the end and pad tokens follow ``plan_arm.DECODER_PROFILES`` when it lists the decoder
+    (that is what MELT would set on the tokenizer), and the audio tokens are ids past the vocabulary, so
+    nothing is suppressed and no student prompt is ever run.
+    """
+    import sys
+    from types import SimpleNamespace
+
+    import torch
+
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ablation-campaign"))
+    from plan_arm import DECODER_PROFILES
+
+    tokenizer = AutoTokenizer.from_pretrained(name, local_files_only=True)
+    profile = DECODER_PROFILES.get(name, {})
+    if profile.get("eos_token"):
+        tokenizer.eos_token = profile["eos_token"]
+    if profile.get("pad_token"):
+        tokenizer.pad_token = profile["pad_token"]
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    lm = AutoModelForCausalLM.from_pretrained(name, dtype=torch.bfloat16, local_files_only=True).cuda().eval()
+    first = len(tokenizer)
+    processor = SimpleNamespace(
+        tokenizer=tokenizer,
+        audio_token="<|audio|>",
+        audio_token_id=first,
+        audio_bos_token_id=first + 1,
+        audio_eos_token_id=first + 2,
+        _surround_bos_eos_mm_tokens=lambda prompt: prompt,
+    )
+    return SimpleNamespace(text_decoder=lm), processor
+
+
+def generate(args: argparse.Namespace) -> None:
+    if args.decoder:
+        model, processor = load_decoder_only(args.decoder)
+    else:
+        from alignment_probe import load_checkpoint
+        from omegaconf import OmegaConf
+
+        ckpt = Path(args.ckpt)
+        model, processor = load_checkpoint(ckpt, OmegaConf.load(ckpt / "resolved_config.json"))
+    template = args.template.replace("\\n", "\n")
+    start = time.time()
+    with open(args.out, "w", encoding="utf-8") as out:
+        for set_dir in map(Path, args.sets):
+            rows = read_rows(set_dir, args.task)
+            hyps = translate(model, processor, rows, template, args.batch_size, args.max_new_tokens)
+            for r, h in zip(rows, hyps):
+                record = {"set": set_dir.name, "sample_key": r["sample_key"], "src_lang": r["src_lang"]}
+                record.update(tgt_lang=r["tgt_lang"], ref=str(r["target"]).strip(), hyp=h, template=template)
+                out.write(json.dumps(record, ensure_ascii=False) + "\n")
+            print(f"[ceiling] {set_dir.name}: {len(rows)} samples, {time.time() - start:.0f} s elapsed", flush=True)
+
+
+def score(args: argparse.Namespace) -> None:
+    import sacrebleu
+
+    by_direction = defaultdict(lambda: ([], []))
+    with open(args.samples, encoding="utf-8") as f:
+        for line in f:
+            r = json.loads(line)
+            hyps, refs = by_direction[(r["set"], r["src_lang"], r["tgt_lang"])]
+            hyps.append(r["hyp"])
+            refs.append(r["ref"])
+    report = defaultdict(dict)
+    sources = defaultdict(set)
+    for name, src, _ in by_direction:
+        sources[name].add(src)
+    for (name, src, tgt), (h, r) in sorted(by_direction.items()):
+        # X->Y sets are keyed by the source language; a one-source set (en->X) by its target.
+        key = tgt if tgt and len(sources[name]) == 1 else src
+        if not tgt:  # a repeat set: how often the teacher returns the transcript unchanged
+            exact = sum(" ".join(a.lower().split()) == " ".join(b.lower().split()) for a, b in zip(h, r)) / len(h)
+            report[name][key] = {"n": len(h), "chrf": sacrebleu.corpus_chrf(h, [r]).score, "exact": exact}
+            print(f"{name} {src} repeat: n {len(h)} chrF {report[name][key]['chrf']:.1f} exact {exact:.0%}")
+            continue
+        report[name][key] = {
+            "n": len(h),
+            "chrf": sacrebleu.corpus_chrf(h, [r]).score,
+            "bleu": sacrebleu.corpus_bleu(h, [r]).score,
+        }
+        print(
+            f"{name} {src}->{tgt}: n {len(h)} chrF {report[name][key]['chrf']:.1f} BLEU {report[name][key]['bleu']:.1f}"
+        )
+    if args.json:
+        Path(args.json).write_text(json.dumps(report, indent=1) + "\n")
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="cmd", required=True)
+    gen = sub.add_parser("generate", help="greedy text-only translations, one JSON line per sample")
+    source = gen.add_mutually_exclusive_group(required=True)
+    source.add_argument("--ckpt", help="a finished run's root (weights, processor, resolved_config.json)")
+    source.add_argument(
+        "--decoder", help="a Hugging Face decoder id in the local cache, as a bare teacher (no MELT model)"
+    )
+    gen.add_argument("--sets", nargs="+", required=True, help="melt-eval frozen-set directories (manifest.jsonl)")
+    gen.add_argument("--out", required=True, help="samples JSONL")
+    gen.add_argument(
+        "--template", default=TRANSLATE, help="the student's translate instruction; literal \\n is a newline"
+    )
+    gen.add_argument("--task", choices=("st", "asr"), default="st", help="st: translate; asr: repeat the transcript")
+    gen.add_argument("--batch-size", type=int, default=64)
+    gen.add_argument("--max-new-tokens", type=int, default=448)
+    gen.set_defaults(func=generate)
+    sc = sub.add_parser("score", help="chrF and BLEU per (set, direction), as summarize_evals.py scores ST")
+    sc.add_argument("samples")
+    sc.add_argument("--json", default=None)
+    sc.set_defaults(func=score)
+    args = p.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

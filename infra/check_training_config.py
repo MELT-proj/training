@@ -490,6 +490,18 @@ def _filter_key(min_duration: float, max_duration: float) -> str:
     return f"{float(min_duration)}:{float(max_duration)}"
 
 
+def _key_range(min_duration: float, max_duration: float, resolution: float) -> tuple[int, float]:
+    """Inclusive histogram-key range ``(lo, hi)`` of a duration filter.
+
+    A split with no ``max_duration`` is read as ``float("inf")``: no upper bound.
+    ``int(round(inf))`` raises OverflowError, so an infinite bound stays infinite
+    and every key from ``lo`` up is kept.
+    """
+    lo = int(round(min_duration / resolution))
+    hi = math.inf if math.isinf(max_duration) else int(round(max_duration / resolution))
+    return lo, hi
+
+
 def measure_shard_detailed(task: tuple[str, str, float]) -> tuple[str, float, int, dict[int, int]]:
     """Return (source, seconds, cuts, duration histogram) for one shard manifest.
 
@@ -647,8 +659,7 @@ def measure_sources(
                 "measured": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             }
             for min_duration, max_duration in filters:
-                lo = int(round(min_duration / resolution))
-                hi = int(round(max_duration / resolution))
+                lo, hi = _key_range(min_duration, max_duration, resolution)
                 f_cuts = sum(v for k, v in hist_all.items() if lo <= k <= hi)
                 f_secs = sum(k * resolution * v for k, v in hist_all.items() if lo <= k <= hi)
                 entry["filtered"][_filter_key(min_duration, max_duration)] = {
@@ -690,8 +701,7 @@ def summed_histogram(
             # the others; treat it as unmeasured rather than mixing scales.
             missing += 1
             continue
-        lo = int(round(min_duration / resolution))
-        hi = int(round(max_duration / resolution))
+        lo, hi = _key_range(min_duration, max_duration, resolution)
         for key, count in entry["hist"].items():
             key = int(key)
             if lo <= key <= hi:
@@ -737,8 +747,7 @@ def split_totals(
             # so flag the result as approximate rather than presenting it as
             # measured at that filter.
             resolution = entry.get("res", HIST_RESOLUTION)
-            lo = int(round(min_duration / resolution))
-            hi = int(round(max_duration / resolution))
+            lo, hi = _key_range(min_duration, max_duration, resolution)
             f_cuts = sum(int(v) for k, v in entry["hist"].items() if lo <= int(k) <= hi)
             f_secs = sum(int(k) * resolution * int(v) for k, v in entry["hist"].items()
                          if lo <= int(k) <= hi)
@@ -1252,48 +1261,72 @@ def check_weights(
         return
 
     report.ran_check("W3")
-    sources = [
-        {"path": leaf.path, "lang_key": leaf.lang_key or "?",
-         "hours": cache[leaf.path]["hours"], "leaf": leaf}
-        for leaf in leaves
-    ]
-    cmw.compute_weights(sources, alpha, beta)
 
-    worst_pc = worst_pl = 0.0
-    offenders: list[str] = []
-    for source in sources:
-        leaf: Leaf = source["leaf"]
-        if leaf.weight is not None:
-            delta = abs(source["p_c"] - leaf.weight)
-            worst_pc = max(worst_pc, delta)
+    def policy_sources(as_cuts: bool) -> list[dict]:
+        """The policy's weights for these leaves: shares of audio, or cut probabilities."""
+        sources = [
+            {"path": leaf.path, "lang_key": leaf.lang_key or "?",
+             "hours": cache[leaf.path]["hours"], "cuts": cache[leaf.path].get("cuts"), "leaf": leaf}
+            for leaf in leaves
+        ]
+        cmw.compute_weights(sources, alpha, beta)
+        if as_cuts:
+            cmw.to_cut_probabilities(sources)
+        return sources
+
+    def compare(sources: list[dict]) -> tuple[list[str], float, float]:
+        worst_pc = worst_pl = 0.0
+        offenders: list[str] = []
+        for source in sources:
+            leaf: Leaf = source["leaf"]
+            if leaf.weight is not None:
+                delta = abs(source["p_c"] - leaf.weight)
+                worst_pc = max(worst_pc, delta)
+                if delta > tol:
+                    offenders.append(
+                        f"{leaf.display}: weight {leaf.weight:.8f}, expected p_c {source['p_c']:.8f} "
+                        f"(delta {delta:.2e})"
+                    )
+
+        # p_l is a property of the language entry, so every member of a group agrees
+        # on it; reading it off any one member is safe.
+        group_expected: dict[str, float] = {}
+        for source in sources:
+            leaf = source["leaf"]
+            if leaf.group_yaml_path:
+                group_expected[leaf.group_yaml_path] = source["p_l"]
+        for level in levels:
+            # A group level's own weight was recorded from its entry in the parent
+            # list while flattening, so no search is needed here.
+            if level.kind != "group" or level.own_weight is None:
+                continue
+            expected = group_expected.get(level.yaml_path.rsplit(".input_cfg", 1)[0])
+            if expected is None:
+                continue
+            delta = abs(expected - level.own_weight)
+            worst_pl = max(worst_pl, delta)
             if delta > tol:
                 offenders.append(
-                    f"{leaf.display}: weight {leaf.weight:.8f}, expected p_c {source['p_c']:.8f} "
-                    f"(delta {delta:.2e})"
+                    f"{level.yaml_path}: group weight {level.own_weight:.8f}, expected p_l "
+                    f"{expected:.8f} (delta {delta:.2e})"
                 )
+        return offenders, worst_pc, worst_pl
 
-    # p_l is a property of the language entry, so every member of a group agrees
-    # on it; reading it off any one member is safe.
-    group_expected: dict[str, float] = {}
-    for source in sources:
-        leaf = source["leaf"]
-        if leaf.group_yaml_path:
-            group_expected[leaf.group_yaml_path] = source["p_l"]
-    for level in levels:
-        # A group level's own weight was recorded from its entry in the parent
-        # list while flattening, so no search is needed here.
-        if level.kind != "group" or level.own_weight is None:
-            continue
-        expected = group_expected.get(level.yaml_path.rsplit(".input_cfg", 1)[0])
-        if expected is None:
-            continue
-        delta = abs(expected - level.own_weight)
-        worst_pl = max(worst_pl, delta)
-        if delta > tol:
-            offenders.append(
-                f"{level.yaml_path}: group weight {level.own_weight:.8f}, expected p_l "
-                f"{expected:.8f} (delta {delta:.2e})"
-            )
+    offenders, worst_pc, worst_pl = compare(policy_sources(as_cuts=False))
+    as_cuts = False
+    cut_hint: list[str] = []
+    if offenders:
+        # lhotse draws cuts, so compute_mix_weights.py writes the policy as cut
+        # probabilities by default (--weights cuts). Accept that reading too, when
+        # the cut counts it needs have been measured.
+        try:
+            cut_offenders, cut_pc, cut_pl = compare(policy_sources(as_cuts=True))
+        except ValueError:
+            cut_hint = ["If these weights are cut probabilities (compute_mix_weights.py --weights cuts), "
+                        "W3 can only check them with a cut count per source: run with --measure."]
+        else:
+            if not cut_offenders:
+                offenders, worst_pc, worst_pl, as_cuts = cut_offenders, cut_pc, cut_pl, True
 
     if offenders:
         report.add(
@@ -1301,11 +1334,12 @@ def check_weights(
             f"{len(offenders)} weights do not match the two-tier policy at "
             f"alpha={alpha}, beta={beta}",
             detail=offenders[:20] + ([f"… and {len(offenders) - 20} more"] if len(offenders) > 20 else []),
-            fix=[f"Re-emit the config: {template_hint}"],
+            fix=[f"Re-emit the config: {template_hint}", *cut_hint],
         )
     else:
         report.note(
-            f"Weights reproduce the policy at alpha={alpha}, beta={beta}: "
+            f"Weights reproduce the policy at alpha={alpha}, beta={beta}"
+            f"{' as cut probabilities (hours / mean cut length)' if as_cuts else ''}: "
             f"worst |delta p_c| = {worst_pc:.2e}, worst |delta p_l| = {worst_pl:.2e}."
         )
 

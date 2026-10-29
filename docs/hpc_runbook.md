@@ -374,6 +374,13 @@ python3 projects/ablation-campaign/build_campaign_config.py \
   --out projects/ablation-campaign/ABL-MA-125-asr.yaml
 ```
 
+Since 2026-10-08 the builder writes **cut-probability** weights by default
+(`--weights cuts`; the loader draws cuts, so hour-share weights over-draw
+long-cut sources — see `docs/mixture_weights.md`). Add `--weights hours` to
+re-render a config made before that date byte for byte. The 2,100 h crossing
+config is rendered over itself with `--topup-corpus yodas3` and
+`--bins-hist-cache` (command in the builder's docstring).
+
 `--tasks` picks the task composition. `asr` gives the ASR-only
 modality-alignment arm; `both` gives the ASR+ST mix, which is the same config
 plus its ST groups — same languages, same budget, same corpus mix, with the

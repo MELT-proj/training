@@ -1,0 +1,91 @@
+# Selection metric on the 2,100 h audio-stack crossing: the seed-43 replicates of whisper-conformer and whisper-moe, and the QK-norm Conformer cells of mhubert and w2vb.
+# Scored 2026-10-16 from melt-eval JSON logs of each run's final checkpoint (selection-metric/submit_crossing_eval.sh). Eval code is
+# training 715b426 on PYTHONPATH inside the v3 eval image; from ad9171c, which scored the 16 cells of crossing-2100-2026-10-12.txt,
+# crossing-2100-qknorm-2026-10-14.txt and crossing-2100-mms1b-conformer-2026-10-15.txt, to 715b426 `melt/` differs only in
+# melt/training/{config,train}.py, which evaluation does not use. Lower is better. The ranking at the end covers 20 runs.
+# Settings by run: whisper-conformer-s43 and whisper-moe-s43 are the seed-43 replicates of whisper-conformer (adapter LR 1e-3, no
+# QK-norm) and whisper-moe (2e-3): the originals' rows with seed 43, so the data order differs (1 node, 157,500 steps each).
+# mhubert-conformer-qkn and w2vb-conformer-qkn re-run the Conformer at adapter LR 2e-3 with qk_norm on, seed 42, the original rows'
+# nodes (2) and steps (78,750); the originals were mhubert-conformer (2e-3, no QK-norm) and w2vb-conformer (1e-3, no QK-norm).
+# The Whisper Conformer with QK-norm is still training; its score follows.
+
+== ma2100-whisper-conformer-s43
+  ID           median 0.0631   en=0.055 de=0.063 es=0.057 fr=0.073 it=0.084
+  OOD-train    median 0.0448   en=0.051 de=0.045 es=0.039 fr=0.050 it=0.030
+  OOD-related  median 0.5714   pt=0.255 ro=0.571 nl=0.462 da=0.854 sv=0.831
+  OOD-latin    median 1.0000   cs=1.000* sk=1.000* pl=1.000* hr=0.863 sl=1.000* hu=1.000* fi=1.000* et=1.000* lt=1.000* lv=1.000* ga=1.000* mt=0.927
+  OOD-script   median 1.0000   bg=1.000* el=1.000* ru=1.000* uk=1.000*
+  score 0.1526   (* = clipped at 1)
+  runaway generations (per-sample CER > 1, report only, not in the score):
+    ID      9/3000   de=1/600 (1% of errors, CER without 0.063)  en=1/600 (2% of errors, CER without 0.053)  es=3/600 (27% of errors, CER without 0.042)  fr=2/600 (11% of errors, CER without 0.065)  it=2/600 (3% of errors, CER without 0.081)
+    FLEURS  679/5171   bg=39/200 (50% of errors, CER without 0.918)  cs=45/200 (64% of errors, CER without 0.637)  da=13/200 (43% of errors, CER without 0.534)  el=54/200 (62% of errors, CER without 0.904)  et=36/200 (62% of errors, CER without 0.548)  fi=46/200 (67% of errors, CER without 0.580)  ga=51/200 (70% of errors, CER without 0.676)  hr=18/200 (39% of errors, CER without 0.598)  hu=60/200 (74% of errors, CER without 0.647)  lt=30/200 (54% of errors, CER without 0.594)  lv=30/200 (51% of errors, CER without 0.628)  mt=26/200 (47% of errors, CER without 0.574)  nl=3/171 (13% of errors, CER without 0.409)  pl=24/200 (44% of errors, CER without 0.691)  pt=2/200 (12% of errors, CER without 0.228)  ro=5/200 (19% of errors, CER without 0.475)  ru=72/200 (64% of errors, CER without 0.917)  sk=31/200 (57% of errors, CER without 0.617)  sl=34/200 (58% of errors, CER without 0.651)  sv=15/200 (44% of errors, CER without 0.512)  uk=45/200 (55% of errors, CER without 0.918)
+
+== ma2100-whisper-moe-s43
+  ID           median 0.0623   en=0.064 de=0.061 es=0.040 fr=0.062 it=0.082
+  OOD-train    median 0.0432   en=0.040 de=0.043 es=0.049 fr=0.052 it=0.034
+  OOD-related  median 0.6130   pt=0.265 ro=0.613 nl=0.537 da=0.753 sv=0.755
+  OOD-latin    median 1.0000   cs=1.000* sk=1.000* pl=1.000* hr=1.000* sl=1.000* hu=1.000* fi=1.000* et=0.959 lt=1.000* lv=1.000* ga=1.000* mt=1.000*
+  OOD-script   median 1.0000   bg=1.000* el=1.000* ru=1.000* uk=1.000*
+  score 0.1596   (* = clipped at 1)
+  runaway generations (per-sample CER > 1, report only, not in the score):
+    ID      9/3000   en=2/600 (20% of errors, CER without 0.051)  es=2/600 (3% of errors, CER without 0.039)  fr=2/600 (1% of errors, CER without 0.062)  it=3/600 (4% of errors, CER without 0.079)
+    FLEURS  996/5171   bg=80/200 (72% of errors, CER without 0.921)  cs=47/200 (72% of errors, CER without 0.605)  da=14/200 (37% of errors, CER without 0.509)  el=81/200 (75% of errors, CER without 0.906)  es=1/200 (25% of errors, CER without 0.036)  et=32/200 (68% of errors, CER without 0.383)  fi=54/200 (73% of errors, CER without 0.483)  ga=82/200 (82% of errors, CER without 0.651)  hr=32/200 (59% of errors, CER without 0.603)  hu=90/200 (87% of errors, CER without 0.507)  lt=40/200 (66% of errors, CER without 0.544)  lv=41/200 (68% of errors, CER without 0.485)  mt=54/200 (73% of errors, CER without 0.523)  nl=6/171 (27% of errors, CER without 0.407)  pl=40/200 (64% of errors, CER without 0.689)  pt=2/200 (17% of errors, CER without 0.222)  ro=12/200 (32% of errors, CER without 0.448)  ru=87/200 (76% of errors, CER without 0.924)  sk=53/200 (73% of errors, CER without 0.568)  sl=51/200 (71% of errors, CER without 0.606)  sv=12/200 (41% of errors, CER without 0.483)  uk=85/200 (77% of errors, CER without 0.920)
+
+== ma2100-mhubert-conformer-qkn
+  ID           median 0.2222   en=0.277 de=0.197 es=0.150 fr=0.281 it=0.222
+  OOD-train    median 0.2288   en=0.229 de=0.231 es=0.209 fr=0.371 it=0.224
+  OOD-related  median 1.0000   pt=1.000* ro=1.000* nl=0.801 da=1.000* sv=1.000*
+  OOD-latin    median 1.0000   cs=1.000* sk=1.000* pl=1.000* hr=1.000* sl=1.000* hu=1.000* fi=1.000* et=1.000* lt=1.000* lv=1.000* ga=1.000* mt=1.000*
+  OOD-script   median 1.0000   bg=1.000* el=1.000* ru=1.000* uk=1.000*
+  score 0.3759   (* = clipped at 1)
+  runaway generations (per-sample CER > 1, report only, not in the score):
+    ID      39/3000   de=3/600 (9% of errors, CER without 0.180)  en=10/600 (33% of errors, CER without 0.189)  es=4/600 (8% of errors, CER without 0.139)  fr=12/600 (22% of errors, CER without 0.224)  it=10/600 (21% of errors, CER without 0.179)
+    FLEURS  1232/5171   bg=68/200 (67% of errors, CER without 0.922)  cs=47/200 (66% of errors, CER without 0.700)  da=34/200 (57% of errors, CER without 0.629)  de=2/200 (15% of errors, CER without 0.198)  el=62/200 (66% of errors, CER without 0.907)  en=3/200 (28% of errors, CER without 0.168)  es=5/200 (33% of errors, CER without 0.142)  et=69/200 (79% of errors, CER without 0.610)  fi=61/200 (72% of errors, CER without 0.640)  fr=5/200 (34% of errors, CER without 0.252)  ga=104/200 (88% of errors, CER without 0.700)  hr=62/200 (78% of errors, CER without 0.602)  hu=69/200 (74% of errors, CER without 0.748)  it=6/200 (42% of errors, CER without 0.136)  lt=53/200 (72% of errors, CER without 0.655)  lv=75/200 (81% of errors, CER without 0.621)  mt=55/200 (72% of errors, CER without 0.590)  nl=14/171 (38% of errors, CER without 0.559)  pl=45/200 (63% of errors, CER without 0.713)  pt=38/200 (60% of errors, CER without 0.564)  ro=48/200 (67% of errors, CER without 0.557)  ru=81/200 (74% of errors, CER without 0.923)  sk=43/200 (64% of errors, CER without 0.635)  sl=46/200 (67% of errors, CER without 0.618)  sv=54/200 (72% of errors, CER without 0.606)  uk=83/200 (73% of errors, CER without 0.918)
+
+== ma2100-w2vb-conformer-qkn
+  ID           median 0.4221   en=0.583 de=0.387 es=0.350 fr=0.486 it=0.422
+  OOD-train    median 0.6184   en=0.746 de=0.618 es=0.611 fr=0.773 it=0.446
+  OOD-related  median 1.0000   pt=1.000* ro=0.943 nl=0.977 da=1.000* sv=1.000*
+  OOD-latin    median 1.0000   cs=1.000* sk=1.000* pl=1.000* hr=1.000* sl=1.000* hu=1.000* fi=1.000* et=1.000* lt=1.000* lv=1.000* ga=1.000* mt=1.000*
+  OOD-script   median 1.0000   bg=1.000* el=1.000* ru=1.000* uk=1.000*
+  score 0.6289   (* = clipped at 1)
+  runaway generations (per-sample CER > 1, report only, not in the score):
+    ID      55/3000   de=6/600 (10% of errors, CER without 0.354)  en=18/600 (24% of errors, CER without 0.463)  es=7/600 (9% of errors, CER without 0.323)  fr=13/600 (16% of errors, CER without 0.418)  it=11/600 (16% of errors, CER without 0.361)
+    FLEURS  1054/5171   bg=71/200 (59% of errors, CER without 0.917)  cs=44/200 (57% of errors, CER without 0.790)  da=48/200 (66% of errors, CER without 0.709)  de=10/200 (34% of errors, CER without 0.436)  el=53/200 (56% of errors, CER without 0.912)  en=10/200 (40% of errors, CER without 0.480)  es=13/200 (43% of errors, CER without 0.379)  et=42/200 (57% of errors, CER without 0.743)  fi=50/200 (63% of errors, CER without 0.759)  fr=18/200 (45% of errors, CER without 0.478)  ga=60/200 (66% of errors, CER without 0.780)  hr=39/200 (53% of errors, CER without 0.744)  hu=56/200 (65% of errors, CER without 0.803)  it=8/200 (27% of errors, CER without 0.339)  lt=46/200 (63% of errors, CER without 0.770)  lv=56/200 (63% of errors, CER without 0.752)  mt=38/200 (54% of errors, CER without 0.725)  nl=18/171 (42% of errors, CER without 0.655)  pl=43/200 (60% of errors, CER without 0.779)  pt=35/200 (49% of errors, CER without 0.713)  ro=24/200 (41% of errors, CER without 0.658)  ru=75/200 (68% of errors, CER without 0.921)  sk=48/200 (65% of errors, CER without 0.750)  sl=39/200 (58% of errors, CER without 0.725)  sv=50/200 (65% of errors, CER without 0.729)  uk=60/200 (63% of errors, CER without 0.924)
+
+checkpoint                        ID  OOD-train  OOD-related  OOD-latin  OOD-script   score  runaway-ID  runaway-FLEURS
+ma2100-whisper-conformer-s43  0.0631     0.0448       0.5714     1.0000      1.0000  0.1526      9/3000        679/5171
+ma2100-whisper-moe-s43        0.0623     0.0432       0.6130     1.0000      1.0000  0.1596      9/3000        996/5171
+ma2100-mhubert-conformer-qkn  0.2222     0.2288       1.0000     1.0000      1.0000  0.3759     39/3000       1232/5171
+ma2100-w2vb-conformer-qkn     0.4221     0.6184       1.0000     1.0000      1.0000  0.6289     55/3000       1054/5171
+
+score = (1*ID + 1.5*OOD-train + 0.6*OOD-related) / 3.1; lower is better
+runaway-* = samples with per-sample CER > 1 (report only, not in the score)
+
+
+# Ranking of the 20 scored runs, by score: the 16 cells of the earlier files (their rows are unchanged) plus the four runs above. The two
+# seed-43 rows are second runs of whisper-conformer and whisper-moe, not new cells; every other row is one seed.
+checkpoint                        ID  OOD-train  OOD-related  OOD-latin  OOD-script   score  runaway-ID  runaway-FLEURS
+ma2100-whisper-conformer      0.0605     0.0401       0.5037     1.0000      1.0000  0.1364      5/3000        661/5171
+ma2100-whisper-moe            0.0610     0.0423       0.5309     1.0000      1.0000  0.1429     12/3000        895/5171
+ma2100-whisper-conformer-s43  0.0631     0.0448       0.5714     1.0000      1.0000  0.1526      9/3000        679/5171
+ma2100-whisper-mlp            0.0651     0.0392       0.6051     1.0000      1.0000  0.1571     10/3000        713/5171
+ma2100-whisper-moe-s43        0.0623     0.0432       0.6130     1.0000      1.0000  0.1596      9/3000        996/5171
+ma2100-whisper-qformer        0.0778     0.0454       0.6686     1.0000      1.0000  0.1765     16/3000        731/5171
+ma2100-mms1b-conformer        0.1130     0.0934       0.8893     1.0000      1.0000  0.2538     18/3000        949/5171
+ma2100-mhubert-mlp            0.1713     0.1544       0.6697     0.9513      1.0000  0.2596     24/3000        583/5171
+ma2100-mhubert-moe            0.1598     0.1298       0.8009     1.0000      1.0000  0.2694     19/3000        726/5171
+ma2100-mhubert-conformer-qkn  0.2222     0.2288       1.0000     1.0000      1.0000  0.3759     39/3000       1232/5171
+ma2100-mhubert-conformer      0.2294     0.2422       1.0000     1.0000      1.0000  0.3847     30/3000       1269/5171
+ma2100-mhubert-qformer        0.2952     0.2772       1.0000     1.0000      1.0000  0.4229     60/3000       1216/5171
+ma2100-mms1b-mlp              0.2491     0.3348       0.9426     1.0000      1.0000  0.4248     38/3000        816/5171
+ma2100-mms1b-moe              0.3008     0.3320       0.9339     1.0000      1.0000  0.4384     51/3000        937/5171
+ma2100-w2vb-moe               0.3808     0.4139       1.0000     1.0000      1.0000  0.5166     81/3000       1196/5171
+ma2100-w2vb-mlp               0.3912     0.4352       1.0000     1.0000      1.0000  0.5303     81/3000       1183/5171
+ma2100-w2vb-conformer-qkn     0.4221     0.6184       1.0000     1.0000      1.0000  0.6289     55/3000       1054/5171
+ma2100-w2vb-qformer           0.6681     0.8635       1.0000     1.0000      1.0000  0.8269    131/3000       1034/5171
+ma2100-mms1b-qformer          0.7860     0.9608       1.0000     1.0000      1.0000  0.9120     77/3000        856/5171
+ma2100-w2vb-conformer         0.7566     1.0000       1.0000     1.0000      1.0000  0.9215    112/3000       1359/5171
+
+score = (1*ID + 1.5*OOD-train + 0.6*OOD-related) / 3.1; lower is better
+runaway-* = samples with per-sample CER > 1 (report only, not in the score)

@@ -20,12 +20,13 @@ belongs on the board, not in a section file.
 | file | what it holds |
 |---|---|
 | `agent-protocol.md` | the rules every session follows: machines, experiments, code, and how to record work; read before touching anything |
+| `evaluation-protocol.md` | the paper's benchmarks, metrics, baselines and how a number reaches the master table; read before any eval work |
 | `timeline.md` | week-by-week TODO list with dates, gates and blockers. Added to and pruned **only by the orchestrator**; sessions tick boxes |
 | `01-interface-recipe.md` | step 0 (LibriSpeech) and the five-language interface screen: LR, batch, frame stacking, prompt |
 | `02-backbones.md` | the 2×3 backbone grid (Llama 3.2 1B, Qwen3.5 2B, EuroLLM 1.7B; base and instruct) and the text-prior study |
 | `03-audio-stack.md` | encoders × adapters, the cost axis, the efficiency figure |
-| `04-regime.md` | IFT-level training-regime factors as a half-fraction design |
-| `05-language-ladder.md` | the "N hours gives P" study over 24 EU languages, transfer and repetition probes |
+| `04-regime.md` | is MA worth running before a full fine-tune; which objective; how many hours (restructured 2026-10-20) |
+| `05-language-ladder.md` | the "N hours gives P" study over 24 EU languages, transfer and repetition probes (postponed off the critical path, 2026-10-20) |
 | `06-fondue.md` | the big run: data, decisions, freeze date, the Raclette pilot, operations, off-boarding |
 | `infrastructure.md` | clusters, repos, data, tooling, and every trap an agent needs to know |
 | `board.md` | everything that happened: findings, numbers, incidents, doubts and proposals, newest first. Any session appends; nothing is ever edited away |
@@ -106,9 +107,12 @@ session, post to `board.md` instead if you think one is wrong.
 | 2026-09-15 | the August MA failure is a coarse-feature plateau, not ignored audio (no-audio floor measured); step 0 reads loss together with WER | `01-interface-recipe.md` §1a |
 | 2026-09-16 | the MA:IFT hours ratio is a named study, run after the regime decision, splitting ASR hours only while ST hours stay fixed; the decoder-frozen IFT regime joins the regime comparison as R9/R10 | `04-regime.md` §3, §6 |
 | 2026-09-17 | step 0 was inconclusive; step 0b (schedule, stacking to 10 Hz, decoder size, plus a seed replicate and an encoder control) runs before the week-2 screen, whose budget is then re-set from step 0b's hours-to-threshold | `01-interface-recipe.md` §2b |
+| 2026-10-02 | crossing budget 2,100 h/lang (10,500 h total), replacing five epochs; budgets counted in absolute hours, not epochs; Yodas v3 added for the five languages so that nothing repeats | `03-audio-stack.md` §1b, `timeline.md` Blocked |
+| 2026-10-01 | Whisper size ladder (tiny/base/small/medium) with the crossing's winning adapter, on the crossing recipe, after the backbone MA arms | `03-audio-stack.md` §2b, `timeline.md` weeks 4–5 |
 | 2026-09-26 | crossing recipe: adapter LR 2e-3, 300 s batch, 10 Hz for every adapter (Conformer stride 5 / kernel 5); MoE per-language usage measured post hoc; MA prompt runs moved to week 6, on the winning combination | `03-audio-stack.md` §1b, `timeline.md` week 6 |
 | 2026-09-23 | the audio-stack crossing runs five epochs per arm (17,500 sampled audio-h; Italian repeats ~5×, larger sources mostly yield new data), one recipe for all sixteen; the MoE reaches the common rate by stacking frames before the router | `03-audio-stack.md` §1b |
 | 2026-09-18 | step 0b settles the optimisation recipe only; its Whisper and Qwen arms are diagnostic controls handed to `03` and `02` as priors, never decisions. The audio-stack section runs **before** the backbone grid, so backbones are compared on a chosen stack; the encoder itself is decided by `03`'s crossing, read on FLEURS-24 split high- against low-resource | `01-interface-recipe.md` §2b, `03-audio-stack.md` §0, `02-backbones.md` |
+| 2026-10-20 | Fondue is a full fine-tune (nothing frozen, no LoRA); the regime study becomes "is MA worth it, which objective, how many hours", reusing the self-distillation starts; R1-R10 and the ratio sweep retired; the language ladder leaves the critical path for the paper | `04-regime.md`, `05-language-ladder.md`, `timeline.md` |
 
 ## Conventions for editing this folder
 

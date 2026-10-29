@@ -1,0 +1,84 @@
+Selection score with speech translation, IFT-stage backbone arms — ST restricted
+to the trained directions (checkpoint-6310, whisper-large-v3 encoder + MoE
+adapter, 700 h/lang).
+
+Supersedes the ST definition of backbones-sel-asr-st-2026-10-23.txt, which is
+kept as the record of what was defined before the PI's 2026-10-23 instruction.
+The ASR part is the metric of README.md unchanged (frozen 2026-09-23) and is
+identical in both files; only the ST half changed.
+
+  ASR   sel = (1.0*med(ID) + 1.5*med(OOD-train) + 0.6*med(OOD-related)) / 3.1
+        medians of clipped per-language CER; ID en,de,es,fr,it in-domain;
+        OOD-train the same five on FLEURS; OOD-related pt,ro,nl,da,sv.
+
+  ST    s_l = 1 - chrF_l/100, lowercase plain chrF, 100 clips per direction,
+        over the five directions the IFT mix trains:
+          de,es,fr,it -> en   (YODAS Granary `ast`, 4.7-10.5% of group draws)
+          en -> de            (CoVoST2, 429.9 h, 9.6% of group draws)
+        sel(ST) = 1 - med(chrF over the five)/100
+        The zero-shot related group (pt,ro,nl,da,sv -> en) that the 2026-10-23
+        first draft weighted at 0.6 is NOT in this score: the PI asked for ST
+        on the languages and directions the arms were trained on.
+
+  headline  sel(ASR+ST) = (sel(ASR) + sel(ST)) / 2                     lower better
+
+Per-direction chrF (lowercase, 1 dp; the score uses unrounded values)
+
+arm                 de->en  es->en  fr->en  it->en  en->de | med
+llama1b-base         63.1    56.7    62.1    59.3    56.5  | 59.3
+llama1b-ins          63.1    56.9    61.5    60.2    57.3  | 60.2
+qwen35-2b-base       65.2    58.5    64.2    61.9    61.5  | 61.9
+qwen35-2b-ins        65.3    58.7    63.4    61.7    59.5  | 61.7
+eurollm1.7b-base     64.2    58.3    63.6    60.5    59.5  | 60.5
+eurollm1.7b-ins      65.2    58.3    63.5    61.2    59.9  | 61.2
+
+Scores
+
+arm                 ID      OODtr   OODrel  sel(ASR)  med(ST)  sel(ST)  sel(ASR+ST)
+llama1b-base        0.0510  0.0300  0.1570  0.0614      59.3   0.4069     0.2342
+llama1b-ins         0.0480  0.0270  0.2920  0.0851      60.2   0.3976     0.2413
+qwen35-2b-base      0.0440  0.0240  0.3100  0.0858      61.9   0.3811     0.2335
+qwen35-2b-ins       0.0470  0.0260  0.4080  0.1067      61.7   0.3832     0.2449
+eurollm1.7b-base    0.0534  0.0321  0.1648  0.0646      60.5   0.3951     0.2299
+eurollm1.7b-ins     0.0498  0.0322  0.1273  0.0563      61.2   0.3878     0.2220
+
+Order: eurollm1.7b-ins < eurollm1.7b-base < qwen35-2b-base < llama1b-base <
+llama1b-ins < qwen35-2b-ins. The EuroLLM lead over third place is 0.0079
+(the README's eval-noise band is 0.002-0.010); every other gap is <= 0.0071,
+and qwen35-2b-base vs llama1b-base is 0.0007.
+
+Sensitivity (all six arms; the numbers above are the headline)
+
+  1. en->de dropped from the median (ST over the four X->en directions only):
+     sel(ST) 0.3929 / 0.3913 / 0.3695 / 0.3746 / 0.3796 / 0.3763 and joint
+     0.2271 / 0.2382 / 0.2276 / 0.2406 / 0.2221 / 0.2163 in the row order
+     above. Every arm improves by 0.007-0.008; qwen35-2b-base and
+     llama1b-base swap. en->de counts German twice and rests on a single
+     100-clip probe, so this variant is the cost of obeying the instruction.
+  2. Median replaced by the mean of the five: joint 0.2330 / 0.2435 / 0.2315
+     / 0.2447 / 0.2262 / 0.2200, no order change.
+  3. ST folded into the ASR sum, (3.1*sel(ASR) + sel(ST))/4.1: 0.1457 / 0.1613
+     / 0.1578 / 0.1741 / 0.1452 / 0.1371, no order change except
+     qwen35-2b-base and llama1b-base swap (the same pair as in 1).
+
+Inputs and jobs
+  ASR   per-language CER from selection-metric/score.py on
+        /gpfs/scratch/epor48/eval-logs/selection-metric/ift-700-backbone-*/
+        The four older arms: scores/backbones-ma-and-ift-2026-10-22.txt.
+        EuroLLM: job 47883097 (acc_debug, 2026-10-23), same script and logs;
+        llama1b-base in the same run reproduced 0.0614.
+  ST    X->en: `melteval st-metrics --group-by src_lang --lowercase --json`
+        (eval-main @ 6f5e8e9, melt_eval_cuda126_spbleu.sif) on
+        /gpfs/scratch/epor48/eval-logs/ift-st/ift-700-backbone-*/
+        EuroLLM job 47883090 and the other three older arms job 47883105,
+        both 2026-10-23; llama1b-base reproduced every published X->en cell
+        to the decimal in job 47883090.
+        en->de: the artemis en->X logs, same instrument as §5's 23-target
+        column (jobs 338939-338942 for the older four; the EuroLLM runs
+        2026-10-23), re-derived with the local chrF that reproduces all six
+        published macros.
+  IFT CER (5-lang), entered in §5 for EuroLLM on 2026-10-23, is the mean of
+        the five in-domain per-language CERs: 0.0498 (ins) / 0.0521 (base).
+
+sel(ASR) recomputes from the ID / OODtr / OODrel columns to 4 dp, e.g.
+eurollm1.7b-ins (0.0498 + 1.5*0.0322 + 0.6*0.1273)/3.1 = 0.0563.

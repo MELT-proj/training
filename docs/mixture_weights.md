@@ -19,6 +19,35 @@ corpus is not swamped before cross-language balancing runs:
 paper's pre-training setting and the script default. Lower values flatten harder;
 the paper uses `alpha = 0.2` for one fine-tuning stage.
 
+### The loader draws cuts, not hours
+
+The policy is stated in hours, but lhotse's multiplexer draws one *cut* per pick,
+so a `weight:` is the probability of drawing a cut, and a source supplies
+`weight x its mean cut length` of audio. Writing `p_c` and `p_l` straight into
+`weight:` therefore delivers their hours only when every source has the same mean
+cut length. They do not when cuts differ several-fold (YODAS v3 segments average
+~23 s, CommonVoice ~5.5 s, YODAS Granary English ~9 s): on the campaign's 2,100 h
+config, hour-share weights gave English 11.9% of the audio instead of 20%.
+
+`--weights cuts` (the default since 2026-10-08) treats the policy's `p_cl` as each
+source's intended share of the **audio** and converts it to the cut probabilities
+that deliver it: proportional to `hours / mean cut length`, renormalised within
+each language entry and across entries. The policy itself (alpha, beta, the
+shares of audio) is unchanged; only what is written into `weight:` differs, and
+the emitted file says so in its header and beside each group and corpus.
+`--weights hours` writes `p_c` and `p_l` as they are, as this script did before,
+for reproducing an older config; it warns that the hours are not enforced.
+
+This needs a cut count per source, which the script records next to hours. A
+cache from before that change holds hours only, so the first `--weights cuts` run
+over it reads every source again (see "Timing, and the cache").
+
+`projects/ablation-campaign/build_campaign_config.py` uses the same conversion
+(`compute_mix_weights.cut_mux_weights`) for the campaign's explicit hour budgets.
+To check any config's mix without trusting either tool, predict each source's
+audio as `group weight x source weight x mean cut` and compare with the hours you
+meant, or read `train_hours/*` from the first log lines of a run.
+
 Every translation **direction** is its own language entry: ASR German is `de`,
 while en→de and de→en are `en-de` and `de-en`. This falls out of the config tags
 (`lang` for ASR, `src_lang`/`tgt_lang` for ST) — you don't declare it anywhere.
@@ -59,6 +88,9 @@ Other outputs, if you want them separately:
   shards (relevant for Smurf).
 - `--emit-yaml flat.yaml` — a flat `shar_path: p_cl` mapping, for inspection.
 
+`--weights {cuts,hours}` picks what the emitted weights are (default `cuts`; see
+"The loader draws cuts, not hours" above).
+
 ## Timing, and the cache
 
 A full pass over the current collection is **22k shards and about two hours**,
@@ -69,6 +101,11 @@ because it decompresses and parses every manifest. It is I/O-bound, so the
 rather than starting over. Point it at the same file next time and only new or
 changed sources get measured. Keep the cache — it turns a re-run after adding one
 corpus into a minute of work.
+
+The cache records each source's **cut count** as well as its hours. A cache made
+before that change has hours only: the first `--weights cuts` run over it re-reads
+every source (a full pass again), after which it is complete. `--weights hours`
+never needs the cut counts, so it still works from an old cache.
 
 For a quick sanity check rather than a config you will train on:
 
@@ -122,7 +159,9 @@ alpha=0.5  beta=0.5  71 language entries  245,099.2 h total
  0.014214   0.002707    5.25x       663.6 en-pl      .../yodas-granary/Polish/ast
 ```
 
-`nat.share` is the source's share of total hours; `boost` is `p_cl / nat.share`.
+`nat.share` is the source's share of total hours; `boost` is the policy's share of
+the audio over `nat.share`. With `--weights cuts`, `p_cl` is the emitted
+probability of drawing a cut from the source, and a `mean cut` column is added.
 Large corpora should come out below 1x and small ones above — that is the policy
 working. Worth checking:
 
@@ -178,7 +217,7 @@ python3 infra/check_training_config.py --config config/train/SFT-v1.3.1.yaml
 ```
 
 That checks the weights against this policy — every `p_l` and `p_c` recomputed from measured hours
-at the config's own alpha and beta — plus `total_hours`, `total_cuts`, `bucket_duration_bins`, the
+(read either as shares of audio or, when cut counts are cached, as cut probabilities) at the config's own alpha and beta — plus `total_hours`, `total_cuts`, `bucket_duration_bins`, the
 validation `name:` keys, and the tag and path consistency of every source. It prints the command or
 the YAML edit for anything that does not check out. See
 [config_verification.md](config_verification.md).

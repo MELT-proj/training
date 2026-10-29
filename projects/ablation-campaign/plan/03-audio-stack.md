@@ -71,15 +71,28 @@ asserted rather than shown.
 |---|---|---|---|---|
 | `facebook/w2v-bert-2.0` | 580M | precomputed features | 50 Hz | the baseline; no flash attention (relative-position bias) |
 | `facebook/mms-1b` | 962M | raw waveform | 50 Hz | flash-eligible; matches w2v-BERT step time with flash, 1.54× slower with sdpa; ships `apply_spec_augment: true`, which must be set to match the others |
-| Whisper-large-v3 encoder | ~635M | log-Mel | 50 Hz after conv | supervised ASR pretraining, the odd one out |
+| Whisper-large-v3 encoder | ~635M | log-Mel | 50 Hz after conv | supervised ASR pretraining, the odd one out; flash-eligible and now given flash_attention_2 (PI, 2026-09-27) -- its own `forward()` never reads the attention mask at all, so there is no masking complication, only a fixed 1500-position dense attention every window |
 | mHuBERT-147 | 95M | raw waveform | 50 Hz | the small one; 147 languages |
 
 | adapter | params (w2v-BERT → 2048-wide decoder) | output rate | state |
 |---|---|---|---|
 | MLP (2-layer, GELU, LayerNorm × gain) | 6.30M | 50 Hz, or 50/k with `stack_factor` k | baseline |
-| Conformer, 1 layer | 27.28M | 25 Hz (stride 2) | ready |
+| Conformer, 1 layer | 27.28M at stride 2 / kernel 3; 35.67M at the crossing's stride 5 / kernel 5 (measured) | 25 Hz (stride 2); 10 Hz at stride 5 / kernel 5 | ready; builds on every encoder |
 | MoE, 8 SwiGLU experts, top-2, load-balancing aux loss | 33.57M total, 8.39M active | 50 Hz, or 50/k with `stack_factor` k | ready |
-| Q-Former, window 15, 3 queries | not instantiable today | 10 Hz by design | broken; PI fixes in week 4 |
+| Q-Former, window 15, 3 queries | 35.70M (measured) | 10 Hz native; ignores `stack_factor` | ready (PR #138) |
+
+Adapter parameters at the crossing's 10 Hz, into a 2048-wide decoder (measured on
+CPU from the real adapter classes and the four encoders' own configs, 2026-09-26). The
+Conformer's layer is w2v-BERT 2.0's own adapter recipe at the encoder's width (64-wide
+heads, 4x feed-forward); w2v-BERT's is unchanged, the other three had no Conformer
+before.
+
+| adapter at 10 Hz | w2v-BERT (1024 wide) | Whisper, MMS (1280) | mHuBERT (768) |
+|---|---|---|---|
+| MLP, `stack_factor` 5 | 14.69M | 17.31M | 12.07M |
+| Conformer, stride 5 / kernel 5 | 35.67M | 55.08M | 20.46M |
+| MoE, `stack_factor` 5 (total) | 100.71M | 121.69M | 79.73M |
+| Q-Former, window 15 | 35.70M | 36.75M | 34.65M |
 
 ## 1b. The budget problem the five-language screen just exposed (2026-09-23)
 
@@ -122,7 +135,8 @@ gradient steps they demonstrably need.
 self-supervised encoders have room to finish the transition the screen
 caught them part-way through. "Epoch" here is a step budget, not a pass over a fixed
 set: hours are enforced by sampling weights plus a derived step count, never
-by subsetting (`build_campaign_config.py` docstring), and the dataloader is
+by subsetting (*corrected 2026-10-08:* the weights pick cuts, not hours; see
+the 2026-10-08 paragraph below) (`build_campaign_config.py` docstring), and the dataloader is
 infinite. Five epochs is therefore **17,500 audio-h sampled per arm**. Italian,
 whose four corpora *are* the 700 h, repeats about five times; a source larger
 than its share (most of en/de/es/fr) mostly yields new cuts. The repetition
@@ -143,11 +157,62 @@ per-language expert usage is measured after training, by running each
 checkpoint over the per-language dev sets; the arms do not wait for it.
 Extrapolated cost: ≈ 3,000 GPU-h for sixteen, ~52 h wall per arm.
 
+*Amended 2026-10-09:* at adapter LR 2e-3 both attention adapters diverge.
+The Q-Former does so in all 4 cells, the Conformer in 2 of 4 even with
+warmup; MLP and MoE are stable. The PI chose to test the LR before changing
+the architecture: whisper-conformer, w2vb-conformer, mms1b-conformer and
+mms1b-qformer run at 1e-3 (board 4182f9a, b483fc6). On 2026-10-10 the other
+three Q-Former cells followed (cc44348), so the whole Q-Former column runs at
+1e-3. So the crossing is no
+longer one recipe for all sixteen arms. Report each cell's LR next to its
+result.
+
+*Amended 2026-10-14:* LR 1e-3 left no Q-Former cell stable, so the PI
+(2026-10-12) moved the Q-Former column and mms1b-conformer to **QK-norm at
+2e-3**. All five ran stable end to end. Q-Former scores: whisper 0.177,
+mhubert 0.423, w2vb 0.827, mms1b 0.912, last on every encoder
+(`selection-metric/scores/crossing-2100-qknorm-2026-10-14.txt`).
+**Provisional stack (PI, 2026-10-14): Whisper-large-v3 + MoE** (0.143);
+whisper-conformer (0.136, 1e-3) stays open until the seed-43 replicates of
+both give a noise floor, final call 10-23.
+
+**Revised (PI, 2026-10-02): 2,100 h per language, 10,500 h total, counted
+in absolute hours.** This supersedes the five-epoch decision above. The
+budget is now stated as training hours per language and in total, not as
+epochs. The PI cut it to the old "three epochs" (3 × 700 h). Yodas v3 is
+added as a new Shar source for the five languages, so every language,
+Italian included, has at least 2,100 distinct hours, and nothing is
+resampled. This should be checked once the Yodas v3 hours are known. The
+crossing waits for Yodas v3 to be prepared and for the campaign config to
+gain the source and its sampling weights.
+
+**How the hours are realised (2026-10-08, board d2a4bac/b17af08/df48665).**
+Two corrections to the "weights plus a derived step count" mechanism:
+
+- **The mux weights are per-cut probabilities.** lhotse's multiplexer picks
+  a source by weight and then takes one cut from it, so a source's share of
+  hours is weight × mean cut duration. With hour-share weights, English got
+  ~12% of the audio instead of 20%, because its top-up (yodas-granary
+  English) averages ~9 s per cut against ~23 s for yodas3. The 700 h
+  config is skewed the same way inside each language: MLS is predicted at
+  52-59% of hours instead of 35%. #151 makes the default weight hours ÷ mean
+  cut duration (`compute_mix_weights.py --weights cuts`). On the re-rendered
+  config, every language gets 19.6-20.7% of the audio. **The 700 h screens
+  were not re-run and carry the within-language skew**; comparisons between
+  them still hold, since every arm used the same mix.
+- **A step carries ~80% of its nominal audio** (234-240 s per 300 s step).
+  So the crossing rows state their steps explicitly: 1.25 × the estimate,
+  i.e. 157,500 steps on 4 ranks, 78,750 on 8, and 39,375 on 16. That trains
+  ~10,490 h, ~2,100 h per language (PI, 2026-10-08).
+
+Cost at the corrected mix's 0.88 s/step: ~2,800 GPU-h for the sixteen arms,
+12-43 h wall per arm. Walltimes are set at projection + 30%.
+
 ## 2. The crossing
 
 Four encoders × four adapters = 16 MA arms on the provisional backbone
 (Llama-3.2-1B-Instruct) with the recipe from `01-interface-recipe.md`, five
-languages at 700 h, ASR-only, five epochs (§1b). ≈ 150 GPU-h each, all in the queue
+languages at 2,100 h each, ASR-only, explicit step counts (§1b). ≈ 2,800 GPU-h for sixteen, all in the queue
 at once in **week 3**. Scored on MA-stage generative WER/CER in-domain and
 FLEURS-24 zero-shot CER from melt-eval.
 
@@ -163,6 +228,35 @@ Then IFT for the top three or four stacks (week 4), and one confirmation of
 the winning stack on the winning backbone (week 6). The encoder × backbone
 interaction is assumed small and is stated as an assumption.
 
+## 2b. Whisper size ladder (PI, 2026-10-01)
+
+**Dropped (PI, 2026-10-15):** not essential now; time and compute go to
+the backbone and regime studies. Design kept below for reference.
+
+Whisper-large-v3 is the leading encoder, and it encodes a full 30 s window
+(1,500 positions) per utterance whatever the length. A rough count puts
+its encoder forward pass at about 1.9 TFLOP per utterance, against about
+1 TFLOP for the Llama-1B forward and backward, so the encoder may dominate
+the step. This is an estimate; the arms' step times will measure it.
+Smaller Whisper encoders could save most of that, and the question is how
+much multilingual quality they give up, since the small models are much
+weaker outside English.
+
+| encoder | encoder params | width × layers |
+|---|---|---|
+| whisper-tiny | ~8M | 384 × 4 |
+| whisper-base | ~20M | 512 × 6 |
+| whisper-small | ~88M | 768 × 12 |
+| whisper-medium | ~307M | 1024 × 24 |
+| whisper-large-v3 (crossing) | ~635M | 1280 × 32 |
+
+Four MA arms: tiny, base, small and medium, each with **the adapter that wins
+the crossing**, on the crossing recipe (§1b), one seed. Large-v3 is the
+crossing's own cell. Scored with the selection metric; GPU-h per step taken
+from SLURM accounting. Runs **after the backbone MA arms** (week 5).
+`large-v3-turbo` is not included: it prunes only the decoder, which this
+pipeline does not use. The result is one curve on the §4 figure.
+
 ## 3. Confounds, and how each is handled
 
 | confound | handling |
@@ -174,6 +268,8 @@ interaction is assumed small and is stated as an assumption.
 | waveform vs feature input, and encoder compute | goes into the cost axis, not hidden |
 | Whisper's fixed 30 s input window | every utterance costs a full window of encoder compute whatever its duration (`encoder_specs.py` `window_frames: 3000`; `processing_melt.py::_extract_windowed` pads the tail waveform). The *decoder* side is unaffected — the mask keeps only real frames, so positions per audio second stay 50 Hz as for w2v-BERT. Measure the padding ratio (`30 s / mean utterance duration`) per corpus and put it in the cost axis; it is larger on Common Voice and FLEURS than on LibriSpeech, and duration-sorted batching does not recover it because the window is per utterance |
 | MoE aux-loss weight and router LR | the MoE's router barely moves at 2e-5; the crossing runs it at the recipe LR, and its aux loss is logged |
+| a frozen encoder still trains in `train()` mode: layerdrop, dropout, SpecAugment fire on every step regardless of freeze | measured (`frozen_encoder_train_mode.py`, board 2026-09-26): train-vs-eval relative L2 error 0.00 (Whisper, no layerdrop/dropout) to 0.36 (w2v-BERT) to 0.76 (MMS-1b). `EVAL_WHEN_FROZEN` (`plan_arm.py`) fixes it opt-in. **A/B measured 2026-09-28** on w2v-BERT at the `lr2e3-b300` corner (control complete at score 0.7149, `01` §3; treatment job 46703807): the flag is **not** a clean win. ID CER *improves* 0.6115 → 0.5599 (Δ −0.0516), but OOD-train (FLEURS on the training languages, weighted 1.5×) *worsens* 0.6698 → 0.7947 (Δ +0.1249), netting an overall score regression 0.7149 → 0.7587 (Δ +0.0438) -- worse, and outside the ~0.035 seed-noise floor measured at the neighbouring corner (approximate, not this exact one). Read as domain-dependent, not a uniform improvement: helps in-domain, hurts FLEURS zero-shot on the same languages. Whisper is unaffected either way (structural no-op, zero layerdrop/dropout). **Open for the PI**: whether to set it on the crossing's other three encoders (w2v-BERT, MMS-1b, mHuBERT-147 all share the live layerdrop-0.1 mechanism) given a mixed, not uniformly positive, result -- see board 2026-09-28. |
+| the MoE's router can leave an expert unused in a batch, which DDP's default rejects | reproduced on real GPU (crossing-prep smoke, board 2026-09-27): step 1 crash, torch's "Expected to have finished reduction" `RuntimeError`. `DDP_FIND_UNUSED_PARAMETERS` (`plan_arm.py`) is a per-arm override for the MoE row only, not a change to `config/accelerate/ddp.yaml` -- the other three adapters route every parameter every step and should not pay the traversal overhead |
 
 The running 10-epoch MoE arm at 2e-5 does not count as MoE evidence: it
 changes adapter, training length and prompt at once.
@@ -197,6 +293,61 @@ lever that moves along the x-axis.
 
 ## 5. Results
 
-| encoder | adapter | rate | MA-stage CER (5-lang) | FLEURS-24 CER | GPU-h / 1K h | notes |
-|---|---|---|---|---|---|---|
-| | | | | | | |
+| encoder | adapter | rate | ID CER | OOD-train CER | OOD-related CER | score | GPU-h / 1K h | notes |
+|---|---|---|---|---|---|---|---|---|
+| w2v-BERT 2.0 | MLP | 10 Hz | 0.3912 | 0.4352 | 1.0000 | 0.5303 | 11.0 | LR 2e-3 |
+| w2v-BERT 2.0 | Conformer | 10 Hz | 0.7566 | 1.0000 | 1.0000 | 0.9215 | 15.9 | LR 1e-3; at 2e-3 it diverged |
+| w2v-BERT 2.0 | Conformer, QK-norm | 10 Hz | 0.4221 | 0.6184 | 1.0000 | 0.6289 | 15.3 | QK-norm, LR 2e-3 |
+| w2v-BERT 2.0 | MoE | 10 Hz | 0.3808 | 0.4139 | 1.0000 | 0.5166 | 11.0 | LR 2e-3 |
+| w2v-BERT 2.0 | Q-Former | 10 Hz | 0.6681 | 0.8635 | 1.0000 | 0.8269 | 20.6 | QK-norm, LR 2e-3 |
+| MMS-1b | MLP | 10 Hz | 0.2491 | 0.3348 | 0.9426 | 0.4248 | 9.3 | LR 2e-3 |
+| MMS-1b | Conformer | 10 Hz | 0.1130 | 0.0934 | 0.8893 | 0.2538 | 15.8 | QK-norm, LR 2e-3; without it, 2e-3 and 1e-3 both diverged |
+| MMS-1b | MoE | 10 Hz | 0.3008 | 0.3320 | 0.9339 | 0.4384 | 9.3 | LR 2e-3 |
+| MMS-1b | Q-Former | 10 Hz | 0.7860 | 0.9608 | 1.0000 | 0.9120 | 18.4 | QK-norm, LR 2e-3 |
+| Whisper-large-v3 | MLP | 10 Hz | 0.0651 | 0.0392 | 0.6051 | 0.1571 | 9.3 | LR 2e-3 |
+| Whisper-large-v3 | Conformer | 10 Hz | 0.0605 | 0.0401 | 0.5037 | 0.1364 | 9.7 | LR 1e-3 |
+| Whisper-large-v3 | Conformer, seed 43 | 10 Hz | 0.0631 | 0.0448 | 0.5714 | 0.1526 | 13.5 | LR 1e-3; second run of the row above, +0.016 on it |
+| Whisper-large-v3 | Conformer, QK-norm | 10 Hz | 0.0649 | 0.0445 | 0.5618 | 0.1512 | 12.1 | QK-norm, LR 2e-3 |
+| Whisper-large-v3 | MoE | 10 Hz | 0.0610 | 0.0423 | 0.5309 | 0.1429 | 9.3 | LR 2e-3 |
+| Whisper-large-v3 | MoE, seed 43 | 10 Hz | 0.0623 | 0.0432 | 0.6130 | 0.1596 | 14.0 | LR 2e-3; second run of the row above, +0.017 on it |
+| Whisper-large-v3 | Q-Former | 10 Hz | 0.0778 | 0.0454 | 0.6686 | 0.1765 | 18.4 | QK-norm, LR 2e-3 |
+| mHuBERT-147 | MLP | 10 Hz | 0.1713 | 0.1544 | 0.6697 | 0.2596 | 8.9 | LR 2e-3 |
+| mHuBERT-147 | Conformer | 10 Hz | 0.2294 | 0.2422 | 1.0000 | 0.3847 | 10.8 | LR 2e-3, no QK-norm |
+| mHuBERT-147 | Conformer, QK-norm | 10 Hz | 0.2222 | 0.2288 | 1.0000 | 0.3759 | 13.4 | QK-norm, LR 2e-3 |
+| mHuBERT-147 | MoE | 10 Hz | 0.1598 | 0.1298 | 0.8009 | 0.2694 | 11.4 | LR 2e-3 |
+| mHuBERT-147 | Q-Former | 10 Hz | 0.2952 | 0.2772 | 1.0000 | 0.4229 | 21.6 | QK-norm, LR 2e-3 |
+
+Lower is better. Each row is one MA-stage run on Llama-3.2-1B-Instruct, ASR
+only, at 10 Hz, on 2,100 h per language (10,410-10,440 h of audio per run).
+The three CER columns are the selection metric's group medians
+(`selection-metric/README.md`): corpus CER clipped at 1.0 per language,
+median over en/de/es/fr/it on the held-out sets of the corpora trained on
+(ID, 600 utterances per language), over the same five languages on FLEURS
+dev (OOD-train, 200 per language) and over pt/ro/nl/da/sv on FLEURS dev
+(OOD-related, zero-shot, 200 per language; nl has 171). 1.0000 is the clip.
+The score is (1.0 · ID + 1.5 · OOD-train + 0.6 · OOD-related) / 3.1. These
+columns replace the earlier "MA-stage CER" and "FLEURS-24 CER": the crossing
+was scored on this metric, so there is no FLEURS-24 mean and no
+high/low-resource split. The other 16 FLEURS languages (OOD-latin,
+OOD-script) are reported but not scored; their median is 1.0000 for every
+run except mhubert-mlp's OOD-latin (0.9513).
+
+The cells did not all train at the recipe LR (§1b, amended 2026-10-09 and
+2026-10-14), so each row's note gives its LR and whether QK-norm was on. The
+Q-Former cells and mms1b-conformer ran with QK-norm because they diverged
+without it; the three "Conformer, QK-norm" rows are the whisper, w2v-BERT
+and mHuBERT Conformer cells run again with it. The two "seed 43" rows repeat
+the whisper Conformer and MoE cells with `seed: 43`; they are the only cells
+with a measured seed spread (+0.016 and +0.017). Every other score is one
+seed.
+
+GPU-h / 1K h is SLURM elapsed time × allocated GPUs per 1,000 audio hours,
+as the run happened. It is not an architecture cost: node counts were set
+per cell, MLP and MoE took the same wall time on the three encoders where
+both ran on one node, and one config's wall time differed by up to 1.5×
+between two submissions (`cost-axis/README.md`). The 21 runs cost 2,906
+GPU-h; 11 discarded runs (diverged, cancelled, superseded) cost another 883.
+
+Sources: the five `selection-metric/scores/crossing-2100-*.txt` files
+(per-language CERs and runaway counts; the one of 2026-10-17 ranks all 21
+runs) and `cost-axis/crossing-2100-cost-2026-10-17.tsv`.

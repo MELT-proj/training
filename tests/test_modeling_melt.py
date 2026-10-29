@@ -9,6 +9,7 @@ import torch
 
 from melt.modeling import (
     MELTAudioAdapter,
+    MELTAudioStack,
     MELTConfig,
     MELTConformerAdapter,
     MELTForCausalLM,
@@ -62,6 +63,83 @@ def test_freeze_audio_stack():
 
     # Text decoder should still be trainable
     assert any(p.requires_grad for p in model.text_decoder.parameters())
+
+
+# ============================================================================
+# MELTAudioEncoder.train(): stays in eval mode while frozen, opt-in
+#
+# HF's Trainer calls .train() on the WHOLE model, which recurses down through
+# MELTAudioStack into MELTAudioEncoder via nn.Module's own default .train() -- so these
+# tests call .train() on the STACK (and, once, on the full model), not on the encoder
+# directly, to exercise that same recursive path rather than assume it works.
+# ============================================================================
+
+
+class TestEvalWhenFrozen:
+    def _stack(self, eval_when_frozen=False):
+        config = _local_melt_config(eval_when_frozen=eval_when_frozen)
+        return MELTAudioStack(config, load_pretrained=False)
+
+    def test_default_false_keeps_the_historical_behaviour(self):
+        """A frozen encoder still enters train mode -- the bug this axis exists to fix."""
+        stack = self._stack(eval_when_frozen=False)
+        stack.encoder.freeze()
+
+        stack.train()
+
+        assert stack.encoder.training is True
+
+    def test_true_keeps_a_fully_frozen_encoder_in_eval(self):
+        stack = self._stack(eval_when_frozen=True)
+        stack.encoder.freeze()
+
+        stack.train()
+
+        assert stack.encoder.training is False
+        # nn.Module.train() is recursive; every submodule of the encoder followed too.
+        assert all(not m.training for m in stack.encoder.modules())
+
+    def test_true_does_nothing_to_a_trainable_encoder(self):
+        """The gate is freeze state, not the flag alone -- a trainable encoder must train."""
+        stack = self._stack(eval_when_frozen=True)
+        assert any(p.requires_grad for p in stack.encoder.parameters())  # never frozen
+
+        stack.train()
+
+        assert stack.encoder.training is True
+
+    def test_true_with_a_partially_frozen_encoder_still_trains(self):
+        """A NO gate, not a mixed one (docstring): MELT never constructs this state today,
+        but the check must not accidentally trigger on it if something ever does."""
+        stack = self._stack(eval_when_frozen=True)
+        next(stack.encoder.parameters()).requires_grad = False  # one parameter, not all
+
+        stack.train()
+
+        assert stack.encoder.training is True
+
+    def test_explicit_eval_is_unaffected_either_way(self):
+        for eval_when_frozen in (False, True):
+            for frozen in (False, True):
+                stack = self._stack(eval_when_frozen=eval_when_frozen)
+                if frozen:
+                    stack.encoder.freeze()
+
+                stack.eval()
+
+                assert stack.encoder.training is False
+
+    def test_the_flag_survives_recursion_from_the_full_model_too(self):
+        """The real call site is MELTForCausalLM.train(), not MELTAudioStack.train()."""
+        config = _local_melt_config(eval_when_frozen=True)
+        model = MELTForCausalLM(config, load_backbones=False)
+        model.audio_stack.encoder.freeze()
+
+        model.train()
+
+        assert model.audio_stack.encoder.training is False
+        # Not a global eval() call -- the rest of the model is unaffected.
+        assert model.text_decoder.training is True
 
 
 # ============================================================================
@@ -252,7 +330,7 @@ class TestAdapterOutputFeaturesShape:
         assert output_mask is None
 
     @staticmethod
-    def _real_qformer_adapter(window_size=15, downsample_rate=5, encoder_width=64):
+    def _real_qformer_adapter(window_size=15, downsample_rate=5, encoder_width=64, qk_norm=False):
         """A Q-Former adapter built from real configs, no hub access."""
         from transformers import GPT2Config, Wav2Vec2Config
 
@@ -266,6 +344,7 @@ class TestAdapterOutputFeaturesShape:
                 intermediate_size=64,
                 window_size=window_size,
                 downsample_rate=downsample_rate,
+                qk_norm=qk_norm,
             ),
             audio_encoder_config=Wav2Vec2Config(hidden_size=encoder_width),
             text_decoder_config=GPT2Config(n_embd=48),
@@ -332,6 +411,66 @@ class TestAdapterOutputFeaturesShape:
         )
         assert torch.allclose(batched[:, :3], alone_masked, atol=1e-5)
         assert alone.shape == (1, 3, 48)
+
+    def test_qformer_is_the_plain_adapter_unless_qk_norm_is_asked_for(self):
+        """QK-norm changes the function the adapter computes, so a config that does not say
+        so, as every checkpoint trained before the option, must build the historical adapter."""
+        from transformers.models.blip_2.modeling_blip_2 import Blip2QFormerMultiHeadAttention
+
+        adapter = self._real_qformer_adapter()
+        attentions = [m for m in adapter.qformer.modules() if isinstance(m, Blip2QFormerMultiHeadAttention)]
+
+        assert len(attentions) == 4
+        for attn in attentions:
+            assert type(attn.query) is torch.nn.Linear
+            assert type(attn.key) is torch.nn.Linear
+        assert not any("norm_weight" in name for name in adapter.state_dict())
+
+    def test_qformer_queries_and_keys_are_normalised_per_head_in_every_attention(self):
+        """Self- and cross-attention alike; the values stay plain projections."""
+        from melt.modeling.modeling_melt import _HeadNormLinear
+        from transformers.models.blip_2.modeling_blip_2 import Blip2QFormerMultiHeadAttention
+
+        adapter = self._real_qformer_adapter(qk_norm=True)
+        attentions = [m for m in adapter.qformer.modules() if isinstance(m, Blip2QFormerMultiHeadAttention)]
+
+        assert len(attentions) == 4  # 2 layers, each with self- and cross-attention
+        for attn in attentions:
+            assert isinstance(attn.query, _HeadNormLinear)
+            assert isinstance(attn.key, _HeadNormLinear)
+            assert attn.query.head_size == attn.key.head_size == attn.attention_head_size
+            assert type(attn.value) is torch.nn.Linear
+
+    def test_qformer_attention_logits_do_not_follow_the_query_and_key_weights(self):
+        """Unbounded logits made the gradient norm grow without bound once the learning rate
+        peaked (board 2026-10-09): q and k must be normalised per head, whatever the scale of
+        the projection weights or of the encoder features the keys read."""
+        from transformers.models.blip_2.modeling_blip_2 import Blip2QFormerMultiHeadAttention
+
+        adapter = self._real_qformer_adapter(qk_norm=True)
+        cross = next(
+            m
+            for m in adapter.qformer.modules()
+            if isinstance(m, Blip2QFormerMultiHeadAttention) and m.key.in_features == 64
+        )
+        queries = torch.randn(2, 3, 32)
+        frames = torch.randn(2, 15, 64)
+
+        def q_and_k_rms(frame_scale=1.0):
+            with torch.no_grad():
+                return [
+                    cross.query(queries).pow(2).mean().sqrt(),
+                    cross.key(frames * frame_scale).pow(2).mean().sqrt(),
+                ]
+
+        before = q_and_k_rms()
+        with torch.no_grad():
+            cross.query.weight.mul_(100)
+            cross.key.weight.mul_(100)
+        after = q_and_k_rms(frame_scale=100.0)  # and 100x larger encoder features
+
+        for b, a in zip(before, after):
+            assert a == pytest.approx(b, rel=0.1)
 
     def test_conformer_adapter_downsampling_single_layer(self):
         """Test Conformer adapter downsampling with a single layer."""
@@ -491,7 +630,7 @@ class TestAdapterOutputFeaturesShape:
 # ============================================================================
 
 
-def _local_melt_config(audio_encoder_config=None):
+def _local_melt_config(audio_encoder_config=None, **config_kwargs):
     """A MELTConfig whose sub-configs are built in-process, so no Hub access."""
     from transformers import LlamaConfig, Wav2Vec2BertConfig
 
@@ -508,6 +647,7 @@ def _local_melt_config(audio_encoder_config=None):
             num_hidden_layers=1, num_attention_heads=2, num_key_value_heads=2,
         ),
         adapter_config={"_type": "mlp"},
+        **config_kwargs,
     )
 
 
@@ -631,6 +771,190 @@ class TestAttnImplementationPropagation:
         model = MELTForCausalLM(config, load_backbones=False)
 
         assert model.text_decoder.config._attn_implementation == "eager"
+
+
+# ============================================================================
+# Conformer adapter: the layers follow the adapter's own stride and kernel,
+# for any encoder (audio-stack crossing, 10 Hz via stride 5 / kernel 5)
+#
+# The adapter's length bookkeeping reads adapter_config, but the HF layer it wraps
+# reads whatever config it is handed. Handed the encoder's, the two disagreed (w2v-BERT
+# at stride 5 emitted 25 Hz while the bookkeeping said 10), and only w2v-BERT's config
+# has the attributes the layer needs at all. These use the real layer, unlike the
+# mocked shape tests above, because a mock cannot see either failure.
+# ============================================================================
+
+
+def _tiny_encoder_config(family: str, width: int = 64):
+    """A small in-memory encoder config of one family, so no Hub access."""
+    from transformers import HubertConfig, Wav2Vec2BertConfig, Wav2Vec2Config, WhisperConfig
+
+    if family == "w2v-bert":
+        return Wav2Vec2BertConfig(
+            hidden_size=width, output_hidden_size=width, num_hidden_layers=1,
+            num_attention_heads=2, intermediate_size=2 * width,
+            feature_projection_input_dim=16,
+        )
+    if family == "whisper":
+        return WhisperConfig(
+            d_model=width, encoder_layers=1, decoder_layers=1, encoder_attention_heads=2,
+            decoder_attention_heads=2, encoder_ffn_dim=2 * width, decoder_ffn_dim=2 * width,
+            vocab_size=64, num_mel_bins=16,
+        )
+    if family == "wav2vec2":
+        return Wav2Vec2Config(
+            hidden_size=width, num_hidden_layers=1, num_attention_heads=2,
+            intermediate_size=2 * width,
+        )
+    if family == "hubert":
+        return HubertConfig(
+            hidden_size=width, num_hidden_layers=1, num_attention_heads=2,
+            intermediate_size=2 * width,
+        )
+    raise ValueError(family)
+
+
+def _conformer_adapter(encoder_config, **adapter_kwargs):
+    config = _local_melt_config(audio_encoder_config=encoder_config)
+    config.adapter_config._type = "conformer"
+    for key, value in adapter_kwargs.items():
+        setattr(config.adapter_config, key, value)
+    return MELTConformerAdapter(config)
+
+
+def _run(adapter, seq_len=100, width=64):
+    """(frames emitted, frames the adapter predicts) for a batch with one padded row."""
+    x = torch.randn(2, seq_len, width)
+    mask = torch.ones(2, seq_len, dtype=torch.long)
+    mask[1, seq_len // 2:] = 0
+    with torch.no_grad():
+        out = adapter.eval()(x, attention_mask=mask)
+    predicted, _ = adapter._get_output_features_shape(tuple(x.shape), mask)
+    return out.shape[1], predicted[1]
+
+
+class TestConformerAdapterLayers:
+    def test_the_convs_follow_the_adapters_stride_and_kernel_not_the_encoders(self):
+        encoder = _tiny_encoder_config("w2v-bert")
+        assert (encoder.adapter_stride, encoder.adapter_kernel_size) == (2, 3)
+
+        adapter = _conformer_adapter(encoder, adapter_stride=5, adapter_kernel_size=5)
+
+        conv = adapter.layers[0].residual_conv
+        assert (conv.stride, conv.kernel_size) == ((5,), (5,))
+        emitted, predicted = _run(adapter)
+        assert emitted == predicted == 20, "100 frames at stride 5: 10 Hz from a 50 Hz encoder"
+
+    def test_the_encoders_own_config_is_left_alone(self):
+        """Its adapter_* keys are its own checkpoint's; this adapter must not rewrite them."""
+        encoder = _tiny_encoder_config("w2v-bert")
+
+        _conformer_adapter(encoder, adapter_stride=5, adapter_kernel_size=5)
+
+        assert (encoder.adapter_stride, encoder.adapter_kernel_size) == (2, 3)
+
+    @pytest.mark.parametrize("family", ["w2v-bert", "whisper", "wav2vec2", "hubert"])
+    def test_it_builds_and_runs_on_every_encoder_family(self, family):
+        """Only w2v-BERT's config carries `conformer_conv_dropout` and friends."""
+        adapter = _conformer_adapter(
+            _tiny_encoder_config(family), adapter_stride=5, adapter_kernel_size=5
+        )
+
+        emitted, predicted = _run(adapter)
+
+        assert emitted == predicted == 20
+
+    def test_the_layers_take_the_encoders_width(self):
+        for width in (48, 96):
+            adapter = _conformer_adapter(_tiny_encoder_config("whisper", width))
+            assert adapter.layers[0].residual_layer_norm.normalized_shape == (width,)
+
+    def test_the_default_layer_is_the_one_w2vbert_always_had(self):
+        """A default Wav2Vec2BertConfig is w2v-BERT 2.0's own (1024 wide, 16 heads, 4096
+        feed-forward, ReLU, 1e-5), so building from the width alone must reproduce it."""
+        from transformers import Wav2Vec2BertConfig
+        from transformers.models.wav2vec2_bert.modeling_wav2vec2_bert import Wav2Vec2BertAdapterLayer
+
+        encoder = Wav2Vec2BertConfig()
+        config = _local_melt_config(audio_encoder_config=encoder)
+        config.adapter_config._type = "conformer"
+
+        ours = MELTConformerAdapter(config).layers[0]
+        original = Wav2Vec2BertAdapterLayer(encoder)
+
+        assert {k: tuple(v.shape) for k, v in ours.state_dict().items()} == {
+            k: tuple(v.shape) for k, v in original.state_dict().items()
+        }
+
+    def test_the_layers_are_the_plain_ones_unless_qk_norm_is_asked_for(self):
+        """QK-norm changes the function the adapter computes, so a config that does not say
+        so, as every checkpoint trained before the option, must build the historical layer."""
+        adapter = _conformer_adapter(_tiny_encoder_config("whisper", 64))
+        attn = adapter.layers[0].self_attn
+
+        assert type(attn.linear_q) is torch.nn.Linear
+        assert type(attn.linear_k) is torch.nn.Linear
+        assert not any("norm_weight" in name for name in adapter.state_dict())
+
+    def test_qk_norm_normalises_queries_and_keys_and_leaves_the_values_plain(self):
+        from melt.modeling.modeling_melt import _HeadNormLinear
+
+        adapter = _conformer_adapter(_tiny_encoder_config("whisper", 64), qk_norm=True)
+        attn = adapter.layers[0].self_attn
+
+        assert isinstance(attn.linear_q, _HeadNormLinear)
+        assert isinstance(attn.linear_k, _HeadNormLinear)
+        assert attn.linear_q.head_size == attn.linear_k.head_size == attn.head_size
+        assert type(attn.linear_v) is torch.nn.Linear
+
+    def test_the_attention_logits_do_not_follow_the_query_and_key_weights(self):
+        """Unbounded logits saturate the softmax under full-LR Adam and overflow the backward
+        in bf16 (board 2026-09-29): q and k must be normalised per head."""
+        adapter = _conformer_adapter(_tiny_encoder_config("whisper", 64), qk_norm=True).eval()
+        attn = adapter.layers[0].self_attn
+        x = torch.randn(2, 20, 64)
+
+        def q_and_k_rms():
+            with torch.no_grad():
+                return [getattr(attn, n)(x).pow(2).mean().sqrt() for n in ("linear_q", "linear_k")]
+
+        before = q_and_k_rms()
+        with torch.no_grad():
+            attn.linear_q.weight.mul_(100)
+            attn.linear_k.weight.mul_(100)
+        after = q_and_k_rms()
+
+        for b, a in zip(before, after):
+            assert a == pytest.approx(b, rel=0.1)
+
+    def test_the_layers_attention_is_sdpa_whatever_the_encoder_runs(self):
+        """Wav2Vec2BertSelfAttention has no flash path."""
+        encoder = _tiny_encoder_config("wav2vec2")
+        encoder._attn_implementation = "eager"
+
+        adapter = _conformer_adapter(encoder)
+
+        assert adapter.layers[0].config._attn_implementation == "sdpa"
+
+    @pytest.mark.parametrize("kernel, stride", [(3, 5), (5, 3), (2, 5)])
+    def test_a_kernel_and_stride_that_pad_differently_are_refused(self, kernel, stride):
+        """The layer pads by stride // 2, the length bookkeeping by kernel // 2. Where
+        those differ the adapter reports one length and emits another."""
+        with pytest.raises(ValueError, match="pad differently"):
+            _conformer_adapter(
+                _tiny_encoder_config("w2v-bert"), adapter_stride=stride, adapter_kernel_size=kernel
+            )
+
+    @pytest.mark.parametrize("stride", [1, 2, 4, 5, 10])
+    def test_a_kernel_equal_to_the_stride_always_agrees_with_the_layer(self, stride):
+        """The route the crossing takes: predicted length matches the emitted one."""
+        adapter = _conformer_adapter(
+            _tiny_encoder_config("w2v-bert"), adapter_stride=stride, adapter_kernel_size=stride
+        )
+
+        emitted, predicted = _run(adapter, seq_len=100)
+
+        assert emitted == predicted
 
 
 # ============================================================================

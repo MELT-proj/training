@@ -27,6 +27,12 @@ model:
     name: facebook/w2v-bert-2.0
     freeze: true
     max_audio_seq_len: 1500 # for frames of 20ms, this is 30s
+    # Pinned off for every encoder. facebook/mms-1b and mHuBERT-147 ship it on, w2v-BERT
+    # and Whisper ship it off, and a frozen encoder still time-masks in train mode, so an
+    # unpinned config would give two of the crossing's four encoders an augmentation the
+    # other two do not have (plan/03-audio-stack.md §3). A no-op for w2v-BERT and Whisper.
+    # plan_arm.py refuses to render an MMS or mHuBERT arm against a config without it.
+    apply_spec_augment: false
 
   decoder:
     name: meta-llama/Llama-3.2-1B-Instruct

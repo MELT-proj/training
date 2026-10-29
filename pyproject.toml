@@ -46,6 +46,14 @@ dev = [
     "pytest",
     "black",
     "isort",
+    # tests/test_self_distill.py exercises the distill objective.
+    "trl==0.29.1",
+]
+distill = [
+    # melt.training.train_self_distill scores with TRL's GKD divergence. Pinned
+    # to the 0.29 line because every TRL 1.x requires datasets>=4.7, newer than
+    # the training image's; 0.29.1 needs nothing the image does not already have.
+    "trl==0.29.1",
 ]
 flash-attn = [
     "flash-attn",

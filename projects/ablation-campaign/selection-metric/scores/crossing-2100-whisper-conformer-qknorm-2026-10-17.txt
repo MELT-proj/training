@@ -1,0 +1,51 @@
+# Selection metric on the 2,100 h audio-stack crossing: whisper-conformer-qkn, the last of the five runs queued on 10-14 and 10-15 (qk_norm on, adapter LR 2e-3, seed 42, 1 node, 157,500 steps).
+# Scored 2026-10-17 from melt-eval JSON logs of the run's final checkpoint (selection-metric/submit_crossing_eval.sh), with the eval code of
+# crossing-2100-replicates-conformer-qknorm-2026-10-16.txt (training 715b426 on PYTHONPATH inside the v3 eval image). Lower is better. The
+# ranking at the end covers 21 runs. The same cell without QK-norm ran at adapter LR 1e-3 (whisper-conformer, seed 42, and whisper-conformer-s43, seed 43).
+
+== ma2100-whisper-conformer-qkn
+  ID           median 0.0649   en=0.053 de=0.065 es=0.042 fr=0.066 it=0.080
+  OOD-train    median 0.0445   en=0.048 de=0.045 es=0.028 fr=0.051 it=0.033
+  OOD-related  median 0.5618   pt=0.226 ro=0.548 nl=0.562 da=0.606 sv=0.750
+  OOD-latin    median 1.0000   cs=1.000* sk=1.000* pl=1.000* hr=0.952 sl=0.956 hu=1.000* fi=1.000* et=0.834 lt=1.000* lv=1.000* ga=1.000* mt=0.778
+  OOD-script   median 1.0000   bg=1.000* el=1.000* ru=1.000* uk=1.000*
+  score 0.1512   (* = clipped at 1)
+  runaway generations (per-sample CER > 1, report only, not in the score):
+    ID      10/3000   de=1/600 (0% of errors, CER without 0.065)  en=2/600 (4% of errors, CER without 0.051)  es=2/600 (3% of errors, CER without 0.040)  fr=3/600 (2% of errors, CER without 0.065)  it=2/600 (3% of errors, CER without 0.078)
+    FLEURS  667/5171   bg=58/200 (46% of errors, CER without 0.919)  cs=41/200 (62% of errors, CER without 0.673)  da=4/200 (15% of errors, CER without 0.527)  el=40/200 (43% of errors, CER without 0.907)  et=25/200 (50% of errors, CER without 0.488)  fi=51/200 (71% of errors, CER without 0.584)  ga=41/200 (62% of errors, CER without 0.675)  hr=21/200 (44% of errors, CER without 0.623)  hu=61/200 (71% of errors, CER without 0.658)  lt=30/200 (55% of errors, CER without 0.570)  lv=38/200 (60% of errors, CER without 0.595)  mt=17/200 (36% of errors, CER without 0.557)  nl=8/171 (31% of errors, CER without 0.413)  pl=19/200 (36% of errors, CER without 0.714)  ro=5/200 (16% of errors, CER without 0.475)  ru=76/200 (66% of errors, CER without 0.931)  sk=31/200 (57% of errors, CER without 0.609)  sl=20/200 (40% of errors, CER without 0.648)  sv=12/200 (36% of errors, CER without 0.519)  uk=69/200 (62% of errors, CER without 0.923)
+
+checkpoint                        ID  OOD-train  OOD-related  OOD-latin  OOD-script   score  runaway-ID  runaway-FLEURS
+ma2100-whisper-conformer-qkn  0.0649     0.0445       0.5618     1.0000      1.0000  0.1512     10/3000        667/5171
+
+score = (1*ID + 1.5*OOD-train + 0.6*OOD-related) / 3.1; lower is better
+runaway-* = samples with per-sample CER > 1 (report only, not in the score)
+
+
+# Ranking of the 21 scored runs, by score: the 16 cells of the earlier files (their rows are unchanged), the four runs of
+# crossing-2100-replicates-conformer-qknorm-2026-10-16.txt and whisper-conformer-qkn. The two seed-43 rows are second runs of
+# whisper-conformer and whisper-moe, not new cells; every other row is one seed.
+checkpoint                        ID  OOD-train  OOD-related  OOD-latin  OOD-script   score  runaway-ID  runaway-FLEURS
+ma2100-whisper-conformer      0.0605     0.0401       0.5037     1.0000      1.0000  0.1364      5/3000        661/5171
+ma2100-whisper-moe            0.0610     0.0423       0.5309     1.0000      1.0000  0.1429     12/3000        895/5171
+ma2100-whisper-conformer-qkn  0.0649     0.0445       0.5618     1.0000      1.0000  0.1512     10/3000        667/5171
+ma2100-whisper-conformer-s43  0.0631     0.0448       0.5714     1.0000      1.0000  0.1526      9/3000        679/5171
+ma2100-whisper-mlp            0.0651     0.0392       0.6051     1.0000      1.0000  0.1571     10/3000        713/5171
+ma2100-whisper-moe-s43        0.0623     0.0432       0.6130     1.0000      1.0000  0.1596      9/3000        996/5171
+ma2100-whisper-qformer        0.0778     0.0454       0.6686     1.0000      1.0000  0.1765     16/3000        731/5171
+ma2100-mms1b-conformer        0.1130     0.0934       0.8893     1.0000      1.0000  0.2538     18/3000        949/5171
+ma2100-mhubert-mlp            0.1713     0.1544       0.6697     0.9513      1.0000  0.2596     24/3000        583/5171
+ma2100-mhubert-moe            0.1598     0.1298       0.8009     1.0000      1.0000  0.2694     19/3000        726/5171
+ma2100-mhubert-conformer-qkn  0.2222     0.2288       1.0000     1.0000      1.0000  0.3759     39/3000       1232/5171
+ma2100-mhubert-conformer      0.2294     0.2422       1.0000     1.0000      1.0000  0.3847     30/3000       1269/5171
+ma2100-mhubert-qformer        0.2952     0.2772       1.0000     1.0000      1.0000  0.4229     60/3000       1216/5171
+ma2100-mms1b-mlp              0.2491     0.3348       0.9426     1.0000      1.0000  0.4248     38/3000        816/5171
+ma2100-mms1b-moe              0.3008     0.3320       0.9339     1.0000      1.0000  0.4384     51/3000        937/5171
+ma2100-w2vb-moe               0.3808     0.4139       1.0000     1.0000      1.0000  0.5166     81/3000       1196/5171
+ma2100-w2vb-mlp               0.3912     0.4352       1.0000     1.0000      1.0000  0.5303     81/3000       1183/5171
+ma2100-w2vb-conformer-qkn     0.4221     0.6184       1.0000     1.0000      1.0000  0.6289     55/3000       1054/5171
+ma2100-w2vb-qformer           0.6681     0.8635       1.0000     1.0000      1.0000  0.8269    131/3000       1034/5171
+ma2100-mms1b-qformer          0.7860     0.9608       1.0000     1.0000      1.0000  0.9120     77/3000        856/5171
+ma2100-w2vb-conformer         0.7566     1.0000       1.0000     1.0000      1.0000  0.9215    112/3000       1359/5171
+
+score = (1*ID + 1.5*OOD-train + 0.6*OOD-related) / 3.1; lower is better
+runaway-* = samples with per-sample CER > 1 (report only, not in the score)

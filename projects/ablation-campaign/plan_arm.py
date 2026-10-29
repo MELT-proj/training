@@ -63,7 +63,7 @@ import os
 import re
 import shlex
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import yaml
 
@@ -145,6 +145,17 @@ DECODER_PROFILES = {
         "pad_token": "</s>",
         "chat_template_config": "chatml",
     },
+    # The 2512 refresh of the 1.7B Instruct (a private repo, utter-project, rev e8faa77e), read from its
+    # downloaded config.json / tokenizer_config.json / chat_template.jinja (2026-10-14): the same Llama
+    # architecture and 128,000-token vocabulary as the entry above, the same special tokens (<|im_end|> id 4
+    # is the stop token, </s> id 2 the pad), a plain ChatML template with no default system turn. It
+    # differs in rope_theta 1e6 (was 1e4), a 32,768-token context, and a generation_config whose
+    # eos_token_id is [4, 2].
+    "utter-project/EuroLLM-1.7B-Instruct-2512": {
+        "eos_token": "<|im_end|>",
+        "pad_token": "</s>",
+        "chat_template_config": "chatml",
+    },
     # The Base half of the pair does NOT share Instruct's vocabulary --
     # verified (2026-09-18): base's tokenizer.json has only 3 added tokens
     # (<unk>, <s>, </s>), no "<|im_start|>"/"<|im_end|>" at all, unlike the
@@ -164,7 +175,14 @@ DECODER_PROFILES = {
 # Short tags for EXP_NAME. Unknown names fall back to a sanitised slug (see
 # _slug) rather than failing -- a new model should get *a* short tag, not
 # block the launcher.
-ENCODER_TAGS = {"facebook/w2v-bert-2.0": "w2vb"}
+ENCODER_TAGS = {
+    "facebook/w2v-bert-2.0": "w2vb",
+    # Whisper's tag is what _slug() already makes of its hub name. Pinned here so it
+    # cannot drift under arms that have run (MA-librispeech-w, the screen's Whisper rows).
+    "openai/whisper-large-v3": "whisperlarge",
+    "facebook/mms-1b": "mms1b",
+    "utter-project/mHuBERT-147": "mhubert147",
+}
 DECODER_TAGS = {
     "meta-llama/Llama-3.2-1B-Instruct": "llama1bIns",
     "meta-llama/Llama-3.2-1B": "llama1bBase",
@@ -251,7 +269,7 @@ TEMPLATE_SELECTION_TAGS = {"with_language": "lid", "without_language": "nolid"}
 LR_SCHEDULERS = ("cosine", "linear", "constant_with_warmup", "warmup_stable_decay")
 LR_SCHEDULER_TAGS = {"warmup_stable_decay": "wsd"}
 WSD_DECAY_FRACTION = 0.2   # decay over the last 20% of steps
-WSD_MIN_LR_RATIO = 0.1     # decay to 0.1x peak, not to zero
+# The floor (0.1x peak) is optimization.min_lr_scale, applied in melt/training/config.py.
 WSD_DECAY_TYPE = "cosine"
 
 # Encoders that demand an exact input length, and the frame count they demand.
@@ -273,6 +291,77 @@ ENCODER_WINDOW_FRAMES: dict[str, int] = {
     "openai/whisper-medium": 3000,
     "openai/whisper-small": 3000,
 }
+
+# Raw-waveform encoders (the wav2vec2 family). For these `model.encoder.max_audio_seq_len`
+# counts SAMPLES, not frames (melt/modeling/encoder_specs.py): the ABL-*.yaml value of
+# 1500 is 30 s of w2v-BERT's 20 ms frames and would slice every cut into ~94 ms pieces.
+# MELTAudioEncoder refuses that at startup -- after the queue wait, which is how Whisper's
+# window cost a job once already -- so it is derived here too, not passed by hand.
+#
+# The derived window is the SAME 30 s the base config gives w2v-BERT and Whisper already
+# pins, so all four encoders of the crossing see one attention span. (The hand-written
+# MMS/mHuBERT probes used 60 s, i.e. never chunk; that would make these two the only
+# encoders to see a cut longer than 30 s in one piece, and the mixture has them: six of
+# the base config's thirty duration buckets start at 28.9 s or above.) One config frame
+# is 20 ms, which in this family is 320 samples at 16 kHz: the product of its conv
+# strides and the multiple MELTAudioEncoder demands, so the result is valid by
+# construction.
+WAVEFORM_ENCODERS = frozenset({"facebook/mms-1b", "utter-project/mHuBERT-147"})
+WAVEFORM_SAMPLES_PER_FRAME = 320
+
+# Encoders whose checkpoint ships `apply_spec_augment: true` (read from each
+# config.json, 2026-09-26). The wav2vec2 family masks time steps whenever the encoder
+# is in train mode, and a frozen encoder still is: HF's Trainer calls model.train() and
+# nothing here switches the encoder to eval. w2v-BERT and Whisper ship it false, so the
+# crossing pins it off in the base YAML (03-audio-stack.md §3); this table is what lets
+# plan() refuse a base config that forgot to.
+ENCODERS_SHIPPING_SPEC_AUGMENT = frozenset({"facebook/mms-1b", "utter-project/mHuBERT-147"})
+
+# Encoder attention backend, where the choice moves throughput. facebook/mms-1b steps
+# 1.54x slower under sdpa than under flash_attention_2 (infrastructure.md §4). Whisper
+# (`_supports_flash_attn = True` in the installed transformers, verified directly) was
+# left on sdpa with no measurement behind it -- corrected 2026-09-27, PI. Its encoder is
+# flash-friendly by construction: WhisperEncoder.forward's own docstring says it "does
+# not support masking of the input_features", and its body never references the
+# attention_mask parameter at all (passes None to every layer regardless of what MELT
+# hands it) -- full dense attention over exactly 1500 positions every time, the case
+# flash_attention_2 speeds up with no masking complication. w2v-BERT has no flash path at
+# all (relative-position bias inside self-attention), and mHuBERT-147 (95M) is not
+# expensive enough to matter, so those two keep the config's own sdpa. Same family as
+# ENCODER_WINDOW_FRAMES, for the same reason: flash support is architectural
+# (WhisperPreTrainedModel), not per-checkpoint.
+ENCODER_ATTN_IMPLEMENTATION: dict[str, str] = {
+    "facebook/mms-1b": "flash_attention_2",
+    "openai/whisper-large-v3": "flash_attention_2",
+    "openai/whisper-large-v3-turbo": "flash_attention_2",
+    "openai/whisper-medium": "flash_attention_2",
+    "openai/whisper-small": "flash_attention_2",
+}
+
+# The rate every crossing encoder hands its adapter (03-audio-stack.md §1): w2v-BERT's
+# 20 ms frames, Whisper's 1500 positions per 30 s window, and the wav2vec2 conv
+# frontend's 320-sample stride are all 50 Hz.
+ENCODER_OUTPUT_HZ = 50
+
+# Encoder knobs the base configs may leave to melt/training/config.py's DEFAULT_CONFIG.
+DEFAULT_ENCODER_ATTN = "sdpa"
+DEFAULT_MAX_AUDIO_SEQ_LEN = 1500
+
+# Adapter knobs the base configs leave to melt/training/config.py's DEFAULT_CONFIG,
+# restated for the same reason as DEFAULT_STACK_FACTOR below.
+DEFAULT_CONFORMER_STRIDE = 2
+DEFAULT_CONFORMER_KERNEL = 3
+DEFAULT_ADAPTER_LAYERS = 1
+DEFAULT_QFORMER_WINDOW = 15
+DEFAULT_QFORMER_DOWNSAMPLE = 5
+
+# Adapters whose output rate comes from `stack_factor`, and the ones that never read it.
+STACKING_ADAPTERS = ("mlp", "moe")
+STACK_FACTOR_IGNORING_ADAPTERS = ("conformer", "qformer")
+
+# Adapters with an attention whose query and key projections `qk_norm` can normalise;
+# the MLP and the MoE have none.
+QK_NORM_ADAPTERS = ("conformer", "qformer")
 
 
 def _slug(name: str, maxlen: int) -> str:
@@ -348,6 +437,103 @@ def effective_duration_inflation(train_ds: dict) -> float:
     return 1.0 + mean_weighted_duration / q
 
 
+@dataclass
+class FrameRateRoute:
+    """How one arm's adapter reaches its declared rate (see ArmAxes.frame_rate_hz)."""
+
+    # The stack_factor to feed the existing stack_factor path, "" when none is derived.
+    stack_factor: str = ""
+    # Extra CLI overrides (the Conformer's stride and kernel) and the EXP_NAME tags that
+    # record the route and the rate. Empty when no rate is declared.
+    overrides: list[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
+
+
+def derive_frame_rate_route(
+    frame_rate_hz: str, adapter: str, stack_factor: str, cfg: dict
+) -> FrameRateRoute:
+    """Derive an adapter's route to a declared decoder frame rate, or refuse.
+
+    Also the one place that refuses a ``stack_factor`` on an adapter that never reads it,
+    whether or not a rate is declared: the tag it earns would state a frame rate that arm
+    does not have.
+    """
+    if stack_factor and int(stack_factor) != 1 and adapter in STACK_FACTOR_IGNORING_ADAPTERS:
+        die(
+            f"STACK_FACTOR={stack_factor} on the {adapter!r} adapter, which never reads it "
+            "(melt/modeling/modeling_melt.py): the arm would be tagged with a frame rate "
+            "it does not have. Declare FRAME_RATE_HZ instead, and the route is derived."
+        )
+    if not frame_rate_hz:
+        return FrameRateRoute()
+
+    try:
+        rate = float(frame_rate_hz)
+    except ValueError:
+        die(f"FRAME_RATE_HZ={frame_rate_hz!r} is not a number.")
+    if rate <= 0:
+        die(f"FRAME_RATE_HZ={frame_rate_hz!r} must be positive.")
+    rate_tag = "hz" + f"{rate:g}".replace(".", "p")
+
+    if adapter == "qformer":
+        # Nothing to derive: the rate is a property of the window, and the adapter reads
+        # both numbers straight from model.adapter (MELTQFormerAdapter).
+        window = int(get(cfg, "model.adapter.window_size", DEFAULT_QFORMER_WINDOW))
+        downsample = int(get(cfg, "model.adapter.downsample_rate", DEFAULT_QFORMER_DOWNSAMPLE))
+        queries = window // downsample
+        native = ENCODER_OUTPUT_HZ * queries / window
+        if abs(native - rate) > 1e-9:
+            die(
+                f"FRAME_RATE_HZ={frame_rate_hz} but the Q-Former's own rate is {native:g} Hz "
+                f"({queries} queries per {window}-frame window at {ENCODER_OUTPUT_HZ} Hz). "
+                "Its window and downsample_rate are not axes, so this arm cannot reach the "
+                "rate; change model.adapter.window_size/downsample_rate in the base config."
+            )
+        return FrameRateRoute(tags=[rate_tag])
+
+    factor = ENCODER_OUTPUT_HZ / rate
+    if abs(factor - round(factor)) > 1e-9:
+        die(
+            f"FRAME_RATE_HZ={frame_rate_hz} is not {ENCODER_OUTPUT_HZ} Hz divided by a whole "
+            "number, so no stride or stacking factor reaches it."
+        )
+    factor = round(factor)
+
+    if adapter in STACKING_ADAPTERS:
+        if stack_factor and int(stack_factor) != factor:
+            die(
+                f"STACK_FACTOR={stack_factor} contradicts FRAME_RATE_HZ={frame_rate_hz}, "
+                f"which needs stack_factor {factor}. Drop STACK_FACTOR and it is derived."
+            )
+        return FrameRateRoute(stack_factor=str(factor), tags=[rate_tag])
+
+    if adapter == "conformer":
+        layers = int(get(cfg, "model.adapter.num_adapter_layers", DEFAULT_ADAPTER_LAYERS))
+        if layers != 1:
+            die(
+                f"The Conformer reaches FRAME_RATE_HZ={frame_rate_hz} through ONE strided layer "
+                f"(stride {factor}); the config asks for {layers}, which would multiply the strides."
+            )
+        # Kernel equals stride: the convolution is then stacking plus a linear map, the
+        # route the MLP and MoE take, and its `// 2` padding agrees with the adapter's
+        # length bookkeeping (MELTConformerAdapter refuses a kernel/stride pair whose
+        # paddings differ).
+        cfg_stride = int(get(cfg, "model.adapter.adapter_stride", DEFAULT_CONFORMER_STRIDE))
+        cfg_kernel = int(get(cfg, "model.adapter.adapter_kernel_size", DEFAULT_CONFORMER_KERNEL))
+        overrides: list[str] = []
+        if factor != cfg_stride:
+            overrides += ["--model.adapter.adapter_stride", str(factor)]
+        if factor != cfg_kernel:
+            overrides += ["--model.adapter.adapter_kernel_size", str(factor)]
+        tags = [f"cs{factor}k{factor}"] if overrides else []
+        return FrameRateRoute(overrides=overrides, tags=[*tags, rate_tag])
+
+    die(
+        f"FRAME_RATE_HZ is set but adapter {adapter!r} has no route to a declared rate "
+        f"(known: {', '.join([*STACKING_ADAPTERS, 'conformer', 'qformer'])})."
+    )
+
+
 def derive_steps(
     train_ds: dict, batch_duration: float, gradient_accumulation_steps: int, world_size: int
 ) -> int:
@@ -396,18 +582,49 @@ class ArmAxes:
     world_size: int
     adapter: str = ""
     adapter_freeze: str = ""
-    # stack_factor: how many consecutive encoder frames the MLP adapter
-    # concatenates before fc1 (`melt/modeling/modeling_melt.py`'s
-    # MELTMLPAdapter); a no-op for the other adapter types, which downsample
-    # through their own knobs instead. Same inherit-or-override rule as every
+    # stack_factor: how many consecutive encoder frames the MLP and MoE adapters
+    # concatenate before their first projection (`melt/modeling/modeling_melt.py`'s
+    # MELTMLPAdapter, MELTMoEAdapter). The Conformer and Q-Former never read it, so
+    # plan() refuses it on those rather than tag an arm with a rate it does not have.
+    # Same inherit-or-override rule as every
     # other axis, but tagged into EXP_NAME only when overridden -- like
     # batch_duration/grad_accum_steps below, not like the always-present LR
     # tags -- since every arm composed before this axis existed has no value
     # for it to differ from, and tagging it unconditionally would rename (and
     # orphan the output directory of) all of them.
     stack_factor: str = ""
+    # frame_rate_hz: the decoder-side rate this arm is configured to, in Hz ("" = none
+    # declared, and nothing below applies). Each adapter reaches a rate by a different
+    # route, so a row states the RATE and plan() derives the route, instead of every row
+    # remembering its own adapter's knobs (the campaign rule learned twice, with
+    # Whisper's window and WSD; 03-audio-stack.md §1b fixes the crossing at 10 Hz):
+    #   mlp, moe   stack_factor = ENCODER_OUTPUT_HZ / rate
+    #   conformer  adapter_stride = adapter_kernel_size = ENCODER_OUTPUT_HZ / rate, one
+    #              layer (a strided conv whose kernel equals its stride is stacking plus
+    #              a linear map, the same route the MLP takes)
+    #   qformer    none: its rate is window_size / downsample_rate queries per window,
+    #              so plan() CHECKS it against the declared rate and refuses a mismatch
+    # An explicit stack_factor that disagrees with the derived one is refused. Tagged
+    # into EXP_NAME as `hz<rate>` whenever set, because the Q-Former's rate is not in
+    # any other tag and the name is where the rate has to be recoverable from.
+    frame_rate_hz: str = ""
     encoder: str = ""
     encoder_freeze: str = ""
+    # eval_when_frozen: keep a fully-frozen encoder in eval mode (see
+    # melt/modeling/modeling_melt.py's MELTAudioEncoder.train() for why this matters --
+    # layerdrop, dropout and SpecAugment otherwise fire on a frozen encoder's features on
+    # every training step). "" inherits the config's own value (every ABL-*.yaml today
+    # omits the key, i.e. false, the historical behaviour). Tagged into EXP_NAME by
+    # EFFECTIVE value, like decoder_lora's `-lora` below, not only when overridden: this
+    # is one half of an A/B and the two arms must not collide on one output directory.
+    eval_when_frozen: str = ""
+    # qk_norm: RMS-normalise the query and key projections of the Conformer's and the
+    # Q-Former's attention, per head (model.adapter.qk_norm; MELTAdapterConfig says why).
+    # "" inherits the config's own value (every ABL-*.yaml omits the key, i.e. false, the
+    # historical adapters). It changes the function the adapter computes, so a true value
+    # is tagged into EXP_NAME as `qkn`; nothing is tagged when it is false, which keeps
+    # every existing name as it is. Refused on an adapter without attention.
+    qk_norm: str = ""
     # lr_scheduler: "" inherits the base config's own lr_scheduler_type.
     # Set to one of LR_SCHEDULERS to override it; warmup_stable_decay also
     # gets its lr_scheduler_kwargs composed here from the arm's own derived
@@ -416,10 +633,9 @@ class ArmAxes:
     # step 0b's A0 (cosine) and R (WSD) differ in EXP_NAME only by seed, which
     # is precisely how a schedule silently goes missing.
     lr_scheduler: str = ""
-    # warmup_ratio: "" inherits. When set, warmup_steps is ALSO forced to 0,
-    # because HF's Trainer.get_warmup_steps only consults warmup_ratio when
-    # warmup_steps <= 0 -- and ABL-MA-700-asr.yaml sets warmup_steps: 20, so
-    # a ratio alone would be silently ignored there. A fixed step count is not
+    # warmup_ratio: "" inherits. When set, it is emitted as `warmup_steps <ratio>`
+    # (a float in [0, 1) is a ratio under transformers 5, which removed the
+    # `warmup_ratio` argument). A fixed step count is not
     # comparable across arms that vary the effective batch (the screen's 1200/
     # 600/300 s levels are 10,500/21,000/42,000 steps, so 20 steps of warmup
     # means three different fractions of training); ABL-MA-librispeech.yaml
@@ -469,6 +685,20 @@ class ArmAxes:
     # fsdp_activation_checkpointing instead) -- see melt/modeling/modeling_melt.py's
     # commit enabling supports_gradient_checkpointing for why this exists.
     gradient_checkpointing: str = ""
+    # ddp_find_unused_parameters: independent boolean, same character as
+    # gradient_checkpointing above -- a DDP mechanical concern, not a
+    # scientific one, so it is not tagged into EXP_NAME either. Needed for
+    # the MoE adapter specifically: its top-k router can leave an expert
+    # with zero tokens routed to it in a given micro-batch (small
+    # train_cuts_per_batch make this common, not an edge case), and DDP's
+    # default expects every parameter passed to it to receive a gradient on
+    # every step -- see torch's own "Expected to have finished reduction"
+    # RuntimeError, reproduced on real GPU 2026-09-27 (board.md) at step 1 of
+    # the crossing-prep MoE smoke, both times eval_on_start had already run
+    # clean. The other three adapters route every parameter every step, so
+    # they neither need nor should pay this flag's traversal overhead --
+    # it stays per-arm, never moved into config/accelerate/ddp.yaml itself.
+    ddp_find_unused_parameters: str = ""
     # epochs: independent override of trainer.num_train_epochs, same
     # inherit-or-override rule as every axis above ("" = inherit the base
     # config's own value -- every ABL-*.yaml currently declares 1, the
@@ -507,6 +737,16 @@ class ArmAxes:
     # and keep_checkpoints applies -- the original convention.
     checkpoint_count: int | None = None
     keep_checkpoints: int = 2
+    # max_steps: the run's length in optimizer steps, stated outright instead of
+    # derived from total_hours. derive_steps assumes every batch is full; the
+    # 2,100 h crossing's batches carry ~80% of their nominal audio (smoke, board
+    # 2026-10-08), so its rows state 1.25x the estimate to train the hours they
+    # budget. It replaces the derived steps wherever they are used (eval/save
+    # cadence, the WSD decay window), is emitted as --trainer.max_steps (which the
+    # trainer prefers to its own estimate), and is tagged into EXP_NAME as
+    # `ms<N>` because it changes what the run trains on. Refused together with
+    # `epochs`, which it would silently override.
+    max_steps: int | None = None
     # exp_name: pin the run identity instead of composing it. Only for
     # continuity with an arm already started under a hand-written launcher's
     # name -- a new arm should let it be composed so it can never be
@@ -566,6 +806,15 @@ def plan(args: ArmAxes) -> ArmPlan:
 
     steps_per_epoch = derive_steps(train_ds, batch_duration_effective, grad_accum_effective, args.world_size)
     steps = steps_per_epoch * epochs_effective
+    if args.max_steps is not None:
+        if args.max_steps < 1:
+            die(f"max_steps must be a positive number of optimizer steps (got {args.max_steps})")
+        if args.epochs:
+            die(
+                f"max_steps={args.max_steps} and epochs={args.epochs} both set the run's length; "
+                "set one of them"
+            )
+        steps = args.max_steps
     # ~11 eval rounds over the run by default, per the campaign convention
     # documented in the old launchers' headers (both landed close to 11:
     # 903/100~=9, 2188/200~=11 -- this makes the derivation land on ~11 for
@@ -617,6 +866,8 @@ def plan(args: ArmAxes) -> ArmPlan:
     # default (false) for every ABL-*.yaml config, none of which declare a
     # lora: block of their own.
     cfg_decoder_lora = bool(get(cfg, "model.lora.enabled"))
+    cfg_eval_when_frozen = bool(get(cfg, "model.encoder.eval_when_frozen"))
+    cfg_qk_norm = bool(get(cfg, "model.adapter.qk_norm"))
     cfg_encoder_lr = get(cfg, "optimization.encoder_lr", DEFAULT_ENCODER_LR)
     cfg_decoder_lr = get(cfg, "optimization.decoder_lr", DEFAULT_DECODER_LR)
     cfg_adapter_lr = get(cfg, "optimization.adapter_lr", DEFAULT_ADAPTER_LR)
@@ -634,7 +885,20 @@ def plan(args: ArmAxes) -> ArmPlan:
     encoder_freeze = as_bool(args.encoder_freeze) if args.encoder_freeze else cfg_encoder_freeze
     decoder_freeze = as_bool(args.decoder_freeze) if args.decoder_freeze else cfg_decoder_freeze
     decoder_lora = as_bool(args.decoder_lora) if args.decoder_lora else cfg_decoder_lora
-    stack_factor_effective = int(args.stack_factor) if args.stack_factor else int(cfg_stack_factor)
+    eval_when_frozen = as_bool(args.eval_when_frozen) if args.eval_when_frozen else cfg_eval_when_frozen
+    qk_norm = as_bool(args.qk_norm) if args.qk_norm else cfg_qk_norm
+    if qk_norm and adapter_effective not in QK_NORM_ADAPTERS:
+        die(
+            f"QK_NORM=true on the {adapter_effective!r} adapter, which has no attention to normalise "
+            f"(known: {', '.join(QK_NORM_ADAPTERS)}): the arm would be tagged with an architecture it "
+            "does not have."
+        )
+    # The frame-rate route may derive a stack_factor; from here on `stack_factor_request`
+    # is the one value the stack_factor logic below reads, whether a row typed it or the
+    # rate derived it.
+    route = derive_frame_rate_route(args.frame_rate_hz, adapter_effective, args.stack_factor, cfg)
+    stack_factor_request = route.stack_factor or args.stack_factor
+    stack_factor_effective = int(stack_factor_request) if stack_factor_request else int(cfg_stack_factor)
 
     overrides: list[str] = []
 
@@ -643,12 +907,64 @@ def plan(args: ArmAxes) -> ArmPlan:
     if args.encoder_freeze and encoder_freeze != cfg_encoder_freeze:
         overrides += ["--model.encoder.freeze", str(encoder_freeze).lower()]
 
+    if args.eval_when_frozen and eval_when_frozen != cfg_eval_when_frozen:
+        overrides += ["--model.encoder.eval_when_frozen", str(eval_when_frozen).lower()]
+    if args.qk_norm and qk_norm != cfg_qk_norm:
+        overrides += ["--model.adapter.qk_norm", str(qk_norm).lower()]
+    if eval_when_frozen and not encoder_freeze:
+        print(
+            "WARNING: EVAL_WHEN_FROZEN=true but the encoder is not frozen "
+            f"(ENCODER_FREEZE={'true' if args.encoder_freeze else '<inherited>'}). "
+            "MELTAudioEncoder.train() only forces eval mode when EVERY encoder parameter "
+            "has requires_grad False, so this is a silent no-op with a trainable encoder. "
+            "Pass ENCODER_FREEZE=true if the encoder is meant to be frozen here.",
+            file=sys.stderr,
+        )
+
+    # SpecAugment: the base config has to pin it off for an encoder that ships it on. The
+    # pin is identical across arms, so it lives in the base YAML (agent-protocol.md §3);
+    # this only refuses to render an arm that would otherwise train with time masking.
+    if (
+        encoder_effective in ENCODERS_SHIPPING_SPEC_AUGMENT
+        and get(cfg, "model.encoder.apply_spec_augment") is not False
+    ):
+        die(
+            f"{encoder_effective} ships apply_spec_augment: true, and {args.config} does not "
+            "pin it off, so this arm would train with time masking that w2v-BERT and Whisper "
+            "do not have (03-audio-stack.md §3). Add `apply_spec_augment: false` under "
+            "model.encoder in the base config."
+        )
+
+    # Attention backend where it moves throughput (see ENCODER_ATTN_IMPLEMENTATION).
+    cfg_encoder_attn = get(cfg, "model.encoder.attn_implementation", DEFAULT_ENCODER_ATTN)
+    required_attn = ENCODER_ATTN_IMPLEMENTATION.get(encoder_effective)
+    if required_attn is not None and required_attn != cfg_encoder_attn:
+        overrides += ["--model.encoder.attn_implementation", required_attn]
+
     # max_audio_seq_len: explicit value wins; otherwise derive the window a
     # fixed-window encoder demands. Only emitted when it differs from what the
     # config already declares, so arms that do not move the encoder produce a
     # byte-identical command to the one they produced before this axis existed.
     cfg_max_audio_seq_len = get(cfg, "model.encoder.max_audio_seq_len")
     required_window = ENCODER_WINDOW_FRAMES.get(encoder_effective)
+    window_reason = (
+        f"accepts exactly {required_window} frames and raises on anything else "
+        "(melt/modeling/encoder_specs.py)"
+    )
+    if required_window is None and encoder_effective in WAVEFORM_ENCODERS:
+        # A raw-waveform encoder counts SAMPLES. The config's own encoder is normally
+        # w2v-BERT, whose value is 20 ms frames; if it is itself a waveform encoder the
+        # value is already samples.
+        base_window = int(cfg_max_audio_seq_len or DEFAULT_MAX_AUDIO_SEQ_LEN)
+        required_window = (
+            base_window if cfg_encoder_name in WAVEFORM_ENCODERS
+            else base_window * WAVEFORM_SAMPLES_PER_FRAME
+        )
+        window_reason = (
+            f"is a raw-waveform encoder whose window is derived as {required_window} samples, "
+            "the same span every encoder of the crossing sees; an explicit value would run "
+            "under an arm name that does not record it"
+        )
     if args.max_audio_seq_len:
         try:
             max_audio_seq_len_effective = int(args.max_audio_seq_len)
@@ -657,8 +973,7 @@ def plan(args: ArmAxes) -> ArmPlan:
         if required_window is not None and max_audio_seq_len_effective != required_window:
             die(
                 f"MAX_AUDIO_SEQ_LEN={max_audio_seq_len_effective} contradicts "
-                f"{encoder_effective}, which accepts exactly {required_window} frames "
-                "and raises on anything else (melt/modeling/encoder_specs.py). Drop "
+                f"{encoder_effective}, which {window_reason}. Drop "
                 "the override and it is derived, or fix the value."
             )
     elif required_window is not None:
@@ -758,11 +1073,12 @@ def plan(args: ArmAxes) -> ArmPlan:
     # See ArmAxes's comment on stack_factor for why this is only emitted (and
     # only tagged into EXP_NAME below) when it actually differs from the
     # config -- same rule as batch_duration/grad_accum_steps just below.
-    stack_factor_overridden = bool(args.stack_factor) and (
+    stack_factor_overridden = bool(stack_factor_request) and (
         stack_factor_effective != int(cfg_stack_factor)
     )
     if stack_factor_overridden:
         overrides += ["--model.adapter.stack_factor", str(stack_factor_effective)]
+    overrides += route.overrides
 
     # batch_duration/grad_accum_steps overrides -- see ArmAxes's comment on
     # why these two are coupled. Only emitted (and only tagged into EXP_NAME
@@ -787,6 +1103,13 @@ def plan(args: ArmAxes) -> ArmPlan:
     if args.gradient_checkpointing and gradient_checkpointing_effective != cfg_gradient_checkpointing:
         overrides += ["--trainer.gradient_checkpointing", str(gradient_checkpointing_effective).lower()]
 
+    cfg_ddp_find_unused = bool(get(cfg, "trainer.ddp_find_unused_parameters"))
+    ddp_find_unused_effective = (
+        as_bool(args.ddp_find_unused_parameters) if args.ddp_find_unused_parameters else cfg_ddp_find_unused
+    )
+    if args.ddp_find_unused_parameters and ddp_find_unused_effective != cfg_ddp_find_unused:
+        overrides += ["--trainer.ddp_find_unused_parameters", str(ddp_find_unused_effective).lower()]
+
     # trainer.num_train_epochs is ALWAYS emitted (unlike the "only when it
     # differs" rule above) because launch_campaign.sh and campaign.py used to
     # hardcode it to 1 unconditionally -- emitting it here unconditionally,
@@ -795,6 +1118,8 @@ def plan(args: ArmAxes) -> ArmPlan:
     # it.
     overrides += ["--trainer.num_train_epochs", str(epochs_effective)]
     epochs_overridden = bool(args.epochs) and epochs_effective != int(cfg_num_train_epochs or 1)
+    if args.max_steps is not None:
+        overrides += ["--trainer.max_steps", str(steps)]
 
     # template_task_override: forces data.prompt_template_selection to "random"
     # (regardless of what the config declares -- ABL-MA-700-asr.yaml itself
@@ -877,20 +1202,15 @@ def plan(args: ArmAxes) -> ArmPlan:
             json.dumps(
                 {
                     "num_decay_steps": round(WSD_DECAY_FRACTION * steps),
-                    "min_lr_ratio": WSD_MIN_LR_RATIO,
                     "decay_type": WSD_DECAY_TYPE,
                 }
             ),
         ]
 
-    cfg_warmup_ratio = get(cfg, "trainer.warmup_ratio")
-    cfg_warmup_steps = get(cfg, "trainer.warmup_steps")
     if args.warmup_ratio:
-        if float(args.warmup_ratio) != (cfg_warmup_ratio or 0.0):
-            overrides += ["--trainer.warmup_ratio", args.warmup_ratio]
-        # See ArmAxes.warmup_ratio: a nonzero warmup_steps silently wins.
-        if cfg_warmup_steps:
-            overrides += ["--trainer.warmup_steps", "0"]
+        # transformers 5 dropped `warmup_ratio`; a float in [0, 1) in
+        # `warmup_steps` is now the ratio of total steps.
+        overrides += ["--trainer.warmup_steps", args.warmup_ratio]
 
     # Only appear when overridden, unlike the always-present LR tags: adding
     # them unconditionally would rename every arm ever composed under the old
@@ -905,6 +1225,8 @@ def plan(args: ArmAxes) -> ArmPlan:
         extra_tags.append(f"ga{grad_accum_effective}")
     if epochs_overridden:
         extra_tags.append(f"ep{epochs_effective}")
+    if args.max_steps is not None:
+        extra_tags.append(f"ms{args.max_steps}")
     if args.template_task_override:
         extra_tags.append(f"tt{_slug(args.template_task_override, 12)}")
     if args.template_selection in TEMPLATE_SELECTION_TAGS:
@@ -912,18 +1234,24 @@ def plan(args: ArmAxes) -> ArmPlan:
     if args.lr_scheduler in LR_SCHEDULER_TAGS:
         extra_tags.append(LR_SCHEDULER_TAGS[args.lr_scheduler])
     if args.warmup_ratio:
-        extra_tags.append(lr_tag(args.warmup_ratio, "wu"))
+        # "wus", not the old "wu": under transformers 5 the old flag was
+        # dropped, so every "wu0p03" run trained with no warmup at all.
+        extra_tags.append(lr_tag(args.warmup_ratio, "wus"))
 
-    # Same "only when overridden" rule, for the same reason (see ArmAxes).
+    # Same "only when overridden" rule, for the same reason (see ArmAxes). The route's own
+    # tags (the Conformer's stride/kernel, and the declared rate) follow it: the rate tag
+    # is what makes the decoder frame rate readable off the name for every adapter.
     stack_factor_tags = [f"sk{stack_factor_effective}"] if stack_factor_overridden else []
 
     composed_name = "-".join([
         args.stage,
         data_tag(args.config, args.stage),
-        f"{encoder_tag(encoder_effective)}{'F' if encoder_freeze else 'T'}",
+        f"{encoder_tag(encoder_effective)}{'F' if encoder_freeze else 'T'}"
+        + ("-evalfrozen" if eval_when_frozen else ""),
         f"{decoder_tag(decoder_effective)}{'F' if decoder_freeze else 'T'}" + ("-lora" if decoder_lora else ""),
-        f"{adapter_effective}{'F' if adapter_freeze else 'T'}",
+        f"{adapter_effective}{'F' if adapter_freeze else 'T'}" + ("-qkn" if qk_norm else ""),
         *stack_factor_tags,
+        *route.tags,
         *extra_tags,
         lr_tag(encoder_lr_effective, "elr"),
         lr_tag(decoder_lr_effective, "dlr"),
@@ -963,8 +1291,11 @@ def main() -> None:
     p.add_argument("--adapter", required=True)
     p.add_argument("--adapter-freeze", required=True)
     p.add_argument("--stack-factor", required=True, help="empty string means: use the config's own value, no override")
+    p.add_argument("--frame-rate-hz", required=True, help="empty string means: no rate declared. Otherwise the adapter's route to it is derived (stack_factor, or the Conformer's stride/kernel) or checked (Q-Former), and `hz<rate>` is tagged into EXP_NAME")
     p.add_argument("--encoder", required=True)
     p.add_argument("--encoder-freeze", required=True)
+    p.add_argument("--eval-when-frozen", required=True, help="empty string means: use the config's own value, no override. See MELTAudioEncoder.train()")
+    p.add_argument("--qk-norm", default="", help="empty string (the default) means: use the config's own value, no override. true normalises the Conformer's and the Q-Former's queries and keys per head, and tags `qkn` into EXP_NAME")
     p.add_argument("--lr-scheduler", required=True, help="empty string means: use the config's own lr_scheduler_type")
     p.add_argument("--warmup-ratio", required=True, help="empty string means: use the config's own warmup settings")
     p.add_argument("--max-audio-seq-len", required=True, help="empty string means: derive it from the encoder, else use the config's own value")
@@ -977,6 +1308,7 @@ def main() -> None:
     p.add_argument("--batch-duration", required=True, help="empty string means: use the config's own value, no override")
     p.add_argument("--grad-accum-steps", required=True, help="empty string means: use the config's own value, no override")
     p.add_argument("--gradient-checkpointing", required=True, help="empty string means: use the config's own value, no override")
+    p.add_argument("--ddp-find-unused-parameters", required=True, help="empty string means: use the config's own value, no override. Needed for the MoE adapter under DDP -- see ArmAxes.ddp_find_unused_parameters")
     p.add_argument("--epochs", required=True, help="empty string means: use the config's own value, no override")
     p.add_argument("--template-task-override", required=True, help="empty string means: use the config's own prompt_template_selection/prompt_template, no override")
     p.add_argument("--template-selection", required=True, help="empty string means: random over the whole bucket; else random, with_language or without_language (needs --template-task-override)")
@@ -990,8 +1322,11 @@ def main() -> None:
         adapter=args.adapter,
         adapter_freeze=args.adapter_freeze,
         stack_factor=args.stack_factor,
+        frame_rate_hz=args.frame_rate_hz,
         encoder=args.encoder,
         encoder_freeze=args.encoder_freeze,
+        eval_when_frozen=args.eval_when_frozen,
+        qk_norm=args.qk_norm,
         lr_scheduler=args.lr_scheduler,
         warmup_ratio=args.warmup_ratio,
         max_audio_seq_len=args.max_audio_seq_len,
@@ -1004,6 +1339,7 @@ def main() -> None:
         batch_duration=args.batch_duration,
         grad_accum_steps=args.grad_accum_steps,
         gradient_checkpointing=args.gradient_checkpointing,
+        ddp_find_unused_parameters=args.ddp_find_unused_parameters,
         epochs=args.epochs,
         template_task_override=args.template_task_override,
         template_selection=args.template_selection,

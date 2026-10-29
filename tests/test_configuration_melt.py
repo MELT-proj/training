@@ -219,6 +219,31 @@ class TestMELTConfig:
         reloaded.audio_encoder_config._attn_implementation = "flash_attention_2"
         assert reloaded.audio_encoder_config._attn_implementation == "flash_attention_2"
 
+    def test_eval_when_frozen_defaults_false(self):
+        """The historical behaviour, for every config that never mentions the key."""
+        config = MELTConfig(
+            audio_encoder=AUDIO_ENCODER,
+            text_decoder=TEXT_DECODER,
+            adapter_config={"_type": "mlp"},
+        )
+
+        assert config.eval_when_frozen is False
+
+    def test_eval_when_frozen_survives_a_round_trip(self, tmp_path):
+        """Unlike `_attn_implementation`, this is a plain field, not a property
+        MELTConfig treats specially -- it should serialise like `initializer_range` does."""
+        config = MELTConfig(
+            audio_encoder=AUDIO_ENCODER,
+            text_decoder=TEXT_DECODER,
+            adapter_config={"_type": "mlp"},
+            eval_when_frozen=True,
+        )
+        config.save_pretrained(tmp_path)
+
+        reloaded = MELTConfig.from_pretrained(tmp_path)
+
+        assert reloaded.eval_when_frozen is True
+
     def test_save_pretrained_writes_config_json(self, tmp_path):
         config = MELTConfig(
             audio_encoder=AUDIO_ENCODER,
