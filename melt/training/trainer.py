@@ -1841,6 +1841,11 @@ class MELTTrainer(Seq2SeqTrainer):
             )
 
         gen_kwargs.setdefault("use_cache", True)
+        # A run that loads its decoder from the Hub inherits the repo's
+        # generation_config, sampling flags included (both EuroLLM-1.7B-Instruct
+        # releases ship `do_sample: true`), while a run from a MELT checkpoint
+        # decodes greedily: pin greedy so eval scores do not depend on the start.
+        gen_kwargs.setdefault("do_sample", False)
         gen_kwargs.setdefault(
             "synced_gpus",
             bool(getattr(self, "is_deepspeed_enabled", False))

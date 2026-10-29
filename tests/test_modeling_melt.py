@@ -774,6 +774,83 @@ class TestAttnImplementationPropagation:
 
 
 # ============================================================================
+# Generation stops at the merged turn-end id when the backbones come from the Hub
+#
+# setup._merge_chat_template_eos_token_id puts the chat template's turn-end id into
+# text_decoder_config.eos_token_id, which is where transformers derives the decoder's
+# generation_config from -- but only on the from_config path. `from_pretrained`
+# (load_backbones=True) replaces it with one rebuilt from the Hub's files, so a run that
+# started from raw Hub components decoded every sample to max_new_tokens while a run
+# that started from a saved checkpoint stopped at the turn end (#124, from-scratch half).
+# ============================================================================
+
+
+class TestFromScratchGenerationStopsAtTurnEnd:
+    RAW_EOS, HUB_ONLY_EOS, TURN_END = 4, 9, 7
+
+    def _build(self, tmp_path, hub_generation_eos):
+        """What train.py builds when `model.ckpt` is unset, over on-disk stand-ins for Hub repos.
+
+        `hub_generation_eos` is the stop list in the decoder repo's generation_config.json, or
+        None for a repo with no such file (Qwen/Qwen3.5-2B ships none).
+        """
+        from transformers import AutoModel, AutoModelForCausalLM, GenerationConfig
+
+        source = _local_melt_config()
+        source.text_decoder_config.eos_token_id = self.RAW_EOS
+        AutoModelForCausalLM.from_config(source.text_decoder_config).save_pretrained(tmp_path / "decoder")
+        AutoModel.from_config(source.audio_encoder_config).save_pretrained(tmp_path / "encoder")
+        (tmp_path / "decoder" / "generation_config.json").unlink(missing_ok=True)
+        if hub_generation_eos is not None:
+            GenerationConfig(eos_token_id=hub_generation_eos).save_pretrained(tmp_path / "decoder")
+
+        config = MELTConfig(
+            audio_encoder=str(tmp_path / "encoder"),
+            text_decoder=str(tmp_path / "decoder"),
+            adapter_config={"_type": "mlp"},
+        )
+        config.text_decoder_config.eos_token_id = [self.RAW_EOS, self.TURN_END]  # as setup.py merges it
+        return MELTForCausalLM(config, load_backbones=True)
+
+    @pytest.mark.parametrize(
+        "hub_generation_eos", [None, [RAW_EOS]], ids=["no-generation-config", "generation-config"]
+    )
+    def test_generation_stops_at_the_turn_end_token(self, tmp_path, hub_generation_eos):
+        from transformers import LogitsProcessor, LogitsProcessorList
+
+        turn_end = self.TURN_END
+
+        class EmitTurnEnd(LogitsProcessor):
+            def __call__(self, input_ids, scores):
+                forced = torch.full_like(scores, float("-inf"))
+                forced[:, turn_end] = 0.0
+                return forced
+
+        model = self._build(tmp_path, hub_generation_eos)
+        input_ids = torch.tensor([[1, 5, 6]])
+        generated = model.generate(
+            input_ids=input_ids,
+            attention_mask=torch.ones_like(input_ids),
+            max_new_tokens=8,
+            do_sample=False,
+            logits_processor=LogitsProcessorList([EmitTurnEnd()]),
+        )
+
+        assert generated.shape[-1] == 1
+
+    def test_a_stop_id_only_the_hubs_generation_config_lists_is_kept(self, tmp_path):
+        """A Hub generation_config.json can list stop ids its config.json lacks (EuroLLM-1.7B-Instruct-2512:
+        [4, 2] against 4); overwriting with the config's list would drop them."""
+        model = self._build(tmp_path, [self.RAW_EOS, self.HUB_ONLY_EOS])
+
+        assert model.text_decoder.generation_config.eos_token_id == [
+            self.RAW_EOS,
+            self.HUB_ONLY_EOS,
+            self.TURN_END,
+        ]
+
+
+# ============================================================================
 # Conformer adapter: the layers follow the adapter's own stride and kernel,
 # for any encoder (audio-stack crossing, 10 Hz via stride 5 / kernel 5)
 #
