@@ -1,5 +1,11 @@
 # 05 — The language ladder: "N hours of language X gives P"
 
+**Postponed 2026-10-20 (PI):** the ladder fits curves that predict
+behaviour as hours grow. It blocks nothing in Raclette or Fondue, so it
+leaves the critical path and becomes a scientific experiment for the paper,
+run on MN5 capacity Fondue does not need, or in December. The design below
+is unchanged.
+
 **Settled (2026-09-15):** an equal-per-language-budget ladder of multilingual
 models at five log-spaced tiers, each run as MA + IFT with the winning
 recipe, backbone and stack; every run is evaluated on all 24 EU languages;

@@ -25,8 +25,8 @@ belongs on the board, not in a section file.
 | `01-interface-recipe.md` | step 0 (LibriSpeech) and the five-language interface screen: LR, batch, frame stacking, prompt |
 | `02-backbones.md` | the 2×3 backbone grid (Llama 3.2 1B, Qwen3.5 2B, EuroLLM 1.7B; base and instruct) and the text-prior study |
 | `03-audio-stack.md` | encoders × adapters, the cost axis, the efficiency figure |
-| `04-regime.md` | IFT-level training-regime factors as a half-fraction design |
-| `05-language-ladder.md` | the "N hours gives P" study over 24 EU languages, transfer and repetition probes |
+| `04-regime.md` | is MA worth running before a full fine-tune; which objective; how many hours (restructured 2026-10-20) |
+| `05-language-ladder.md` | the "N hours gives P" study over 24 EU languages, transfer and repetition probes (postponed off the critical path, 2026-10-20) |
 | `06-fondue.md` | the big run: data, decisions, freeze date, the Raclette pilot, operations, off-boarding |
 | `infrastructure.md` | clusters, repos, data, tooling, and every trap an agent needs to know |
 | `board.md` | everything that happened: findings, numbers, incidents, doubts and proposals, newest first. Any session appends; nothing is ever edited away |
@@ -112,6 +112,7 @@ session, post to `board.md` instead if you think one is wrong.
 | 2026-09-26 | crossing recipe: adapter LR 2e-3, 300 s batch, 10 Hz for every adapter (Conformer stride 5 / kernel 5); MoE per-language usage measured post hoc; MA prompt runs moved to week 6, on the winning combination | `03-audio-stack.md` §1b, `timeline.md` week 6 |
 | 2026-09-23 | the audio-stack crossing runs five epochs per arm (17,500 sampled audio-h; Italian repeats ~5×, larger sources mostly yield new data), one recipe for all sixteen; the MoE reaches the common rate by stacking frames before the router | `03-audio-stack.md` §1b |
 | 2026-09-18 | step 0b settles the optimisation recipe only; its Whisper and Qwen arms are diagnostic controls handed to `03` and `02` as priors, never decisions. The audio-stack section runs **before** the backbone grid, so backbones are compared on a chosen stack; the encoder itself is decided by `03`'s crossing, read on FLEURS-24 split high- against low-resource | `01-interface-recipe.md` §2b, `03-audio-stack.md` §0, `02-backbones.md` |
+| 2026-10-20 | Fondue is a full fine-tune (nothing frozen, no LoRA); the regime study becomes "is MA worth it, which objective, how many hours", reusing the self-distillation starts; R1-R10 and the ratio sweep retired; the language ladder leaves the critical path for the paper | `04-regime.md`, `05-language-ladder.md`, `timeline.md` |
 
 ## Conventions for editing this folder
 
