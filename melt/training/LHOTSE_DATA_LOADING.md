@@ -186,27 +186,37 @@ This is computed via `estimate_steps_per_epoch()` and used to convert between `n
 | Duplicate samples in eval | Check `num_workers` settings and `worker_init_fn` |
 | Infinite eval loop | Use `get_eval_dataloader_from_config`, not `get_lhotse_dataloader_from_config` |
 
-## ASR score band (`data.train_ds.asr_filter`)
+## Cut filter (`data.train_ds.cut_filter`)
 
-Off unless the key is present. Keeps only ASR cuts whose precomputed WER/CER is inside a band, per source, optionally changing at optimizer steps. Code: `data/audio/lhotse/asr_score_filter.py`; scores are built by `infra/build_asr_scores.py`.
+Off unless the key is present. Named rules keep only the cuts whose value satisfies a condition, per source, optionally changing at optimizer steps. A rule applies to the leaves whose merged tags match its `match`; a cut must pass every rule that applies to its leaf. Code: `data/audio/lhotse/cut_filter.py`; WER/CER arrays are built by `infra/build_asr_scores.py`.
 
 ```yaml
-asr_filter:
-  scores_root: ${oc.env:LOCAL_ASR_SCORES_DIR}   # <root>/<shar_path under LOCAL_DATASETS_DIR>/wer.u16.npy
-  metric: wer            # wer | cer
-  missing: drop          # a cut with no score: drop | keep
-  phases:                # default for every ASR source; or just min/max
-    - {from_step: 0,    min: 0.10, max: 0.40}
-    - {from_step: 5400, min: 0.00, max: 0.10}
+cut_filter:
+  scores_root: ${oc.env:LOCAL_ASR_SCORES_DIR}   # only for `array` rules: <root>/<shar_path under LOCAL_DATASETS_DIR>/<array>.u16.npy
+  rules:
+    asr_wer:
+      match: {task: asr}       # merged tags; a list means "any of"; omit to match every leaf
+      array: wer               # sidecar array, judged before the cut is read
+      missing: drop            # a cut with no value: drop | keep
+      phases:                  # or just min/max
+        - {from_step: 0,    min: 0.10, max: 0.40}
+        - {from_step: 5400, min: 0.00, max: 0.10}
+    st_quality:
+      match: {task: st}
+      field: custom.st_qe      # any dotted path into the cut manifest (supervisions.0.custom.x works too)
+      min: 0.7
 input_cfg:               # per source or per group, nearest wins
-  - {type: lhotse_shar, shar_path: .../x, asr_filter: {pct_max: 25}}   # lowest quarter of THIS source
-  - {type: lhotse_shar, shar_path: .../y, asr_filter: false}           # exempt (no scores)
+  - {type: lhotse_shar, shar_path: .../x, cut_filter: {asr_wer: {pct_max: 25}}}   # lowest quarter of THIS source
+  - {type: lhotse_shar, shar_path: .../y, cut_filter: {asr_wer: false}}           # exempt from one rule
+  - {type: lhotse_shar, shar_path: .../z, cut_filter: false}                      # exempt from every rule
 ```
 
-- Only leaves whose merged `task` tag is `asr` get a filter (outer group tags win, as for the cuts themselves); ST and other tasks are never touched.
+- Conditions: `min`/`max` (inclusive), `in: [...]` (allowed values; `field` rules only), `pct_min`/`pct_max` (`array` rules only). An override that names a condition replaces the rule's whole phase list; `missing` replaces singly. An override naming a rule that does not match the leaf's tags is ignored; one naming an unknown rule is an error.
+- `match` uses the tags the cuts end up with (outer group tags win, as for the cuts themselves), so an ASR rule never touches an ST source of the same corpus.
 - The node sits on the leaf before `repeat()`, so the leaf keeps its mux weight; hours per source move with the survivors' mean cut length.
-- The row index is checked *before* the cut is read, so a band that keeps 7% costs index lookups, not 13 manifest reads per kept cut (the stock filter reads every cut; on GPFS that stalled the smoke test).
-- Join is positional (`_graph_origin` row index of the indexed reader): needs indexed Shar. A missing score file, a row count that differs from the manifests, or a band that keeps nothing is a startup error.
-- `min`/`max` are inclusive score units (0.1 == 10%); `pct_min`/`pct_max` are percentiles of the source's own scored cuts, inclusive of ties: WER is discrete and often exactly 0 (77% of `cv22_sidon/de`), so `pct_max: 30` there keeps 77%, not 30%. Prefer absolute bands unless the source's scores are spread out; the startup log prints what each band keeps.
+- `array` vs `field`: an array rule checks the row index *before* the cut is read, so a band that keeps 7% costs index lookups, not 13 manifest reads per kept cut (the stock filter reads every cut; on GPFS that stalled the smoke test). A field rule has to read the cut first: fine for a mild filter, slow for a harsh one on GPFS, where a sidecar array is the better choice. Field rules also cannot take percentiles, and their startup log cannot say what they keep.
+- Array rules join positionally (`_graph_origin` row index of the indexed reader): they need indexed Shar. A missing array, a row count that differs from the manifests, or a band that keeps nothing is a startup error. Array values are `round(10000 * x)` in uint16, 65535 = no value.
+- `min`/`max` on arrays are in score units (0.1 == 10%); `pct_min`/`pct_max` are percentiles of the source's own scored cuts, inclusive of ties: WER is discrete and often exactly 0 (77% of `cv22_sidon/de`), so `pct_max: 30` there keeps 77%, not 30%. Prefer absolute bands unless the source's scores are spread out; the startup log prints what each band keeps.
+- A field value that is not a number under `min`/`max` is an error, not a silent drop.
 - Phase steps are optimizer steps, published to the workers by a trainer callback. The switch gates admission into the sampler: cuts already in the bucket buffer leave over about `buffer_size * mean_cut / (batch_duration * grad_accum)` steps.
-- Resuming with a different band is allowed: buffered cuts restore without being re-checked.
+- Resuming with a different condition is allowed: buffered cuts restore without being re-checked.

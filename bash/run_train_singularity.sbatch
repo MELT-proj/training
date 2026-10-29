@@ -273,7 +273,7 @@ BINDS=(
     "${HOST_OUTPUT_DIR}:/workspace/outputs:rw"
 )
 [[ -n "${HOST_HF_HOME}" ]] && BINDS+=("${HOST_HF_HOME}:/workspace/hf_cache")
-# Score arrays for data.train_ds.asr_filter (infra/build_asr_scores.py), read-only.
+# Sidecar arrays for data.train_ds.cut_filter `array` rules (infra/build_asr_scores.py), read-only.
 if [[ -n "${LOCAL_ASR_SCORES_DIR:-}" ]]; then
     BINDS+=("${LOCAL_ASR_SCORES_DIR}:/workspace/asr_scores:ro")
     container_env LOCAL_ASR_SCORES_DIR /workspace/asr_scores

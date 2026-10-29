@@ -143,11 +143,12 @@ def resolve_custom_template(
 def _get_nested_value(obj, path: str, default=None):
     """Get a nested value from an object using dot notation.
 
-    Supports both attribute access and dict key access at each level.
+    Supports attribute access, dict key access and list indexing at each level.
 
     Args:
-        obj: Object to traverse (can have nested dicts/objects).
-        path: Dot-separated path like ``"custom.metadata.sentence"``.
+        obj: Object to traverse (can have nested dicts/objects/lists).
+        path: Dot-separated path like ``"custom.metadata.sentence"`` or
+            ``"supervisions.0.custom.score"``.
         default: Default value if path not found.
 
     Returns:
@@ -162,6 +163,8 @@ def _get_nested_value(obj, path: str, default=None):
             current = getattr(current, part)
         elif isinstance(current, dict) and part in current:
             current = current[part]
+        elif isinstance(current, (list, tuple)) and part.isdigit() and int(part) < len(current):
+            current = current[int(part)]
         else:
             return default
     return current if current is not None else default

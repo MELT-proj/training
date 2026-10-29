@@ -37,15 +37,19 @@ data:
   min_chars: 3
 
   train_ds:
-    # Per-source ASR bands. The global default is a two-phase band; sources
-    # override it, or opt out. ST sources carry no filter at all.
-    asr_filter:
+    # Per-source ASR bands. The rule's default is a two-phase band; sources
+    # override it, or opt out. The rule matches task asr, so ST sources carry
+    # no filter at all.
+    cut_filter:
       scores_root: ${oc.env:LOCAL_ASR_SCORES_DIR}
-      metric: wer
-      missing: drop
-      phases:
-        - {from_step: 0,  min: 0.10, max: 0.40}
-        - {from_step: 25, min: 0.00, max: 0.10}
+      rules:
+        asr_wer:
+          match: {task: asr}
+          array: wer
+          missing: drop
+          phases:
+            - {from_step: 0,  min: 0.10, max: 0.40}
+            - {from_step: 25, min: 0.00, max: 0.10}
     input_cfg:
       # default phases (absolute band, switches at step 25)
       - type: lhotse_shar
@@ -57,22 +61,23 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/de/train
         weight: 0.15
         tags: {task: asr, lang: de, text_field: custom.metadata.sentence}
-        asr_filter:
-          phases:
-            - {from_step: 0,  min: 0.01, max: 0.30}
-            - {from_step: 25, min: 0.00, max: 0.00}
+        cut_filter:
+          asr_wer:
+            phases:
+              - {from_step: 0,  min: 0.01, max: 0.30}
+              - {from_step: 25, min: 0.00, max: 0.00}
       # one static band, no phases
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/mls_sidon/dutch/train
         weight: 0.15
         tags: {task: asr, lang: nl, text_field: custom.pnc_text}
-        asr_filter: {min: 0.00, max: 0.05}
+        cut_filter: {asr_wer: {min: 0.00, max: 0.05}}
       # exempt
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/es/train
         weight: 0.10
         tags: {task: asr, lang: es}
-        asr_filter: false
+        cut_filter: false
       # ST: untouched
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/nl_en/train

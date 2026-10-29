@@ -34,7 +34,7 @@ from ..logging_utils import _is_global_master, force_print, get_logger
 from ..modeling import MELTProcessor
 from ..modeling.encoder_specs import get_encoder_spec_for_feature_extractor
 from .duration_tracker import DurationTracker
-from .data.audio.lhotse.asr_score_filter import make_step_callback
+from .data.audio.lhotse.cut_filter import make_step_callback
 from .data.audio.lhotse import (
     FallbackDataset,
     MELTDataCollator,
@@ -391,9 +391,9 @@ class MELTTrainer(Seq2SeqTrainer):
         # Initialize parent (may set up distributed)
         super().__init__(model=model, args=args, eval_dataset=eval_dataset, **kwargs)
 
-        # Phase boundaries of data.train_ds.asr_filter are optimizer steps; the
+        # Phase boundaries of data.train_ds.cut_filter are optimizer steps; the
         # dataloader workers learn the step from this shared counter.
-        if OmegaConf.select(self.config, "data.train_ds.asr_filter") is not None:
+        if OmegaConf.select(self.config, "data.train_ds.cut_filter") is not None:
             self.add_callback(make_step_callback())
 
         # WER/CER are computed from decoded *generations*.  Without
