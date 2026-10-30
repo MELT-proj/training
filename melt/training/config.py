@@ -78,6 +78,16 @@ run:
   perf_logging: false
   stop_after_step: null   # End the run after this optimizer step, a checkpoint saved there. The LR schedule stays that of trainer.max_steps
   defer_optimizer_load: false # On a resume, load the optimizer state just before the first optimizer step instead of before the first micro-batch, so that window has a fresh run's GPU memory
+  # Phase marks for every optimizer step and torch.profiler windows on chosen
+  # steps; see melt/training/step_profile.py. Off by default. trace_steps are
+  # global_step values (0-based); a trace covers one non-final micro-batch from
+  # trace_micro and the final micro-batch through the optimizer step.
+  step_profile:
+    enabled: false
+    ranks: [0]
+    trace_steps: []
+    trace_micro: [2]
+    trace_dir: null
 
 # =============================================================================
 # Model Configuration

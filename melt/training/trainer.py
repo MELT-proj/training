@@ -37,6 +37,7 @@ from ..logging_utils import _is_global_master, force_print, get_logger
 from ..modeling import MELTProcessor
 from ..modeling.encoder_specs import get_encoder_spec_for_feature_extractor
 from .duration_tracker import DurationTracker
+from .step_profile import StepProfileCallback, StepProfiler, profiling_span
 from .data.audio.lhotse.cut_filter import make_step_callback
 from .data.audio.lhotse import (
     FallbackDataset,
@@ -288,6 +289,9 @@ class MELTTrainer(Seq2SeqTrainer):
         eval_num_batches: Estimated number of eval batches.
     """
 
+    #: Set in ``__init__`` when ``run.step_profile.enabled``; None otherwise.
+    _step_profiler: StepProfiler | None = None
+
     def __init__(
         self,
         model,
@@ -404,6 +408,19 @@ class MELTTrainer(Seq2SeqTrainer):
         self._perf_log_s: float = 0.0
         self._perf_step_times: deque[float] = deque(maxlen=100)
         self._perf_window: dict[str, float] = {}
+
+        # Opt-in phase marks and profiler windows (run.step_profile); see
+        # melt/training/step_profile.py. None when off, and every hook site
+        # below is a single None check.
+        step_profile_cfg = self.config.get("run", {}).get("step_profile", None)
+        if step_profile_cfg and step_profile_cfg.get("enabled", False):
+            self._step_profiler = StepProfiler(
+                step_profile_cfg,
+                output_dir=self.args.output_dir,
+                grad_accum=self.args.gradient_accumulation_steps,
+                rank=self._global_rank,
+            )
+            self.add_callback(StepProfileCallback(self._step_profiler))
 
         # Sum of a MoE adapter's load-balancing aux loss and router entropy
         # (`melt.modeling.modeling_melt.MELTMoEAdapter`) across training_step
@@ -1481,6 +1498,14 @@ class MELTTrainer(Seq2SeqTrainer):
             self._batch_cuts_history.append(len(langs))
         if self._perf:
             self._perf_observe_batch(inputs, durations)
+        profiler = self._step_profiler
+        if profiler is not None:
+            profiler.attach(self.model, model)
+            profiler.begin_micro(model)
+            profiler.note_micro(
+                None if durations is None else len(durations),
+                None if durations is None else float(sum(float(d) for d in durations)),
+            )
 
         if self._grad_bucket_view and not getattr(model, "_melt_zero_grad_in_place", False):
             # Trainer clears gradients with model.zero_grad() after every optimizer step,
@@ -1502,9 +1527,31 @@ class MELTTrainer(Seq2SeqTrainer):
             if self._memory_profiling:
                 self._dump_memory_snapshot()
             raise
+        finally:
+            if profiler is not None:
+                profiler.end_micro()
 
         self._accumulate_router_stats()
         return loss
+
+    def get_batch_samples(self, epoch_iterator, num_batches, device):
+        """Mark the dataloader wait of each optimizer step when ``run.step_profile`` is on."""
+        profiler = self._step_profiler
+        if profiler is None:
+            return super().get_batch_samples(epoch_iterator, num_batches, device)
+        profiler.begin_step(self.state.global_step)
+        try:
+            return super().get_batch_samples(epoch_iterator, num_batches, device)
+        finally:
+            profiler.end_dataloader()
+
+    def _prepare_inputs(self, inputs):
+        with profiling_span(self._step_profiler, "h2d0", "h2d1"):
+            return super()._prepare_inputs(inputs)
+
+    def _clip_grad_norm(self, model):
+        with profiling_span(self._step_profiler, "clip0", "clip1"):
+            return super()._clip_grad_norm(model)
 
     # Keys of the per-window counters, in the order they are all-reduced.
     _PERF_WINDOW_KEYS = (
