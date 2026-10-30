@@ -50,6 +50,40 @@ def _ms(fn, reps: int = 5, warmup: int = 2) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# InfiniBand access from inside the container
+# ---------------------------------------------------------------------------
+
+
+def ib_diagnostic() -> dict:
+    """What the container can see of the fabric: device nodes, who owns them, whether they open."""
+    out: dict = {"uid": os.getuid(), "gid": os.getgid(), "groups": os.getgroups()}
+    root = "/dev/infiniband"
+    try:
+        names = sorted(os.listdir(root))
+    except OSError as exc:
+        return {**out, "dev_infiniband": repr(exc)}
+    nodes = {}
+    for name in names:
+        path = os.path.join(root, name)
+        info = os.stat(path)
+        entry = {"mode": oct(info.st_mode), "uid": info.st_uid, "gid": info.st_gid}
+        if name.startswith("uverbs"):
+            try:
+                os.close(os.open(path, os.O_RDWR))
+                entry["open"] = "ok"
+            except OSError as exc:
+                entry["open"] = repr(exc)
+        nodes[name] = entry
+    out["dev_infiniband"] = nodes
+    for sysdir in ("/sys/class/infiniband", "/sys/class/infiniband_verbs"):
+        try:
+            out[sysdir] = sorted(os.listdir(sysdir))
+        except OSError as exc:
+            out[sysdir] = repr(exc)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # All-reduce
 # ---------------------------------------------------------------------------
 
@@ -285,6 +319,8 @@ def main() -> None:
     local_world = torch.cuda.device_count()
 
     results: dict = {"world": world, "local_world": local_world, "gpu": torch.cuda.get_device_name(0)}
+    if rank % local_world == 0:
+        print(f"[lever_bench] ib diagnostic rank {rank}: {json.dumps(ib_diagnostic())}", flush=True)
     t0 = time.time()
     results["allreduce"] = allreduce_bench(rank, world, local_world)
     dist.barrier()
