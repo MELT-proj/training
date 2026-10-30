@@ -32,6 +32,9 @@ sys.path.insert(0, str(BENCH_DIR))
 
 import bench  # noqa: E402
 
+#: Host libibverbs, the mlx5 provider and libnl copied from /usr/lib64 (see the board entry).
+IB_STAGE = "/gpfs/scratch/epor48/outputs/BENCH-profile-ibstage"
+
 
 def exp_name(nodes: int, grad_accum: int, tag: str | None) -> str:
     name = f"BENCH-profile-n{nodes}-ga{grad_accum}"
@@ -101,6 +104,7 @@ def main() -> None:
     lever = sub.add_parser("levers", help="submit the isolated lever benchmarks (no data, no training)")
     lever.add_argument("--nodes", type=int, default=2)
     lever.add_argument("--time", default="00:40:00")
+    lever.add_argument("--ib", action="store_true", help="bind the host InfiniBand userspace into the container")
     args = parser.parse_args()
 
     if args.command == "levers":
@@ -159,6 +163,11 @@ def submit_levers(args: argparse.Namespace) -> None:
         "SINGULARITYENV_NCCL_DEBUG": "INFO",
         "SINGULARITYENV_NCCL_DEBUG_SUBSYS": "INIT,NET",
     }
+    if args.ib:
+        name += "-ib"
+        stage = f"{IB_STAGE}:/opt/hostib:ro"
+        env["MELT_EXTRA_BINDS"] = f"{stage},/dev/infiniband,/etc/libibverbs.d"
+        extra_env["SINGULARITYENV_LD_LIBRARY_PATH"] = "/opt/hostib"
     argv = [
         "infra/runners/submit-container.sh",
         defaults["site"],
