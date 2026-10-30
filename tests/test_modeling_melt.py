@@ -459,8 +459,8 @@ class TestAdapterOutputFeaturesShape:
         def q_and_k_rms(frame_scale=1.0):
             with torch.no_grad():
                 return [
-                    cross.query(queries).pow(2).mean().sqrt(),
-                    cross.key(frames * frame_scale).pow(2).mean().sqrt(),
+                    cross.query(queries).pow(2).mean().sqrt().item(),
+                    cross.key(frames * frame_scale).pow(2).mean().sqrt().item(),
                 ]
 
         before = q_and_k_rms()
@@ -993,7 +993,7 @@ class TestConformerAdapterLayers:
 
         def q_and_k_rms():
             with torch.no_grad():
-                return [getattr(attn, n)(x).pow(2).mean().sqrt() for n in ("linear_q", "linear_k")]
+                return [getattr(attn, n)(x).pow(2).mean().sqrt().item() for n in ("linear_q", "linear_k")]
 
         before = q_and_k_rms()
         with torch.no_grad():
