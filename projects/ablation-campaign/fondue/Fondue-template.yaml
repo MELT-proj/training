@@ -1,0 +1,233 @@
+# @@HEADER@@
+#
+# Fondue: one full fine-tune from the Hub components, no MA stage (PI, 2026-10-29).
+# DRAFT, NOT FROZEN. The rows still open are marked "# OPEN"; plan/06-fondue.md §3
+# holds the decision table and plan/timeline.md the dates.
+#
+# Rendered in two steps by build_fondue_mix.py (its docstring has the commands):
+#   1. `sources` writes every training source, tagged, into Fondue-sources.yaml;
+#   2. `render` weights them with the two-tier policy of infra/compute_mix_weights.py
+#      (alpha 0.2, beta 0.5; PI 2026-10-30) and writes Fondue.yaml.
+# Edit this template or the builder, never the rendered files.
+
+# =============================================================================
+# Run Configuration
+# =============================================================================
+run:
+  exp_name: Fondue
+  dry_run: false
+  memory_preallocation: true
+
+# =============================================================================
+# Model: Whisper-large-v3 + MoE (8 experts, top-2) at 10 Hz + EuroLLM-1.7B-Instruct,
+# everything trainable (PI, 2026-10-29 and 10-30).
+# =============================================================================
+model:
+  encoder:
+    name: openai/whisper-large-v3
+    freeze: false
+    max_audio_seq_len: 3000 # Whisper takes exactly 30 s of 10 ms mel frames
+    attn_implementation: flash_attention_2
+    apply_spec_augment: false
+
+  decoder:
+    # PROVISIONAL: EuroLLM-1.7B-Instruct-2512 may replace it at the IFT freeze
+    # (11-05); same tokens and chat template (plan_arm.py's decoder table).
+    name: utter-project/EuroLLM-1.7B-Instruct
+    attn_implementation: flash_attention_2
+    freeze: false
+    eos_token: <|im_end|>
+    pad_token: </s>
+    audio_token: <|audio|>
+    audio_bos_token: <|audio_bos|>
+    audio_eos_token: <|audio_eos|>
+
+  adapter:
+    _type: moe
+    freeze: false
+    stack_factor: 5 # 50 Hz Whisper frames -> 10 Hz into the decoder (PI, 2026-10-30)
+
+  ckpt: null # from the Hub: no MA stage
+
+  # Not optional: without it the Hub's bf16 decoder trains in pure bf16 under DDP.
+  # The 10-24 scaling bench ran without it and went to loss 0 / grad_norm nan at step 2.
+  master_dtype: float32
+
+# =============================================================================
+# Data
+# =============================================================================
+data:
+  sample_rate: 16000
+
+  apply_chat_template: true
+  prompt_template_selection: random
+  chat_template_config: chatml
+
+  strict_text_field: true
+  skip_text_field_mismatch: true
+
+  train_ds:
+    input_cfg:
+    # total_hours is the hours Fondue DRAWS, not the size of the pool: the trainer
+    # turns it into steps per epoch, steps = total_hours * 3600 /
+    # (batch_duration * world_size * grad_accum). OPEN: the budget follows the
+    # step profile's cost per 1,000 h (the 10-24 bench numbers are void).
+    total_hours: 330000.0
+    force_estimate: false
+
+    min_duration: 0.5
+    max_duration: 60.0
+
+    batch_size: null
+    # OPEN: from the step profile (fp32 masters, 10 Hz). bd 10 is the micro-batch
+    # it measures first; 15 OOMs with fp32 masters.
+    batch_duration: 10
+    quadratic_duration: null
+    lhotse_sampler_type: dynamic_bucketing
+    num_buckets: 30
+    buffer_size: 10000
+    # OPEN: measured on the draw at the dry run (the per-source histograms of
+    # infra/check_training_config.py x the weights). A stale set is an OOM.
+    bucket_duration_bins: []
+    max_tokens: 400
+
+    shuffle: true
+    drop_last: false
+    seed: 1337
+    shard_seed: 1337
+    num_workers: 1
+    pin_memory: true
+    prefetch_factor: 32
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+    # Per-cut quality bands (PR #157, LHOTSE_DATA_LOADING.md "Cut filter"). Values
+    # from the "Cut Filter Thresholds" page; they are iterated before Raclette.
+    # Phase steps are optimizer steps. OPEN: ANNEAL_STEP below is where the LR
+    # decay starts, max_steps - num_decay_steps, and is set with max_steps.
+    cut_filter:
+      scores_root: ${oc.env:LOCAL_ASR_SCORES_DIR}
+      rules:
+        # ASR: a looser WER band while the LR is constant, a tighter one while it
+        # anneals. Sidecar arrays, so a harsh band costs index lookups, not reads.
+        asr_wer:
+          match: {task: asr, scored: wer} # leaves without a WER array train unfiltered
+          array: wer
+          missing: keep # languages neither recognizer covers
+          phases:
+            - {from_step: 0, max: 0.2999}
+            - {from_step: 0, max: 0.0999} # ANNEAL_STEP
+        # ST with no per-cut score (YODAS-Granary ast X->en, CoVoST2, Europarl-ST):
+        # all of it while the LR is constant, none while it anneals (PI, 10-30).
+        # CAUTION: a filter that rejects every cut still lets the mux pick the leaf,
+        # which then reads and discards its manifests. Zero weight from the annealing
+        # step is the clean way; the loader has no per-phase weights yet.
+        st_unscored:
+          match: {task: st, scored: none}
+          field: duration
+          phases:
+            - {from_step: 0, min: 0}
+            - {from_step: 0, max: -1} # ANNEAL_STEP
+        # SPITE: audio and English transcript must be aligned (BLASER 2.0 >= 4, PI
+        # 10-30) before xCOMET says anything about the translation. Field rules:
+        # SPITE has no sidecar arrays.
+        st_align:
+          match: {task: st, scored: spite}
+          field: custom.spite.blaser2_src
+          min: 4.0
+@@XCOMET_RULES@@
+
+  validation_ds:
+    # Per NAMED set: every set below scores this many clips, a seeded draw.
+    max_samples: 20
+    input_cfg:
+    total_hours: 0.0
+    force_estimate: true
+    strict_text_field: true
+    skip_text_field_mismatch: true
+    prompt_template_selection: custom
+    prompt_template:
+      asr: "Transcribe the following {lang} audio: {audio_token}"
+      st: "Translate the following audio into {lang}: {audio_token}"
+    batch_size: 16
+    batch_duration: null
+    buffer_size: 20000
+    shuffle: false
+    drop_last: true
+    min_duration: 0.5
+    max_duration: 60.0
+    num_workers: 0
+    pin_memory: true
+    prefetch_factor: null
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+# =============================================================================
+# Trainer
+# =============================================================================
+trainer:
+  output_dir: ${oc.env:OUTPUT_DIR}
+  overwrite_output_dir: false
+  resume_from_checkpoint: null
+  seed: 1337
+  do_train: true
+  do_eval: true
+  eval_on_start: true
+  average_tokens_across_devices: true
+
+  per_device_train_batch_size: -1 # Handled by Lhotse
+  per_device_eval_batch_size: 4
+  # OPEN: from the step profile's grad_accum fit; the batch is fixed before Raclette.
+  gradient_accumulation_steps: 15
+
+  # Warmup, a long plateau, then a cosine decay to 0.1x peak over the last fifth.
+  # The launcher sets num_decay_steps = max_steps / 5; the cut_filter's
+  # ANNEAL_STEP is max_steps - num_decay_steps.
+  lr_scheduler_type: warmup_stable_decay
+  warmup_steps: 0.05
+  lr_scheduler_kwargs:
+    min_lr_ratio: 0.1
+    decay_type: cosine
+
+  num_train_epochs: 1
+  max_steps: -1
+
+  logging_strategy: steps
+  logging_steps: 5
+  report_to: wandb
+
+  # OPEN: cadence, gated on the batch (06-fondue.md §3, "checkpoint and eval cadence").
+  eval_strategy: steps
+  eval_steps: 500
+  batch_eval_metrics: true
+  predict_with_generate: true
+  generation_max_length: 256
+  generation_num_beams: 1
+
+  save_strategy: steps
+  save_steps: 1000
+  save_total_limit: 2
+
+  bf16: true
+  dataloader_num_workers: 4
+  remove_unused_columns: false
+  # Top-2 routing over 8 experts leaves an expert without tokens on some rank in
+  # some step; without this the scaling bench's 1-node smoke died in step 2.
+  ddp_find_unused_parameters: true
+
+  max_grad_norm: 1.0
+
+evaluation:
+  compute_metrics: true
+  enable_whisper_normalization: true
+  log_num_samples: 10
+
+optimization:
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  encoder_lr: 6e-6
+  adapter_lr: 2e-4
+  decoder_lr: 2e-5 # OPEN: Raclette's three LR points set it (IFT freeze, 11-05)
+  min_lr_scale: 0.1
