@@ -79,9 +79,10 @@ data:
     max_duration: 60.0
 
     batch_size: null
-    # OPEN: from the step profile (fp32 masters, 10 Hz). bd 10 is the micro-batch
-    # it measures first; 15 OOMs with fp32 masters.
-    batch_duration: 10
+    # The step profile's recipe (fp32 masters, 10 Hz, gradient checkpointing ON):
+    # 15 fits with checkpointing; without it 15, 10 and 8 all run out of memory.
+    # Measured fill is ~137%: a micro-batch carries ~20.5 s of audio, not 15.
+    batch_duration: 15
     quadratic_duration: null
     lhotse_sampler_type: dynamic_bucketing
     num_buckets: 30
@@ -179,8 +180,12 @@ trainer:
 
   per_device_train_batch_size: -1 # Handled by Lhotse
   per_device_eval_batch_size: 4
-  # OPEN: from the step profile's grad_accum fit; the batch is fixed before Raclette.
-  gradient_accumulation_steps: 15
+  # PROVISIONAL: the step profile's fit (10-30) at 16 nodes is 13.9 s/step at 20,
+  # a 7.3 audio-h batch, ~34 GPU-h per 1,000 h. 40 is cheaper per hour only on paper:
+  # it stalls on the loader (prefetch_factor 32 < 40). The ~4 s exposed all-reduce
+  # may be fixable (the lever job), which would make 10 the better choice.
+  gradient_accumulation_steps: 20
+  gradient_checkpointing: true
 
   # Warmup, a long plateau, then a cosine decay to 0.1x peak over the last fifth.
   # The launcher sets num_decay_steps = max_steps / 5; the cut_filter's
