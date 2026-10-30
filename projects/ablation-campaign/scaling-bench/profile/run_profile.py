@@ -32,6 +32,7 @@ sys.path.insert(0, str(BENCH_DIR))
 
 import bench  # noqa: E402
 
+
 #: Host libibverbs, the mlx5 provider and libnl copied from /usr/lib64 (see the board entry).
 IB_STAGE = "/gpfs/scratch/epor48/outputs/BENCH-profile-ibstage"
 
