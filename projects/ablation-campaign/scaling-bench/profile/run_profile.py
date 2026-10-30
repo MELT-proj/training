@@ -105,6 +105,8 @@ def main() -> None:
     lever = sub.add_parser("levers", help="submit the isolated lever benchmarks (no data, no training)")
     lever.add_argument("--nodes", type=int, default=2)
     lever.add_argument("--time", default="00:40:00")
+    lever.add_argument("--env", action="append", default=[], help="KEY=VALUE passed into the container (repeatable)")
+    lever.add_argument("--tag", default=None)
     lever.add_argument("--ib", action="store_true", help="bind the host InfiniBand userspace into the container")
     args = parser.parse_args()
 
@@ -164,6 +166,11 @@ def submit_levers(args: argparse.Namespace) -> None:
         "SINGULARITYENV_NCCL_DEBUG": "INFO",
         "SINGULARITYENV_NCCL_DEBUG_SUBSYS": "INIT,NET",
     }
+    for item in args.env:
+        key, value = item.split("=", 1)
+        extra_env[f"SINGULARITYENV_{key}"] = value
+    if args.tag:
+        name += f"-{args.tag}"
     if args.ib:
         name += "-ib"
         stage = f"{IB_STAGE}:/opt/hostib:ro"
