@@ -122,7 +122,7 @@ def main() -> None:
     if args.command == "check":
         bench.submit(name, env, argv, test_only=True)
         return
-    submit_and_record(name, env, argv)
+    submit_and_record(name, env, argv, {f"SINGULARITYENV_{k}": v for k, v in (i.split("=", 1) for i in args.env)})
 
 
 def submit_and_record(
