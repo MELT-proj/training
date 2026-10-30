@@ -257,6 +257,13 @@ leftovers) comes before Raclette.
 | Wed 11-25 / Mon 11-30 | Last submission / allocation ends: the final checkpoint is copied off MN5 and verified. |
 
 **Update 10-30.**
+- **The Fondue scaling numbers above are void** (step profile, 10-30). The
+  10-24 bench loaded the model in pure bf16 (no `master_dtype`), and every
+  Fondue point ran `loss 0, grad_norm nan` from step 2. With fp32 master
+  weights, `batch_duration 15 x grad_accum 40` runs out of memory at step 1
+  (~61 of 63 GB). The ~20.7 GPU-h per 1,000 h, the ~6,850 GPU-h and the
+  ~4.5 days are not measurements of the Fondue recipe. The profile now
+  measures the fp32-master recipe at a micro-batch that fits.
 - PR #165 merged (`5b087f1`), so Raclette's and Fondue's clone must be at or
   after it.
 - The PI's cleanup is done: `epor48` scratch is at 17.58 of 19.53 TB.
