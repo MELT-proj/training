@@ -92,6 +92,7 @@ def add_common(sub: argparse.ArgumentParser) -> None:
     sub.add_argument("--ranks", type=int, nargs="*", default=[0])
     sub.add_argument("--time", default="01:20:00")
     sub.add_argument("--tag", default=None)
+    sub.add_argument("--env", action="append", default=[], help="KEY=VALUE passed into the container (repeatable)")
     sub.add_argument(
         "--extra", action="append", default=[], help="a further override, appended last: --extra=--a.b=c (repeatable)"
     )
