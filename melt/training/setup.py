@@ -184,6 +184,10 @@ def _merge_chat_template_eos_token_id(cfg: DictConfig, tokenizer, text_decoder_c
     upstream ``config.json`` already lists its chat stop tokens alongside the
     raw EOS, which is why Llama runs never hit this.
 
+    With ``load_backbones=True`` the decoder goes through ``from_pretrained``
+    instead, which rebuilds its ``generation_config`` from the Hub's files;
+    ``MELTForCausalLM._create_text_stack`` adds the merged ids back there.
+
     A no-op when ``data.apply_chat_template`` is off: without chat formatting
     the model is never trained to emit a turn-end token, so there is nothing
     to add.

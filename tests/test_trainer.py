@@ -463,6 +463,16 @@ def test_none_valued_generation_kwargs_are_dropped():
     assert "num_beams" not in gen_kwargs
 
 
+def test_eval_decodes_greedily_unless_asked_to_sample():
+    """A decoder loaded from the Hub keeps the repo's `do_sample: true`
+    (EuroLLM-1.7B-Instruct); a decoder rebuilt from a MELT checkpoint does not."""
+    gen_kwargs = _bare_trainer(_gen_kwargs={})._generation_kwargs({})
+    assert gen_kwargs["do_sample"] is False
+
+    gen_kwargs = _bare_trainer(_gen_kwargs={"do_sample": True})._generation_kwargs({})
+    assert gen_kwargs["do_sample"] is True
+
+
 def test_pad_to_max_len_uses_the_processor_pad_id():
     """MELT sets no `model.config.pad_token_id`, which is what
     Seq2SeqTrainer's version would reach for."""

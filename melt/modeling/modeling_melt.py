@@ -1478,6 +1478,12 @@ class MELTPreTrainedModel(PreTrainedModel):
                 module.weight.data[module.padding_idx].zero_()
 
 
+def _union_eos_token_ids(*eos_token_ids: int | list[int] | None) -> list[int]:
+    """The stop ids in every ``eos_token_id`` given (scalar, list or unset), in first-seen order."""
+    flat = [i for eos in eos_token_ids if eos is not None for i in ([eos] if isinstance(eos, int) else eos)]
+    return list(dict.fromkeys(flat))
+
+
 class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
     r"""
     MELT model for conditional generation, consisting of an audio encoder, audio adapter, and text decoder.
@@ -1554,9 +1560,17 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
         pretrained weights would be wasteful.
         """
         if load_backbones and config.text_decoder is not None:
-            return AutoModelForCausalLM.from_pretrained(
+            decoder = AutoModelForCausalLM.from_pretrained(
                 config.text_decoder, config=config.text_decoder_config
             )
+            # from_pretrained swaps the generation_config transformers built from `config`
+            # for one rebuilt from the Hub's files, which lacks any eos id merged into
+            # `config` since (the chat turn-end token, #124): generation then runs on to
+            # max_new_tokens. Add those back, keeping the stop ids the Hub itself lists.
+            decoder.generation_config.eos_token_id = _union_eos_token_ids(
+                decoder.generation_config.eos_token_id, config.text_decoder_config.eos_token_id
+            )
+            return decoder
         return AutoModelForCausalLM.from_config(config.text_decoder_config)
 
     @staticmethod
