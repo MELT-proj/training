@@ -155,6 +155,9 @@ def submit_levers(args: argparse.Namespace) -> None:
     }
     extra_env = {
         "SINGULARITYENV_PYTHONPATH": "/workspace/training/projects/ablation-campaign/scaling-bench/profile",
+        # Which transport NCCL picks (NET/IB or NET/Socket) is printed at init.
+        "SINGULARITYENV_NCCL_DEBUG": "INFO",
+        "SINGULARITYENV_NCCL_DEBUG_SUBSYS": "INIT,NET",
     }
     argv = [
         "infra/runners/submit-container.sh",
