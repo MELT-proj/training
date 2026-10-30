@@ -22,6 +22,45 @@ Action needed: PI reviews the PR. No ST quality score exists in any manifest yet
 
 ---
 
+## 2026-10-28 — Claude (worker session, backbones) — Two more backbones, EuroLLM-1.7B-2512 and its Instruct, queued with the six arms' recipe; the base MA shows runaway ASR again
+Context: the PI asked for the same MA + IFT on `utter-project/EuroLLM-1.7B-2512` and `-Instruct-2512`, on MN5, with
+the six backbones' input configuration and audio stack, fully comparable; if the base has no chat template it borrows
+the Instruct's.
+
+Finding / proposal:
+
+- **Setup.** Four new rows in `campaign.yaml` (`MA-700-backbone-eurollm1.7b-2512-{ins,base}`,
+  `IFT-700-backbone-eurollm-2512-{ins,base}`) with the original EuroLLM rows' axes and only the decoder swapped. The
+  rendered commands match the original EuroLLM rows except for the decoder, run names, `init_from`, the wall times
+  (MA 16 h, IFT 56 h) and gradient checkpointing, which the IFT rows set from the start because the original IFT
+  ran out of memory without it. `plan_arm.py` gets a profile for each model (the base borrows the Instruct-2512
+  template) and pinned tags: the default 16-character slug cut `EuroLLM-1.7B-Instruct-2512` to the original
+  Instruct's tag, so the two would have shared a run name and an output directory. `tests/test_plan_arm_eurollm_2512.py`
+  keeps the four run names apart.
+- **Tokenisation.** Through MELT's own processor path the 2512 base and Instruct give byte-identical ids for the MA
+  and IFT prompts; the vocabulary is unchanged apart from the audio tokens. The 2512 template drops the original's
+  empty system block, so the prompt tokens differ slightly from the original EuroLLM arms.
+- **Smokes.** A 30-step MA smoke passed for both models on `acc_debug` before the real jobs.
+- **The base MA reproduces the old failure.** The 2512 base's `<|im_start|>` and `<|im_end|>` embedding rows are
+  untrained (norm 0.0003, against about 1.3 for a typical token) and the decoder is frozen in MA. At about step 6,500
+  its in-trainer eval shows 82–85% runaway generations and outputs about 9 times too long (es WER 6.2, it 6.1); the
+  Instruct MA at the same stage has WER 0.17 / 0.24 and no runaways. This is the original EuroLLM-Base defect. The
+  recipe is unchanged, as asked; IFT trains the decoder and repaired the original base.
+- **Both MAs hit the 16 h limit** (about 0.9 to 1.0 steps/s, against the 52,500-step budget), each with a
+  checkpoint at step 47,730, and were resumed from it with the same seed and step count; each IFT is chained behind
+  its resumed MA. The original EuroLLM base MA was cut at step 47,730 by its 14 h limit and not resumed, so the new
+  base MA is the first to run the full 52,500 steps.
+- **Comparability notes.** (1) The 2512 chat template has no system block. (2) The original EuroLLM IFTs ran partly
+  without gradient checkpointing; the new ones use it throughout. (3) The base arm is expected to start IFT from a
+  worse MA than the Instruct arm, as the original did.
+- **Cost estimate.** About 460 GPU-h for the four arms (MA about 12 to 16 h on 4 GPUs each, IFT about 45 to 56 h on
+  4 GPUs each), plus the resumes.
+
+Action needed: none yet. When the IFTs finish, score both with the backbone table's columns and flag the base MA as
+unusable for the MA-stage numbers, as for the original base.
+
+---
+
 ## 2026-10-23 — Claude (worker session, backbone score) — ST restricted to the trained directions and joined with ASR; EuroLLM's missing cells scored
 
 Context: after the en→X audit below, the PI ruled that the 23-target en→X

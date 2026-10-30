@@ -1512,3 +1512,81 @@ arms:
     max_steps: 6310
     checkpoint_count: 7
     time: "46:00:00"
+
+  # Backbone study, EuroLLM 2512 pair (utter-project/EuroLLM-1.7B-2512 and -Instruct-2512): two more arms on the same
+  # recipe as the six above, row for row the EuroLLM rows with the decoder changed and nothing else in the training
+  # axes (same configs, seeds, batch, LRs, max_steps, 4 GPUs). The base borrows the Instruct-2512 template
+  # (plan_arm DECODER_PROFILES). Differences that are not choices: the 2512 template has no empty system block; the
+  # base already registers the ChatML tokens, but their embedding and lm_head rows are untrained, as in the original
+  # base, and the MA decoder is frozen. Walltimes only: MA 16 h (the original Instruct took 12 h 05 of its 14 h); IFT
+  # with gradient checkpointing from the start (the originals OOM'd at bd 75 without it and were resumed with it; a
+  # memory change only), ~25 s/step measured on the resumes.
+  - id: MA-700-backbone-eurollm1.7b-2512-ins
+    stage: MA
+    config: ABL-MA-700-whisper-asr.yaml
+    decoder: utter-project/EuroLLM-1.7B-Instruct-2512
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    ddp_find_unused_parameters: true
+    nodes: 1
+    seed: 42
+    max_steps: 52500
+    time: "16:00:00"
+
+  - id: MA-700-backbone-eurollm1.7b-2512-base
+    stage: MA
+    config: ABL-MA-700-whisper-asr.yaml
+    decoder: utter-project/EuroLLM-1.7B-2512
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    lr_scheduler: warmup_stable_decay
+    warmup_ratio: 0.03
+    adapter_lr: 2e-3
+    batch_duration: 75
+    grad_accum_steps: 1
+    ddp_find_unused_parameters: true
+    nodes: 1
+    seed: 42
+    max_steps: 52500
+    time: "16:00:00"
+
+  - id: IFT-700-backbone-eurollm-2512-ins
+    stage: IFT
+    config: ABL-IFT-700-backbone.yaml
+    init_from: MA-700-backbone-eurollm1.7b-2512-ins
+    decoder: utter-project/EuroLLM-1.7B-Instruct-2512
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    batch_duration: 75
+    grad_accum_steps: 16     # 75 x 16 x 4 = 4,800 s
+    gradient_checkpointing: true
+    nodes: 1
+    seed: 1337
+    max_steps: 6310
+    checkpoint_count: 7
+    time: "56:00:00"
+
+  - id: IFT-700-backbone-eurollm-2512-base
+    stage: IFT
+    config: ABL-IFT-700-backbone.yaml
+    init_from: MA-700-backbone-eurollm1.7b-2512-base
+    decoder: utter-project/EuroLLM-1.7B-2512
+    encoder: openai/whisper-large-v3
+    adapter: moe
+    frame_rate_hz: 10
+    batch_duration: 75
+    grad_accum_steps: 16
+    gradient_checkpointing: true
+    nodes: 1
+    seed: 1337
+    max_steps: 6310
+    checkpoint_count: 7
+    time: "56:00:00"
