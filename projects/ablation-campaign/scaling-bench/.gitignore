@@ -1,0 +1,4 @@
+# Machine output fetched off the cluster: perf.jsonl, resolved_config.json and
+# SLURM logs. Regenerable from the cluster, and large enough that committing it
+# would be noise in every diff. The committed tables live in ../tables/.
+raw/

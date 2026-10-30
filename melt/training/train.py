@@ -229,6 +229,14 @@ def prepare_model(
             # fp16 for Whisper); widening is exact, so this loses nothing.
             model = model.to(load_dtype)
 
+    # The encoder logs its own backend; the decoder's was only ever implied by the
+    # config, and a silent fall-back to sdpa is not visible anywhere else.
+    logger.info(
+        "Text decoder %s attention implementation: %s",
+        type(model.text_decoder).__name__,
+        getattr(model.text_decoder.config, "_attn_implementation", "unknown"),
+    )
+
     logger.info("Tied model weights:")
     for tied_pair in find_tied_parameters(model):
         logger.info(f"  {tied_pair[0]} <--> {tied_pair[1]}")
