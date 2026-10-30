@@ -409,19 +409,6 @@ class MELTTrainer(Seq2SeqTrainer):
         self._perf_step_times: deque[float] = deque(maxlen=100)
         self._perf_window: dict[str, float] = {}
 
-        # Opt-in phase marks and profiler windows (run.step_profile); see
-        # melt/training/step_profile.py. None when off, and every hook site
-        # below is a single None check.
-        step_profile_cfg = self.config.get("run", {}).get("step_profile", None)
-        if step_profile_cfg and step_profile_cfg.get("enabled", False):
-            self._step_profiler = StepProfiler(
-                step_profile_cfg,
-                output_dir=self.args.output_dir,
-                grad_accum=self.args.gradient_accumulation_steps,
-                rank=self._global_rank,
-            )
-            self.add_callback(StepProfileCallback(self._step_profiler))
-
         # Sum of a MoE adapter's load-balancing aux loss and router entropy
         # (`melt.modeling.modeling_melt.MELTMoEAdapter`) across training_step
         # calls since the last log() call, plus a step count -- averaged and
@@ -524,6 +511,19 @@ class MELTTrainer(Seq2SeqTrainer):
         self._defer_optimizer_load = bool(
             config is not None and config.get("run", {}).get("defer_optimizer_load", False)
         )
+
+        # Opt-in phase marks and profiler windows (run.step_profile); see
+        # melt/training/step_profile.py. None when off, and every hook site
+        # below is a single None check.
+        step_profile_cfg = self.config.get("run", {}).get("step_profile", None)
+        if step_profile_cfg and step_profile_cfg.get("enabled", False):
+            self._step_profiler = StepProfiler(
+                step_profile_cfg,
+                output_dir=self.args.output_dir,
+                grad_accum=self.args.gradient_accumulation_steps,
+                rank=self._global_rank,
+            )
+            self.add_callback(StepProfileCallback(self._step_profiler))
 
         # trainer.ddp_gradient_as_bucket_view (config.py). Trainer.__init__ has built
         # the accelerator but train() has not wrapped the model in DDP yet, so the DDP
