@@ -2,7 +2,8 @@
 # The pool weighted: 25% of the audio to ST, then alpha 0.2 / beta 0.5 inside
 # each task (the two-tier comment below runs beta inside ASR and inside ST, not across both).
 # total_hours is what Fondue draws, not the pool.
-# ANNEAL_STEP 49500: max_steps - max_steps/5 at 16 nodes x 4 GPUs,
+# max_steps 45142, ANNEAL_STEP 36114 (the last fifth decays): 16 nodes x 4 GPUs,
+# micro-batches carrying batch_duration x 1.371 of audio (the measured fill),
 # from the template's total_hours, batch_duration and grad_accum; it moves with any of them.
 #
 # Fondue: one full fine-tune from the Hub components, no MA stage (PI, 2026-10-29).
@@ -2768,7 +2769,7 @@ data:
           missing: keep # languages neither recognizer covers
           phases:
             - {from_step: 0, max: 0.2999}
-            - {from_step: 49500, max: 0.0999} # ANNEAL_STEP
+            - {from_step: 36114, max: 0.0999} # ANNEAL_STEP
         # ST with no per-cut score (YODAS-Granary ast X->en, CoVoST2, Europarl-ST):
         # all of it while the LR is constant, none while it anneals (PI, 10-30).
         # CAUTION: a filter that rejects every cut still lets the mux pick the leaf,
@@ -2779,7 +2780,7 @@ data:
           field: duration
           phases:
             - {from_step: 0, min: 0}
-            - {from_step: 49500, max: -1} # ANNEAL_STEP
+            - {from_step: 36114, max: -1} # ANNEAL_STEP
         # SPITE: audio and English transcript must be aligned (BLASER 2.0 >= 4, PI
         # 10-30) before xCOMET says anything about the translation. Field rules:
         # SPITE has no sidecar arrays.
@@ -2792,37 +2793,37 @@ data:
           field: custom.spite.scores.de.xcomet_xl
           phases:
             - {from_step: 0, min: 0.9}
-            - {from_step: 49500, min: 0.97} # ANNEAL_STEP
+            - {from_step: 36114, min: 0.97} # ANNEAL_STEP
         st_xcomet_es:
           match: {task: st, scored: spite, tgt_lang: es}
           field: custom.spite.scores.es.xcomet_xl
           phases:
             - {from_step: 0, min: 0.9}
-            - {from_step: 49500, min: 0.97} # ANNEAL_STEP
+            - {from_step: 36114, min: 0.97} # ANNEAL_STEP
         st_xcomet_fr:
           match: {task: st, scored: spite, tgt_lang: fr}
           field: custom.spite.scores.fr.xcomet_xl
           phases:
             - {from_step: 0, min: 0.9}
-            - {from_step: 49500, min: 0.97} # ANNEAL_STEP
+            - {from_step: 36114, min: 0.97} # ANNEAL_STEP
         st_xcomet_it:
           match: {task: st, scored: spite, tgt_lang: it}
           field: custom.spite.scores.it.xcomet_xl
           phases:
             - {from_step: 0, min: 0.9}
-            - {from_step: 49500, min: 0.97} # ANNEAL_STEP
+            - {from_step: 36114, min: 0.97} # ANNEAL_STEP
         st_xcomet_nl:
           match: {task: st, scored: spite, tgt_lang: nl}
           field: custom.spite.scores.nl.xcomet_xl
           phases:
             - {from_step: 0, min: 0.9}
-            - {from_step: 49500, min: 0.97} # ANNEAL_STEP
+            - {from_step: 36114, min: 0.97} # ANNEAL_STEP
         st_xcomet_pt:
           match: {task: st, scored: spite, tgt_lang: pt}
           field: custom.spite.scores.pt.xcomet_xl
           phases:
             - {from_step: 0, min: 0.9}
-            - {from_step: 49500, min: 0.97} # ANNEAL_STEP
+            - {from_step: 36114, min: 0.97} # ANNEAL_STEP
 
   validation_ds:
     # Per NAMED set: every set below scores this many clips, a seeded draw.
@@ -3073,16 +3074,18 @@ trainer:
   gradient_checkpointing: true
 
   # Warmup, a long plateau, then a cosine decay to 0.1x peak over the last fifth.
-  # The launcher sets num_decay_steps = max_steps / 5; the cut_filter's
-  # ANNEAL_STEP is max_steps - num_decay_steps.
+  # build_fondue_mix.py pins max_steps and num_decay_steps (= max_steps / 5) from
+  # total_hours at the MEASURED fill, and the cut_filter's ANNEAL_STEP is
+  # max_steps - num_decay_steps. The launcher must not re-derive max_steps.
   lr_scheduler_type: warmup_stable_decay
   warmup_steps: 0.05
   lr_scheduler_kwargs:
     min_lr_ratio: 0.1
     decay_type: cosine
+    num_decay_steps: 9028
 
   num_train_epochs: 1
-  max_steps: -1
+  max_steps: 45142
 
   logging_strategy: steps
   logging_steps: 5

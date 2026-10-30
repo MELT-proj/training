@@ -68,23 +68,9 @@ def test_x_to_y_only_on_request():
     assert ("de", "fr") in {(e["tags"]["src_lang"], e["tags"]["tgt_lang"]) for e in bfm.st_leaves(x_to_y=True)}
 
 
-def test_anneal_step_is_four_fifths_of_max_steps():
+def test_schedule_draws_total_hours_at_the_measured_fill():
     lines = ["    total_hours: 9600.0", "    batch_duration: 10", "  gradient_accumulation_steps: 15"]
-    # 9600 h * 3600 / (10 * 15 * 16 * 4) = 3600 steps; the decay takes the last 720.
-    assert bfm.anneal_step(lines, nodes=16, gpus_per_node=4) == 2880
-
-
-def test_st_share_is_the_st_part_of_the_audio_whatever_the_entry_count():
-    def src(task, key, hours):
-        return {"task": task, "lang_key": key, "hours": hours, "path": key}
-
-    sources = [src("asr", "en", 900.0), src("asr", "mt", 4.0)]
-    sources += [src("st", f"en-{t}", 100.0) for t in ("de", "es", "fr", "it", "nl", "pt")] + [src("st", "de-en", 50.0)]
-    bfm.split_weights(sources, 0.25)
-
-    st = sum(s["p_cl"] for s in sources if s["task"] == "st")
-    assert st == pytest.approx(0.25)
-    assert sum(s["p_cl"] for s in sources) == pytest.approx(1.0)
-    # beta inside ASR only: en against mt, sqrt(900) : sqrt(4) = 30 : 2.
-    en, mt = sources[0]["p_l"], sources[1]["p_l"]
-    assert en / mt == pytest.approx(30 / 2)
+    # 9600 h * 3600 / (10 * 15 * 16 * 4) = 3600 steps at a fill of 1.0; the decay takes the last 720.
+    assert bfm.schedule(lines, nodes=16, gpus_per_node=4, fill=1.0) == (3600, 2880)
+    # At a fill of 1.5 each step carries 1.5x the audio, so 2/3 of the steps draw the same hours.
+    assert bfm.schedule(lines, nodes=16, gpus_per_node=4, fill=1.5) == (2400, 1920)

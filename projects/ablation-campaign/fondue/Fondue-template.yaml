@@ -188,8 +188,9 @@ trainer:
   gradient_checkpointing: true
 
   # Warmup, a long plateau, then a cosine decay to 0.1x peak over the last fifth.
-  # The launcher sets num_decay_steps = max_steps / 5; the cut_filter's
-  # ANNEAL_STEP is max_steps - num_decay_steps.
+  # build_fondue_mix.py pins max_steps and num_decay_steps (= max_steps / 5) from
+  # total_hours at the MEASURED fill, and the cut_filter's ANNEAL_STEP is
+  # max_steps - num_decay_steps. The launcher must not re-derive max_steps.
   lr_scheduler_type: warmup_stable_decay
   warmup_steps: 0.05
   lr_scheduler_kwargs:
