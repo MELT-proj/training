@@ -88,6 +88,7 @@ run:
     trace_steps: []
     trace_micro: [2]
     trace_dir: null
+    skip_final_save: false  # a measurement run writes no weights
 
 # =============================================================================
 # Model Configuration

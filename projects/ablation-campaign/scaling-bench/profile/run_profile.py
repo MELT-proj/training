@@ -55,6 +55,7 @@ def render(args: argparse.Namespace) -> tuple[str, dict[str, str], list[str]]:
     overrides += [
         f"--trainer.gradient_accumulation_steps={args.grad_accum}",
         "--run.step_profile.enabled=true",
+        "--run.step_profile.skip_final_save=true",
         f"--run.step_profile.trace_steps=[{','.join(str(s) for s in args.trace_steps)}]",
         f"--run.step_profile.trace_micro=[{args.trace_micro}]",
         f"--run.step_profile.ranks=[{','.join(str(r) for r in args.ranks)}]",
