@@ -38,8 +38,7 @@ def test_every_language_the_prompts_will_name_is_known_to_the_loader():
 
 def test_pool_follows_the_pi_language_decisions():
     langs = {e["tags"].get("lang") for e in _train()} - {None}
-    assert "ru" not in langs and "cy" not in langs
-    assert {"uk", "ca", "eu", "gl"} <= langs
+    assert langs == set(bfm.EU24) | {"uk", "ru"}
     spite = {e["tags"]["tgt_lang"] for e in _train() if e["tags"]["scored"] == "spite"}
     assert spite == {"de", "es", "fr", "it", "nl", "pt"}
 
@@ -73,3 +72,19 @@ def test_anneal_step_is_four_fifths_of_max_steps():
     lines = ["    total_hours: 9600.0", "    batch_duration: 10", "  gradient_accumulation_steps: 15"]
     # 9600 h * 3600 / (10 * 15 * 16 * 4) = 3600 steps; the decay takes the last 720.
     assert bfm.anneal_step(lines, nodes=16, gpus_per_node=4) == 2880
+
+
+def test_st_share_is_the_st_part_of_the_audio_whatever_the_entry_count():
+    def src(task, key, hours):
+        return {"task": task, "lang_key": key, "hours": hours, "path": key}
+
+    sources = [src("asr", "en", 900.0), src("asr", "mt", 4.0)]
+    sources += [src("st", f"en-{t}", 100.0) for t in ("de", "es", "fr", "it", "nl", "pt")] + [src("st", "de-en", 50.0)]
+    bfm.split_weights(sources, 0.25)
+
+    st = sum(s["p_cl"] for s in sources if s["task"] == "st")
+    assert st == pytest.approx(0.25)
+    assert sum(s["p_cl"] for s in sources) == pytest.approx(1.0)
+    # beta inside ASR only: en against mt, sqrt(900) : sqrt(4) = 15 : 2.
+    en, mt = sources[0]["p_l"], sources[1]["p_l"]
+    assert en / mt == pytest.approx(15 / 2)

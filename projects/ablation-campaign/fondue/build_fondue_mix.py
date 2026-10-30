@@ -3,17 +3,20 @@
 
 Fondue trains on the whole pool for its languages (PI, 2026-10-29 and 10-30):
 
-* **ASR**: the 24 EU languages, Ukrainian, and the regional languages of EU member
-  states that have data here (ca, eu, gl, ast, oc, lb, fy, br, hsb, lij, ltg). No
-  Russian. Welsh is left out: the UK is not a member state.
+* **ASR**: the 24 official EU languages, Ukrainian and Russian (PI, 2026-10-30: no
+  regional languages).
 * **ST X->en**: YODAS-Granary ``ast`` (``custom.translation_en``), CoVoST2, Europarl-ST.
 * **ST en->X**: CoVoST2, Europarl-ST, and SPITE (CV16 and GigaSpeech English, machine
   translated) for its EU targets only: de, es, fr, it, nl, pt.
 * **ST X->Y** between two non-English languages (Europarl-ST): only with ``--x-to-y``.
 
-Weights: the two-tier policy of ``infra/compute_mix_weights.py`` (Canary, arXiv:2509.14128
-§3.3.1), alpha 0.2 within a language, beta 0.5 across languages and directions, written
-as cut probabilities. Every ASR language and every ST direction is one entry.
+Weights: first a fixed split of the audio between the two tasks, ``--st-share`` of it to ST
+(default ST_SHARE). Inside each task, the two-tier policy of ``infra/compute_mix_weights.py``
+(Canary, arXiv:2509.14128 §3.3.1): alpha 0.2 within an entry, beta 0.5 across the task's
+entries. Every ASR language and every ST direction is one entry. Without the split, beta
+runs over ASR and ST entries together and the ST share falls out of how many directions
+there are: SPITE alone, six directions over the same English audio, took ~19% of the run.
+Written as cut probabilities.
 
 Tags the cut filter matches on, set here so the rules in the template find their sources:
 
@@ -49,6 +52,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[2]
 sys.path.insert(0, str(REPO_ROOT / "infra"))
@@ -57,25 +61,30 @@ sys.path.insert(0, str(REPO_ROOT / "projects" / "self-distill" / "sft"))
 import compute_mix_weights as cmw  # noqa: E402
 from build_sft_mix import audit_source  # noqa: E402
 
+
 TEMPLATE = HERE / "Fondue-template.yaml"
 SOURCES = HERE / "Fondue-sources.yaml"
 RENDERED = HERE / "Fondue.yaml"
 
 ALPHA = 0.2
 BETA = 0.5
+# Share of the drawn AUDIO that is ST. ASR is the larger task and the base the
+# instruction-following rests on; a quarter for ST still gives it ~80K h at the 330K h
+# budget, more than the whole X->en pool. The annealing phase drops the unscored ST
+# sources, so ST's real share falls there (to SPITE alone).
+ST_SHARE = 0.25
 
 EU24 = (
     "bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr", "ga", "hr",
     "hu", "it", "lt", "lv", "mt", "nl", "pl", "pt", "ro", "sk", "sl", "sv",
 )  # fmt: skip
 # Regional and minority languages of member states with training data on disk.
-REGIONAL = ("ca", "eu", "gl", "ast", "oc", "lb", "fy", "br", "hsb", "lij", "ltg")
-ASR_LANGS = EU24 + ("uk",) + REGIONAL
+ASR_LANGS = EU24 + ("uk", "ru")
 SPITE_TARGETS = ("de", "es", "fr", "it", "nl", "pt")
 SPITE_CORPORA = ("spite_cv16_euro9b", "spite_gigaspeech_euro9b")
 
 # Directory spellings per corpus. A source is only real if its directory exists.
-CV22_DIRS = {c: c for c in ASR_LANGS if c not in ("hr", "oc", "lb")} | {"ga": "ga-IE", "sv": "sv-SE", "fy": "fy-NL"}
+CV22_DIRS = {c: c for c in ASR_LANGS if c != "hr"} | {"ga": "ga-IE", "sv": "sv-SE"}
 MLS_DIRS = {
     "de": "german", "en": "english", "es": "spanish", "fr": "french",
     "it": "italian", "nl": "dutch", "pl": "polish", "pt": "portuguese",
@@ -90,18 +99,17 @@ GRANARY_DIRS = {
     "en": "English", "es": "Spanish", "et": "Estonian", "fi": "Finnish", "fr": "French",
     "hr": "Croatian", "hu": "Hungarian", "it": "Italian", "lt": "Lithuanian",
     "lv": "Latvian", "nl": "Dutch", "pl": "Polish", "pt": "Portuguese",
-    "ro": "Romanian", "sk": "Slovak", "sv": "Swedish", "uk": "Ukrainian",
+    "ro": "Romanian", "sk": "Slovak", "sv": "Swedish", "uk": "Ukrainian", "ru": "Russian",
 }  # fmt: skip
 FLEURS_DIRS = {
     "bg": "bg_bg", "cs": "cs_cz", "da": "da_dk", "de": "de_de", "el": "el_gr",
     "en": "en_us", "es": "es_419", "et": "et_ee", "fi": "fi_fi", "fr": "fr_fr",
     "ga": "ga_ie", "hr": "hr_hr", "hu": "hu_hu", "it": "it_it", "lt": "lt_lt",
     "lv": "lv_lv", "mt": "mt_mt", "nl": "nl_nl", "pl": "pl_pl", "pt": "pt_br",
-    "ro": "ro_ro", "sk": "sk_sk", "sl": "sl_si", "sv": "sv_se", "uk": "uk_ua",
-    "ca": "ca_es", "gl": "gl_es", "ast": "ast_es", "oc": "oc_fr", "lb": "lb_lu",
+    "ro": "ro_ro", "sk": "sk_sk", "sl": "sl_si", "sv": "sv_se", "uk": "uk_ua", "ru": "ru_ru",
 }  # fmt: skip
 # FLEURS leaves with no custom.pnc_text: they train on the (unpunctuated) supervision.
-FLEURS_WITHOUT_PNC = ("ga", "ca", "gl", "ast", "oc", "lb")
+FLEURS_WITHOUT_PNC = ("ga",)
 ENGLISH_EXTRA = (
     "gigaspeech/train",
     "peoples_speech/clean/train",
@@ -112,9 +120,9 @@ ENGLISH_EXTRA = (
 )
 COVOST_X_TO_EN = {
     "de": "de_en", "es": "es_en", "fr": "fr_en", "it": "it_en", "nl": "nl_en",
-    "pt": "pt_en", "et": "et_en", "lv": "lv_en", "sl": "sl_en", "sv": "sv-SE_en", "ca": "ca_en",
+    "pt": "pt_en", "et": "et_en", "lv": "lv_en", "sl": "sl_en", "sv": "sv-SE_en", "ru": "ru_en",
 }  # fmt: skip
-COVOST_EN_TO_X = {"de": "en_de", "et": "en_et", "lv": "en_lv", "sl": "en_sl", "sv": "en_sv-SE", "ca": "en_ca"}
+COVOST_EN_TO_X = {"de": "en_de", "et": "en_et", "lv": "en_lv", "sl": "en_sl", "sv": "en_sv-SE"}
 EUROPARL_LANGS = ("de", "en", "es", "fr", "it", "nl", "pl", "pt", "ro")
 
 PNC = "custom.pnc_text"
@@ -125,8 +133,7 @@ EXCLUDED = {
     "voxpopuli/hr/train": "47% of its cuts have no transcript",
     "yodas3/hr/train": "13 cuts (5 minutes), none with pnc_text",
     "voxpopuli_mosel/bg": "no WER sidecar, generic conversion (board, 10-29)",
-    "cv22_sidon/cy, fleurs/cy_gb, covost2/cy_en": "Welsh: the UK is not a member state",
-    "yodas-granary/Russian, cv22_sidon/ru, fleurs/ru_ru, covost2/ru_en": "Russian is out (PI, 10-30)",
+    "regional languages (ca, eu, gl, ...)": "only official EU languages, plus uk and ru (PI, 10-30)",
     "SPITE ko/ru/zh": "only SPITE's EU targets (PI, 10-30)",
     "instructs2s200k": "not ASR or ST",
 }
@@ -367,6 +374,18 @@ def cmd_sources(args: argparse.Namespace) -> None:
         print(f"  {rel}")
 
 
+def split_weights(sources: list[dict], st_share: float) -> None:
+    """The policy inside each task, then the task split: p_l and p_cl scaled by the task's share of the audio."""
+    if not 0 < st_share < 1:
+        raise ValueError(f"--st-share must be in (0, 1), got {st_share}")
+    for task, share in (("asr", 1 - st_share), ("st", st_share)):
+        part = [s for s in sources if s["task"] == task]
+        cmw.compute_weights(part, ALPHA, BETA)
+        for s in part:
+            s["p_l"] *= share
+            s["p_cl"] *= share
+
+
 def cmd_render(args: argparse.Namespace) -> None:
     os.environ.setdefault("LOCAL_ASR_SCORES_DIR", "/unused")  # only the cut filter reads it
     sources = cmw.load_sources(SOURCES, args.datasets_root)
@@ -386,7 +405,7 @@ def cmd_render(args: argparse.Namespace) -> None:
         )
     for s in sources:
         s["hours"], s["cuts"] = cache[s["path"]]["hours"], cache[s["path"]]["cuts"]
-    cmw.compute_weights(sources, ALPHA, BETA)
+    split_weights(sources, args.st_share)
     cmw.to_cut_probabilities(sources)
 
     lines = SOURCES.read_text().splitlines()
@@ -405,7 +424,9 @@ def cmd_render(args: argparse.Namespace) -> None:
         "# Fondue.yaml: generated by build_fondue_mix.py `render`. Do not hand-edit.",
     ).replace(
         "# The pool, unweighted; build_fondue_mix.py `render` writes the weighted Fondue.yaml.",
-        f"# The pool weighted by language and corpus (alpha {ALPHA}, beta {BETA}); total_hours is what Fondue draws.",
+        f"# The pool weighted: {args.st_share:.0%} of the audio to ST, then alpha {ALPHA} / beta {BETA} inside\n"
+        "# each task (the two-tier comment below runs beta inside ASR and inside ST, not across both).\n"
+        "# total_hours is what Fondue draws, not the pool.",
     )
     RENDERED.write_text(text)
 
@@ -415,7 +436,7 @@ def cmd_render(args: argparse.Namespace) -> None:
     pool = sum({s["path"]: s["hours"] for s in sources}.values())
     print(
         f"\nPool: {pool:,.0f} h of distinct leaves; Fondue draws {budget:,.0f} h. "
-        f"alpha {ALPHA}, beta {BETA}, {len(by_entry)} entries.\n"
+        f"ST {args.st_share:.0%} of the audio; alpha {ALPHA}, beta {BETA} inside each task; {len(by_entry)} entries.\n"
     )
     print(f"{'entry':<10} {'pool h':>10} {'share':>7} {'drawn h':>10} {'passes':>7}  largest corpus")
     rows = []
@@ -438,6 +459,27 @@ def cmd_render(args: argparse.Namespace) -> None:
     ast = sum(r[3] for r in rows if "-" in r[0])
     print(f"\nST entries draw {ast:,.0f} h ({ast / budget:.1%}); ASR {budget - ast:,.0f} h.")
     print(f"Wrote {RENDERED.relative_to(REPO_ROOT)}")
+    if args.json:
+        # Shares inside a task do not depend on the split, so a page can re-split them.
+        task_share = {"asr": 1 - args.st_share, "st": args.st_share}
+        out = {
+            "alpha": ALPHA,
+            "beta": BETA,
+            "st_share": args.st_share,
+            "budget_hours": budget,
+            "entries": [
+                {
+                    "key": key,
+                    "task": by_entry[key][0]["task"],
+                    "pool_h": round(held, 1),
+                    "within": share / task_share[by_entry[key][0]["task"]],
+                    "top": top,
+                }
+                for key, held, share, _, _, top in sorted(rows, key=lambda r: -r[2])
+            ],
+        }
+        args.json.write_text(json.dumps(out, indent=1) + "\n")
+        print(f"Wrote {args.json}")
 
 
 def main() -> None:
@@ -454,6 +496,8 @@ def main() -> None:
     s.add_argument("--xcomet-anneal", type=float, default=0.97)
     r = sub.add_parser("render", help="weight Fondue-sources.yaml into Fondue.yaml")
     r.add_argument("--datasets-root", default=os.environ.get("LOCAL_DATASETS_DIR"))
+    r.add_argument("--st-share", type=float, default=ST_SHARE, help="share of the drawn audio that is ST")
+    r.add_argument("--json", type=Path, default=None, help="also write the per-entry table (for the thresholds page)")
     r.add_argument("--cache", default=str(REPO_ROOT / "infra" / ".mix_weights_hours.json"))
     args = p.parse_args()
     if not args.datasets_root or (args.cmd == "sources" and not args.scores_root):

@@ -495,47 +495,17 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/uk_ua/train
         tags: {task: asr, lang: uk, text_field: custom.pnc_text, scored: wer}
       - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ca/train
-        tags: {task: asr, lang: ca, text_field: custom.metadata.sentence, scored: wer}
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ru/train
+        tags: {task: asr, lang: ru, text_field: custom.metadata.sentence, scored: wer}
       - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/ca_es/train
-        tags: {task: asr, lang: ca, scored: wer}
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Russian/asr_only
+        tags: {task: asr, lang: ru, scored: wer}
       - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/eu/train
-        tags: {task: asr, lang: eu, text_field: custom.metadata.sentence, scored: wer}
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Russian/ast
+        tags: {task: asr, lang: ru, scored: wer}
       - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/gl/train
-        tags: {task: asr, lang: gl, text_field: custom.metadata.sentence, scored: wer}
-      - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/gl_es/train
-        tags: {task: asr, lang: gl, scored: wer}
-      - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ast/train
-        tags: {task: asr, lang: ast, text_field: custom.metadata.sentence, scored: none}
-      - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/ast_es/train
-        tags: {task: asr, lang: ast, scored: none}
-      - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/oc_fr/train
-        tags: {task: asr, lang: oc, scored: none}
-      - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/lb_lu/train
-        tags: {task: asr, lang: lb, scored: none}
-      - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/fy-NL/train
-        tags: {task: asr, lang: fy, text_field: custom.metadata.sentence, scored: none}
-      - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/br/train
-        tags: {task: asr, lang: br, text_field: custom.metadata.sentence, scored: none}
-      - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/hsb/train
-        tags: {task: asr, lang: hsb, text_field: custom.metadata.sentence, scored: none}
-      - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/lij/train
-        tags: {task: asr, lang: lij, text_field: custom.metadata.sentence, scored: none}
-      - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ltg/train
-        tags: {task: asr, lang: ltg, text_field: custom.metadata.sentence, scored: none}
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/ru_ru/train
+        tags: {task: asr, lang: ru, text_field: custom.pnc_text, scored: wer}
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Bulgarian/ast
         tags: {task: st, src_lang: bg, tgt_lang: en, text_field: custom.translation_en, scored: none}
@@ -654,8 +624,11 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Ukrainian/ast
         tags: {task: st, src_lang: uk, tgt_lang: en, text_field: custom.translation_en, scored: none}
       - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/ca_en/train
-        tags: {task: st, src_lang: ca, tgt_lang: en, scored: none}
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Russian/ast
+        tags: {task: st, src_lang: ru, tgt_lang: en, text_field: custom.translation_en, scored: none}
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/ru_en/train
+        tags: {task: st, src_lang: ru, tgt_lang: en, scored: none}
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_de/train
         tags: {task: st, src_lang: en, tgt_lang: de, scored: none}
@@ -731,9 +704,6 @@ data:
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_sv-SE/train
         tags: {task: st, src_lang: en, tgt_lang: sv, scored: none}
-      - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_ca/train
-        tags: {task: st, src_lang: en, tgt_lang: ca, scored: none}
     # total_hours is the hours Fondue DRAWS, not the size of the pool: the trainer
     # turns it into steps per epoch, steps = total_hours * 3600 /
     # (batch_duration * world_size * grad_accum). OPEN: the budget follows the
@@ -944,49 +914,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/uk/validation
         tags: {task: asr, lang: uk, text_field: custom.metadata.sentence}
       - type: lhotse_shar
-        name: asr_ca
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ca/validation
-        tags: {task: asr, lang: ca, text_field: custom.metadata.sentence}
-      - type: lhotse_shar
-        name: asr_eu
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/eu/validation
-        tags: {task: asr, lang: eu, text_field: custom.metadata.sentence}
-      - type: lhotse_shar
-        name: asr_gl
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/gl/validation
-        tags: {task: asr, lang: gl, text_field: custom.metadata.sentence}
-      - type: lhotse_shar
-        name: asr_ast
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ast/validation
-        tags: {task: asr, lang: ast, text_field: custom.metadata.sentence}
-      - type: lhotse_shar
-        name: asr_oc
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/oc_fr/validation
-        tags: {task: asr, lang: oc}
-      - type: lhotse_shar
-        name: asr_lb
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/lb_lu/validation
-        tags: {task: asr, lang: lb}
-      - type: lhotse_shar
-        name: asr_fy
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/fy-NL/validation
-        tags: {task: asr, lang: fy, text_field: custom.metadata.sentence}
-      - type: lhotse_shar
-        name: asr_br
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/br/validation
-        tags: {task: asr, lang: br, text_field: custom.metadata.sentence}
-      - type: lhotse_shar
-        name: asr_hsb
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/hsb/validation
-        tags: {task: asr, lang: hsb, text_field: custom.metadata.sentence}
-      - type: lhotse_shar
-        name: asr_lij
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/lij/validation
-        tags: {task: asr, lang: lij, text_field: custom.metadata.sentence}
-      - type: lhotse_shar
-        name: asr_ltg
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ltg/validation
-        tags: {task: asr, lang: ltg, text_field: custom.metadata.sentence}
+        name: asr_ru
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/cv22_sidon/ru/validation
+        tags: {task: asr, lang: ru, text_field: custom.metadata.sentence}
       - type: lhotse_shar
         name: st_de_en_covost2
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/de_en/dev
@@ -1028,9 +958,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/sv-SE_en/dev
         tags: {task: st, src_lang: sv, tgt_lang: en}
       - type: lhotse_shar
-        name: st_ca_en_covost2
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/ca_en/dev
-        tags: {task: st, src_lang: ca, tgt_lang: en}
+        name: st_ru_en_covost2
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/ru_en/dev
+        tags: {task: st, src_lang: ru, tgt_lang: en}
       - type: lhotse_shar
         name: st_en_de_covost2
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_de/dev
@@ -1051,10 +981,6 @@ data:
         name: st_en_sv_covost2
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_sv-SE/dev
         tags: {task: st, src_lang: en, tgt_lang: sv}
-      - type: lhotse_shar
-        name: st_en_ca_covost2
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/covost2/en_ca/dev
-        tags: {task: st, src_lang: en, tgt_lang: ca}
       - type: lhotse_shar
         name: st_en_de_europarl
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/europarl_st/en_de/validation
