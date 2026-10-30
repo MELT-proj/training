@@ -188,6 +188,8 @@ class StepProfiler:
             return
         self.mark("mb1")
         self._in_micro = False
+        if self._meta and torch.cuda.is_available():
+            self._meta[-1]["peak_gb"] = round(torch.cuda.max_memory_allocated() / 2**30, 2)
         if self._micro == 0 and len(self._unused) < 8:
             self._note_unused_gradients()
         if self._tracing and self._micro != self.grad_accum - 1:
