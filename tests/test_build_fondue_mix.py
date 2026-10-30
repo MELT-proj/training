@@ -85,6 +85,6 @@ def test_st_share_is_the_st_part_of_the_audio_whatever_the_entry_count():
     st = sum(s["p_cl"] for s in sources if s["task"] == "st")
     assert st == pytest.approx(0.25)
     assert sum(s["p_cl"] for s in sources) == pytest.approx(1.0)
-    # beta inside ASR only: en against mt, sqrt(900) : sqrt(4) = 15 : 2.
+    # beta inside ASR only: en against mt, sqrt(900) : sqrt(4) = 30 : 2.
     en, mt = sources[0]["p_l"], sources[1]["p_l"]
-    assert en / mt == pytest.approx(15 / 2)
+    assert en / mt == pytest.approx(30 / 2)
