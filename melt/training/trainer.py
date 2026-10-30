@@ -20,7 +20,7 @@ import sys
 from typing import Any, Optional, Union
 
 import torch
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 from transformers import Seq2SeqTrainer, Seq2SeqTrainingArguments, Trainer, TrainingArguments
 from transformers.trainer_utils import (
@@ -34,6 +34,7 @@ from ..logging_utils import _is_global_master, force_print, get_logger
 from ..modeling import MELTProcessor
 from ..modeling.encoder_specs import get_encoder_spec_for_feature_extractor
 from .duration_tracker import DurationTracker
+from .data.audio.lhotse.cut_filter import make_step_callback
 from .data.audio.lhotse import (
     FallbackDataset,
     MELTDataCollator,
@@ -63,6 +64,22 @@ def _one_line(text: str) -> str:
     breaks the REF/HYP pairing that makes it readable in the first place.
     """
     return " ".join(text.split())
+
+
+def load_before_first_step(optimizer, load) -> None:
+    """Call ``load()`` once, right before the first ``optimizer.step()``, instead of now.
+
+    *optimizer* is a ``torch.optim.Optimizer`` or the ``accelerate`` wrapper around one. The call happens inside the step, ahead of
+    its update, so what ``load`` puts into the optimizer (its state and parameter groups) is what that first step uses.
+    """
+    inner = getattr(optimizer, "optimizer", optimizer)
+    handle = None
+
+    def hook(*_):
+        handle.remove()
+        load()
+
+    handle = inner.register_step_pre_hook(hook)
 
 
 def _fsdp2_module_class():
@@ -390,6 +407,11 @@ class MELTTrainer(Seq2SeqTrainer):
         # Initialize parent (may set up distributed)
         super().__init__(model=model, args=args, eval_dataset=eval_dataset, **kwargs)
 
+        # Phase boundaries of data.train_ds.cut_filter are optimizer steps; the
+        # dataloader workers learn the step from this shared counter.
+        if OmegaConf.select(self.config, "data.train_ds.cut_filter") is not None:
+            self.add_callback(make_step_callback())
+
         # WER/CER are computed from decoded *generations*.  Without
         # predict_with_generate the eval loop hands compute_metrics raw logits,
         # which TrainingEvaluator would decode as token ids and score into
@@ -459,6 +481,9 @@ class MELTTrainer(Seq2SeqTrainer):
             config is not None and config.get("run", {}).get("memory_preallocation", False)
         )
         self._preallocation_done = False
+        self._defer_optimizer_load = bool(
+            config is not None and config.get("run", {}).get("defer_optimizer_load", False)
+        )
 
         # trainer.ddp_gradient_as_bucket_view (config.py). Trainer.__init__ has built
         # the accelerator but train() has not wrapped the model in DDP yet, so the DDP
@@ -520,6 +545,26 @@ class MELTTrainer(Seq2SeqTrainer):
             # super().train(), so by here the sampler state is already on disk
             # and the workers have nothing left to report (issue #63).
             self._shutdown_dataloaders()
+
+    def _load_optimizer_and_scheduler(self, checkpoint: str | None) -> None:
+        """Load the optimizer and scheduler state of a resume, at the first optimizer step if ``run.defer_optimizer_load`` is on.
+
+        A resumed run puts AdamW's state (two fp32 copies of the model, 18.9 GiB here) on the GPU before its first micro-batch. A fresh
+        run has none until its first ``optimizer.step()``, and its first accumulation window does without: the gradients of the
+        micro-batches before the first synchronised backward are fresh tensors beside DDP's buckets, one more model-sized copy
+        (9.4 GiB). With the state already resident that window no longer fits a 64 GB card, and every rank dies at its first step.
+        Deferring the load puts the state where a fresh run creates it, so the resume follows the memory of the run it continues.
+        """
+        if checkpoint is None or not self._defer_optimizer_load:
+            super()._load_optimizer_and_scheduler(checkpoint)
+            return
+        logger.info(
+            "run.defer_optimizer_load: the optimizer and scheduler state of %s load at the first optimizer step",
+            checkpoint,
+        )
+        load_before_first_step(
+            self.optimizer, lambda: super(MELTTrainer, self)._load_optimizer_and_scheduler(checkpoint)
+        )
 
     # ------------------------------------------------------------------
     # Dataloader teardown
@@ -1796,6 +1841,11 @@ class MELTTrainer(Seq2SeqTrainer):
             )
 
         gen_kwargs.setdefault("use_cache", True)
+        # A run that loads its decoder from the Hub inherits the repo's
+        # generation_config, sampling flags included (both EuroLLM-1.7B-Instruct
+        # releases ship `do_sample: true`), while a run from a MELT checkpoint
+        # decodes greedily: pin greedy so eval scores do not depend on the start.
+        gen_kwargs.setdefault("do_sample", False)
         gen_kwargs.setdefault(
             "synced_gpus",
             bool(getattr(self, "is_deepspeed_enabled", False))

@@ -1,188 +1,335 @@
-# 04 — Training regime: an IFT-level half fraction, and the MA:IFT ratio
+# 04 — Is modality alignment worth it? Strategy and quantity
 
-**Settled (2026-09-15/16):** four two-level factors, eight IFT runs, on the
-provisional backbone from the confirmed MA checkpoint; "adapter frozen at
-IFT" is treated as an ablation level, not the default, pending this result;
-the decoder-frozen regime (only the adapter trains at IFT, under instruction
-templates) joins the comparison as two runs outside the fraction; the
-MA:IFT hours ratio is a named study (§6), run after the regime decision,
-splitting ASR hours only while ST hours stay fixed.
-**Open:** the exact levels for "MA epochs" (1 vs 3 is the default proposal);
-the ratio points if the decoder-frozen regime wins (then the single-stage
-comparison becomes the headline).
-**Owner:** PI decides the regime at the week-5 gate and reads the ratio
-sweep before the Fondue freeze.
+**Restructured 2026-10-20 (PI).** The final model is fully fine-tuned, with
+no frozen components and no LoRA. The learning rate is Raclette's job
+(`06-fondue.md` §4), not this section's. The 2^(4−1) regime fraction
+(R1-R10: adapter frozen or trainable at IFT, LoRA, decoder-frozen IFT) and
+the MA:IFT ratio sweep (P0-P7) of 2026-09-15/16 are retired. They are in git
+history before this date.
 
-## 1. Why a fraction here and not at the MA stage
+**The two questions:**
+1. **Is there any measurable benefit from running MA at all,** before a
+   full fine-tune?
+2. **If so, in which format and how much?** Format means the MA objective:
+   gold-transcript CE, self-distillation with ASR and translate
+   instructions, or AZeroS's instruction-free SIFT. It also covers ASR-only
+   against ASR+ST supervision. Quantity means MA hours.
 
-An IFT run costs 80–300 GPU-h and one to two days of wall clock. Sixteen
-runs would take a month of queue; eight take a week. At the MA stage the
-same factors are cheap enough for the full grid, which is why
-`01-interface-recipe.md` and `03-audio-stack.md` do not use fractions.
+**What it decides.** The "MA data budget and stage split" row of
+`06-fondue.md` §3: whether Fondue runs MA, for how many hours across the
+EU languages, and with which objective.
 
-## 2. Factors
+**Owner:** the PI reads the Tier-1 scatter on Mon 10-26 (§5).
 
-| factor | low (−) | high (+) | why it matters |
+## 1. What the self-distillation study already tested
+
+Source: `projects/self-distill/README.md`, merged into main on 10-19.
+Corrections to how it is remembered are marked **(note)**.
+
+| phase | stack | what ran | what it shows |
 |---|---|---|---|
-| A: adapter during IFT | frozen | trainable | freezing a weak adapter and training only the decoder cannot repair the interface; most published recipes keep the projector trainable |
-| B: decoder update | full fine-tune | LoRA (r=16, alpha 32) | text-ability retention and cost |
-| C: MA data | ASR only | ASR + ST | whether translation supervision during alignment helps or hurts |
-| D: MA length | 1 epoch | 3 epochs | strong vs light alignment |
+| 1 | w2v-BERT 2.0 + MLP + Qwen3.5-2B, adapter only, 19.5 h | GOLD (CE), AZEROS, SOFT (forward KL), REVERSE (on-policy reverse KL), RELAY | **Nothing.** No variant aligned, CE included: content-word recall equals a shuffled baseline. Not reusable. |
+| 2, start | Whisper-large-v3 + MLP sk5 + Qwen3.5-2B-Instruct, adapter only, en/de/fr/es/it | GOLDW: CE on gold transcripts, 1,000 h, WSD | Aligns at 26-32 h of audio; in-domain WER 0.106 at 1,000 h. This is start **A**. |
+| 2, steps 2-4 | same, 50 h **continuations of A**, not runs from scratch | S2 (repeat instruction only = ASR): `ce`, `soft`, `opd`, `opd_anchor`, `sift`, `sift_anchor`. S3 (half repeat, half "translate into X" = ASR + teacher ST): `azeros(_anchor)`, `soft_anchor`, `opd_anchor`. Three data seeds on the main arms. | On-policy never beats offline. The instruction mix gives X→en chrF 24→53 from ASR audio alone, and SIFT ties it on translation and loses on ASR. `S3-azeros_anchor` = start **B**. |
+| 2, step 5 | full fine-tune (encoder, adapter, decoder; LRs 6e-6 / 2e-4 / 2e-5) on HR5 and EU24 mixes of gold ASR+ST, 11,499 steps | **(note) Only two starts were fine-tuned, A and B,** not every MA checkpoint. B's runs were cancelled after 2,872-3,590 steps. | B's 13-22 chrF head start is gone by step 718 (383 h nominal), and the last edges by 2,872 (1,532 h; all sign tests p > .2). |
+| 2, step 6 | from A, adapter only, 24 EU languages, 2,700 h | SD24 (instruction mix), CE24 (gold CE), SD-SIFT24, each on Qwen and EuroLLM; plus SFT-EU24 on both decoders | Self-distillation *instead of* fine-tuning; none of these starts was fine-tuned afterwards. |
 
-## 3. The design
+**ASR vs ASR+ST.** It was tested only in this form: S2 against S3, i.e.
+repeat-only against repeat + translate instructions with the **teacher's**
+translations. It was measured after MA and not carried through fine-tuning,
+because only B (ASR + teacher ST) went to step 5. **Gold** ST data inside MA
+has never been run.
 
-A 2^(4−1) half fraction with D = ABC. Each main effect is aliased only with a
-three-factor interaction (assumed negligible); two-factor interactions are
-aliased in pairs (AB with CD, AC with BD, AD with BC).
+**Quantity.** It was never varied. Every phase-2 strategy sits on the same
+1,000 h CE base, and there is **no no-MA point**: no fine-tune from a random
+adapter exists.
 
-| run | A adapter@IFT | B decoder | C MA data | D MA epochs |
-|---|---|---|---|---|
-| R1 | frozen | full | ASR | 1 |
-| R2 | trainable | full | ASR | 3 |
-| R3 | frozen | LoRA | ASR | 3 |
-| R4 | trainable | LoRA | ASR | 1 |
-| R5 | frozen | full | ASR+ST | 3 |
-| R6 | trainable | full | ASR+ST | 1 |
-| R7 | frozen | LoRA | ASR+ST | 1 |
-| R8 | trainable | LoRA | ASR+ST | 3 |
+## 2. What can be reused
 
-Reading: the main effect of A is the mean of the four "trainable" runs minus
-the mean of the four "frozen" runs; the other factors are balanced within
-both halves. Factors C and D need their own MA checkpoints (ASR vs ASR+ST,
-1 vs 3 epochs): four MA runs, cheap.
+All of it is on the step-5 stack (Whisper-large-v3 + MLP sk5 + Qwen3.5-2B,
+adapter-only MA), and every path below exists (checked 2026-10-20).
 
-**The third regime, outside the fraction.** Factor B compares full
-fine-tuning with LoRA. The decoder-frozen regime, in which IFT trains only
-the adapter under the instruction templates, is a different animal: the
-decoder never changes, so text ability is preserved by construction, IFT
-costs the same per hour as MA rather than several times more, and ST
-depends entirely on the frozen decoder translating from adapter embeddings.
-It is added as two runs:
+| piece | MA objective / hours | where | use |
+|---|---|---|---|
+| GOLDW checkpoints 1200, 2400, …, 9600 | CE, 100-800 h, stable phase of WSD (decay is the last 2,400 steps) | artemis `outputs/GOLDW-…qwen35…-1000h-s42-2g/`, with optimizer and sampler state | **low-hour CE points** after a short decay branch (§3) |
+| GOLDW-final = A | CE, 1,000 h | same, plus MN5 | the 1,000 h CE point |
+| `SFT-EU24-from-goldw` | A → full FT, all 11,499 steps | nyx `outputs-sft/`, scored at 0/718/…/8616/final | **reused as is** |
+| `S3-azeros_anchor` d42 = B | CE 1,000 + SD-mix 50 h | artemis + nyx | the 1,050 h SD-mix point |
+| `SFT-EU24-from-sd-azeros` | B → full FT, cancelled at ~3,890 | nyx (718-2,872), MN5 | **reused as is** up to 2,872 |
+| SD24, CE24, SD-SIFT24 (Qwen) | CE 1,000 + 2,700 h of SD-mix / CE / SIFT over 24 languages | nyx `outputs-sd24/` (finals), MN5 | the 3,700 h points: they need the fine-tune |
+| the same three on EuroLLM, A-EuroLLM, `SFT-EU24-from-EuroLLM-A` | as above | nyx, MN5 | a decoder check, only if EuroLLM wins the backbone |
+| S2 arms, other S3 arms | 50 h continuations | artemis | not needed: B stands for them |
+| the frozen clone `~/training-sd-sft` @ 2a26f33 on MN5 | the step-5 SFT code | MN5 | **new fine-tunes must run from it**, so that their batches match A's and B's |
+| HR5 SFT pair | 5-language fine-tune | nyx | not reusable: different data |
 
-| run | adapter@IFT | decoder | MA data | MA epochs | compare with |
+The reuse is large because **only the fine-tune side is missing.**
+- Five MA starts exist and have never been fine-tuned.
+- Two low-hour CE starts cost a few GPU-minutes.
+- The no-MA start costs nothing.
+
+## 3. Design
+
+One downstream protocol for every point: **the step-5 EU24 fine-tune**.
+- Same config, seeds and world size as A's and B's runs, from the same clone.
+- Every run reads the same batches, so only `model.ckpt` differs.
+- Readouts at steps 718, 1,436, 2,154 and 2,872 (383 / 766 / 1,149 /
+  1,532 h nominal), plus step 0 for MA alone.
+- Arms stop at 2,872. The schedule stays the 11,499-step one, so the LR is
+  in its stable phase at every readout for every arm.
+
+**What each tier answers.** Every comparison is made *after* the same
+fine-tune, because Fondue fine-tunes everything: MA matters only if what
+it gives survives that.
+- **Tier 1** reuses what exists and answers three things:
+  - *Is MA needed?* No MA (T0) against MA (T1, T2, A, T3) at equal
+    fine-tune steps, with T0' and A' for the noise.
+  - *Roughly how much?* The same CE objective at 0 / 120 / 360 / 1,000 /
+    3,700 h.
+  - *Which format?* At equal hours (3,700): ASR only (T3), teacher ST
+    (T4), SIFT (T5); A against B at 1,000 h. Gold ST inside MA (T6) was
+    dropped on 10-20 (PI: not tested for now).
+  
+  Its limits: below 1,000 h it covers only the five high-resource
+  languages, and every point above 1,000 h stands on the same 1,000 h CE
+  base.
+- **Tier 2** runs only if Tier 1 says MA matters. It re-measures the
+  hours curve the way Fondue would run MA: from scratch, on all 24
+  languages, per format. That gives the hours to reserve directly.
+
+**Tier 1 — reuse, submit this week.**
+
+| point | MA objective | MA hours | languages in MA | start | fine-tune |
 |---|---|---|---|---|---|
-| R9 | trainable | frozen | ASR | 1 | R4 (LoRA, same A/C/D) |
-| R10 | trainable | frozen | ASR+ST | 1 | R6 (full, same A/C/D) |
+| T0 | none (random adapter) | 0 | — | Whisper + Qwen + a fresh MLP | **new**, to the end (11,499), to compare with A's final |
+| T1 | CE | 120 | HR5 | GOLDW ckpt-1200 + 240-step decay | new, to 2,872 |
+| T2 | CE | 360 | HR5 | GOLDW ckpt-3600 + 720-step decay | new, to 2,872 |
+| A | CE | 1,000 | HR5 | GOLDW-final | **exists** |
+| B | CE + SD-mix (ASR + teacher ST) | 1,000 + 50 | HR5 | `S3-azeros_anchor` d42 | **exists** to 2,872 |
+| T3 | CE + CE | 1,000 + 2,700 | HR5 then EU24 | CE24 | new, to 2,872 |
+| T4 | CE + SD-mix | 1,000 + 2,700 | HR5 then EU24 | SD24 | new, to 2,872 |
+| T5 | CE + SIFT | 1,000 + 2,700 | HR5 then EU24 | SD-SIFT24 | new, to 2,872 |
+| ~~T6~~ | ~~CE + gold ASR+ST~~ | | | dropped 10-20 (PI) | |
+| T0', A' | replicates of T0 and A, data seed changed | | | | new, to 2,872: there is no fine-tune seed noise yet, and the T0-A gap is the headline |
 
-Adapter-trainable is the only sensible level for this regime, so it does
-not enter the fraction's aliasing; R9/R10 are read as direct pairs.
+- **Decay branches (T1, T2).** Resume the GOLDW checkpoint and override
+  `max_steps` and `num_decay_steps`, so that it decays over the last 20% of
+  its own length, as GOLDW did. The old rule "never intermediate
+  checkpoints" stands; the branch is what makes them real runs. The
+  checkpoints carry optimizer and sampler state, but whether the resume
+  takes the overrides has to be checked first. On artemis 2× H200 each
+  branch is minutes.
+- **T6 dropped (PI, 10-20).** For the record, the gold ST that exists:
+  X→en 55,633 h over 21 sources, en→X 2,744 h over 12 targets, none for
+  ga/mt. At 2,700 h with a 0.25 ST share that is 24.5 h per direction over
+  33 directions.
+- **T0's init.** `INIT=none` (PR #159). The model config matches
+  GOLDW-final's except `encoder.eval_when_frozen`, which is inert with an
+  unfrozen encoder. One caveat: A's start loads through `dtype=auto`, so its
+  Whisper weights are F16 rounded to bf16, while T0 keeps the hub's F16.
+  That is ~0.1% per weight, below seed noise, but T0 vs A is not purely
+  "MA vs none".
 
-## 4. Metrics and decision rule
+**Tier 2 — only if Tier 1 shows an MA effect that survives step 718.**
+The Fondue answer then needs the curve over **24 languages** and from
+scratch. Below 1,000 h Tier 1 is HR5 only, and above it every point stands
+on the 1,000 h HR5 base.
+- MA from scratch on the SD24 language mix (flat cap), CE and SD-mix at
+  120 / 360 / 1,000 h.
+- Six cheap MAs plus six fine-tunes to 2,872.
 
-In-domain CER and FLEURS-24 CER after IFT, X→en chrF/COMET, text-ability
-retention (a small text benchmark or held-out text perplexity before vs
-after IFT), and GPU-h. The regime for Fondue is the combination whose main
-effects are favourable and whose aliased interactions are not large; if an
-interaction pair is large, the two candidate explanations are separated by
-one extra run.
+**Fondue-stack check (beside Tier 1, once the backbone is called).**
+- The whole study above runs on Qwen3.5-2B-Instruct + MLP, not on the Fondue
+  stack (Whisper + MoE + the winning decoder).
+- One extra run tests whether the answer to question 1 carries over: a
+  no-MA IFT on the winning backbone with the backbone IFT config,
+  `~/training-ift`'s, read against that backbone's existing MA 700 h + IFT
+  arm at the same steps. This is the retired P0, kept because it is the
+  number Fondue actually inherits.
 
-## 5. Results
+## 4. Readouts and figures
 
-| run | CER in-domain | CER FLEURS-24 | chrF X→en | text retention | GPU-h |
-|---|---|---|---|---|---|
-| R1 | | | | | |
-| … | | | | | |
-| R9 | | | | | |
-| R10 | | | | | |
+Per checkpoint, scored on artemis with the step-5 pipeline
+(`eval/watch_sft_checkpoints.py`, `render_sft_tables.sh`), plus the
+campaign's selection metric:
+- FLEURS-24 dev: WER on HR5 and CER on the other 19;
+- X→en and en→X chrF++, on HR4 and the other 19;
+- the share of en→X outputs in the requested language;
+- runaways, i.e. hypotheses over twice the reference length;
+- the selection score.
 
-## 6. The MA:IFT hours ratio (added 2026-09-16)
+ASR and ST are always reported side by side (rule of 2026-09-20,
+SALMONN's task over-fitting): a point that wins on ASR and loses on ST is a
+finding, not a winner.
 
-Every arm so far uses 700 h per language of ASR in MA and 700 h per
-language of ASR plus ST in IFT. Nobody chose that split; it fell out of the
-data design. What the split *means* changes with the regime, which is why
-this study runs after the week-5 decision rather than beside it:
+**The figure the PI asked for.**
+- x = MA hours (log axis, with 0 shown apart);
+- y = each metric after S fine-tune steps;
+- one panel per S (718 and 2,872), one marker per strategy;
+- a band for the T0/T0' and A/A' seed spread.
 
-| regime at IFT | what the split means | expectation, to be tested |
+**Second view, for the cost argument.** x = total GPU-h (MA + fine-tune).
+On this stack an MA hour is not much cheaper than a fine-tune hour:
+- CE24: 2,700 h in ~75 GPU-h, i.e. ~36 h per GPU-h;
+- SFT-EU24: 6,133 h nominal in ~226 GPU-h, i.e. ~27 h per GPU-h;
+- SD-mix: about 2.8× the CE cost per step.
+
+So MA has to buy quality, not just cheap hours.
+
+## 5. Decision rule for Fondue
+
+Read Mon 10-26, at the latest 2,872-step readout available.
+
+| outcome | Fondue |
+|---|---|
+| T0 is within the seed band of A at 718 and after | **No MA, or the shortest MA that keeps the start stable** (T1's 120 h, if T0 shows loss spikes or a damaged decoder). The MA hours go to IFT. |
+| MA helps at 718 but the gap is gone by 2,872 | Same, because Fondue's IFT is far longer than 1,532 h. A short MA is kept only if it buys stability or early checkpoints. |
+| A gap persists at 2,872 | MA is kept: the best strategy, at the knee of the hours curve. Tier 2 then sets the EU24 hours. **Fondue's MA can start before Tier 2 ends.** It is WSD, so its length is set when the decay is triggered, not at submission. |
+| SD-mix or SIFT beats CE only on ST at step 0 | That repeats step 5, and does not justify the extra cost of self-distillation in Fondue. |
+
+**Default if Tier 1 is late:** Fondue keeps a CE MA on the EU24 pool,
+shortened to what the 10-23 freeze already fixes. The decay is triggered
+by the first readout that lands.
+
+## 6. Cost and schedule
+
+| item | GPU-h | where | when |
+|---|---|---|---|
+| T1, T2 decay branches | < 2 | artemis 2× H200 | Tue 10-20 to Wed 10-21 |
+| Tier-1 fine-tunes: T1-T5, T0' and A' to 2,872 | 7 × ~60 = ~420 | MN5, 2 nodes each | submitted Wed 10-21 |
+| T0 to the end | ~226 | MN5 | submitted Wed 10-21 |
+| evals (6-7 checkpoints × 9 runs) | A6000 | artemis | as checkpoints land |
+| Fondue-stack no-MA IFT | ~100 (Llama) / ~300 (Qwen) | MN5 | when the backbone is called (~10-22) |
+| Tier 2, if triggered | ~500 | MN5 + artemis | 10-26 to ~10-30 |
+
+**Where things run.**
+- **artemis `hades`:** the two decay branches only. They must resume
+  GOLDW's 2-rank sampler state, so they need GOLDW's world size: 2 H200.
+  Queued 2026-10-20 and waiting for GPUs (1 of 8 was free).
+- **MN5:** everything that needs a whole node, so that the arms stay
+  consistent: all fine-tunes (2 nodes, as A and B) and the Fondue-stack
+  IFT. Each is requested with the shortest wall
+  time that covers it.
+
+**Checklist to start Tier 1** (checked 2026-10-20 unless marked):
+
+| # | item | state |
 |---|---|---|
-| decoder frozen, adapter trainable | both stages train the same 6.3M parameters at the same cost per hour; the split is a pure curriculum question, and a single stage with instructions from the start is the honest comparison | the split matters little; single-stage may match two-stage; ST is capacity-limited by the adapter |
-| full fine-tune | IFT can repair a weak interface but costs several times more per hour and erodes text ability; MA front-loads the cheap work | a flat optimum somewhere around 20–50% of the ASR hours in MA; the no-MA point is the baseline that matters |
-| LoRA | limited repair capacity, less forgetting | between the two |
+| 1 | MN5 clone `~/training-ma-utility` = 2a26f33 + the two PR #159 commits (`~/training-sd-sft` stays untouched) | ✓ clean |
+| 2 | starts on MN5 scratch: GOLDW-final, `S3-azeros_anchor` d42, CE24, SD24, SD-SIFT24 (Qwen) | ✓ all present |
+| 3 | `launch_sft.sh` builds a **no-MA start** (`INIT=none`: no `--model.ckpt`, a fresh MLP, the same processor) | ✓ PR #159 (open), in the clone |
+| 4 | the reused starts (CE24, SD24, SD-SIFT24) go through `INIT=sd SD_CKPT=…` with their own `INIT_TAG` | ✓ dry-run table done on MN5 |
+| 5 | **a clean stop at step 2,872** without changing the 11,499-step schedule: a stop-at-step option, or a wall time ending just past the 2,872 save. MN5 step time varies up to 1.5×, so the option is safer. | ✓ `run.stop_after_step`, PR #159; `acc_debug` smoke against A's log queued |
+| 6 | decay branches T1 and T2: resume GOLDW ckpt-1200 and ckpt-3600 with `max_steps` 1,440 and 4,320 and `num_decay_steps` 240 and 720. At the first logged step, check that the LR starts decaying from 1e-3. It should: the HF WSD scheduler is a LambdaLR rebuilt from the new arguments, with the step count restored from `scheduler.pt`. | queued on `hades`; then the LR check and `mn5transfer` of the two finals (~5 GB each) |
+| 7 | ~~T6's MA~~ | dropped 10-20 (PI) |
+| 8 | replicates: `SEED=1338` for T0' and A' (it changes the init and the data order together) | launcher supports it |
+| 9 | scoring: add the new run names to `runs.txt` for `eval/watch_sft_checkpoints.py` (nyx → artemis A6000), with `pull_mn5_checkpoints.sh` limited to steps 718-2,872 | to do |
+| 10 | the selection metric on each readout, beside the step-5 tables | to do |
 
-Factor A changes the meaning again: with the adapter trainable at IFT, MA
-is a warm start rather than the adapter's only training, and the optimum
-shifts towards less MA.
+Items 6 and 9 gate the Wed 10-21 submission, and so does the PI's go for `acc_ehpc` (~630 GPU-h).
 
-**Design rules.**
+The fine-tunes run at ~7 h to step 2,872 after a 12-13 h `acc_ehpc` queue.
+Everything submitted on 10-21 is read by Sat 10-24 to Sun 10-25.
 
-- **Split ASR hours only; hold ST fixed.** Only IFT carries ST, so at a
-  fixed total a larger MA share would silently cut ST exposure and confound
-  the effect with a data-quantity change. The sweep keeps the campaign's ST
-  hours in IFT (700 h per direction) and splits a fixed 700 h per language
-  of ASR between the two stages.
-- **Separate MA runs per budget, never intermediate checkpoints.** A
-  checkpoint at 100 h of a 700 h cosine run has not decayed its learning
-  rate and is not a 100 h run. MA is cheap; render and run each budget with
-  its own full schedule.
-- **One seed per point**, two at the campaign split (the week-3
-  confirmation run and its replicate already provide them).
-- **Score ST at every point, not only ASR** (PI, 2026-09-20). Two-stage
-  training on ASR-heavy data is known to collapse onto ASR at the expense of
-  the other tasks — SALMONN ([arXiv:2310.13289](https://arxiv.org/abs/2310.13289))
-  names this task over-fitting and needs a third stage to undo it. Our MA
-  stage is ASR-only by construction, so this sweep is the place it would
-  show up: a split that minimises ASR WER may be the split that costs the
-  most chrF. Report ASR and ST side by side at every point and treat a
-  point that wins on ASR while losing on ST as a finding, not a winner.
-  The existing text-retention metric does not cover this: it asks whether
-  the decoder still writes text, not whether the model still translates.
+## 7. Results
 
-**Consequence for the ASR:ST allocation.** If task over-fitting is visible
-here, then the ASR:ST mix inside IFT becomes a decision in its own right
-rather than a property of the data pool, and it has to be settled before
-Raclette can pilot a learning rate (`06-fondue.md` §4) — the LR that suits
-an ASR-dominated mix is not the one that suits a balanced one.
-- **Metrics:** in-domain CER, FLEURS-24 CER, X→en chrF/COMET (with ST
-  exposure fixed, an ST change reflects alignment quality rather than
-  exposure), text retention, and GPU-h. Read the same table two ways: CER
-  against MA share at fixed hours (the data-limited view, which is the
-  ladder's tail languages) and CER against GPU-h using each stage's
-  measured per-hour cost under that regime (the compute-limited view, which
-  is Fondue).
+**Decided 2026-10-29 (PI): no MA. Fondue is a single-stage full fine-tune
+from the Hub components (MA budget 0 h); Tier 2 is not run.** Final
+readout below the interim one.
 
-**Points, under the winning regime.** MA ASR hours per language against IFT
-ASR hours per language, with IFT ST fixed at 700 h per direction:
+First readout, 2026-10-21. Steps 718 / 2,872 unless marked (A and B
+also show step 0). WER and CER are fractions; lower is better for WER, CER
+and selection. ST cells are chrF, "HR4 / other-19" at each step in turn.
 
-| point | MA | IFT ASR | note |
-|---|---|---|---|
-| P0 | 0 | 700 | no MA: the adapter starts from random init inside IFT (adapter trainable). Under the decoder-frozen regime this *is* the single-stage model |
-| P1 | 100 | 600 | |
-| P3 | 300 | 400 | |
-| P7 | 700 | 0 | ST-only IFT: ASR then has to survive as instruction-following with no ASR instruction data |
-| campaign | 700 | 700 | the existing arm; no trade-off, the reference point |
-| zero-IFT probe | 700 | none | evaluation only, instruct backbones: score the MA checkpoint with the IFT prompts for ASR and ST |
+| point | MA objective | MA h | step | WER HR5 | CER other-19 | X→en HR4 / other | en→X HR4 / other | selection | GPU-h |
+|---|---|---|---|---|---|---|---|---|---|
+| T0 | none | 0 | 718 / 2,872 | .091 / .075 | .124 / .090 | 56.7 / 47.3, 57.6 / 49.7 | 49.4 / 38.8, 51.2 / 39.8 | .0616 / .0518 | |
+| T0' | none, seed 1338 | 0 | 718 / 2,872 | .090 / .076 | .147 / .100 | 56.2 / 46.5, 57.7 / 50.1 | 50.6 / 38.5, 51.7 / 40.9 | .0628 / .0429 | |
+| T1 | CE | 120 | 718 / 2,872 | .112 / .074 | .155 / .093 | 56.7 / 47.0, 58.0 / 49.7 | 49.3 / 38.5, 51.5 / 40.5 | .0566 / .0437 | |
+| T2 | CE | 360 | 718 / 2,872 | .080 / .074 | .132 / .096 | 57.5 / 47.7, 57.8 / 49.8 | 50.5 / 38.9, 52.1 / 40.2 | .0549 / .0433 | |
+| A | CE | 1,000 | 0 / 718 / 2,872 | .081 / .092 / .072 | .582 / .136 / .092 | 25.7 / 22.3, 57.3 / 47.5, 57.7 / 50.1 | 50.3 / 39.3, 51.7 / 41.2 | .0523 / .0430 | |
+| A' | CE, seed 1338 | 1,000 | 718 / 2,872 | .075 / .072 | .146 / .097 | 57.8 / 48.0, 58.2 / 49.6 | 51.4 / 39.1, 51.5 / 40.7 | .0509 / .0434 | |
+| B | CE + SD-mix | 1,050 | 0 / 718 / 2,872 | .083 / .077 / .072 | .565 / .147 / .098 | 39.2 / 40.3, 57.4 / 47.2, 57.9 / 49.9 | 50.1 / 38.8, 51.8 / 40.6 | .0549 / .0431 | |
+| T3 | CE + CE24 | 3,700 | 718 / 2,872 | .076 / .072 | .117 / .090 | 57.6 / 48.2, 58.1 / 50.4 | 50.3 / 39.5, 51.8 / 40.2 | .0515 / .0404 | |
+| T4 | CE + SD-mix24 | 3,700 | 718 / 2,872 | .076 / .070 | .122 / .089 | 58.1 / 49.4, 58.5 / 50.4 | 50.5 / 39.2, 52.3 / 40.2 | .0538 / .0410 | |
+| T5 | CE + SIFT24 | 3,700 | 718 / 2,872 | .089 / .072 | .120 / .091 | 58.4 / 50.1, 58.1 / 50.7 | 51.1 / 38.9, 52.0 / 40.5 | .0490 / .0427 | |
 
-Then P0 and P3 again under the runner-up regime as the interaction check.
-If the two curves have the same shape, the split is a property of the
-pipeline and the paper reports one number; if not, it reports one per
-regime, which is itself the more interesting result.
+Selection score at 718 / 1,436 / 2,154 / 2,872:
 
-**What it decides.** Fondue's "MA data budget and stage split" row in
-`06-fondue.md` §3: whether MA runs over the full ASR pool, a subset, or (if
-the decoder-frozen regime wins and P0 matches the campaign point) not at
-all. Default if the sweep misses the 2026-10-25 freeze: full MA, as today.
+| point | 718 | 1,436 | 2,154 | 2,872 |
+|---|---|---|---|---|
+| T0 | .0616 | .0520 | .0503 | .0518 |
+| T0' | .0628 | .0595 | .0551 | .0429 |
+| T1 | .0566 | .0544 | .0507 | .0437 |
+| T2 | .0549 | .0476 | .0474 | .0433 |
+| A | .0523 | .0429 | .0461 | .0430 |
+| A' | .0509 | .0471 | .0458 | .0434 |
+| B | .0549 | .0447 | .0464 | .0431 |
+| T3 | .0515 | .0440 | .0448 | .0404 |
+| T4 | .0538 | .0457 | .0461 | .0410 |
+| T5 | .0490 | .0425 | .0479 | .0427 |
 
-**Cost.** MA at 100 and 300 h/lang is about 5 and 15 GPU-h. The IFT side
-scales with the measured per-arm cost of the winning backbone: Llama-1B is
-80–100 GPU-h per arm, Qwen3.5-2B is **306 GPU-h** measured on a full
-production arm (job noted in `arms.tsv`; see `06-fondue.md` §2). So the
-four-point sweep plus two runner-up points is roughly 450 GPU-h for a
-Llama-class winner and roughly 1,800 for a Qwen-class one. Both fit, but a
-Qwen winner makes this the most expensive study outside Fondue and the
-runner-up points become the first thing to cut.
+**Interim reading (10-21; T0 runs to the end on Thu 10-22).**
+- **Step 718: MA helps.** No MA scores .0616 / .0628. Every MA arm scores
+  .0490-.0566. The gap, ~.010, is 7-8× the seed gap of either pair
+  (.0012, .0014). The score improves with MA hours up to 1,000 h; 3,700 h
+  adds nothing consistent.
+- **Step 2,872: undecided.** The seed-1338 pair has caught up
+  (T0' .0429, A' .0434). The seed-1337 pair has not (T0 .0518, A .0430);
+  T0's excess sits in the five trained languages on FLEURS dev (OOD-train
+  median CER .0448 against .0265-.0322 for every other arm). Paired no-MA
+  minus MA gaps favour MA in 7 of 8 step/seed pairs. The step-5 metrics show
+  only a small HR5 WER lag for no MA (.075 / .076 against .072 / .072).
+- **Hours:** at 2,872, 120 h (T1 .0437) and 360 h (T2 .0433) already match
+  1,000 h (A .0430). The extra 2,700 h on EU24 buy at most .003
+  (T3 .0404), inside the largest A/A' gap seen (.0042).
+- **Format:** neither SD-mix nor SIFT beats CE consistently on selection.
+  The 3,700 h arms lead the ST chrF columns by up to ~1.
+- **Against §5:** between rows 2 and 3. T0's later reads, and a third
+  no-MA seed if the PI wants one, decide it.
+- **Caveat:** T0's Whisper keeps the hub's F16, while A's was rounded to
+  bf16 (§3).
 
-**Needs:** per-task budgets in `build_campaign_config.py`, so an IFT render
-can carry ASR at 600/400/0 h per language while ST stays at 700. Small
-change, scheduled for week 5 Track B.
+**Final readout (2026-10-23; T0, T3 and T5 run to step 11,499).** The
+headline is the joint ASR+ST score adopted 2026-10-21: equal thirds of
+100 − ASR-24 (geometric-mean CER over the 24 languages, %), mean X→en chrF
+over 23 sources and mean en→X chrF over 23 targets (`self-distill/eval/tier1_joint.py`).
+Higher is better; the seed spread at 718-2,872 is 0.32. The gate was
+registered on 10-21, before any late read: D = joint(MA start) − joint(T0)
+on identical batches; **MA is out if A and T5 have both lost their lead**.
 
-### 6.1 Results
+| arm | MA h | 718 | 1,436 | 2,154 | 2,872 | 4,308 | 5,744 | 8,616 | 11,499 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| T0 | 0 | 60.49 | 62.03 | 62.19 | 62.21 | 62.72 | 62.58 | 62.52 | 64.16 |
+| T0' | 0 | 60.23 | 61.63 | 61.73 | 62.51 | | | | |
+| T1 | 120 | 59.88 | 61.91 | 62.23 | 62.43 | | | | |
+| T2 | 360 | 60.79 | 62.42 | 62.40 | 62.38 | | | | |
+| A | 1,000 | 60.80 | 62.30 | 62.32 | 62.74 | 62.91 | 62.61 | 62.67 | 64.09 |
+| A' | 1,000 | 61.16 | 61.97 | 62.17 | 62.44 | | | | |
+| B | 1,050 | 60.51 | 62.55 | 62.57 | 62.52 | | | | |
+| T3 | 3,700 | 61.24 | 62.56 | 62.48 | 62.64 | 63.03 | 62.62 | 62.28 | 64.03 |
+| T4 | 3,700 | 61.62 | 62.35 | 62.56 | 62.74 | | | | |
+| T5 | 3,700 | 61.80 | 62.48 | 62.72 | 62.85 | 63.19 | 62.63 | 62.56 | 64.23 |
 
-| point | regime | CER in-domain | CER FLEURS-24 | chrF X→en | text retention | GPU-h |
-|---|---|---|---|---|---|---|
-| P0 | | | | | | |
-| P1 | | | | | | |
-| P3 | | | | | | |
-| P7 | | | | | | |
-| campaign | | | | | | |
-| zero-IFT probe | | | | | | |
-| P0 runner-up | | | | | | |
-| P3 runner-up | | | | | | |
+- **MA is out.** D at 11,499 is −0.07 (A), +0.07 (T5) and −0.13 (T3); the
+  stable-phase means (4,308 / 5,744 / 8,616) are +0.13, +0.19 and +0.04, all
+  inside the 0.32 spread. At 11,499 ASR-24 CER is 5.00 / 5.06 / 5.03 / 4.98 %
+  (T0 / A / T3 / T5), and X→en and en→X are within 0.3 chrF of no MA.
+- **What MA buys is a head start.** A and A' lead T0 and T0' by
+  +0.62 / +0.31 / +0.29 / +0.23 at 718 / 1,436 / 2,154 / 2,872 (pooled); T5
+  leads by +1.31 at 718 and nothing from 5,744 on. The WSD decay (from step
+  9,200) lifts every arm by ~1.5 and erases what is left. A's MA costs
+  ~29 GPU-h, CE24's and SIFT24's starts ~108 and ~195, for a head start worth
+  6-20 GPU-h of fine-tuning.
+- **Format:** T5 − T3 = +0.21 at 11,499, inside the spread: SIFT24 does no
+  better than CE24.
+- **Stability:** T0 shows one single-step gradient-norm spike with no loss
+  response, so there is no stability case for a short MA either (§5 row 1).
+- **Cost:** 1,002 GPU-h (the PI's go covered 648; the T3/T5 continuations,
+  decided 10-21, 354, of which 12 lost to a GPU fault).
+- **Caveats:** one seed at the end of the schedule; T0's Whisper keeps the
+  hub's F16 (§3); the stack is Whisper + Qwen3.5-2B-Instruct + MLP, not
+  Fondue's (EuroLLM-1.7B-Instruct + MoE), which Raclette's no-MA start checks
+  (`06` §4). The in-trainer generation of T0 and T0' ran every clip to the
+  length cap (fixed in PR #165; offline scores are unaffected).
+- Readout, figures and the cost table: nyx
+  `/mnt/scratch-nyx/giuseppe/ma-utility-check/readouts/2026-10-23-final/`.

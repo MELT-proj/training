@@ -114,8 +114,8 @@ same way.
 | Llama-3.2-1B-Instruct | 1.940 → 2.719 | +0.779 | 1.859 → 2.536 | +0.677 | 1.094 → 1.287 | +0.194 | 1.242 → 1.366 | +0.123 |
 | Qwen3.5-2B-Base | 1.324 → 2.368 | +1.044 | 1.651 → 2.279 | +0.628 | 0.959 → 1.280 | +0.321 | 1.463 → 1.472 | +0.009 |
 | Qwen3.5-2B (instruct) | 1.390 → 2.523 | +1.133 | 1.428 → 2.433 | +1.006 | 0.986 → 1.313 | +0.326 | 1.158 → 1.490 | +0.332 |
-| EuroLLM-1.7B (base) | pending | pending | pending | pending | pending | pending | pending | pending |
-| EuroLLM-1.7B-Instruct | pending | pending | pending | pending | pending | pending | pending | pending |
+| EuroLLM-1.7B (base) | 1.190 → 1.451 | +0.261 | 1.856 → 1.491 | -0.365 | 1.023 → 1.237 | +0.214 | 1.800 → 1.345 | -0.455 |
+| EuroLLM-1.7B-Instruct | 1.200 → 1.450 | +0.250 | 1.701 → 1.437 | -0.264 | 1.039 → 1.225 | +0.186 | 1.572 → 1.336 | -0.236 |
 
 ### The Llama-Instruct correction, made visible
 
@@ -125,8 +125,8 @@ same way.
 | Llama-3.2-1B-Instruct | 1.884 | 1.859 | 2.536 | +0.652 | 1.250 | 1.242 | 1.366 | +0.115 |
 | Qwen3.5-2B-Base | 1.651 | 1.651 | 2.279 | +0.628 | 1.464 | 1.463 | 1.472 | +0.009 |
 | Qwen3.5-2B (instruct) | 1.428 | 1.428 | 2.433 | +1.006 | 1.158 | 1.158 | 1.490 | +0.332 |
-| EuroLLM-1.7B (base) | pending | pending | pending | pending | pending | pending | pending | pending |
-| EuroLLM-1.7B-Instruct | pending | pending | pending | pending | pending | pending | pending | pending |
+| EuroLLM-1.7B (base) | 1.856 | 1.856 | 1.491 | -0.365 | 1.801 | 1.800 | 1.345 | -0.456 |
+| EuroLLM-1.7B-Instruct | 1.700 | 1.701 | 1.437 | -0.263 | 1.572 | 1.572 | 1.336 | -0.236 |
 
 ### Per language
 
@@ -252,10 +252,23 @@ the same-day control; `pre` for raw ASR is §3.7.
 
 ## Notes
 
-- **EuroLLM is pending.** Its two IFT runs are queued (`47783768`,
-  `47783769`, 36 h wall); at submission time only `checkpoint-3608` exists,
-  against the 6,310-step step-2 checkpoint the other four arms use. It is
-  measured with the same procedure once the runs reach `checkpoint-6310`.
+- **EuroLLM** was measured 2026-10-23 (job 47880299, `acc_debug`, COMPLETED
+  0:0 in 8 m 15 s) on `checkpoint-6310` of the two resumed IFT runs, with
+  `chatml` and the same frozen dev sets. Both exports verified clean (219 / 219
+  decoder keys identical, 515 audio-stack tensors dropped, finite forward;
+  `LlamaForCausalLM`, vocab 128,008, untied); the tokenizer-id and
+  rendered-prompt checks listed for the other four arms were not re-run for
+  these two. Result files are `eurollm-{ins,base}-{asr,st}.json` (no `-dev`
+  suffix, unlike the others) next to the `control-eurollm17b-*-dev.json`
+  controls; the controls reproduce §3.7 to 0.001. **Per-language blocks for
+  EuroLLM are not written here.** Both arms' conditioned deltas are negative
+  (the decoder scores the reference *better* conditioned after IFT than
+  before). For the base arm that matches llama1b-base and the template
+  confound described above. For the instruct arm it does not: the other two
+  instruct arms are +0.123 to +1.006. The raw deltas are positive and smaller
+  than the older arms' (+0.250 ASR for ins against +0.779 Llama-Instruct and
+  +1.133 Qwen-Instruct). The cause of the instruct arm's sign was not
+  investigated.
 - The ST frozen set's only `lang` is `en` (the target), so its per-language
   breakdown is a single cell; this is how §3.7 scored it too, and the
   per-language deltas that matter for ST are not available from this set.
@@ -290,6 +303,7 @@ All on MN5, account `epor48`, QOS `acc_debug`, one whole `acc` node.
 | 47791474 | Qwen and EuroLLM controls, both sets | COMPLETED, rc=0 |
 | 47791831 | Llama IFT measurements, both sets | COMPLETED, rc=0 |
 | 47792179 | Qwen IFT measurements, both sets | COMPLETED, rc=0 |
+| 47880299 | EuroLLM IFT measurements (`tp_eurollm.sbatch`), both sets, both arms | COMPLETED, rc=0; the first attempt failed with "No CUDA GPUs are available" (sbatch header missing `--gpus-per-node=1`; environment/script, not code) |
 
 Logs: `/gpfs/scratch/epor48/text-prior/logs/`. Per-arm results:
 `/gpfs/scratch/epor48/text-prior/results/`; exports under

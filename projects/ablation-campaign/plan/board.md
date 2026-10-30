@@ -15,6 +15,13 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-29 — Claude (worker session, data) — PR #157: the ASR band is now a generic cut filter (`data.train_ds.cut_filter`)
+Context: PI asked for filtering on any manifest field with a given condition, so ST data can be filtered on ST quality scores too.
+Finding: `asr_filter` is replaced by named rules under `cut_filter.rules`. Each rule matches leaves on their merged tags (`match: {task: st}`; any tag, lists allowed), reads its value from a dotted manifest path (`field: custom.st_qe`, `supervisions.0.custom.x`) or from a sidecar array (`array: wer`, the existing `shar-asr-scores` tree, still judged on the row index before the cut is read), and keeps cuts by `min`/`max`, `in` (fields), or `pct_min`/`pct_max` (arrays), with phases as before. Per-source overrides are keyed by rule name (`cut_filter: {asr_wer: {pct_max: 25}}`, `{asr_wer: false}`, or `false` for every rule). Field rules read every cut before judging it, so a harsh field filter on GPFS should become an array; they cannot take percentiles. The smoke config and checker are ported; the MN5 smoke above ran the old key and was not re-run.
+Action needed: PI reviews the PR. No ST quality score exists in any manifest yet; whoever scores ST picks `custom.<name>` (field rule) or a sidecar array.
+
+---
+
 ## 2026-10-28 — Claude (worker session, backbones) — Two more backbones, EuroLLM-1.7B-2512 and its Instruct, queued with the six arms' recipe; the base MA shows runaway ASR again
 Context: the PI asked for the same MA + IFT on `utter-project/EuroLLM-1.7B-2512` and `-Instruct-2512`, on MN5, with
 the six backbones' input configuration and audio stack, fully comparable; if the base has no chat template it borrows
@@ -53,6 +60,94 @@ Action needed: none yet. When the IFTs finish, score both with the backbone tabl
 unusable for the MA-stage numbers, as for the original base.
 
 ---
+
+## 2026-10-23 — Claude (worker session, backbone score) — ST restricted to the trained directions and joined with ASR; EuroLLM's missing cells scored
+
+Context: after the en→X audit below, the PI ruled that the 23-target en→X
+column cannot compare these arms and asked for ST on the languages and
+directions they were trained on, combined with the ASR selection score into
+one metric for choosing a backbone.
+
+Decision: `sel (ST) = 1 − med(chrF over de,es,fr,it→en and en→de)/100`;
+`sel (ASR+ST) = (sel (ASR) + sel (ST))/2`, `sel (ASR)` unchanged. The
+zero-shot related group ST carried in the first draft is out.
+
+Scores (checkpoint-6310; lower better):
+
+| arm | sel (ASR) | sel (ST) | sel (ASR+ST) |
+|---|---|---|---|
+| eurollm1.7b-ins | 0.0563 | 0.3878 | **0.2220** |
+| eurollm1.7b-base | 0.0646 | 0.3951 | 0.2299 |
+| qwen35-2b-base | 0.0858 | 0.3811 | 0.2335 |
+| llama1b-base | 0.0614 | 0.4069 | 0.2342 |
+| llama1b-ins | 0.0851 | 0.3976 | 0.2413 |
+| qwen35-2b-ins | 0.1067 | 0.3832 | 0.2449 |
+
+- EuroLLM-ins leads by 0.0079 over EuroLLM-base and by 0.0115 over third
+  place; the README's noise band is 0.002–0.010, so the lead is real but not
+  large.
+- **qwen35-2b-base vs llama1b-base (0.0007) is unresolved**: it swaps when
+  en→de is dropped from the ST median and when ST is folded into the ASR sum.
+  en→de counts German twice and rests on a single 100-clip probe; that is the
+  price of the trained-directions-only instruction.
+- Cells that were "not entered" are now scored from the same logs as the other
+  arms: IFT CER (5-lang) .0498 / .0521, FLEURS-24 per-language CER, and the
+  per-direction X→en chrF. Jobs 47883097 (ASR, `score.py`) and 47883090 /
+  47883105 (X→en chrF); llama1b-base reproduced its published values in both.
+
+Action needed: none for the docs. `charts/results_master.csv` is the
+eval-owner's; these six rows still need to reach it through `charts/master.py`.
+
+---
+
+## 2026-10-23 — Claude (worker session, en→X audit) — The 17-point EuroLLM lead on en→X is language following, not boilerplate; EuroLLM rows and retention entered
+
+Context: the PI asked whether EuroLLM's en→X chrF (42.9 ins / 37.6 base against
+23.9–25.9) can stand as a comparison. H1: instruct arms prepend boilerplate
+that chrF punishes. H2: EuroLLM really translates better out of English.
+Method: the six `ift-st-enx` logs (2,300 samples each) were dumped, labelled
+by a character-n-gram language identifier trained on the FLEURS references
+(5-fold accuracy 98.5%), and re-scored with a local chrF that reproduces all
+six published macros to the first decimal. No log was modified and nothing was
+re-scored with `melteval`; no en→X number changed.
+
+Finding:
+- **H1 does not hold.** 13,800 generations, none empty, none multi-line, none
+  with an intro or label. Colon-led openings are 0.7–1.4% per arm and
+  sentence-internal. Stripping every leading "clause:" anyway lowers each arm
+  by 0.05–0.08 and moves no rank. So no normalisation rule exists to land in the
+  scorer, and none is proposed.
+- **The gap is the share of outputs in the asked language:** eurollm-ins
+  83.5%, eurollm-base 66.7%, the four older arms 21–32%, whose misses are
+  mostly German (the trained direction, 32–65%) or English (9–24%). Macro chrF:
+  on de the six arms span 56.5–61.5 (EuroLLM does not lead); on de/es/fr/it/pt
+  EuroLLM leads Qwen by about 2–3 and Llama by about 8–10; on the other 18
+  targets the older four sit at 17.5–18.3 and EuroLLM at 32.6 / 39.4.
+- **H2:** where EuroLLM writes the language it is translating the audio
+  (sentence chrF ~49 against 44–47 for the older arms when they do), at
+  mixed fidelity, with drift into invention on hard languages (hr). The older
+  arms' wrong-language outputs are faithful (German answers 57–61 chrF against
+  the German reference of the same sentence; English 79–86 against the source).
+  Quotes and tables in `02-backbones.md` §5, "What the en→X column measures".
+- **Correction:** §5 said bg and el "come out as English" for the older arms. They
+  come out as German (60–100% of clips), English second; "mt as Italian"
+  holds only for qwen35-2b-ins (37%). Rewritten.
+- EuroLLM added to §5: the two rows with the hand-over numbers (IFT CER
+  5-lang and the per-language ASR and X→en cells were not in it and are marked
+  not entered), E-B/E-I columns in the en→X table, and the retention column.
+  Text retention (job 47880299, `acc_debug`, COMPLETED, exports verified):
+  conditioned Δ is negative for both EuroLLM arms (ASR / ST: ins
+  −0.264 / −0.236, base −0.365 / −0.455). Base matches llama1b-base (the †
+  template confound); ins is the odd one, since the other instruct arms are
+  +0.123 to +1.006. Raw Δ is positive and small (ins +0.250 / +0.186, base
+  +0.261 / +0.214). The cause of the ins sign was not investigated.
+
+Action needed: PI — decide whether the 23-target en→X column stays in the
+backbone table (it is a language-following measure on untrained targets, and
+the trained direction en→de shows no EuroLLM lead). Eval-owner agent — ingest
+the new measured numbers through `charts/master.py` (EuroLLM retention deltas;
+en→X language-outcome shares and slice macros if charted); I did not write
+`results_master.csv`.
 
 ## 2026-10-23 — Claude (worker session, backbone scores) — §5 scores only the languages and directions the arms train; the selection metric gains an ST half
 
@@ -177,6 +272,167 @@ Finding:
 6. **`~/eval-main` on MN5** (melt-eval main, has `st_metrics.py`) is what `st-metrics` must be run from, inside the spbleu eval image. The login node has no `inspect_ai`.
 
 Action needed: PI — the gate, provisionally moved to Mon 10-26 while EuroLLM finishes, needs item 1's choice between in-domain and zero-shot weighting; text retention is still unmeasured (no exporter for a MELT checkpoint into `melteval text-prior`).
+
+---
+
+## 2026-10-20 (later) — Claude (worker session, data) — ASR score band: arrays built and staged, MN5 smoke passed across a phase switch and a resume (PR open)
+Context: PI asked for the arrays on nyx, staged on MN5, and a short run testing the multi-phase approach with different sources.
+Finding:
+1. **Arrays.** `shar-asr-scores/` on nyx (`melt-data/`), 568 leaves, 389 MB, built by `infra/build_asr_scores.py` with every leaf's `cut_id` column checked against shar-stats. Staged to `/gpfs/projects/epor48/melt-data/shar-asr-scores` (387 MB) over `mn5transfer`. On MN5 the md5 of the cut ids in `shar-indexed` matches `meta.json` for voxpopuli de/es, mls_sidon dutch, cv22_sidon de (the MN5 manifest order question from the design entry is closed for those four).
+2. **Two defects found by running it, both fixed.** (a) The stock filter reads and deserialises every rejected cut; with a source that keeps 7% this stalled the job in GPFS I/O. The node now decides on the row index before reading (`asr_score_filter.py`, `__iter__`). (b) Unrelated to the filter: with `bucket_duration_bins: null` the sampler reads 10,000 shuffled cuts, audio included, in the main process, and does not finish on these sources (reproduced on nyx without the filter); the smoke gives explicit bins, as every campaign config does.
+3. **Smoke** (`tests/integration/asr_filter_smoke/`, 1 node x 4 GPUs, acc_debug, 40 steps, switch at step 25, `buffer_size` 300): voxpopuli/de default phases, cv22_sidon/de own phases ([0.01, 0.3] then exactly 0), mls_sidon/nl one static band, voxpopuli/es exempt, covost2 nl/it ST. Share of delivered cuts inside the band (batch-formation step; `check_smoke.py`): cv22 de in phase-0 band 100% up to step 20, 89% / 53% / 21% / 18% for the windows from step 25; in the phase-1 band 0 / 9 / 47 / 79 / 82%. voxpopuli de the same shape (phase 1: 20 / 48 / 75 / 76%). mls nl 100% in its static band throughout, voxpopuli es and both ST sources untouched. Resumed from `checkpoint-20` (sampler state restored, 2 workers x 4 ranks): the same transition (cv22 de phase 1: 11 / 42 / 76%). The old-band tail after the switch (~15 steps at this buffer) matches the transition period the PI accepted.
+4. **Percentile bands are tie-inclusive and WER is discrete**: `pct_max: 30` on cv22_sidon/de keeps 77% (77% of its cuts have WER exactly 0). Documented in `LHOTSE_DATA_LOADING.md`; prefer absolute bands, the startup log prints what each band keeps.
+5. Cost: smoke 3.5 min + 7 min, ~1 GPUh each; the two earlier stalled attempts were cancelled after ~30 min each (~4 GPUh).
+Action needed: PI reviews the PR. Open before real runs: per-source band choice for the Fondue pool (tail languages), `check_training_config`/`plan_arm`/weights follow-ups listed in the previous entry.
+
+---
+
+## 2026-10-20 — Claude (worker session, data) — ASR score band implemented on branch `asr-score-filter` (PI's go with changes; PR to follow)
+Context: the PI approved joining over baking, accepted a transition period after a band switch (old-band half-life 70-270 steps), and asked for a **per-source band** so a run-wide band does not give languages different shares of cuts. Producer of the scores confirmed: the untracked `asr_wer/` code, likely claude.ai session 01GvZ5z5YmihX6hn5ULQro5q.
+Finding: implemented as designed above, with these changes: (1) the band is per source (or group), nearest `asr_filter` wins, `false` exempts; (2) a band is absolute (`min`/`max`) or relative (`pct_min`/`pct_max`, percentiles of the source's own scored cuts, which keeps the same share of every source); (3) no purge, the transition period stands. Task is read from the merged tags (outer group wins), ST leaves never get a node. 14 new tests pass (mixed ASR+ST with an ST score file present, outer-group task, repeated ids joined by row, missing/keep, loud failures, percentile + per-source override, phases, step visible in a forked worker, restore after a band change, ties, builder); `test_lhotse_dataloader.py` + `test_trainer.py` 130 passed. Built and filtered one real leaf (`voxpopuli/de/train`) from a scratch copy: builder checks `cut_id` against shar-stats. **Not done** (follow-ups, not in the PR): band-aware `check_training_config.py`, `plan_arm.py` `from_frac`, `compute_mix_weights.py`/`build_campaign_config.py` survivor weights, per-phase exposure meter. No score arrays written to shared storage yet.
+Action needed: PI reviews the PR when opened. Before any run: build the arrays on nyx (~0.15 GB, new tree beside Shar), stage over `mn5transfer`, choose per-source bands (the pool table above shows the tail languages cannot take a hard band 1), smoke on `acc_debug` from a fresh clone.
+
+---
+
+## 2026-10-20 — Claude (worker session, data) — WER/CER-aware ASR sampler: investigation and design (phase 1, nothing implemented; needs the PI's go)
+Context: the PI wants ASR cuts dropped by per-cut WER/CER band, switchable inside one run (band 1 `[0.1, 0.4]` for warmup+stable, band 2 `[0, 0.1]` for the LR decay), ST and other tasks untouched. Read-only: lhotse 2.0.0a3 source from the container (`melt_cuda126.sif`, pinned by `pyproject.toml:31`), our loader and trainer, the sidecars, the drafts. No code, no data writes, no GPU, no MN5, no jupiter.
+
+**Four premises in the task that do not hold (they change the design):**
+1. **`shar-stats/` has no WER/CER.** None of its 1,051 parquets has a score column. The scores are in the sibling tree `melt-data/shar-asr-wer/<corpus>/<leaf>/asr_wer.parquet` (568 files, 99,748,906 rows). The producer is the `asr_wer/` pipeline in a **preprocessing worktree** (`preprocessing/.claude/worktrees/bridge-cse_01Uothe4uvDw7thD8dFWCDyS/data-utils/asr_wer/`, README + `docs/asr_wer_report.md`), **untracked in git, never committed**. I could not tell which session ran it; the scripts say how.
+2. **covost2 and europarl_st have no sidecar and are ST in every config.** Across `ABL-IFT-700-backbone.yaml` (20 ASR + 5 ST sources) and `SFT-EU24.yaml` (111 ASR + 43 ST), the only corpus feeding both tasks is **yodas-granary**: `asr_only` leaves are ASR (scored), `ast` leaves are ST (not scored: the pipeline skips them as "text is a translation"). Keying on task, not corpus, is still the right rule; here it is also structural (below).
+3. **Neither the loader nor lhotse can do this today** (confirmed, below). Our loader has two global filters (duration, `num_tokens`) and nothing step-aware.
+4. **A cut-id join is wrong for FLEURS.** Repeated ids are different utterances there: of 117,906 repeated (leaf, id) keys, 70,344 have different WERs. Only a positional join is correct.
+
+**1. Lhotse 2.0.0a3 (answer for exactly this version)**
+- Filtering exists but is a plain predicate: `AlgorithmMixin.filter` -> `LazyFilter(source, predicate)` (`lhotse/lazy.py:241-254`, `:1293-1380`). It sees one cut; no step, no state. It is checkpointable, but only by delegating to its source (`:1356-1364`).
+- `CutSet.mux(weights=...)` takes a fixed list, read once in `__init__` (`lazy.py:910-917`, `:986-995`). No way to change weights or sources during iteration. Nothing in `lhotse/dataset/sampling/` or `lazy.py` reads a training step or schedule (grep for step/schedule/update_weights: only `signal_transforms.py:374 schedule_value_for_step`, used by the Gaussian-noise augmentation, unrelated).
+- **Trap for a changed-config resume:** the sampler checkpoint stores each buffered cut as a graph token and restores it with `source[token]` (`dynamic_bucketing.py:662-737`). `LazyFilter.__getitem__` **raises `RuntimeError` if the restored cut fails the predicate** (`lazy.py:1330-1338`). So resuming leg 2 with a stock `LazyFilter` on a different band crashes in the worker at the first batch, for any buffered cut outside the new band. Our own node must not re-check on restore.
+- **Trap for filtered-to-nothing sources:** `LazyRepeater` returns on an empty pass (`lazy.py:1659-1660`); the mux then marks the source exhausted and renormalises the rest. A band that empties a source would silently remove it. Must be a startup error.
+- **What makes a cheap join possible:** the indexed Shar reader tags every cut with `_graph_origin = (global_idx, shar_epoch)` (`shar/readers/indexed.py:339-393`). Checked on real data (`voxpopuli/de/train`, `fleurs/de_de/train`, `shuffle_shards=True`, `indexed=True`): `global_idx` equals the row in `shar-stats/.../cuts.parquet` for 2,000 of 2,000 cuts, FLEURS duplicates included, and the token survives a `.filter`. So a score array indexed by `global_idx` is an exact join with no id lookup. (Shar can also carry per-cut side data as an extra jsonl field via `from_shar(fields=...)`; heavier, not needed.)
+- Upstream: not needed; 2.0.0a3 has no such feature, and I did not look for a later one.
+
+**2. The sidecars**
+- Columns: `row_idx, cut_id, asr_status (scored|no_text|unsupported_lang|missing), asr_text, asr_wer, asr_cer, asr_model, asr_lang, asr_segments` (float32 WER/CER). **Normalised** with Whisper's `BasicTextNormalizer` (NFKC, lowercase, punctuation to space, diacritics kept; numbers not verbalised, so "12" vs "twelve" is an error), **unclipped** (insertions can give >1). Reference = the leaf's `text_field_used` (`supervisions.0.text`, or `custom.metadata.sentence` for CV), **not** the `pnc_text` the SFT/IFT target uses (the truecase pass edits words: 3.11% WER on MLS Italian).
+- Reference model: `parakeet-tdt-0.6b-v3` for the 25 European languages (280 leaves; all 26 Fondue languages except **ga**, 0.6 h, which is Seamless), `seamless-m4t-v2-large` elsewhere (288 leaves; unreliable on low-resource languages, use CER). Known artefacts: Parakeet returns an empty transcript on 0.05-0.7% of cuts (WER 1.0, looks like a bad label), WER is null on empty references.
+- **Join key:** positional. `row_idx` is the row in the matching `shar-stats/<leaf>/cuts.parquet` and in the Shar manifests. All 568 leaves: row counts equal, `cut_id` equal row by row, `row_idx` equal to the row, 0 mismatches. I also compared 9 leaves against the current Shar manifests on disk (full for 4, prefix for 5): equal. The MN5 copy I did not touch; it must be checked after staging (see tests).
+- **Coverage** (hours): every ASR leaf of the 26 Fondue languages has a sidecar. Unscored: `cv22_sidon` 87 leaves in unsupported languages (1,156 h, none in the pool), `fleurs` 33 leaves (194 h), `yodas3/*/untranscribed` (102 h); **ST leaves have none by design** (covost2 8,361 h, europarl_st 2,019 h, granary `ast` 73,991 h); `voxpopuli_mosel` none (excluded, treat as unscored). Inside scored leaves: 28.6 h of VoxPopuli `no_text`, 157.9 h of CV22 and 76.6 h of FLEURS with null WER. In the pool these hit **hr hardest: 17.0 of 35.1 h unscored**.
+- **Distribution.** Table: the 26 Fondue languages, ASR train splits that the drafts use (cv22, mls, voxpopuli, granary `asr_only`, plus librispeech/people's speech/gigaspeech for en), hours per band. Pool = sidecar-measured hours of those leaves, **not** the `hours_by_language.csv` figure (that one also counts granary `ast` as ASR, e.g. de 11,128 h vs 3,690 h here). "repeat x" = illustration only: planned exposure (the draft's beta=0.5 on these pool hours, one nominal epoch = pool total, 176,130 h; the real figure comes from `compute_mix_weights.py`) divided by the hours the band keeps; unfiltered it is 0.6 (en) to 286 (ga). Bands overlap at exactly 0.1 (1.0% of cuts), counted in both.
+
+| lang | pool h | [0,0.1] h (% of pool) | [0.1,0.4] h (%) | >0.4 (%) | unscored h | repeat x, band 1 | repeat x, band 2 |
+|---|---|---|---|---|---|---|---|
+| en | 161,839 | 129,808 (80%) | 30,074 (19%) | 2% | 0.0 | 3.0 | 0.7 |
+| de | 3,690 | 2,488 (67%) | 1,097 (30%) | 4% | 0.0 | 12.3 | 5.4 |
+| fr | 2,849 | 1,778 (62%) | 801 (28%) | 11% | 0.0 | 14.8 | 6.7 |
+| es | 2,358 | 1,383 (59%) | 770 (33%) | 10% | 0.0 | 14.0 | 7.8 |
+| it | 700.3 | 460.8 (66%) | 208.1 (30%) | 6% | 0.0 | 28.3 | 12.8 |
+| ru | 1,771 | 517 (29%) | 824 (47%) | 25% | 0.0 | 11.3 | 18.1 |
+| uk | 41.9 | 28.9 (69%) | 10.2 (24%) | 8% | 0.0 | 141.0 | 49.8 |
+| nl | 1,692 | 417 (25%) | 1,225 (72%) | 4% | 0.4 | 7.5 | 21.9 |
+| pt | 449.4 | 246.7 (55%) | 126.4 (28%) | 18% | 0.0 | 37.3 | 19.1 |
+| pl | 257.9 | 166.2 (64%) | 86.7 (34%) | 3% | 0.8 | 41.2 | 21.5 |
+| hu | 119.2 | 74.0 (62%) | 40.9 (34%) | 4% | 1.5 | 59.3 | 32.8 |
+| fi | 29.0 | 13.4 (46%) | 13.4 (46%) | 5% | 1.2 | 89.6 | 89.2 |
+| cs | 86.3 | 58.6 (68%) | 25.9 (30%) | 3% | 0.8 | 79.7 | 35.2 |
+| ro | 87.9 | 39.3 (45%) | 43.3 (49%) | 5% | 2.3 | 48.2 | 53.0 |
+| sv | 11.0 | 5.2 (48%) | 4.2 (38%) | 16% | 0.0 | 175.7 | 140.6 |
+| hr | 35.1 | 10.4 (30%) | 7.7 (22%) | 1% | 17.0 | 171.8 | 126.1 |
+| sk | 39.5 | 21.7 (55%) | 15.0 (38%) | 7% | 0.7 | 93.2 | 64.4 |
+| bg | 9.0 | 4.3 (47%) | 4.0 (45%) | 10% | 0.0 | 165.7 | 156.2 |
+| lv | 23.4 | 4.4 (19%) | 11.8 (50%) | 33% | 0.0 | 91.4 | 245.1 |
+| da | 4.8 | 3.5 (74%) | 0.9 (19%) | 9% | 0.0 | 549.9 | 137.5 |
+| lt | 13.7 | 9.0 (66%) | 3.8 (28%) | 8% | 0.0 | 218.0 | 91.4 |
+| el | 3.2 | 1.1 (35%) | 1.4 (43%) | 24% | 0.0 | 287.5 | 358.8 |
+| et | 9.2 | 2.4 (27%) | 4.8 (53%) | 20% | 0.2 | 139.2 | 275.4 |
+| sl | 7.6 | 0.4 (5%) | 1.6 (21%) | 74% | 0.0 | 388.1 | 1674.6 |
+| ga | 0.6 | 0.2 (37%) | 0.3 (46%) | 19% | 0.0 | 628.4 | 769.6 |
+| mt | 2.4 | 2.0 (82%) | 0.2 (9%) | 10% | 0.0 | 1576.2 | 175.6 |
+
+- **Reading it.** (i) 37% of pool hours have WER exactly 0 (CV read speech, MLS), so band 2 mostly selects easy, short, read audio: in granary de/fr/es/it the band-2 survivors average 2.0-3.1 s per cut against 7.6-10.9 s in band 1 (full pools 3.0-5.0 s). (ii) A hard band 1 is not usable for the tail: below ~100 h per language the kept hours are a few hours (ga 0.3, mt 0.2, da 0.9), so a per-language exemption or a minimum-survivors guard is part of the design, not a tuning option. (iii) The score is Parakeet-relative: sl has 74% above 0.4 (probably the model, not the labels); the cuts the band keeps are the ones Parakeet reads well.
+- **Ties.** WER is a ratio of small integers, stored float32: 1/10 is 0.10000000149 > 0.1 in double, so `wer <= 0.1` drops every cut at exactly 0.1 (1.0% of cuts, 0.8% of hours; 0.4: 0.17% of hours). The comparison needs a tolerance, or integer storage (below).
+
+**3. How the loader gets the score: (a) bake into manifests vs (b) join at load**
+| | (a) bake `custom.asr_wer` into new manifests | (b) join a compact score array at load |
+|---|---|---|
+| New disk | whole manifests: **74 GB** for the pool (72.6M cuts, 787-1645 B/cut; 55 GB for the 20 IFT-700 sources) plus `.idx` rebuilt (`index_shar.py`); artemis scratch has 1.8 TB free (97% full) | **0.15 GB** (uint16, WER only, whole pool) to 0.3 GB (WER+CER); 113 MB for the IFT-700 sources |
+| MN5 staging (`mn5transfer`, ~15-20 MB/s) | 74 GB = ~1.2 h of transfer, a new Shar tree beside the frozen one, every config path changes | minutes; one small tree `shar-asr-scores/` beside Shar; frozen clones untouched (a new clone is needed for the new code either way) |
+| Shar / indexed | rewriting changes line offsets; `.idx` must be rebuilt, and any later manifest rewrite (PNC merge, yodas3 merge) silently invalidates the bake | no change to Shar or `.idx`; join by `global_idx` (verified above). Startup check: array length == sum of shard lengths (`LazyIndexedSharIterator._cum_lens`) |
+| Memory per worker | none extra (field is in the cut) | `np.load(mmap_mode="r")`: page cache shared by all workers and ranks on a node, ~0.15-0.3 GB per node, touched pages only |
+| Cut with no score | whichever the file says | explicit, below |
+| Risk | the loader never sees a mismatch; a stale bake is invisible | a mismatch is caught at startup by the geometry check; a bad build tool is the single point of failure (tested against the sidecar parquet) |
+Existing `merge_asr_wer.py` can bake (b)'s data into manifests in place; I would not use it (it rewrites the originals, breaks `.idx`, and the in-place rule forbids it).
+**Recommendation: (b), arrays built by a new CPU tool on nyx from `shar-asr-wer`, quantised to uint16 (value = round(10000*x), 65535 = null; 0.1 is exactly 1000, no float ties), one `wer.u16.npy` (+ optional `cer.u16.npy`) and `meta.json` per leaf** (row count, md5 of the cut-id column, scoring model, reference text_field, source parquet mtime). Disk and staging are negligible, nothing existing is touched.
+**No-score policy** (`missing: drop|keep`, default `drop`): a cut whose score is null/unscored is dropped, because a quality-selected run should not carry unscored data silently. A source with **no score file at all** (voxpopuli_mosel, ST leaves by construction) must be listed `asr_filter: false`; if it is not, startup fails. hr loses 48% of its pool under `drop`, which is the right place to look at before choosing.
+
+**4. Our loader: where the filter goes and how it behaves**
+- **Where: per source, after `from_shar` and `_count_cuts`, before `.repeat()`** in `_combine_entries` (`dataloader.py:799-811`), for ASR leaves only. Three reasons: (i) the positional token exists only on the bare leaf (after mux/repeat/tag it is nested); (ii) filtering before `repeat` keeps every source's mux weight meaning "probability of drawing from this source", so survivors are re-drawn (repeated) instead of the source quietly shrinking, which is what the per-cut weights are built on (PR #151); (iii) ST leaves never get a node, so "ST passes through untouched" holds by construction, not by a runtime check. The existing duration and token filters stay global after the mux (`:966-1024`); the new one must not be put there (no token, ST cuts would be inspected).
+- **Task key.** Task is not a corpus property: it is `tags.task` of the leaf merged with every enclosing group's tags, and the OUTER group wins (`_add_tags_to_cut`, `dataloader.py:907-925`; collation reads the same field in `get_tags_from_cut`, `helpers.py:459-499`). The node is attached to a leaf iff that merged value is `asr` at build time; the same function resolves it for the filter and is unit-tested against `get_tags_from_cut` on real cuts. `n_cuts` for auto-weights stays the unfiltered count (explicit weights are used everywhere in the campaign); with scores in hand the filtered count is `count_nonzero(mask)` and I would log it.
+- **YAML (off unless `asr_filter` is present; `config.py` train_ds default `asr_filter: null`):**
+```yaml
+data:
+  train_ds:
+    asr_filter:
+      scores_root: ${oc.env:LOCAL_ASR_SCORES_DIR}   # <root>/<shar_path relative to LOCAL_DATASETS_DIR>/wer.u16.npy
+      metric: wer                 # wer | cer, whole run
+      missing: drop               # drop | keep, for cuts with a null/unscored value
+      phases:                     # sorted, first from_step 0, bounds inclusive, in optimizer steps
+        - {from_step: 0,    min: 0.10, max: 0.40}
+        - {from_step: 5400, min: 0.00, max: 0.10}     # or from_frac: 0.9 (plan_arm resolves it)
+    input_cfg:
+      - {type: lhotse_shar, shar_path: .../voxpopuli_mosel/de/train, asr_filter: false, tags: {task: asr, lang: de}}
+```
+  A single `min/max` with no `phases` = a static band. Per-source `asr_filter: {min: .., max: ..}` could override a band for one source (tail languages); `asr_filter: false` exempts.
+- **Per-cut mux weights.** Unchanged and still valid, but the *hours* a source delivers move by (survivor mean cut length / original), because the weights were computed as hours / mean cut (`build_campaign_config.py --weights cuts`). Accounting below. Auto-weights by cut count would use the unfiltered `n_cuts` unless changed.
+- **Workers, indexed partitioning.** Each (rank, worker) iterates its own disjoint index range and the node drops locally; the array is mmap'd, read-only. Needs indexed sources (startup error otherwise, as `num_workers=0` already is). Cost: rejected cuts are still read and deserialised (band 1 keeps 8-48% of a source, so up to ~12x more manifest lines per delivered cut); not measured, small against 17-30 s steps, but measure it in the smoke.
+- **Resume (same config).** Works as today: the node is stateless; the sampler state restores buffered cuts by token, the mux restores its RNG and exhausted flags (`lazy.py:1018-1040`). A run started without the filter can be resumed with it (tokens pass through filter nodes unchanged, `:1330-1338`); not yet tested.
+- **A band that switches at a step: how the sampler learns the step.** It does not, in stock lhotse. Proposal: the trainer owns a shared counter, `torch.multiprocessing.Value('q')` created in `get_lhotse_dataloader_from_config` before the `DataLoader` (inherited by forked workers; also valid with `num_workers=0`); a `TrainerCallback` writes `state.global_step` in `on_train_begin` (covers resume) and `on_step_end`. The node reads it per cut and picks the phase. Phase bounds are in optimizer steps: `warmup_stable_decay` has them (`warmup_steps`, decay start = `max_steps - num_decay_steps`, `lr_scheduler_kwargs`; `config.py:677-732`), `cosine_with_min_lr` (what every campaign config uses, `cosine`) has no stable/decay boundary, so for it the boundary is a chosen step (e.g. `from_frac: 0.9`); `plan_arm.py` resolves `from_frac` to `from_step` since it already derives `max_steps`.
+- **What happens to buffered batches at the switch (the real cost of the dynamic version).** The switch gates *admission* into the sampler. Three things are already past the gate: (i) the batch being assembled and `prefetch_factor` x `num_workers` ready batches (2 micro-batches per rank in our configs): negligible, under one optimizer step; (ii) HF's grad-accum in flight: same; (iii) **the bucket buffer: `buffer_size` cuts (10,000 in every campaign config)**, drawn down at random, so old-band cuts leave with time constant tau = buffer_size x mean_cut / (batch_duration x grad_accum) steps: IFT-700 row bd 75, ga 4: **~270 steps** (4% of 6,310; 37% of the old band is still there 270 steps in, 13% at 540); IFT Llama bd 75, ga 16: ~70; MA bd 150, ga 4: ~150 (mean cut 8-9 s). Against a decay phase of 10% of the run (631 steps), band 2 is "clean" only after roughly half of the phase. Options, cheapest first: shrink `buffer_size` for phased runs (2,000 gives tau/5, bucketing quality barely moves with 30 buckets); admit the switch `tau` steps early (`from_step` already is the knob; the audit tells the lag); or a purge of non-conforming buffered cuts at the switch inside a `DynamicBucketingSampler` subclass (touches lhotse's private `_bucketer.buckets`, so pinned to 2.0.0a3 and covered by a test; I would only do it if the measured lag is not acceptable).
+- **Resume with a changed data config (the two-leg fallback).** Today: nothing checks the data config on resume. `_restore_sampler_state` only compares `num_workers` and `world_size` (`trainer.py:983-998`), `ignore_data_skip` is forced on (`:1013`). With stock `LazyFilter` the leg-2 band would crash on the buffered tokens (`lazy.py:1334-1338`). With our node (restore does not re-check, buffer then drains as above) it works, and the position of every source, the mux RNG and the shard shuffle all continue. Without the sampler state (delete the file) the stream restarts from the top with the same seed: ST data and the survivors both replay what leg 1 saw, so a new `shard_seed` is needed. Also needed: `max_steps` identical in both legs (a changed `total_hours` changes the derived value, and the HF scheduler is rebuilt from it, so the LR curve would move); and leg 1 must stop at the decay start: there is no stop-at-step knob (`should_training_stop` appears only in a docstring, `trainer.py:754`), so the operator cancels after a checkpoint, or we add a callback. The 3-day MN5 chain limit already forces resumes in a 5-day Fondue MA; a switch placed at a chain boundary costs no extra queue wait, anywhere else it costs one (12-13+ h observed on `acc_ehpc`, AGENTS.md) plus the 80-120 s start-up of the first steps.
+
+**5. Accounting (what must change so the numbers stay true)**
+- **Steps.** `derive_steps` (`plan_arm.py:537-566`) is `total_hours*3600 / batch_duration / world_size / grad_accum`, i.e. a *budget of audio seconds*; the batcher fills each batch with survivors, so the step count does not change when ASR cuts are dropped. Keep `total_hours` as the budget; do not "re-derive" it from filtered hours. What changes is the meaning of "one epoch" (passes over survivors) and each source's repetition factor, which `check_training_config.py` must report (it caches unfiltered duration histograms keyed by the duration filter only, `:489-760`; add a band dimension, fed by the same arrays, so "filtered totals" also covers the score band; no value changes for runs without `asr_filter`).
+- **ASR:ST share, IFT-700-backbone** (ASR 3,500 h = 5 languages x 700 h from cv22/mls/granary/voxpopuli, ST 3,229.85 h; hours per source from the config comments, survivors from the sidecars). Two semantics: **A** = drop after the draw (a global filter, what "just add a filter" gives), **B** = filter per source before `repeat` (proposed, weights unchanged).
+
+| | ASR h | ASR share | per-language ASR h (en, de, fr, es, it) |
+|---|---|---|---|
+| nominal (today) | 3,500 | 52.0% | 700 each |
+| band 1 `[0.1,0.4]`, A | 920 | **22.2%** | 126, 202, 186, 198, 208 |
+| band 1, B | 4,057 | 55.7% | 699, 810, 808, 894, 847 |
+| band 2 `[0,0.1]`, A | 2,442 | 43.1% | 572, 473, 468, 468, 461 |
+| band 2, B | 3,325 | 50.7% | 708, 656, 638, 664, 660 |
+  A makes the run a mostly-ST run (band 1: 22% ASR), with ST seen ~1.6x more often. B keeps the share within 4 points but moves hours *between* sources: granary de/fr/es/it go from 120 h to 224/217/311/261 h in band 1 and 76/59/81/75 h in band 2 (survivors are longer in band 1, shorter in band 2), because the weights encode hours/mean cut. Under a switching band the share goes 55.7% -> 50.7% at the switch, and the mixture drifts. If hour balance matters, `build_campaign_config.py` takes `--asr-band` and recomputes weights from survivor mean cuts for the band that covers most steps. Repetition of survivors under B in the 700 h design: it/cv22 8.5x in band 1 (pool 254.7 h, band keeps 30 h), it 2.2-3.2x for the other three it sources, es/cv22 and es/vox 2.7-2.9x; everything else in en/de/fr/es at or below 1.7x. The pool table above gives the Fondue equivalent.
+- **Fondue weights.** `compute_mix_weights.py` (alpha/beta) reads source hours; with a filter it must read the band's hours (and, for a phased run, state which band the weights balance) or the planned exposure is wrong by the "repeat x" column above.
+- **Exposure audit.** `DurationTracker` (`duration_tracker.py`) already counts hours actually fed, by (task, language), so it reports post-filter ASR hours with no change. For a phased run it must also be read per phase (log deltas at the boundary, saved in the sampler state already) and should add the delivered ASR cuts' mean score and the share outside the current band (needs the score on the cut: the node sets `cut.custom["asr_score"]`), which is also how the buffer lag is measured.
+
+**6. Options and recommendation**
+| | what | verdict |
+|---|---|---|
+| dynamic, in one run | phased filter node + shared step counter | **recommended**; lag tau needs a smaller buffer or an early switch; no extra queue waits |
+| two legs, resume with the other band | same node, static band per leg; resume with changed data config; stop at the decay start | the same loader code (score arrays + node), minus about 40 lines of clock and callback; adds one forced stop/resume (a queue wait if not at a chain boundary), a stop-at-step mechanism that does not exist, the identical-`max_steps` requirement, and a data-replay choice. Cheaper to *write* by a day at most, costlier to *run*; only the fallback if the clock misbehaves in the smoke |
+| baked vs joined | | joined (section 3) |
+| per source vs per task | | per source before the repeat, **selected by task** at build time (section 4) |
+| semantics A vs B | | B (section 5); A turns a quality filter into a task re-weighting |
+
+**Files to touch (phase 2):** new `melt/training/data/audio/lhotse/asr_score_filter.py` (loader of the arrays, `PhasedScoreFilter` node, step counter, effective-task resolver); `dataloader.py` (`_combine_entries`: pass inherited tags down, attach the node after `_count_cuts`, startup checks; `get_lhotse_dataloader_from_config`: build the counter, log per-phase survivors); `trainer.py` (callback + per-phase tracker deltas); `config.py` (default `asr_filter: null`); new `infra/build_asr_scores.py` (parquet -> arrays + `meta.json`, plus the band-hours report my ad-hoc queries produced); `infra/check_training_config.py` (band-aware filtered totals, repetition guard, exempt/missing report); `infra/compute_mix_weights.py`, `build_campaign_config.py`, `plan_arm.py` (`from_frac`, survivor-mean-cut weights, per-phase ASR:ST share in the plan printout); `melt/training/LHOTSE_DATA_LOADING.md`, `docs/lhotse_dataloading.md`; `docs/hpc_runbook.md` (staging of the score tree).
+
+**Test plan** (in `tests/test_lhotse_dataloader.py` unless noted, container on nyx, pytest reaped after):
+1. **Mixed ASR+ST (required):** a tiny Shar with an ASR leaf and an ST leaf, scores on disk for both (the ST leaf's array exists on purpose). With the filter on, every ST cut of the unfiltered stream (same seed) comes out unchanged and in the same order; every ASR cut is inside the band. Also a granary-shaped pair, `asr_only` scored and `ast` not.
+2. Task resolution: leaf `asr` inside a group `st`, and the reverse; checked against `get_tags_from_cut` on the yielded cuts.
+3. Off by default: a config without `asr_filter` builds the same graph and the same first N batches as today.
+4. Positional join: a FLEURS-shaped leaf with repeated ids and different scores, shuffled shards, two epochs: each cut gets its own row's score. Pins the `_graph_origin` contract to lhotse 2.0.0a3.
+5. Missing policy (`drop`/`keep`), exempt source, absent score file, zero survivors, wrong array length: the last three raise at startup.
+6. Phase switch with a stub counter: admission follows the bounds; lag matches the tau formula within tolerance on a small buffer; static band equals a one-phase list.
+7. Resume: same config continues bit-identically from a saved state; a changed band does not crash and the stream continues; a run saved without the filter resumes with it.
+8. Ties: WER exactly 0.1 and 0.4 are inside both bands as specified.
+9. `tests/test_build_asr_scores.py` (new): parquet -> arrays round trip, null handling, `cut_id` column alignment check against stats.
+10. `tests/test_check_training_config.py`: band hours equal the builder's report; no change without `asr_filter`. A new `tests/test_plan_arm_asr_filter.py` (beside the other `test_plan_arm_*` files): `from_frac` resolution, steps unchanged.
+11. Smoke on `acc_debug` before any real run: 1 node, short phases, run from a fresh MN5 clone (never a frozen one), the delivered-score meter shows the lag, and a checkpoint-resume across a phase boundary.
+
+**Deadline.** (i) **Static band on the MA by the 10-23 freeze: feasible** if the PI's go comes by 10-21: builder (minutes on nyx, the queries above ran in 2 min), node and config, tests, ~0.15 GB staged over `mn5transfer`, one smoke on `acc_debug`. (ii) **Switching band: also feasible but tighter** (+ the counter, callback, boundary tests, buffer decision) and the first real test of it is the Fondue MA itself unless a short phased run goes through `acc_debug` first. (iii) **The two-leg fallback is not the only way to make 10-23**: it needs the same score arrays and the same node, so it saves a day of writing, not a day of staging, and adds a queue wait and a resume-with-changed-config proof that has never been run. If the freeze must hold and the switch cannot be smoked, ship the static band and keep the phases key for the IFT freeze (~10-29), where only the ASR share is at stake. All three assume the 26-language pool is as measured above (including the tail problem: a hard band 1 cannot apply to the 16 languages under ~100 pool h, they need `asr_filter: false` or a looser band).
+
+Not measured / not verified: the MN5 Shar manifests' row order (no MN5 access used), the read cost of rejected cuts, tau (formula only), Seamless-vs-Parakeet agreement, that a filter-free checkpoint resumes under a filtered config (read from source, not run).
+Action needed: **PI: go or no-go on the design (dynamic vs static first; B semantics; `missing: drop`; tail-language exemption list).** User: confirm that the untracked `asr_wer/` code in the preprocessing worktree is the producer and should be committed there (the board and the scores depend on a pipeline that is not in git). Orchestrator: nothing in `timeline.md` ticked; the three-way split (builder / node / accounting) can be folded into a week-3 item if the PI says go.
+
+---
 
 ## 2026-10-19 — MELT orchestrator — MoE or Conformer for Fondue: the evidence in one place
 Context: the PI is unsure whether MoE is more stable and more defensible than the Conformer. Everything below is already on main (03 §5, the score files, the board entries of 09-26 to 10-17); nothing new was run.

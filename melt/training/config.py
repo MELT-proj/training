@@ -70,6 +70,8 @@ run:
   config: null            # Path to config file (set via CLI)
   memory_profiling: false # Enable PyTorch CUDA memory snapshot on OOM (writes .pkl to output_dir)
   memory_preallocation: false # Run a max-length warmup forward+backward pass before training to preallocate CUDA buffers
+  stop_after_step: null   # End the run after this optimizer step, a checkpoint saved there. The LR schedule stays that of trainer.max_steps
+  defer_optimizer_load: false # On a resume, load the optimizer state just before the first optimizer step instead of before the first micro-batch, so that window has a fresh run's GPU memory
 
 # =============================================================================
 # Model Configuration
@@ -214,6 +216,10 @@ data:
     total_hours: null
     total_cuts: null
     force_estimate: null
+    # Per-source, step-aware filter rules on any per-cut value (manifest field
+    # or sidecar array; off when null). See
+    # melt/training/data/audio/lhotse/cut_filter.py.
+    cut_filter: null
     batch_size: null
     batch_duration: 120.0
     quadratic_duration: null
