@@ -1055,7 +1055,8 @@ trainer:
   # The step profile (PR #166, 2 nodes, extrapolated to 16): with the NCCL socket
   # tuning and 256 MB buckets, 20 is ~11.8 s/step, a 7.4 audio-h batch, ~28.5 GPU-h
   # per 1,000 h (~34 without the tuning). 10 costs 33 per 1,000 h for half the batch;
-  # 40 stalls on the loader (prefetch_factor 32 < 40). OPEN: the tuning is the PI's call.
+  # 40 stalls on the loader (prefetch_factor 32 < 40). The tuning is adopted (PI,
+  # 10-31), pending a check on more than 2 nodes at the dry run.
   gradient_accumulation_steps: 20
   gradient_checkpointing: true
 
@@ -1095,6 +1096,9 @@ trainer:
   # Top-2 routing over 8 experts leaves an expert without tokens on some rank in
   # some step; without this the scaling bench's 1-node smoke died in step 2.
   ddp_find_unused_parameters: true
+  # Fewer, larger all-reduces; half of the step profile's NCCL fix, the other half
+  # is the socket tuning in infra/runners/sites/mn5.sh (PR #166).
+  ddp_bucket_cap_mb: 256
 
   max_grad_norm: 1.0
 
