@@ -450,6 +450,21 @@ Note `save_steps == eval_steps` is a simplification versus the old arms (the
 125 h launcher used `save_steps = 2 x eval_steps`); see the PR description for
 the full before/after diff.
 
+## Measuring how it scales
+
+`campaign.py` runs arms; it does not measure them. Two sibling folders do:
+
+- **`scaling-bench/`** — TFLOP/s per GPU, MFU against the 989 TFLOP/s bf16 peak,
+  and wall time per 100,000 audio hours at 1/2/4/8/16/32 nodes. Reads per-step
+  timings from `run.perf_logging` (off by default) rather than from tqdm, and
+  carries the FlopCounterMode calibration that makes the MFU figures
+  defensible. Read its `README.md` before quoting any efficiency number.
+- **`cost-axis/`** — post-hoc GPU-hours per arm from SLURM accounting.
+
+The two answer different questions and are not substitutes: `cost-axis` says
+what a finished run cost in GPU-hours, `scaling-bench` says how much of the
+hardware a step actually uses and how that changes with node count.
+
 ## Arms registry
 
 Every submission through `campaign.py run` (not `--dry-run`) appends one line

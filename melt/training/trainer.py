@@ -14,9 +14,12 @@ import contextlib
 import functools
 import gc
 import inspect
+import json
 import math
 import os
 import sys
+import time
+from collections import deque
 from typing import Any, Optional, Union
 
 import torch
@@ -381,6 +384,26 @@ class MELTTrainer(Seq2SeqTrainer):
         # Unlike _duration_tracker this is reset every call, not cumulative --
         # see _reduced_batch_cuts_stats for why.
         self._batch_cuts_history: list[int] = []
+
+        # Per-step throughput instrumentation, opt-in via run.perf_logging.
+        #
+        # Off by default because it is a measurement device, not a metric: it
+        # exists so a scaling benchmark can read s/step and audio-hours per
+        # wall-hour off the log instead of guessing from tqdm's trailing
+        # average (the trap documented in plan/infrastructure.md). When off,
+        # nothing below runs and training_step costs exactly what it did.
+        #
+        # Window counters are rank-local and summed across ranks at emit time,
+        # so every logged number describes the whole job rather than one rank.
+        # audio_s comes from the batch's own durations rather than from
+        # _duration_tracker, which deliberately double-counts FallbackDataset
+        # replays and would inflate the throughput figure.
+        self._perf: bool = bool(self.config.get("run", {}).get("perf_logging", False))
+        self._perf_t_last: float | None = None
+        self._perf_step_last: int = 0
+        self._perf_log_s: float = 0.0
+        self._perf_step_times: deque[float] = deque(maxlen=100)
+        self._perf_window: dict[str, float] = {}
 
         # Sum of a MoE adapter's load-balancing aux loss and router entropy
         # (`melt.modeling.modeling_melt.MELTMoEAdapter`) across training_step
@@ -1456,6 +1479,8 @@ class MELTTrainer(Seq2SeqTrainer):
         self._duration_tracker.update(durations, tasks, langs, src_langs, tgt_langs)
         if langs is not None:
             self._batch_cuts_history.append(len(langs))
+        if self._perf:
+            self._perf_observe_batch(inputs, durations)
 
         if self._grad_bucket_view and not getattr(model, "_melt_zero_grad_in_place", False):
             # Trainer clears gradients with model.zero_grad() after every optimizer step,
@@ -1480,6 +1505,218 @@ class MELTTrainer(Seq2SeqTrainer):
 
         self._accumulate_router_stats()
         return loss
+
+    # Keys of the per-window counters, in the order they are all-reduced.
+    _PERF_WINDOW_KEYS = (
+        "audio_s",
+        "enc_padded_frames",
+        "enc_valid_frames",
+        "enc_chunks",
+        "dec_positions",
+        "dec_sequences",
+        "sup_tokens",
+    )
+
+    def _perf_observe_batch(self, inputs: dict, durations) -> None:
+        """Accumulate one microbatch into the perf window (``run.perf_logging``).
+
+        Called from :meth:`training_step` before the forward pass. Two jobs:
+
+        1. **Optimizer-step timing.** ``global_step`` only advances after
+           ``optimizer.step()``, so the interval between two consecutive runs of
+           this method with *different* ``global_step`` values is one whole
+           optimizer step, gradient-accumulation microbatches included. That is
+           the number the benchmark wants, and it needs no per-microbatch
+           timers.
+        2. **Work counters.** Audio seconds, encoder frames (padded and valid),
+           encoder chunks, decoder positions and supervised tokens, all read
+           off tensors the step already has. Padding is deliberately included:
+           it is work the GPU does.
+
+        Time spent inside :meth:`log` is subtracted, because on the Hot path
+        that is bookkeeping rather than training (the log path issues three
+        ``all_gather_object`` collectives). Eval and checkpointing are *not*
+        subtracted -- with ``eval_strategy``/``save_strategy`` at ``"no"``
+        (which is how the benchmark runs) there is none in the interval anyway.
+        """
+        now = time.monotonic()
+        step = self.state.global_step
+        if step != self._perf_step_last:
+            if self._perf_t_last is not None:
+                self._perf_step_times.append(max(0.0, now - self._perf_t_last - self._perf_log_s))
+            self._perf_step_last = step
+            self._perf_t_last = now
+            self._perf_log_s = 0.0
+
+        window = self._perf_window
+        if durations is not None:
+            window["audio_s"] = window.get("audio_s", 0.0) + sum(float(d) for d in durations)
+
+        features = inputs.get("input_features")
+        audio_positions = 0.0
+        if features is not None:
+            # Counted in encoder OUTPUT positions, which is what the transformer
+            # layers run on: Whisper's input is 10 ms mel frames and its stride-2
+            # conv halves them, so input-frame counts would double the encoder's
+            # body FLOPs and the decoder's audio positions. 1 for w2v-BERT.
+            stride = self._perf_encoder_stride()
+            padded = float(features.shape[0]) * float(features.shape[1]) / stride
+            window["enc_padded_frames"] = window.get("enc_padded_frames", 0.0) + padded
+            mask = inputs.get("features_attention_mask")
+            valid = float(mask.sum()) / stride if mask is not None else padded
+            window["enc_valid_frames"] = window.get("enc_valid_frames", 0.0) + valid
+            chunk = int(getattr(self.config.model.encoder, "max_audio_seq_len", 0) or 0)
+            if chunk > 0:
+                chunks = math.ceil(features.shape[1] / chunk) * features.shape[0]
+                window["enc_chunks"] = window.get("enc_chunks", 0.0) + float(chunks)
+            stack_factor = int(getattr(self.config.model.adapter, "stack_factor", 0) or 0) or 1
+            audio_positions = valid / stack_factor
+
+        input_ids = inputs.get("input_ids")
+        if input_ids is not None:
+            # The decoder does NOT run on input_ids as given. MELT injects the
+            # adapter's audio embeddings into the sequence, INSERTING rather
+            # than replacing (``_inject_tensor`` says so in its docstring), so
+            # the real length is
+            #     input_ids - (audio placeholders) + (audio embeddings).
+            # Counting input_ids.numel() alone undercounts the decoder by ~9x
+            # on a 50 Hz encoder -- the audio placeholder is one token standing
+            # in for hundreds of frames -- which would deflate every FLOPs
+            # figure derived from it.
+            placeholders = int((input_ids == self._perf_audio_token_id()).sum())
+            merged = float(input_ids.numel()) - placeholders + audio_positions
+            window["dec_positions"] = window.get("dec_positions", 0.0) + merged
+            window["dec_sequences"] = window.get("dec_sequences", 0.0) + float(input_ids.shape[0])
+        labels = inputs.get("labels")
+        if labels is not None:
+            window["sup_tokens"] = window.get("sup_tokens", 0.0) + float((labels != -100).sum())
+
+    def _perf_encoder_stride(self) -> float:
+        """Input frames per encoder output position (cached); 1 if unknown."""
+        cached = getattr(self, "_perf_stride", None)
+        if cached is not None:
+            return cached
+        stride = 1
+        extractor = getattr(self.processor, "feature_extractor", None)
+        if extractor is not None:
+            stride = int(get_encoder_spec_for_feature_extractor(extractor).total_stride or 1)
+        self._perf_stride = float(max(stride, 1))
+        return self._perf_stride
+
+    def _perf_audio_token_id(self) -> int:
+        """Token id MELT injects audio at; cached, and -1 if it cannot be resolved."""
+        cached = getattr(self, "_perf_audio_id", None)
+        if cached is not None:
+            return cached
+        token = self.config.model.decoder.audio_token
+        token_id = -1
+        try:
+            tokenizer = getattr(self.processor, "tokenizer", None)
+            if tokenizer is not None:
+                token_id = int(tokenizer.convert_tokens_to_ids(token))
+                if token_id == tokenizer.unk_token_id:
+                    logger.warning("perf: audio token %r is unknown to the tokenizer; decoder positions will over-count", token)
+        except (AttributeError, ValueError, TypeError) as exc:
+            logger.warning("perf: could not resolve the audio token id (%s); decoder positions will over-count", exc)
+        self._perf_audio_id = token_id
+        return token_id
+
+    def _perf_emit(self, logs: dict[str, float]) -> None:
+        """Reduce and log the perf window; no-op until the second call.
+
+        The all-reduce runs on every rank, unconditionally -- the same
+        discipline ``reduced_hours()`` follows, and for the same reason: a
+        collective skipped on one rank deadlocks the others. Only rank 0 writes
+        the ``[perf]`` line and ``perf.jsonl``.
+        """
+        now = time.monotonic()
+        if self._perf_t_last is None:
+            self._perf_t_last = now
+            self._perf_step_last = self.state.global_step
+            return
+
+        n_steps = self.state.global_step - self._perf_step_last
+        if n_steps <= 0:
+            return
+        wall = now - self._perf_t_last
+
+        device = getattr(self.args, "device", None) or torch.device("cpu")
+        counts_t = torch.tensor(
+            [float(self._perf_window.get(k, 0.0)) for k in self._PERF_WINDOW_KEYS],
+            dtype=torch.float64,
+            device=device,
+        )
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            torch.distributed.all_reduce(counts_t, op=torch.distributed.ReduceOp.SUM)
+        counts = dict(zip(self._PERF_WINDOW_KEYS, counts_t.tolist()))
+
+        s_per_step = wall / n_steps
+        record = {
+            "step": int(self.state.global_step),
+            # Bumped when a counter's definition changes. v2 counts the decoder
+            # positions MELT actually runs on (input_ids with the audio
+            # embeddings inserted) rather than the raw input_ids length, which
+            # was ~9x too small. collect.py refuses to mix versions.
+            "perf_version": 2,
+            "s_per_step": s_per_step,
+            "window_s": wall,
+            "window_steps": int(n_steps),
+            "audio_s_per_wall_s": counts["audio_s"] / wall if wall > 0 else 0.0,
+            **counts,
+        }
+        if self._perf_step_times:
+            ordered = sorted(self._perf_step_times)
+            record["s_per_step_p10"] = ordered[len(ordered) // 10]
+            record["s_per_step_p90"] = ordered[min(len(ordered) - 1, (9 * len(ordered)) // 10)]
+
+        logs["perf/s_per_step"] = s_per_step
+        logs["perf/audio_s_per_wall_s"] = record["audio_s_per_wall_s"]
+        logs["perf/dec_positions"] = counts["dec_positions"]
+        logs["perf/audio_s"] = counts["audio_s"]
+
+        if _is_global_master():
+            if "s_per_step_p10" in record:
+                logger.info(
+                    "[perf] step=%d s_per_step=%.3f (p10 %.3f p90 %.3f) audio_s_per_wall_s=%.1f "
+                    "audio_s=%.0f dec_positions=%.0f enc_padded_frames=%.0f enc_valid_frames=%.0f",
+                    record["step"],
+                    record["s_per_step"],
+                    record["s_per_step_p10"],
+                    record["s_per_step_p90"],
+                    record["audio_s_per_wall_s"],
+                    counts["audio_s"],
+                    counts["dec_positions"],
+                    counts["enc_padded_frames"],
+                    counts["enc_valid_frames"],
+                )
+            else:
+                logger.info(
+                    "[perf] step=%d s_per_step=%.3f audio_s_per_wall_s=%.1f audio_s=%.0f",
+                    record["step"],
+                    record["s_per_step"],
+                    record["audio_s_per_wall_s"],
+                    counts["audio_s"],
+                )
+            self._perf_append_jsonl(record)
+
+        self._perf_window = {}
+
+    def _perf_append_jsonl(self, record: dict) -> None:
+        """Append one perf record to ``<output_dir>/perf.jsonl`` (rank 0 only).
+
+        A file rather than only a log line so the collector never has to parse
+        prose, and jsonl rather than a single JSON document so a job killed at
+        the wall clock still leaves every completed record on disk.
+        """
+        output_dir = getattr(self.args, "output_dir", None)
+        if not output_dir:
+            return
+        try:
+            os.makedirs(output_dir, exist_ok=True)
+            with open(os.path.join(output_dir, "perf.jsonl"), "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, sort_keys=True) + "\n")
+        except OSError as exc:  # a full or read-only filesystem must not kill training
+            logger.warning("perf.jsonl write failed (%s); continuing without it", exc)
 
     def _get_moe_adapter(self):
         """Return the concrete MoE adapter module (`MELTMoEAdapter`), or None.
@@ -1539,6 +1776,9 @@ class MELTTrainer(Seq2SeqTrainer):
         hours = self._duration_tracker.reduced_hours()
         if hours and "loss" in logs:
             logs.update(hours)
+        perf_t0 = time.monotonic() if self._perf else 0.0
+        if self._perf and "loss" in logs:
+            self._perf_emit(logs)
         if "loss" in logs and torch.cuda.is_available():
             logs["gpu_peak_gb"] = torch.cuda.max_memory_allocated() / 1024 ** 3
             torch.cuda.reset_peak_memory_stats()
@@ -1552,6 +1792,12 @@ class MELTTrainer(Seq2SeqTrainer):
             logs.update(router_stats)
 
         super().log(logs, start_time)
+        if self._perf:
+            # Everything log() did -- the emit's collective, the three
+            # all_gather_object calls below, wandb -- is bookkeeping, not
+            # training. Charge it to the next step's interval so it is
+            # subtracted there rather than inflating s_per_step.
+            self._perf_log_s += time.monotonic() - perf_t0
 
     def _reduced_batch_cuts_stats(self, prefix: str = "train_cuts_per_batch") -> dict[str, float]:
         """Return min/mean/max cuts-per-microbatch since the last log() call, reduced across ranks.
