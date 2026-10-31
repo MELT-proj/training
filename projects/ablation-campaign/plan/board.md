@@ -15,6 +15,71 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-10-31 — Claude (step-profiling session) — Fondue step, decomposed: the fixed cost is a gradient all-reduce running on TCP sockets; socket tuning alone takes ga20 from 13.05 to 11.04 s/step. The 10-24 Fondue scaling table is superseded.
+Context: PI/orchestrator asked where the Fondue training step goes and what would make it faster, and for the grad_accum fit first because Raclette must run at Fondue's global batch (fixed Mon 11-02). Instruments are new, off by default: `run.step_profile` (phase marks at every boundary of the step, gradient-hook marks for the backward phases, torch.profiler windows) in `melt/training/step_profile.py`, plus `scaling-bench/profile/` (job driver, analysis script, isolated lever benchmark, raw data). All measurements: 2 nodes (8 H100), `master_dtype float32`, everything trainable, `stack_factor 5` (PI-confirmed 10 Hz), bd 15, gradient checkpointing ON, DDP, flash attention 2, loss/grad_norm finite on every retained step. 31.1 GPU-h used of 40; 7.2 of that went to six runs that failed (five out of memory, one my own bug).
+
+**The 10-24 Fondue scaling table (13.3 / 15.7 / 16.5 s/step, 5-7% MFU) is superseded.** It was measured on a model loaded in pure bf16 (`Will use dtype=torch.bfloat16` in the logs; no `master_dtype`), shard seed 42, and every point has `loss 0, grad_norm nan` from step 2 on. With the current code (fp32 masters) bd 15 x ga 40 does not fit in 63 GB, nor does bd 10 or bd 8; only gradient checkpointing fits (peak 52 GB at bd 15, 54 GB at bd 30).
+
+Finding:
+1. **Decomposition, 2 nodes, bd 15 x ga 40, default NCCL (25.69 s/step, 56 steady steps, 100% of the step accounted):**
+
+| part | s/step | % |
+|---|---|---|
+| encoder fwd / bwd (bwd includes recompute) | 2.76 / 5.21 | 10.7 / 20.3 |
+| decoder fwd / bwd | 3.19 / 5.51 | 12.4 / 21.5 |
+| adapter (MoE) fwd + bwd | 0.65 | 2.5 |
+| loss | 0.12 | 0.5 |
+| **backward tail = gradient all-reduce not hidden by backward** | **4.12** | **16.0** |
+| **dataloader wait** | **3.46** | **13.5** |
+| optimizer + clip | 0.17 | 0.7 |
+| H2D, DDP find_unused traversal, bookkeeping, logging | 0.5 | 2 |
+
+   Per micro-batch (non-sync): 455-460 ms at ga20 and ga40. **I have no 1-node decomposition**: both 1-node attempts ran out of memory before the checkpointing change, and the budget went to the questions below.
+2. **Accumulation is free of communication.** A traced non-final micro-batch has zero NCCL kernels; only the final micro-batch all-reduces. `no_sync` works under HF Trainer + accelerate.
+3. **The exposed communication per step is 4.0 s (3.96 / 4.00 / 4.12 s at ga 10 / 20 / 40), and it is a fixed cost.** The final micro-batch's trace: 213 fp32 ring all-reduce kernels, 3.95 s, only 0.1 s overlapped with compute. Cause: NCCL runs on TCP sockets (`Using network Socket`, over `ib0`), not InfiniBand verbs. In the lever benchmark the same 9.3 GB reduces in 0.05 s inside a node and 2.8 s across two (bus bandwidth 5 GB/s vs ~300). IB verbs were unreachable in my first attempt because I bound `/dev/infiniband` explicitly: Singularity 3.11 on MN5 is setuid and mounts user binds `nosuid,nodev`, so the bound `uverbs*` nodes could not be opened (the default `/dev` is fine). Root cause found by the orchestrator's probe; with the host libibverbs/mlx5 stage bound in and no `/dev/infiniband` bind, NCCL reports `Using network IB` and the 9.3 GB all-reduce takes 0.153 s in isolation (see the follow-up note below once the training run is in).
+4. **Socket tuning fixes most of it, with identical numerics.** `NCCL_SOCKET_NTHREADS=8 NCCL_NSOCKS_PERTHREAD=8 NCCL_BUFFSIZE=16777216` plus `trainer.ddp_bucket_cap_mb=256`: the 9.3 GB all-reduce goes 2.79 -> 0.87 s in isolation; in the real run ga20 goes **13.05 -> 11.04 s/step** and the tail 4.0 -> 1.55 s (31 kernels instead of 213, 0.9 s still exposed in the trace). No NaN.
+5. **Fit, s/step = a + b x ga (2 nodes):**
+   - default NCCL, ga 10 / 20: a = 4.06 s, b = 449 ms (ga40 sits 3.65 s above the line, see 6).
+   - tuned NCCL, ga 10 / 20 (6.11 / 11.04 s): **a = 1.18 s, b = 493 ms** (b differs from 449 ms with no cause identified; the per-micro non-sync time measured directly is 455-477 ms in all runs, and a two-point fit is noisy at this size).
+6. **ga40 has an extra 3.5 s of dataloader wait** (0.06 s at ga20, 0.04 at ga10). Likely: the loader prefetches 32 batches but the Trainer requests 40 at the start of each step (one worker). Not tested. Irrelevant at ga <= 32.
+7. **16-node prediction (extrapolation, +0.8 s on the 2-node fit; that 2->16 rise is from the old bf16 sweep and the true fp32/socket rise is unmeasured, treat the 16-node column as optimistic):**
+
+| ga | s/step, default NCCL | GPU-h per 1,000 h, default | s/step, tuned NCCL | GPU-h per 1,000 h, tuned | global batch at 16 nodes, audio-h |
+|---|---|---|---|---|---|
+| 40 | 22.8 (26.3 with the loader stall) | 27.8 (32.1) | 21.7 | 26.1 | 14.8 |
+| 20 | 13.9 | 33.7 | 11.8 | 28.5 | 7.4 |
+| 10 | 9.4 | 45.6 | 6.9 | 33.2 | 3.7 |
+| 5 | 7.1 | 69.3 | 4.5 | 42.8 | 1.8 |
+
+   Audio per micro-batch is 20.56 s, not 15 (measured mean over 4,600 micro-batches), so global batches are 1.37x the nominal. With the tuned transport, ga10 costs 33 GPU-h per 1,000 h: 16% more than ga20 for a batch half the size. The fixed cost no longer dominates at ga20 (17% of the step).
+8. **The 137% fill is lhotse's rule that every batch holds at least one cut.** `TimeConstraint.exceeded()` charges num_cuts x longest cut, so any batch of 2+ cuts stays under bd; 82% of micro-batches are a single cut (mean 22.4 s, 90% of the audio), mean 1.39 cuts per micro-batch. Not `quadratic_duration` (null), not `max_duration`. `max_steps` must use the measured ~20.56 s per micro-batch (orchestrator has applied this).
+9. **Micro-batches are launch-bound.** In a traced non-final micro-batch the GPU is busy 114 ms of ~460 ms (about 16,000 kernels, mostly tiny). bd 30 x ga 10 (2.35 cuts, 26.3 s per micro-batch) costs 511 ms per micro-batch: 28% more audio for 12% more time, so compute per audio-second falls 13%; peak 54.4 GB, fits. At matched audio per step (ga 16) that is about 9% fewer GPU-h (extrapolated).
+   Matched-audio follow-up with the tuned transport (2026-10-31, 2 nodes, bd 30 x ga 16): **9.29 s/step** for 421 s of audio per rank per step, against 11.04 s for 414 s at bd 15 x ga 20. That is 22.1 against 26.6 GPU-h per 1,000 audio-h (-17%); 16-node extrapolation (+0.8 s) 24.0 against 28.6, global batch 7.5 against 7.4 audio-h. Micro-batches: 2.23 cuts and 26.3 s of audio (bd 15: 1.34 cuts, 20.7 s), peak 54.4 GB (51.8), finite losses throughout.
+   InfiniBand training run (2026-10-31, same recipe and batches, no socket variables, 256 MB buckets, host libibverbs/mlx5 stage bound, no `/dev/infiniband` bind): NCCL reports `Using network IB` on both nodes, **8.55 s/step**, exposed all-reduce tail 0.82 s (1.49 s on tuned sockets, 4.0 s on default sockets), **20.3 GPU-h per 1,000 audio-h** at 2 nodes (22.1 on tuned sockets), finite losses. The all-reduce alone takes 0.153 s in isolation, so about 0.65 s of the tail is not wire time; I have not investigated what it is. 16-node extrapolation (+0.8 s, unmeasured under IB): 9.4 s/step, 22.2 GPU-h per 1,000 audio-h.
+10. At stack 5 the MoE adapter is 2.5-3% of the step and no parameter went without a gradient in the 8 sampled micro-batches, so `find_unused_parameters` costs 0.01-0.02 s per step and the MoE loop is not worth touching.
+
+Levers (2-node measurements unless marked; class: I = identical or reduction order only, C = close, M = changes model or data):
+
+| lever | saving | class | effort |
+|---|---|---|---|
+| NCCL socket threads/sockets + `ddp_bucket_cap_mb 256` | **2.0 s/step at ga20 (-15%)**, measured | I | env vars in the launcher + one config line |
+| InfiniBand verbs inside the container | up to ~1.4 s more of the remaining 1.5 s tail (all-reduce 0.153 s in isolation) | I | bind the host libibverbs/mlx5 stage and `/etc/libibverbs.d`, set `LD_LIBRARY_PATH`; do NOT bind `/dev/infiniband` |
+| larger micro-batch (bd 30, ga adjusted to the same audio) | ~9% GPU-h, extrapolated | C (same expected gradient, different micro-batch composition) | config only; fits at 54 GB with checkpointing |
+| dataloader prefetch/workers when ga > 32 | 3.5 s/step at ga40, measured as an excess | I | config; fix untested |
+| bf16 gradient all-reduce | 0.43 s vs 0.85 s in isolation, ~0.4 s/step | C | comm hook; changes numerics, do not before Raclette |
+| fused AdamW | 0.09 s/step (138 -> 49 ms; 5e-7 max abs diff after one step) | C | one flag |
+| CUDA graphs / `torch.compile` on the micro-batch | up to 3x on compute, not tested | I in principle | high (variable shapes) |
+| drop gradient checkpointing | ~25-30% of the micro-batch (recompute), estimated; does not fit at bd >= 8 | I | needs memory: `ddp_gradient_as_bucket_view` frees ~9 GB (untested here) |
+| MoE grouped GEMM | < 0.1 s/step; bit-identical to the loop in the test (max diff 0.0) | I | not worth it at stack 5 |
+| `find_unused_parameters` off | <= 0.02 s/step | I | not worth it |
+| Whisper 30 s padding | encoder is 39% of the step; padding share not measured | M | PI decision; the encoder is launch-bound, so truncation may not save time |
+
+What it changes: the Fondue step is not compute-limited. Recommendation, ranked by saving per unit of risk: (1) adopt the NCCL socket settings and 256 MB buckets before Raclette (identical numerics, 15% faster at ga20); (2) keep ga20 (7.4 audio-h at 16 nodes, 28.5 GPU-h per 1,000 h); ga10 is 33; (3) re-check bd 30 at the same audio per step once the transport is fixed; (4) if ga stays <= 32 the loader stall does not occur; (5) only then consider CUDA graphs.
+Not done: no 1-node decomposition; no 16-node run (all 16-node numbers are extrapolated); the 10 Hz MoE variants in `lever_bench.py` errored on an input-shape bug of mine and were not rerun; the fp32 fused-optimizer/bucket-view memory levers are untested.
+Action needed: PI decides whether to adopt the NCCL settings in the launcher (they apply to every multi-node run, not only Fondue). IB verbs work once `/dev/infiniband` is not bound explicitly; the training-run measurement is pending. Raw data and scripts: `projects/ablation-campaign/scaling-bench/profile/`; job ids in `arms.tsv`.
+
+---
+
 ## 2026-10-29 — Claude (worker session, data) — PR #157: the ASR band is now a generic cut filter (`data.train_ds.cut_filter`)
 Context: PI asked for filtering on any manifest field with a given condition, so ST data can be filtered on ST quality scores too.
 Finding: `asr_filter` is replaced by named rules under `cut_filter.rules`. Each rule matches leaves on their merged tags (`match: {task: st}`; any tag, lists allowed), reads its value from a dotted manifest path (`field: custom.st_qe`, `supervisions.0.custom.x`) or from a sidecar array (`array: wer`, the existing `shar-asr-scores` tree, still judged on the row index before the cut is read), and keeps cuts by `min`/`max`, `in` (fields), or `pct_min`/`pct_max` (arrays), with phases as before. Per-source overrides are keyed by rule name (`cut_filter: {asr_wer: {pct_max: 25}}`, `{asr_wer: false}`, or `false` for every rule). Field rules read every cut before judging it, so a harsh field filter on GPFS should become an array; they cannot take percentiles. The smoke config and checker are ported; the MN5 smoke above ran the old key and was not re-run.

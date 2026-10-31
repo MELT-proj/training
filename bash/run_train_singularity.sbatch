@@ -278,6 +278,12 @@ if [[ -n "${LOCAL_ASR_SCORES_DIR:-}" ]]; then
     BINDS+=("${LOCAL_ASR_SCORES_DIR}:/workspace/asr_scores:ro")
     container_env LOCAL_ASR_SCORES_DIR /workspace/asr_scores
 fi
+# Extra host paths, comma-separated host:container[:mode]. Off unless set; used to
+# bind the host InfiniBand userspace into the image (docs/hpc_runbook.md).
+if [[ -n "${MELT_EXTRA_BINDS:-}" ]]; then
+    IFS=',' read -ra _extra_binds <<< "${MELT_EXTRA_BINDS}"
+    BINDS+=("${_extra_binds[@]}")
+fi
 BIND_ARGS=$(IFS=,; echo "${BINDS[*]}")
 
 echo "[container] runtime:  ${SINGULARITY_BIN}"

@@ -1,0 +1,60 @@
+{
+ "points": [
+  {
+   "run": "projects/ablation-campaign/scaling-bench/profile/raw/n2-ga10-ckptsk5-nccl",
+   "grad_accum": 10,
+   "s_per_step": 6.11285297826087,
+   "audio_s_per_micro": 20.868246195652173,
+   "steps_used": 46
+  },
+  {
+   "run": "projects/ablation-campaign/scaling-bench/profile/raw/n2-ga20-ckptsk5-nccl",
+   "grad_accum": 20,
+   "s_per_step": 11.041907388888891,
+   "audio_s_per_micro": 20.72096979166667,
+   "steps_used": 36
+  }
+ ],
+ "a_s": 1.1837985676328495,
+ "b_s_per_micro": 0.4929054410628021,
+ "rms_s": 6.280369834735101e-16,
+ "predictions": [
+  {
+   "grad_accum": 40,
+   "s_per_step_2_nodes": 20.900016210144933,
+   "s_per_step_16_nodes": 21.700016210144934,
+   "audio_s_per_rank_per_step": 831.7843197463767,
+   "global_batch_audio_h_16_nodes": 14.787276795491142,
+   "gpu_h_per_1000_audio_h_16_nodes": 26.088513205877202,
+   "fixed_share_of_step": 0.09141922053981727
+  },
+  {
+   "grad_accum": 20,
+   "s_per_step_2_nodes": 11.041907388888891,
+   "s_per_step_16_nodes": 11.841907388888892,
+   "audio_s_per_rank_per_step": 415.89215987318835,
+   "global_batch_audio_h_16_nodes": 7.393638397745571,
+   "gpu_h_per_1000_audio_h_16_nodes": 28.47350474820123,
+   "fixed_share_of_step": 0.16752356714883804
+  },
+  {
+   "grad_accum": 10,
+   "s_per_step_2_nodes": 6.112852978260871,
+   "s_per_step_16_nodes": 6.9128529782608705,
+   "audio_s_per_rank_per_step": 207.94607993659417,
+   "global_batch_audio_h_16_nodes": 3.6968191988727854,
+   "gpu_h_per_1000_audio_h_16_nodes": 33.24348783284927,
+   "fixed_share_of_step": 0.2869724806633935
+  },
+  {
+   "grad_accum": 5,
+   "s_per_step_2_nodes": 3.64832577294686,
+   "s_per_step_16_nodes": 4.44832577294686,
+   "audio_s_per_rank_per_step": 103.97303996829709,
+   "global_batch_audio_h_16_nodes": 1.8484095994363927,
+   "gpu_h_per_1000_audio_h_16_nodes": 42.78345400214536,
+   "fixed_share_of_step": 0.44596521677832346
+  }
+ ],
+ "n16_delta_s": 0.8
+}

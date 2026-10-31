@@ -1,0 +1,278 @@
+{
+ "world": 8,
+ "local_world": 4,
+ "gpu": "NVIDIA H100",
+ "allreduce": [
+  {
+   "dtype": "float32",
+   "bucket_mb": 25,
+   "scope": "job",
+   "ranks": 8,
+   "gigabytes": 9.32,
+   "median_s": 2.440665283203125,
+   "algbw_GBps": 3.8186309544946893,
+   "busbw_GBps": 6.682604170365706
+  },
+  {
+   "dtype": "float32",
+   "bucket_mb": 25,
+   "scope": "node",
+   "ranks": 4,
+   "gigabytes": 9.32,
+   "median_s": 0.05615932846069336,
+   "algbw_GBps": 165.95640039611922,
+   "busbw_GBps": 248.93460059417885
+  },
+  {
+   "dtype": "float32",
+   "bucket_mb": 100,
+   "scope": "job",
+   "ranks": 8,
+   "gigabytes": 9.32,
+   "median_s": 1.149219482421875,
+   "algbw_GBps": 8.109852071389316,
+   "busbw_GBps": 14.192241124931304
+  },
+  {
+   "dtype": "float32",
+   "bucket_mb": 100,
+   "scope": "node",
+   "ranks": 4,
+   "gigabytes": 9.32,
+   "median_s": 0.04805766296386719,
+   "algbw_GBps": 193.93369184446962,
+   "busbw_GBps": 290.9005377667044
+  },
+  {
+   "dtype": "float32",
+   "bucket_mb": 256,
+   "scope": "job",
+   "ranks": 8,
+   "gigabytes": 9.32,
+   "median_s": 0.8717303466796875,
+   "algbw_GBps": 10.691379548158121,
+   "busbw_GBps": 18.70991420927671
+  },
+  {
+   "dtype": "float32",
+   "bucket_mb": 256,
+   "scope": "node",
+   "ranks": 4,
+   "gigabytes": 9.32,
+   "median_s": 0.04455926513671875,
+   "algbw_GBps": 209.159643261709,
+   "busbw_GBps": 313.7394648925635
+  },
+  {
+   "dtype": "float32",
+   "bucket_mb": 1024,
+   "scope": "job",
+   "ranks": 8,
+   "gigabytes": 9.32,
+   "median_s": 0.8492847290039063,
+   "algbw_GBps": 10.973940401508306,
+   "busbw_GBps": 19.204395702639538
+  },
+  {
+   "dtype": "float32",
+   "bucket_mb": 1024,
+   "scope": "node",
+   "ranks": 4,
+   "gigabytes": 9.32,
+   "median_s": 0.04277916717529297,
+   "algbw_GBps": 217.86305380397283,
+   "busbw_GBps": 326.7945807059592
+  },
+  {
+   "dtype": "bfloat16",
+   "bucket_mb": 25,
+   "scope": "job",
+   "ranks": 8,
+   "gigabytes": 4.66,
+   "median_s": 1.234875732421875,
+   "algbw_GBps": 3.773659063540482,
+   "busbw_GBps": 6.603903361195844
+  },
+  {
+   "dtype": "bfloat16",
+   "bucket_mb": 25,
+   "scope": "node",
+   "ranks": 4,
+   "gigabytes": 4.66,
+   "median_s": 0.02735260772705078,
+   "algbw_GBps": 170.36766828602677,
+   "busbw_GBps": 255.55150242904017
+  },
+  {
+   "dtype": "bfloat16",
+   "bucket_mb": 100,
+   "scope": "job",
+   "ranks": 8,
+   "gigabytes": 4.66,
+   "median_s": 0.5894557495117188,
+   "algbw_GBps": 7.905597670156165,
+   "busbw_GBps": 13.834795922773289
+  },
+  {
+   "dtype": "bfloat16",
+   "bucket_mb": 100,
+   "scope": "node",
+   "ranks": 4,
+   "gigabytes": 4.66,
+   "median_s": 0.023708383560180665,
+   "algbw_GBps": 196.55494387338524,
+   "busbw_GBps": 294.83241581007786
+  },
+  {
+   "dtype": "bfloat16",
+   "bucket_mb": 256,
+   "scope": "job",
+   "ranks": 8,
+   "gigabytes": 4.66,
+   "median_s": 0.4418742980957031,
+   "algbw_GBps": 10.545985634563241,
+   "busbw_GBps": 18.455474860485673
+  },
+  {
+   "dtype": "bfloat16",
+   "bucket_mb": 256,
+   "scope": "node",
+   "ranks": 4,
+   "gigabytes": 4.66,
+   "median_s": 0.022069887161254884,
+   "algbw_GBps": 211.14743206213268,
+   "busbw_GBps": 316.721148093199
+  },
+  {
+   "dtype": "bfloat16",
+   "bucket_mb": 1024,
+   "scope": "job",
+   "ranks": 8,
+   "gigabytes": 4.66,
+   "median_s": 0.43081161499023435,
+   "algbw_GBps": 10.816792857605831,
+   "busbw_GBps": 18.929387500810204
+  },
+  {
+   "dtype": "bfloat16",
+   "bucket_mb": 1024,
+   "scope": "node",
+   "ranks": 4,
+   "gigabytes": 4.66,
+   "median_s": 0.021259647369384765,
+   "algbw_GBps": 219.19460464385193,
+   "busbw_GBps": 328.7919069657779
+  }
+ ],
+ "moe": {
+  "4 cuts, 36% valid, 50 Hz": [
+   {
+    "variant": "loop (repo), all frames",
+    "tokens": 6000,
+    "median_ms": 5.059807777404785,
+    "min_ms": 5.035391807556152,
+    "max_ms": 5.087520122528076
+   },
+   {
+    "variant": "loop (repo), valid frames only",
+    "tokens": 6000,
+    "median_ms": 4.116352081298828,
+    "min_ms": 4.085728168487549,
+    "max_ms": 4.14412784576416
+   },
+   {
+    "variant": "dense dispatch, all frames",
+    "tokens": 6000,
+    "median_ms": 7.906047821044922,
+    "min_ms": 7.894815921783447,
+    "max_ms": 8.034367561340332
+   },
+   {
+    "variant": "grouped GEMM, all frames",
+    "tokens": 6000,
+    "median_ms": 3.2200000286102295,
+    "min_ms": 3.212575912475586,
+    "max_ms": 3.228447914123535
+   }
+  ],
+  "4 cuts, 36% valid, 10 Hz (stack 5)": [
+   {
+    "variant": "loop (repo), all frames",
+    "error": "RuntimeError('mat1 and mat2 shapes cannot be multiplied (240x32000 and 6400x8)')"
+   },
+   {
+    "variant": "loop (repo), valid frames only",
+    "error": "RuntimeError('mat1 and mat2 shapes cannot be multiplied (87x32000 and 6400x8)')"
+   },
+   {
+    "variant": "dense dispatch, all frames",
+    "tokens": 1200,
+    "median_ms": 4.632768154144287,
+    "min_ms": 4.624000072479248,
+    "max_ms": 4.760159969329834
+   },
+   {
+    "variant": "grouped GEMM, all frames",
+    "tokens": 1200,
+    "median_ms": 3.3291521072387695,
+    "min_ms": 3.320607900619507,
+    "max_ms": 3.3446719646453857
+   }
+  ],
+  "12 cuts, 36% valid, 50 Hz": [
+   {
+    "variant": "loop (repo), all frames",
+    "tokens": 18000,
+    "median_ms": 9.858016014099121,
+    "min_ms": 9.741344451904297,
+    "max_ms": 9.873184204101562
+   },
+   {
+    "variant": "loop (repo), valid frames only",
+    "tokens": 18000,
+    "median_ms": 4.942527770996094,
+    "min_ms": 4.883359909057617,
+    "max_ms": 4.971680164337158
+   },
+   {
+    "variant": "dense dispatch, all frames",
+    "tokens": 18000,
+    "median_ms": 21.43516731262207,
+    "min_ms": 21.124191284179688,
+    "max_ms": 21.540800094604492
+   },
+   {
+    "variant": "grouped GEMM, all frames",
+    "tokens": 18000,
+    "median_ms": 6.897151947021484,
+    "min_ms": 6.873983860015869,
+    "max_ms": 6.9160637855529785
+   }
+  ]
+ },
+ "moe_numerics": {
+  "dense_vs_loop_max_abs": 0.001953125,
+  "grouped_vs_loop_max_abs": 0.0,
+  "loop_abs_mean": 0.06049824133515358
+ },
+ "optimizer": {
+  "tensors": 773,
+  "foreach": {
+   "median_ms": 138.17872619628906,
+   "min_ms": 138.05075073242188,
+   "max_ms": 138.2857208251953
+  },
+  "clip_grad_norm": {
+   "median_ms": 21.498048782348633,
+   "min_ms": 21.4169921875,
+   "max_ms": 21.516864776611328
+  },
+  "fused_vs_foreach_max_abs_after_one_step": 4.76837158203125e-07,
+  "fused": {
+   "median_ms": 49.05379104614258,
+   "min_ms": 48.99599838256836,
+   "max_ms": 49.19887924194336
+  }
+ },
+ "seconds": 49.39425826072693
+}
