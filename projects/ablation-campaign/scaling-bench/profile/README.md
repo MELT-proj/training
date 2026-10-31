@@ -6,7 +6,7 @@ Results are in the 2026-10-31 entry of `plan/board.md`. This directory holds the
 |---|---|
 | `run_profile.py` | submits one profile job (`run`), the isolated lever benchmark (`levers`), or prints/validates a command (`render`, `check`). `acc_debug` only; writes `BENCH-profile-*` and no weights |
 | `analyze_profile.py` | `phases` (decomposition from the marks), `trace` (NCCL overlap, per-phase kernels and host syncs from a profiler trace), `fit` (s/step = a + b x grad_accum) |
-| `lever_bench.py` | all-reduce by bucket size and dtype, MoE dispatch variants, AdamW foreach vs fused; also prints what the container sees of `/dev/infiniband` |
+| `lever_bench.py` | all-reduce by bucket size and dtype, MoE dispatch variants, AdamW foreach vs fused; also prints what the container sees of `/dev/infiniband`. `--ib` (levers and run) binds the host InfiniBand userspace; never bind `/dev/infiniband` itself (setuid Singularity mounts user binds `nodev`) |
 | `raw/<run>/` | `step_phases_rank0.jsonl` (raw marks), `perf.jsonl`, `unused_grads_rank0.json`; traces only for the ga40 run (the rest stay on MN5 under `/gpfs/scratch/epor48/outputs/BENCH-profile-*`) |
 
 Run names: `n<nodes>-ga<grad_accum>[-bd<batch_duration>]ckptsk5[-nccl]`. All runs: fp32 master weights, gradient checkpointing, `stack_factor 5`, bd 15 unless the name says otherwise. `-nccl` runs set `NCCL_SOCKET_NTHREADS=8 NCCL_NSOCKS_PERTHREAD=8 NCCL_BUFFSIZE=16777216` and `trainer.ddp_bucket_cap_mb=256`.

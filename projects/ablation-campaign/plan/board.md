@@ -36,7 +36,7 @@ Finding:
 
    Per micro-batch (non-sync): 455-460 ms at ga20 and ga40. **I have no 1-node decomposition**: both 1-node attempts ran out of memory before the checkpointing change, and the budget went to the questions below.
 2. **Accumulation is free of communication.** A traced non-final micro-batch has zero NCCL kernels; only the final micro-batch all-reduces. `no_sync` works under HF Trainer + accelerate.
-3. **The exposed communication per step is 4.0 s (3.96 / 4.00 / 4.12 s at ga 10 / 20 / 40), and it is a fixed cost.** The final micro-batch's trace: 213 fp32 ring all-reduce kernels, 3.95 s, only 0.1 s overlapped with compute. Cause: NCCL runs on TCP sockets (`Using network Socket`, over `ib0`), not InfiniBand verbs. In the lever benchmark the same 9.3 GB reduces in 0.05 s inside a node and 2.8 s across two (bus bandwidth 5 GB/s vs ~300). IB verbs cannot be opened inside the container: the host libraries bind in and NCCL sees the six mlx5 devices, but `open()` on `/dev/infiniband/uverbs*` is refused with the container's bind of the device nodes, while the same user opens them fine outside the container (suspected `nodev` bind mount, not confirmed).
+3. **The exposed communication per step is 4.0 s (3.96 / 4.00 / 4.12 s at ga 10 / 20 / 40), and it is a fixed cost.** The final micro-batch's trace: 213 fp32 ring all-reduce kernels, 3.95 s, only 0.1 s overlapped with compute. Cause: NCCL runs on TCP sockets (`Using network Socket`, over `ib0`), not InfiniBand verbs. In the lever benchmark the same 9.3 GB reduces in 0.05 s inside a node and 2.8 s across two (bus bandwidth 5 GB/s vs ~300). IB verbs were unreachable in my first attempt because I bound `/dev/infiniband` explicitly: Singularity 3.11 on MN5 is setuid and mounts user binds `nosuid,nodev`, so the bound `uverbs*` nodes could not be opened (the default `/dev` is fine). Root cause found by the orchestrator's probe; with the host libibverbs/mlx5 stage bound in and no `/dev/infiniband` bind, NCCL reports `Using network IB` and the 9.3 GB all-reduce takes 0.153 s in isolation (see the follow-up note below once the training run is in).
 4. **Socket tuning fixes most of it, with identical numerics.** `NCCL_SOCKET_NTHREADS=8 NCCL_NSOCKS_PERTHREAD=8 NCCL_BUFFSIZE=16777216` plus `trainer.ddp_bucket_cap_mb=256`: the 9.3 GB all-reduce goes 2.79 -> 0.87 s in isolation; in the real run ga20 goes **13.05 -> 11.04 s/step** and the tail 4.0 -> 1.55 s (31 kernels instead of 213, 0.9 s still exposed in the trace). No NaN.
 5. **Fit, s/step = a + b x ga (2 nodes):**
    - default NCCL, ga 10 / 20: a = 4.06 s, b = 449 ms (ga40 sits 3.65 s above the line, see 6).
@@ -62,7 +62,7 @@ Levers (2-node measurements unless marked; class: I = identical or reduction ord
 | lever | saving | class | effort |
 |---|---|---|---|
 | NCCL socket threads/sockets + `ddp_bucket_cap_mb 256` | **2.0 s/step at ga20 (-15%)**, measured | I | env vars in the launcher + one config line |
-| InfiniBand verbs inside the container | up to ~1 s more of the remaining 1.5 s tail, estimated | I | blocked by the device-open refusal; needs BSC/runtime help |
+| InfiniBand verbs inside the container | up to ~1.4 s more of the remaining 1.5 s tail (all-reduce 0.153 s in isolation) | I | bind the host libibverbs/mlx5 stage and `/etc/libibverbs.d`, set `LD_LIBRARY_PATH`; do NOT bind `/dev/infiniband` |
 | larger micro-batch (bd 30, ga adjusted to the same audio) | ~9% GPU-h, extrapolated | C (same expected gradient, different micro-batch composition) | config only; fits at 54 GB with checkpointing |
 | dataloader prefetch/workers when ga > 32 | 3.5 s/step at ga40, measured as an excess | I | config; fix untested |
 | bf16 gradient all-reduce | 0.43 s vs 0.85 s in isolation, ~0.4 s/step | C | comm hook; changes numerics, do not before Raclette |
@@ -75,7 +75,7 @@ Levers (2-node measurements unless marked; class: I = identical or reduction ord
 
 What it changes: the Fondue step is not compute-limited. Recommendation, ranked by saving per unit of risk: (1) adopt the NCCL socket settings and 256 MB buckets before Raclette (identical numerics, 15% faster at ga20); (2) keep ga20 (7.4 audio-h at 16 nodes, 28.5 GPU-h per 1,000 h); ga10 is 33; (3) re-check bd 30 at the same audio per step once the transport is fixed; (4) if ga stays <= 32 the loader stall does not occur; (5) only then consider CUDA graphs.
 Not done: no 1-node decomposition; no 16-node run (all 16-node numbers are extrapolated); the 10 Hz MoE variants in `lever_bench.py` errored on an input-shape bug of mine and were not rerun; the fp32 fused-optimizer/bucket-view memory levers are untested.
-Action needed: PI decides whether to adopt the NCCL settings in the launcher (they apply to every multi-node run, not only Fondue). Someone with BSC access should ask why `/dev/infiniband/uverbs*` cannot be opened from Singularity on `acc` nodes. Raw data and scripts: `projects/ablation-campaign/scaling-bench/profile/`; job ids in `arms.tsv`.
+Action needed: PI decides whether to adopt the NCCL settings in the launcher (they apply to every multi-node run, not only Fondue). IB verbs work once `/dev/infiniband` is not bound explicitly; the training-run measurement is pending. Raw data and scripts: `projects/ablation-campaign/scaling-bench/profile/`; job ids in `arms.tsv`.
 
 ---
 

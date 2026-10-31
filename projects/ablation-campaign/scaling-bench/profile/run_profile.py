@@ -83,6 +83,15 @@ def render(args: argparse.Namespace) -> tuple[str, dict[str, str], list[str]]:
     return name, env, argv
 
 
+def ib_settings() -> tuple[dict[str, str], dict[str, str]]:
+    """(env for the submit, env for the container) that put the host InfiniBand userspace in the image."""
+    stage = f"{IB_STAGE}:/opt/hostib:ro"
+    return (
+        {"MELT_EXTRA_BINDS": f"{stage},/etc/libibverbs.d"},
+        {"SINGULARITYENV_LD_LIBRARY_PATH": "/opt/hostib"},
+    )
+
+
 def add_common(sub: argparse.ArgumentParser) -> None:
     sub.add_argument("--nodes", type=int, required=True)
     sub.add_argument("--grad-accum", type=int, default=40)
@@ -92,6 +101,7 @@ def add_common(sub: argparse.ArgumentParser) -> None:
     sub.add_argument("--ranks", type=int, nargs="*", default=[0])
     sub.add_argument("--time", default="01:20:00")
     sub.add_argument("--tag", default=None)
+    sub.add_argument("--ib", action="store_true", help="bind the host InfiniBand userspace into the container")
     sub.add_argument("--env", action="append", default=[], help="KEY=VALUE passed into the container (repeatable)")
     sub.add_argument(
         "--extra", action="append", default=[], help="a further override, appended last: --extra=--a.b=c (repeatable)"
@@ -123,7 +133,12 @@ def main() -> None:
     if args.command == "check":
         bench.submit(name, env, argv, test_only=True)
         return
-    submit_and_record(name, env, argv, {f"SINGULARITYENV_{k}": v for k, v in (i.split("=", 1) for i in args.env)})
+    extra_env = {f"SINGULARITYENV_{k}": v for k, v in (i.split("=", 1) for i in args.env)}
+    if args.ib:
+        submit_env, container_env = ib_settings()
+        env.update(submit_env)
+        extra_env.update(container_env)
+    submit_and_record(name, env, argv, extra_env)
 
 
 def submit_and_record(
@@ -175,7 +190,9 @@ def submit_levers(args: argparse.Namespace) -> None:
     if args.ib:
         name += "-ib"
         stage = f"{IB_STAGE}:/opt/hostib:ro"
-        env["MELT_EXTRA_BINDS"] = f"{stage},/dev/infiniband,/etc/libibverbs.d"
+        # Do not bind /dev/infiniband: user binds are mounted nosuid,nodev under the setuid
+        # Singularity on MN5, which makes the uverbs nodes unopenable. The default /dev is fine.
+        env["MELT_EXTRA_BINDS"] = f"{stage},/etc/libibverbs.d"
         extra_env["SINGULARITYENV_LD_LIBRARY_PATH"] = "/opt/hostib"
     argv = [
         "infra/runners/submit-container.sh",
