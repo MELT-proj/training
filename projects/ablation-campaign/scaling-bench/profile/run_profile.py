@@ -33,8 +33,9 @@ sys.path.insert(0, str(BENCH_DIR))
 import bench  # noqa: E402
 
 
-#: Host libibverbs, the mlx5 provider and libnl copied from /usr/lib64 (see the board entry).
-IB_STAGE = "/gpfs/scratch/epor48/outputs/BENCH-profile-ibstage"
+#: The production stage of sites/mn5.sh (infra/setup/stage_host_ib.sh); the runs of 10-30/31
+#: used a byte-identical copy under outputs/BENCH-profile-ibstage.
+IB_STAGE = "/gpfs/projects/epor48/melt-data/hostib"
 
 
 def exp_name(nodes: int, grad_accum: int, tag: str | None) -> str:
@@ -83,13 +84,10 @@ def render(args: argparse.Namespace) -> tuple[str, dict[str, str], list[str]]:
     return name, env, argv
 
 
-def ib_settings() -> tuple[dict[str, str], dict[str, str]]:
-    """(env for the submit, env for the container) that put the host InfiniBand userspace in the image."""
-    stage = f"{IB_STAGE}:/opt/hostib:ro"
-    return (
-        {"MELT_EXTRA_BINDS": f"{stage},/etc/libibverbs.d"},
-        {"SINGULARITYENV_LD_LIBRARY_PATH": "/opt/hostib"},
-    )
+def ib_settings(ib: bool) -> dict[str, str]:
+    """The submit env for the transport: the shared sbatch binds MELT_IB_STAGE into the
+    image, and an empty value keeps a run on sockets (sites/mn5.sh turns IB on by default)."""
+    return {"MELT_IB_STAGE": IB_STAGE if ib else ""}
 
 
 def add_common(sub: argparse.ArgumentParser) -> None:
@@ -134,10 +132,7 @@ def main() -> None:
         bench.submit(name, env, argv, test_only=True)
         return
     extra_env = {f"SINGULARITYENV_{k}": v for k, v in (i.split("=", 1) for i in args.env)}
-    if args.ib:
-        submit_env, container_env = ib_settings()
-        env.update(submit_env)
-        extra_env.update(container_env)
+    env.update(ib_settings(args.ib))
     submit_and_record(name, env, argv, extra_env)
 
 
@@ -189,11 +184,7 @@ def submit_levers(args: argparse.Namespace) -> None:
         name += f"-{args.tag}"
     if args.ib:
         name += "-ib"
-        stage = f"{IB_STAGE}:/opt/hostib:ro"
-        # Do not bind /dev/infiniband: user binds are mounted nosuid,nodev under the setuid
-        # Singularity on MN5, which makes the uverbs nodes unopenable. The default /dev is fine.
-        env["MELT_EXTRA_BINDS"] = f"{stage},/etc/libibverbs.d"
-        extra_env["SINGULARITYENV_LD_LIBRARY_PATH"] = "/opt/hostib"
+    env.update(ib_settings(args.ib))
     argv = [
         "infra/runners/submit-container.sh",
         defaults["site"],

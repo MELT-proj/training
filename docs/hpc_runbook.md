@@ -152,6 +152,29 @@ When you promote a future image, keep the previous one under a dated name
 (`melt_cuda126_pre-<reason>-<YYYYMMDD>.sif`) and move the symlink — never
 overwrite the file a running job is reading.
 
+### InfiniBand inside the container
+
+The image ships no rdma-core, so on its own NCCL runs inter-node traffic over TCP
+sockets: on 2 nodes a 9.3 GB gradient all-reduce took 3.45 s, against 0.15 s over
+InfiniBand (Fondue step profile, PR #166). `infra/runners/sites/mn5.sh` therefore
+sets `MELT_IB_STAGE=/gpfs/projects/epor48/melt-data/hostib`, a copy of the host's
+libibverbs, mlx5 provider, libibumad and libnl, and `bash/run_train_singularity.sbatch`
+binds it at `/opt/hostib`, puts it first on `LD_LIBRARY_PATH` and binds
+`/etc/libibverbs.d`. Every launcher that goes through `submit-container.sh` gets it.
+
+- **Never bind `/dev/infiniband`.** Singularity mounts binds `nodev`, so the uverbs
+  nodes become unopenable ("Permission denied") and NCCL silently falls back to
+  sockets. The default `mount dev = yes` already shows the host's `/dev`. The sbatch
+  refuses such a bind.
+- **Check it took:** `NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,NET` (NCCL_* is forwarded
+  into the container) prints `Using network IB` on every node; `Using network Socket`
+  means it did not.
+- **Turn it off** with `MELT_IB_STAGE=` (empty). The socket tuning in `mn5.sh`
+  (`NCCL_SOCKET_NTHREADS`, `NCCL_NSOCKS_PERTHREAD`, `NCCL_BUFFSIZE`) is then what
+  keeps the all-reduce near 1.2 s per step instead of ~4 s.
+- **Re-stage after an MN5 OS update**, from a login node:
+  `ssh mn5 'bash -s /gpfs/projects/epor48/melt-data/hostib' < infra/setup/stage_host_ib.sh`.
+
 ### Which Shar tree
 
 Point `LOCAL_DATASETS_DIR` at **`shar-indexed`**. The indexed tree carries
