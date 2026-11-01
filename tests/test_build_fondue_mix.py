@@ -127,3 +127,15 @@ def test_schedule_draws_total_hours_at_the_measured_fill():
     assert bfm.schedule(9600, 10, 15, nodes=16, gpus_per_node=4, fill=1.0) == (3600, 2880)
     # At a fill of 1.5 each step carries 1.5x the audio, so 2/3 of the steps draw the same hours.
     assert bfm.schedule(9600, 10, 15, nodes=16, gpus_per_node=4, fill=1.5) == (2400, 1920)
+
+
+def test_only_the_annealing_config_restarts_the_data_stream_and_its_keys_exist():
+    yaml = pytest.importorskip("yaml")
+    config = pytest.importorskip("melt.training.config")
+    default_run = config.get_default_config().run
+    constant, anneal = (yaml.safe_load(bfm.RENDERED[p].read_text()) for p in ("constant", "anneal"))
+
+    assert "restart_data_stream" in default_run
+    assert not constant["run"].get("restart_data_stream", False)
+    assert anneal["run"]["restart_data_stream"] is True
+    assert anneal["data"]["train_ds"]["seed"] != constant["data"]["train_ds"]["seed"]
