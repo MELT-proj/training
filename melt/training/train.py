@@ -503,6 +503,10 @@ def main(cfg: DictConfig) -> None:
     # the weights are consolidated after the fact with utils/merge_fsdp_weight.py
     # and verify_saved_weights() below makes sure that step is never forgotten.
 
+    if (cfg.run.get("step_profile") or {}).get("skip_final_save", False):
+        logger.info("run.step_profile.skip_final_save: nothing is saved")
+        return
+
     logger.info("Saving model, processor, and config...")
     trainer.save_model()
 

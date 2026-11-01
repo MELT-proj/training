@@ -1,0 +1,380 @@
+{
+ "projects/ablation-campaign/scaling-bench/profile/raw/n2-ga40-ckptsk5/trace_rank0_step8_micro2.json.gz": {
+  "window_ms": 549.484705078125,
+  "gpu_busy_ms": 114.12641259765626,
+  "gpu_idle_ms": 435.3582924804688,
+  "compute_busy_ms": 114.12641259765626,
+  "nccl_ms": 0.0,
+  "nccl_overlapped_ms": 0.0,
+  "nccl_exposed_ms": 0.0,
+  "nccl_kernels": 0,
+  "phases": {
+   "(outside melt/* ranges)": {
+    "kernels": 33,
+    "kernel_ms": 5.033339,
+    "busy_ms": 5.03333740234375,
+    "span_ms": 549.484705078125
+   },
+   "melt/fwd_pre": {
+    "kernels": 1,
+    "kernel_ms": 0.002496,
+    "busy_ms": 0.00249609375,
+    "span_ms": 0.00249609375
+   },
+   "melt/fwd_enc": {
+    "kernels": 1111,
+    "kernel_ms": 13.961086999999994,
+    "busy_ms": 13.9610908203125,
+    "span_ms": 50.039173828125
+   },
+   "melt/fwd_adapter": {
+    "kernels": 236,
+    "kernel_ms": 1.1129419999999988,
+    "busy_ms": 1.112943359375,
+    "span_ms": 5.6444130859375
+   },
+   "melt/fwd_merge": {
+    "kernels": 77,
+    "kernel_ms": 0.13740499999999997,
+    "busy_ms": 0.13740234375,
+    "span_ms": 3.21590185546875
+   },
+   "melt/fwd_dec": {
+    "kernels": 1390,
+    "kernel_ms": 11.143436,
+    "busy_ms": 11.1434404296875,
+    "span_ms": 146.2113486328125
+   },
+   "melt/fwd_loss": {
+    "kernels": 9,
+    "kernel_ms": 0.48819,
+    "busy_ms": 0.48818994140625,
+    "span_ms": 0.49923095703125
+   },
+   "melt/bwd_loss": {
+    "kernels": 6,
+    "kernel_ms": 0.43708800000000003,
+    "busy_ms": 0.43708837890625,
+    "span_ms": 0.51427197265625
+   },
+   "melt/bwd_dec": {
+    "kernels": 3955,
+    "kernel_ms": 37.76361700000001,
+    "busy_ms": 37.76360693359375,
+    "span_ms": 119.72854541015624
+   },
+   "melt/bwd_adapter": {
+    "kernels": 362,
+    "kernel_ms": 2.6248330000000006,
+    "busy_ms": 2.624833984375,
+    "span_ms": 6.35625146484375
+   },
+   "melt/bwd_enc": {
+    "kernels": 3364,
+    "kernel_ms": 41.42198700000014,
+    "busy_ms": 41.42198291015625,
+    "span_ms": 202.0698466796875
+   }
+  },
+  "host_syncs": {
+   "(outside melt/* ranges)": {
+    "calls": 16,
+    "ms": 1.778127
+   },
+   "melt/fwd_adapter": {
+    "calls": 26,
+    "ms": 0.20292500000000002
+   },
+   "melt/fwd_merge": {
+    "calls": 56,
+    "ms": 0.358188
+   },
+   "melt/fwd_dec": {
+    "calls": 50,
+    "ms": 0.5230909999999999
+   },
+   "melt/fwd_loss": {
+    "calls": 1,
+    "ms": 0.015302
+   },
+   "melt/bwd_dec": {
+    "calls": 102,
+    "ms": 4.0772639999999996
+   }
+  },
+  "ddp_ranges": [
+   [
+    "DistributedDataParallel.forward",
+    213.11797099999998
+   ]
+  ],
+  "top_kernels": [
+   [
+    "void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctor_add<float>, std:",
+    1057,
+    22.59806900000003
+   ],
+   [
+    "void at::native::vectorized_elementwise_kernel<8, at::native::bfloat16_copy_kernel_cuda(at",
+    1900,
+    19.47689800000001
+   ],
+   [
+    "void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::Tenso",
+    930,
+    10.81797100000002
+   ],
+   [
+    "void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl_nocast<at::native:",
+    801,
+    5.549601999999994
+   ],
+   [
+    "nvjet_tst_128x256_64x4_2x1_v_bz_coopA_NTN",
+    196,
+    4.266555999999998
+   ],
+   [
+    "void flash::flash_bwd_dq_dk_dv_loop_seqk_parallel_kernel<Flash_bwd_kernel_traits<64, 128, ",
+    32,
+    3.8942050000000004
+   ],
+   [
+    "nvjet_tst_128x120_64x6_2x1_v_bz_bias_TNT",
+    224,
+    3.6577270000000017
+   ],
+   [
+    "void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_nocast<at::native:",
+    698,
+    3.3638000000000057
+   ],
+   [
+    "void flash::flash_fwd_kernel<Flash_fwd_kernel_traits<64, 128, 128, 4, false, false, cutlas",
+    64,
+    3.037143
+   ],
+   [
+    "nvjet_tst_128x40_64x10_4x2_h_bz_NNT",
+    144,
+    2.574165999999998
+   ],
+   [
+    "nvjet_tst_128x120_64x6_2x1_v_bz_NNT",
+    160,
+    2.570243
+   ],
+   [
+    "void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl<at::native::CUDAFu",
+    97,
+    2.131579000000001
+   ],
+   [
+    "void at::native::reduce_kernel<128, 4, at::native::ReduceOp<c10::BFloat16, at::native::fun",
+    209,
+    2.131324000000002
+   ],
+   [
+    "nvjet_tst_256x120_64x4_2x1_v_bz_coopA_bias_TNT",
+    64,
+    2.0854060000000003
+   ],
+   [
+    "nvjet_tst_128x72_64x8_2x1_v_bz_TNT",
+    96,
+    1.5659830000000003
+   ]
+  ]
+ },
+ "projects/ablation-campaign/scaling-bench/profile/raw/n2-ga40-ckptsk5/trace_rank0_step8_final.json.gz": {
+  "window_ms": 4352.697685546875,
+  "gpu_busy_ms": 4202.888254394531,
+  "gpu_idle_ms": 149.80943115234376,
+  "compute_busy_ms": 352.8193999023438,
+  "nccl_ms": 3946.908885253906,
+  "nccl_overlapped_ms": 96.84003076171875,
+  "nccl_exposed_ms": 3850.0688544921877,
+  "nccl_kernels": 213,
+  "phases": {
+   "(outside melt/* ranges)": {
+    "kernels": 2070,
+    "kernel_ms": 2999.555218999998,
+    "busy_ms": 2995.0844951171875,
+    "span_ms": 4352.697685546875
+   },
+   "melt/fwd_pre": {
+    "kernels": 1,
+    "kernel_ms": 0.002592,
+    "busy_ms": 0.002591796875,
+    "span_ms": 0.002591796875
+   },
+   "melt/fwd_enc": {
+    "kernels": 1153,
+    "kernel_ms": 23.89769400000001,
+    "busy_ms": 23.89771435546875,
+    "span_ms": 44.96506689453125
+   },
+   "melt/fwd_adapter": {
+    "kernels": 230,
+    "kernel_ms": 1.2395510000000007,
+    "busy_ms": 1.23955322265625,
+    "span_ms": 6.81327685546875
+   },
+   "melt/fwd_merge": {
+    "kernels": 77,
+    "kernel_ms": 0.15401399999999996,
+    "busy_ms": 0.1540146484375,
+    "span_ms": 2.69391845703125
+   },
+   "melt/fwd_dec": {
+    "kernels": 1390,
+    "kernel_ms": 12.928628999999994,
+    "busy_ms": 12.928654296875,
+    "span_ms": 50.3147607421875
+   },
+   "melt/fwd_loss": {
+    "kernels": 9,
+    "kernel_ms": 1.182303,
+    "busy_ms": 1.18230322265625,
+    "span_ms": 1.19449462890625
+   },
+   "melt/bwd_loss": {
+    "kernels": 6,
+    "kernel_ms": 1.052192,
+    "busy_ms": 1.05219189453125,
+    "span_ms": 1.10480029296875
+   },
+   "melt/bwd_dec": {
+    "kernels": 4173,
+    "kernel_ms": 50.43933299999996,
+    "busy_ms": 50.4393427734375,
+    "span_ms": 118.062626953125
+   },
+   "melt/bwd_adapter": {
+    "kernels": 406,
+    "kernel_ms": 193.40682299999986,
+    "busy_ms": 189.9621728515625,
+    "span_ms": 191.078328125
+   },
+   "melt/bwd_enc": {
+    "kernels": 4011,
+    "kernel_ms": 1015.8698789999972,
+    "busy_ms": 1015.869875,
+    "span_ms": 1116.5658603515626
+   }
+  },
+  "host_syncs": {
+   "(outside melt/* ranges)": {
+    "calls": 763,
+    "ms": 3930.5529480000005
+   },
+   "melt/fwd_enc": {
+    "calls": 1,
+    "ms": 0.012067999999999999
+   },
+   "melt/fwd_adapter": {
+    "calls": 26,
+    "ms": 0.18481200000000003
+   },
+   "melt/fwd_merge": {
+    "calls": 56,
+    "ms": 0.3336130000000001
+   },
+   "melt/fwd_dec": {
+    "calls": 50,
+    "ms": 0.493544
+   },
+   "melt/fwd_loss": {
+    "calls": 1,
+    "ms": 0.013346
+   },
+   "melt/bwd_dec": {
+    "calls": 102,
+    "ms": 6.539082
+   }
+  },
+  "ddp_ranges": [
+   [
+    "DistributedDataParallel.forward",
+    107.79903599999999
+   ]
+  ],
+  "top_kernels": [
+   [
+    "ncclDevKernel_AllReduce_Sum_f32_RING_LL(ncclDevKernelArgsStorage<4096ul>)",
+    212,
+    3943.2098160000005
+   ],
+   [
+    "void at::native::(anonymous namespace)::multi_tensor_apply_kernel<at::native::(anonymous n",
+    1178,
+    159.43025799999995
+   ],
+   [
+    "void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctor_add<float>, std:",
+    1059,
+    24.96802600000004
+   ],
+   [
+    "void at::native::vectorized_elementwise_kernel<8, at::native::bfloat16_copy_kernel_cuda(at",
+    1900,
+    22.82711900000005
+   ],
+   [
+    "Memcpy DtoD (Device -> Device)",
+    790,
+    13.804632000000007
+   ],
+   [
+    "void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::Tenso",
+    932,
+    12.722888000000019
+   ],
+   [
+    "void at::native::vectorized_elementwise_kernel<4, at::native::AUnaryFunctor<float, float, ",
+    840,
+    11.990332
+   ],
+   [
+    "void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl_nocast<at::native:",
+    804,
+    10.123701000000013
+   ],
+   [
+    "void flash::flash_bwd_dq_dk_dv_loop_seqk_parallel_kernel<Flash_bwd_kernel_traits<64, 128, ",
+    32,
+    7.680256000000001
+   ],
+   [
+    "nvjet_tst_128x232_64x4_2x1_v_bz_coopA_NNT",
+    160,
+    6.715522000000002
+   ],
+   [
+    "nvjet_tst_128x232_64x4_2x1_v_bz_coopA_bias_TNT",
+    224,
+    6.050271000000004
+   ],
+   [
+    "void flash::flash_fwd_kernel<Flash_fwd_kernel_traits<64, 128, 128, 4, false, false, cutlas",
+    64,
+    5.876893999999997
+   ],
+   [
+    "void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_nocast<at::native:",
+    698,
+    5.801806
+   ],
+   [
+    "nvjet_tst_256x128_64x4_1x2_h_bz_coopA_NTT",
+    64,
+    4.466523000000001
+   ],
+   [
+    "nvjet_tst_256x160_64x4_2x1_v_bz_coopA_bias_TNT",
+    64,
+    4.461250000000001
+   ]
+  ]
+ }
+}

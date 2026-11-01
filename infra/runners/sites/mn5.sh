@@ -46,6 +46,18 @@ export REMOTE_REPO="${REMOTE_REPO:-training}"
 # and run fully offline.
 export WANDB_MODE=offline
 export HF_HUB_OFFLINE=1
+# Inter-node all-reduce over InfiniBand: the shared sbatch binds this stage of the
+# host's verbs userspace into the image (infra/setup/stage_host_ib.sh rebuilds it).
+# Without it NCCL ran on TCP sockets: a 9.3 GB all-reduce took 3.45 s on 2 nodes,
+# 0.15 s over IB (Fondue step profile, PR #166). `-` not `:-`, so an exported
+# empty value turns it off.
+export MELT_IB_STAGE="${MELT_IB_STAGE-/gpfs/projects/epor48/melt-data/hostib}"
+# Socket tuning, used only if NCCL cannot bring IB up and falls back to TCP: it cut
+# the socket all-reduce from ~4 s to ~1.2 s per step, with identical numerics. An
+# exported value wins.
+export NCCL_SOCKET_NTHREADS="${NCCL_SOCKET_NTHREADS:-8}"
+export NCCL_NSOCKS_PERTHREAD="${NCCL_NSOCKS_PERTHREAD:-8}"
+export NCCL_BUFFSIZE="${NCCL_BUFFSIZE:-16777216}"
 # MASTER_PORT is deliberately NOT set here. This file is sourced on the LOGIN
 # node at submit time, before the job (and its SLURM_JOB_ID) exists, so a
 # fixed value here would apply to every job the same way and two jobs landing

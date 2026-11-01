@@ -21,6 +21,9 @@ export VENV_PATH="${VENV_PATH:-/mnt/scratch-artemis/giuseppe/venvs/lhotse2/bin/a
 
 # --- misc -----------------------------------------------------------------
 export WANDB_MODE=online
+# No InfiniBand stage (MELT_IB_STAGE, see sites/mn5.sh): every partition but
+# a6000 is a single node, so NCCL never leaves the node. A two-node a6000 run
+# would need infra/setup/stage_host_ib.sh run here first; not done or measured.
 # MASTER_PORT is deliberately NOT set here. This file is sourced on the LOGIN
 # node at submit time, before the job (and its SLURM_JOB_ID) exists, so a
 # fixed value here would apply to every job the same way and two jobs landing

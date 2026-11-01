@@ -36,6 +36,10 @@ export VENV_PATH=/path/to/venvs/melt/bin/activate     # python virtualenv activa
 
 # --- misc -----------------------------------------------------------------
 export WANDB_MODE=online                              # use offline on air-gapped sites (+ export HF_HUB_OFFLINE=1)
+# Multi-node container runs on an InfiniBand cluster: stage the host's verbs
+# userspace once (infra/setup/stage_host_ib.sh <dir>) and point this at it, or
+# NCCL falls back to TCP sockets between nodes. Never bind /dev/infiniband.
+# export MELT_IB_STAGE="${MELT_IB_STAGE-/path/to/melt-data/hostib}"
 # Do NOT hardcode MASTER_PORT here: this file is sourced at submit time, on
 # the login node, before SLURM_JOB_ID exists -- a fixed value would be baked
 # into every job identically and concurrent jobs on the same node would

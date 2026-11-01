@@ -650,3 +650,269 @@ def test_ledger_job_id_prefers_the_newest_row_across_both_copies(tmp_path, monke
     assert bench.ledger_job_id("BENCH-x-n1-smoke") == "100"
     assert bench.ledger_job_id("BENCH-x-n1-smoke", remote) == "200"
     assert bench.ledger_job_id("BENCH-unknown", remote) is None
+
+
+# --------------------------------------------------------------------------
+# run.step_profile: phase marks. Host clock instead of CUDA events, a toy model
+# with the attributes the hooks look for (audio_stack.encoder/.adapter and
+# text_decoder).
+# --------------------------------------------------------------------------
+
+
+def _toy_model():
+    from types import SimpleNamespace
+
+    import torch
+    from torch import nn
+
+    class Toy(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.audio_stack = nn.Module()
+            self.audio_stack.encoder = nn.Linear(4, 4)
+            self.audio_stack.adapter = nn.Linear(4, 4)
+            self.text_decoder = nn.Linear(4, 4)
+
+        def forward(self, x):
+            hidden = self.audio_stack.adapter(self.audio_stack.encoder(x))
+            logits = self.text_decoder(hidden)
+            return SimpleNamespace(loss=logits.pow(2).mean(), logits=logits)
+
+    return Toy(), torch.ones(2, 4)
+
+
+def _profiler(tmp_path, rank=0, **cfg):
+    from melt.training.step_profile import StepProfiler, _HostClock
+
+    return StepProfiler(cfg, output_dir=str(tmp_path), grad_accum=2, rank=rank, clock=_HostClock())
+
+
+def _run_micro(profiler, model, x, ddp=None):
+    profiler.begin_micro(ddp if ddp is not None else model)
+    out = model(x)
+    out.loss.backward()
+    profiler.end_micro()
+
+
+def _records(tmp_path, rank=0):
+    import json
+
+    path = tmp_path / f"step_phases_rank{rank}.jsonl"
+    return [json.loads(line) for line in path.read_text().splitlines()]
+
+
+def test_step_profile_marks_follow_the_forward_and_backward_order(tmp_path):
+    model, x = _toy_model()
+    profiler = _profiler(tmp_path)
+    profiler.attach(model, model)
+    profiler.begin_step(0)
+    _run_micro(profiler, model, x)
+    profiler.close()
+
+    names = [m[0] for m in _records(tmp_path)[0]["marks"]]
+    assert names == [
+        "dl0", "mb0", "fwd0", "enc0", "enc1", "ad0", "ad1", "dec0", "dec1", "fwd1",
+        "bwd0", "g_logits", "g_adapter", "g_enc", "g_encend", "mb1", "close",
+    ]  # fmt: skip
+
+
+def test_step_profile_closes_a_step_with_the_next_steps_first_mark(tmp_path):
+    model, x = _toy_model()
+    profiler = _profiler(tmp_path)
+    profiler.attach(model, model)
+    for step in range(3):
+        profiler.begin_step(step)
+        _run_micro(profiler, model, x)
+    profiler.close()
+
+    records = _records(tmp_path)
+    assert [r["step"] for r in records] == [0, 1, 2]
+    assert records[0]["marks"][0][:3] == ["dl0", -1, 0.0]
+    assert records[0]["marks"][-1][0] == "close"
+    assert records[0]["marks"][-1][2] <= records[1]["marks"][0][2] + records[0]["marks"][-1][2]
+    # Every mark is offset from its own step's first one, never negative.
+    assert all(m[2] >= 0 and m[3] >= 0 for r in records for m in r["marks"])
+
+
+def test_step_profile_records_whether_each_micro_batch_syncs(tmp_path):
+    from types import SimpleNamespace
+
+    model, x = _toy_model()
+    profiler = _profiler(tmp_path)
+    profiler.attach(model, model)
+    profiler.begin_step(0)
+    _run_micro(profiler, model, x, ddp=SimpleNamespace(require_backward_grad_sync=False))
+    _run_micro(profiler, model, x, ddp=SimpleNamespace(require_backward_grad_sync=True))
+    profiler.close()
+
+    assert [m["sync"] for m in _records(tmp_path)[0]["micro"]] == [False, True]
+
+
+def test_step_profile_ignores_forwards_outside_a_micro_batch(tmp_path):
+    model, x = _toy_model()
+    profiler = _profiler(tmp_path)
+    profiler.attach(model, model)
+    profiler.begin_step(0)
+    model(x)  # an evaluation-style forward: no begin_micro
+    profiler.close()
+
+    assert [m[0] for m in _records(tmp_path)[0]["marks"]] == ["dl0", "close"]
+
+
+def test_step_profile_is_silent_on_ranks_it_was_not_asked_to_watch(tmp_path):
+    model, x = _toy_model()
+    profiler = _profiler(tmp_path, rank=1, ranks=[0])
+    profiler.attach(model, model)
+    profiler.begin_step(0)
+    _run_micro(profiler, model, x)
+    profiler.close()
+
+    assert not list(tmp_path.glob("step_phases_rank*.jsonl"))
+    assert not model.audio_stack.encoder._forward_hooks
+
+
+def test_step_profile_defaults_to_off_in_the_shipped_config():
+    import yaml
+
+    from melt.training.config import DEFAULT_CONFIG
+
+    cfg = yaml.safe_load(DEFAULT_CONFIG)["run"]["step_profile"]
+    assert cfg["enabled"] is False
+    assert cfg["ranks"] == [0]
+
+
+def test_step_profile_lists_parameters_that_received_no_gradient(tmp_path):
+    import json
+
+    import torch
+
+    model, x = _toy_model()
+    model.audio_stack.adapter.extra = torch.nn.Linear(4, 4)  # never used in forward
+    profiler = _profiler(tmp_path)
+    profiler.attach(model, model)
+    profiler.begin_step(0)
+    _run_micro(profiler, model, x)
+    profiler.close()
+
+    (entry,) = json.loads((tmp_path / "unused_grads_rank0.json").read_text())
+    assert entry["count"] == 2
+    assert sorted(entry["names"]) == ["audio_stack.adapter.extra.bias", "audio_stack.adapter.extra.weight"]
+
+
+# --------------------------------------------------------------------------
+# profile/analyze_profile.py: the arithmetic on hand-built inputs.
+# --------------------------------------------------------------------------
+
+
+def _analyze():
+    sys.path.insert(0, str(REPO_ROOT / "projects" / "ablation-campaign" / "scaling-bench" / "profile"))
+    import analyze_profile
+
+    return analyze_profile
+
+
+def _micro_marks(t0, m, sync, enc=100, tail=5):
+    """One micro-batch of marks starting at t0 ms; returns (marks, end time)."""
+    steps = [
+        ("mb0", 0), ("h2d0", 2), ("h2d1", 3), ("fwd0", 4), ("enc0", 5), ("enc1", 5 + enc),
+        ("ad0", 6 + enc), ("ad1", 16 + enc), ("dec0", 17 + enc), ("dec1", 57 + enc),
+        ("fwd1", 60 + enc), ("bwd0", 61 + enc), ("g_logits", 70 + enc), ("g_adapter", 110 + enc),
+        ("g_enc", 120 + enc), ("g_encend", 120 + 2 * enc), ("mb1", 120 + 2 * enc + tail),
+    ]  # fmt: skip
+    marks = [[name, m, t0 + dt, t0 + dt] for name, dt in steps]
+    return marks, t0 + steps[-1][1]
+
+
+def _step_record(grad_accum=2, tail_last=500):
+    marks = [["dl0", -1, 0.0, 0.0], ["dl1", -1, 10.0, 10.0]]
+    t = 12.0
+    for m in range(grad_accum):
+        last = m == grad_accum - 1
+        micro, end = _micro_marks(t, m, last, tail=tail_last if last else 5)
+        marks += micro
+        t = end + 1.0
+    marks += [["clip0", grad_accum - 1, t, t], ["clip1", grad_accum - 1, t + 3, t + 3],
+              ["opt0", grad_accum - 1, t + 4, t + 4], ["opt1", grad_accum - 1, t + 24, t + 24],
+              ["step_end", grad_accum - 1, t + 25, t + 25], ["close", -1, t + 125, t + 125]]  # fmt: skip
+    return {
+        "step": 0,
+        "traced": False,
+        "micro": [{"micro": m, "sync": m == grad_accum - 1, "audio_s": 20.0} for m in range(grad_accum)],
+        "marks": marks,
+    }
+
+
+def test_phase_intervals_sum_to_the_step_and_name_every_interval():
+    ap = _analyze()
+    record = _step_record()
+    gpu, _, per_micro = ap.step_intervals(record)
+    assert abs(sum(gpu.values()) - record["marks"][-1][2] / 1000.0) < 1e-9
+    assert not [k for k in gpu if k.startswith("other:")]
+    assert gpu["bwd_tail"] == pytest.approx((5 + 500) / 1000.0)
+    assert gpu["optimizer"] == pytest.approx(0.020)
+    assert [m["sync"] for m in per_micro] == [False, True]
+
+
+def test_an_unknown_pair_of_marks_is_reported_not_dropped():
+    ap = _analyze()
+    record = _step_record()
+    record["marks"].insert(3, ["mystery", 0, 12.5, 12.5])
+    gpu, _, _ = ap.step_intervals(record)
+    assert any(k.startswith("other:") for k in gpu)
+    assert abs(sum(gpu.values()) - record["marks"][-1][2] / 1000.0) < 1e-9
+
+
+def test_phases_skips_warmup_and_traced_steps(tmp_path):
+    import json
+
+    ap = _analyze()
+    rows = [_step_record() for _ in range(6)]
+    rows[4]["traced"] = True
+    rows[0]["marks"][-1][2] *= 10  # a slow first step
+    (tmp_path / "step_phases_rank0.jsonl").write_text("\n".join(json.dumps(r) for r in rows))
+    result = ap.phases(tmp_path, skip=1)
+    assert result["steps_used"] == 4
+    assert result["accounted_fraction"] == pytest.approx(1.0)
+    assert result["s_per_step"] == pytest.approx(rows[1]["marks"][-1][2] / 1000.0)
+
+
+def test_fit_recovers_a_known_line_and_prices_the_16_node_batch(tmp_path):
+    import json
+
+    ap = _analyze()
+    dirs = []
+    for g in (4, 8, 16):
+        record = _step_record(grad_accum=g)
+        d = tmp_path / f"ga{g}"
+        d.mkdir()
+        (d / "step_phases_rank0.jsonl").write_text("\n".join(json.dumps(record) for _ in range(6)))
+        dirs.append(d)
+    result = ap.fit(dirs, skip=1)
+    # Each added micro-batch costs the same, so the fit is exact.
+    assert result["rms_s"] == pytest.approx(0.0, abs=1e-9)
+    per_micro = (120 + 2 * 100 + 5 + 1) / 1000.0
+    assert result["b_s_per_micro"] == pytest.approx(per_micro, rel=0.03)
+    p40 = next(p for p in result["predictions"] if p["grad_accum"] == 40)
+    assert p40["global_batch_audio_h_16_nodes"] == pytest.approx(40 * 20.0 * 64 / 3600.0)
+    assert p40["s_per_step_16_nodes"] == pytest.approx(result["a_s"] + 40 * result["b_s_per_micro"] + 0.8)
+
+
+def test_trace_stats_split_nccl_into_overlapped_and_exposed():
+    ap = _analyze()
+    events = [
+        # compute 0-100 us, NCCL 60-160 us: 40 us overlapped, 60 us exposed.
+        {"ph": "X", "cat": "kernel", "name": "gemm", "ts": 0, "dur": 100, "args": {"correlation": 1}},
+        {"ph": "X", "cat": "kernel", "name": "ncclDevKernel_AllReduce", "ts": 60, "dur": 100, "args": {"correlation": 2}},
+        {"ph": "X", "cat": "cuda_runtime", "name": "cudaLaunchKernel", "ts": 0, "dur": 1, "args": {"correlation": 1}},
+        {"ph": "X", "cat": "cuda_runtime", "name": "cudaStreamSynchronize", "ts": 10, "dur": 30, "args": {"correlation": 3}},
+        {"ph": "X", "cat": "cuda_runtime", "name": "cudaLaunchKernel", "ts": 70, "dur": 1, "args": {"correlation": 2}},
+        {"ph": "X", "cat": "user_annotation", "name": "melt/fwd_enc", "ts": 0, "dur": 50, "args": {}},
+        {"ph": "X", "cat": "user_annotation", "name": "melt/bwd_enc", "ts": 55, "dur": 50, "args": {}},
+    ]  # fmt: skip
+    stats = ap.trace_stats(events)
+    assert stats["nccl_overlapped_ms"] == pytest.approx(0.040)
+    assert stats["nccl_exposed_ms"] == pytest.approx(0.060)
+    assert stats["gpu_idle_ms"] == pytest.approx(0.0)
+    assert stats["phases"]["melt/fwd_enc"]["kernels"] == 1
+    assert stats["phases"]["melt/bwd_enc"]["kernels"] == 1
+    assert stats["host_syncs"]["melt/fwd_enc"] == {"calls": 1, "ms": pytest.approx(0.030)}

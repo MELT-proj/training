@@ -265,6 +265,12 @@ for prefix in WANDB_ MLFLOW_ TRACKIO_ COMET_ NEPTUNE_ TENSORBOARD_; do
     done < <(env | grep "^${prefix}" || true)
 done
 
+# NCCL settings (a site file's transport tuning, NCCL_DEBUG for a diagnosis) are
+# forwarded by prefix too: --cleanenv below would otherwise drop them silently.
+while IFS='=' read -r var _; do
+    [[ -n "${!var:-}" ]] && container_env "$var" "${!var}"
+done < <(env | grep "^NCCL_" || true)
+
 # Bind mounts (host:container[:mode]).
 BINDS=(
     "${SUBMIT_DIR}:/workspace/training"
@@ -278,6 +284,38 @@ if [[ -n "${LOCAL_ASR_SCORES_DIR:-}" ]]; then
     BINDS+=("${LOCAL_ASR_SCORES_DIR}:/workspace/asr_scores:ro")
     container_env LOCAL_ASR_SCORES_DIR /workspace/asr_scores
 fi
+# InfiniBand. The image has no rdma-core, so without the host's verbs userspace
+# NCCL falls back to TCP sockets, which added ~4 s to every multi-node step on MN5
+# (Fondue step profile, PR #166). MELT_IB_STAGE is a host directory holding the
+# host's libibverbs, mlx5 provider, libibumad and libnl (infra/setup/stage_host_ib.sh);
+# the site file sets it, an empty value turns it off. /dev/infiniband itself is
+# never bound: binds are mounted nodev, which makes the uverbs nodes unopenable,
+# and the default `mount dev = yes` already shows the host's /dev.
+if [[ -n "${MELT_IB_STAGE:-}" ]]; then
+    if [[ ! -f "${MELT_IB_STAGE}/libibverbs.so.1" ]]; then
+        echo "ERROR: MELT_IB_STAGE=${MELT_IB_STAGE} has no libibverbs.so.1"
+        echo "Stage it with infra/setup/stage_host_ib.sh, or set MELT_IB_STAGE= to run on sockets."
+        exit 2
+    fi
+    if [[ ! -d /etc/libibverbs.d ]]; then
+        echo "ERROR: MELT_IB_STAGE is set but this host has no /etc/libibverbs.d"
+        exit 2
+    fi
+    BINDS+=("${MELT_IB_STAGE}:/opt/hostib:ro" "/etc/libibverbs.d:/etc/libibverbs.d:ro")
+    # The image's own default, with the stage in front.
+    container_env LD_LIBRARY_PATH "/opt/hostib:/usr/local/nvidia/lib:/usr/local/nvidia/lib64"
+fi
+# Extra host paths, comma-separated host:container[:mode]. Off unless set.
+if [[ -n "${MELT_EXTRA_BINDS:-}" ]]; then
+    IFS=',' read -ra _extra_binds <<< "${MELT_EXTRA_BINDS}"
+    for _b in "${_extra_binds[@]}"; do
+        if [[ "${_b%%:*}" == /dev/infiniband* ]]; then
+            echo "ERROR: do not bind ${_b%%:*}: binds are mounted nodev and NCCL then cannot open the verbs devices (use MELT_IB_STAGE)"
+            exit 2
+        fi
+    done
+    BINDS+=("${_extra_binds[@]}")
+fi
 BIND_ARGS=$(IFS=,; echo "${BINDS[*]}")
 
 echo "[container] runtime:  ${SINGULARITY_BIN}"
@@ -287,6 +325,11 @@ echo "[container] datasets: ${HOST_LOCAL_DATASETS_DIR} -> /workspace/shar"
 echo "[container] tmp:      ${HOST_TMPDIR} -> /workspace/tmp"
 echo "[container] outputs:  ${HOST_OUTPUT_DIR} -> /workspace/outputs (wandb under /workspace/outputs/wandb)"
 [[ -n "${HOST_HF_HOME}" ]] && echo "[container] hf_cache: ${HOST_HF_HOME} -> /workspace/hf_cache"
+if [[ -n "${MELT_IB_STAGE:-}" ]]; then
+    echo "[container] infiniband: ${MELT_IB_STAGE} -> /opt/hostib (NCCL_DEBUG=INFO prints 'Using network IB')"
+else
+    echo "[container] infiniband: off (MELT_IB_STAGE unset); multi-node NCCL runs on TCP sockets"
+fi
 echo "[container] master:   ${MASTER_ADDR_HOST}:${MASTER_PORT}"
 echo "[container] nnodes:   ${SLURM_NNODES:-1}, gpus/node: ${SLURM_GPUS_ON_NODE:-unset}"
 echo "[container] launching: bash/run_train.sh ${ACCELERATE_CONFIG} ${TRAIN_ARGS[*]:-}"
