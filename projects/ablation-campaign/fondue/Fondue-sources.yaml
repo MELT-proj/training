@@ -728,9 +728,10 @@ data:
     lhotse_sampler_type: dynamic_bucketing
     num_buckets: 30
     buffer_size: 10000
-    # OPEN: measured on the draw at the dry run (the per-source histograms of
-    # infra/check_training_config.py x the weights). A stale set is an OOM.
-    bucket_duration_bins: []
+    # DRAFT: measured 11-01 on nyx by infra/check_training_config.py --only bins
+    # --measure (per-source duration histograms x the constant phase's weights, before
+    # the cut filter). Re-measure on MN5 once the data settles: a stale set is an OOM.
+    bucket_duration_bins: [2.36, 3.33, 4.2, 5.01, 5.86, 6.74, 7.74, 8.94, 10.32, 11.68, 13.09, 14.49, 15.56, 17.14, 18.82, 21.1, 24.22, 26.47, 27.47, 28.03, 28.43, 28.79, 29.11, 29.43, 29.75, 30.07, 34.82, 37.18, 38.72]
     max_tokens: 400
 
     shuffle: true
