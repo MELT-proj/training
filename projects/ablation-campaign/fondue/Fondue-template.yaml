@@ -7,7 +7,9 @@
 # Rendered in two steps by build_fondue_mix.py (its docstring has the commands):
 #   1. `sources` writes every training source, tagged, into Fondue-sources.yaml;
 #   2. `render` weights them with the two-tier policy of infra/compute_mix_weights.py
-#      (alpha 0.2, beta 0.5; PI 2026-10-30) and writes Fondue.yaml.
+#      on the hours that survive the quality filters, and writes one config per phase:
+#      Fondue.yaml (warmup and constant LR, stops at the annealing step) and
+#      Fondue-anneal.yaml (resumes there with the annealing filters and weights).
 # Edit this template or the builder, never the rendered files.
 
 # =============================================================================
@@ -17,6 +19,7 @@ run:
   exp_name: Fondue
   dry_run: false
   memory_preallocation: true
+  stop_after_step: null # @@STOP_AFTER_STEP@@
 
 # =============================================================================
 # Model: Whisper-large-v3 + MoE (8 experts, top-2) at 10 Hz + EuroLLM-1.7B-Instruct,
@@ -68,21 +71,19 @@ data:
 
   train_ds:
     input_cfg:
-    # total_hours is the hours Fondue DRAWS, not the size of the pool: the trainer
-    # turns it into steps per epoch, steps = total_hours * 3600 /
-    # (batch_duration * world_size * grad_accum). OPEN: the budget follows the
-    # step profile's cost per 1,000 h (the 10-24 bench numbers are void).
-    total_hours: 330000.0
+    # The hours Fondue draws over BOTH phases, set by the builder to the hours that
+    # survive the constant phase's filters ("train on all the data", PI 11-01).
+    total_hours: 0.0
     force_estimate: false
 
     min_duration: 0.5
     max_duration: 60.0
 
     batch_size: null
-    # The step profile's recipe (fp32 masters, 10 Hz, gradient checkpointing ON):
-    # 15 fits with checkpointing; without it 15, 10 and 8 all run out of memory.
-    # Measured fill is ~137%: a micro-batch carries ~20.5 s of audio, not 15.
-    batch_duration: 15
+    # 30 x grad_accum 16 (PI, 11-01): same audio per step as 15 x 20, 17-20% fewer
+    # GPU-h (step profile, PR #166), 54.4 of 63 GB peak with checkpointing on. A
+    # micro-batch carries ~26.3 s of audio (2.23 cuts), the fill the builder uses.
+    batch_duration: 30
     quadratic_duration: null
     lhotse_sampler_type: dynamic_bucketing
     num_buckets: 30
@@ -103,41 +104,12 @@ data:
     text_field: text
     lang_field: lang
 
-    # Per-cut quality bands (PR #157, LHOTSE_DATA_LOADING.md "Cut filter"). Values
-    # from the "Cut Filter Thresholds" page; they are iterated before Raclette.
-    # Phase steps are optimizer steps. OPEN: ANNEAL_STEP below is where the LR
-    # decay starts, max_steps - num_decay_steps, and is set with max_steps.
+    # Per-cut quality bands (PR #157), one condition per rule: each phase has its own
+    # config. Thresholds are the builder's policy (PI, 11-01).
     cut_filter:
       scores_root: ${oc.env:LOCAL_ASR_SCORES_DIR}
       rules:
-        # ASR: a looser WER band while the LR is constant, a tighter one while it
-        # anneals. Sidecar arrays, so a harsh band costs index lookups, not reads.
-        asr_wer:
-          match: {task: asr, scored: wer} # leaves without a WER array train unfiltered
-          array: wer
-          missing: keep # languages neither recognizer covers
-          phases:
-            - {from_step: 0, max: 0.2999}
-            - {from_step: 0, max: 0.0999} # ANNEAL_STEP
-        # ST with no per-cut score (YODAS-Granary ast X->en, CoVoST2, Europarl-ST):
-        # all of it while the LR is constant, none while it anneals (PI, 10-30).
-        # CAUTION: a filter that rejects every cut still lets the mux pick the leaf,
-        # which then reads and discards its manifests. Zero weight from the annealing
-        # step is the clean way; the loader has no per-phase weights yet.
-        st_unscored:
-          match: {task: st, scored: none}
-          field: duration
-          phases:
-            - {from_step: 0, min: 0}
-            - {from_step: 0, max: -1} # ANNEAL_STEP
-        # SPITE: audio and English transcript must be aligned (BLASER 2.0 >= 4, PI
-        # 10-30) before xCOMET says anything about the translation. Field rules:
-        # SPITE has no sidecar arrays.
-        st_align:
-          match: {task: st, scored: spite}
-          field: custom.spite.blaser2_src
-          min: 4.0
-@@XCOMET_RULES@@
+        # @@CUT_FILTER_RULES@@
 
   validation_ds:
     # Per NAMED set: every set below scores this many clips, a seeded draw.
@@ -180,17 +152,15 @@ trainer:
 
   per_device_train_batch_size: -1 # Handled by Lhotse
   per_device_eval_batch_size: 4
-  # The step profile (PR #166, 2 nodes, extrapolated to 16): with the NCCL socket
-  # tuning and 256 MB buckets, 20 is ~11.8 s/step, a 7.4 audio-h batch, ~28.5 GPU-h
-  # per 1,000 h (~34 without the tuning). 10 costs 33 per 1,000 h for half the batch;
-  # 40 stalls on the loader (prefetch_factor 32 < 40). The tuning is adopted (PI,
-  # 10-31), pending a check on more than 2 nodes at the dry run.
-  gradient_accumulation_steps: 20
+  # With batch_duration 30 (PI, 11-01): 8.55 s/step on 2 nodes over InfiniBand,
+  # 20.3 GPU-h per 1,000 h; ~22 at 16 nodes (extrapolated, an upper bound). A
+  # 7.5 audio-h global batch at 16 nodes.
+  gradient_accumulation_steps: 16
   gradient_checkpointing: true
 
   # Warmup, a long plateau, then a cosine decay to 0.1x peak over the last fifth.
   # build_fondue_mix.py pins max_steps and num_decay_steps (= max_steps / 5) from
-  # total_hours at the MEASURED fill, and the cut_filter's ANNEAL_STEP is
+  # total_hours at the MEASURED fill; the annealing phase starts at
   # max_steps - num_decay_steps. The launcher must not re-derive max_steps.
   lr_scheduler_type: warmup_stable_decay
   warmup_steps: 0.05
