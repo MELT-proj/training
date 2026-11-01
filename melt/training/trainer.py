@@ -511,6 +511,9 @@ class MELTTrainer(Seq2SeqTrainer):
         self._defer_optimizer_load = bool(
             config is not None and config.get("run", {}).get("defer_optimizer_load", False)
         )
+        self._restart_data_stream = bool(
+            config is not None and config.get("run", {}).get("restart_data_stream", False)
+        )
 
         # Opt-in phase marks and profiler windows (run.step_profile); see
         # melt/training/step_profile.py. None when off, and every hook site
@@ -560,7 +563,16 @@ class MELTTrainer(Seq2SeqTrainer):
 
         # Check whether the checkpoint contains a saved sampler state for this rank
         self._lhotse_resume_from = None
-        if resume_from_checkpoint is not None:
+        if resume_from_checkpoint is not None and self._restart_data_stream:
+            # The saved stream positions belong to the mixture that wrote them; a
+            # resume into a different one (Fondue's annealing phase) reads its own
+            # from the start. ignore_data_skip stops HF replaying global_step batches.
+            self.args.ignore_data_skip = True
+            logger.info(
+                f"run.restart_data_stream: resuming the model, optimizer and LR schedule of "
+                f"{resume_from_checkpoint}; the data stream starts from the beginning."
+            )
+        elif resume_from_checkpoint is not None:
             sampler_file = os.path.join(
                 resume_from_checkpoint,
                 "sampler",

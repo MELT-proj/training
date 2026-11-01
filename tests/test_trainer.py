@@ -296,6 +296,44 @@ def test_default_eval_workers_is_nonzero():
 
 
 # ---------------------------------------------------------------------------
+# run.restart_data_stream
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("restart", [False, True])
+def test_restart_data_stream_drops_only_the_saved_stream_position(tmp_path, restart):
+    """A resume into a different mixture must not restore the old mixture's stream, nor replay its batches.
+
+    The model, optimizer and scheduler still come from the checkpoint: the switch
+    leaves the checkpoint path handed to the parent's train() untouched.
+    """
+    ckpt = tmp_path / "checkpoint-49707"
+    (ckpt / "sampler").mkdir(parents=True)
+    (ckpt / "sampler" / "sampler_state_rank0.pt").touch()
+
+    trainer = _make_teardown_trainer()
+    trainer._restart_data_stream = restart
+    trainer.args = SimpleNamespace(ignore_data_skip=False, output_dir=str(tmp_path))
+    seen = {}
+
+    def parent_train(self, resume_from_checkpoint=None, **kwargs):
+        seen["checkpoint"] = resume_from_checkpoint
+        seen["sampler"] = self._lhotse_resume_from
+
+    with patch("transformers.Seq2SeqTrainer.train", parent_train):
+        trainer.train(resume_from_checkpoint=str(ckpt))
+
+    assert seen["checkpoint"] == str(ckpt)
+    if restart:
+        assert seen["sampler"] is None
+        assert trainer.args.ignore_data_skip is True
+    else:
+        # A plain resume sets ignore_data_skip later, once the state is restored.
+        assert seen["sampler"] == str(ckpt / "sampler" / "sampler_state_rank0.pt")
+        assert trainer.args.ignore_data_skip is False
+
+
+# ---------------------------------------------------------------------------
 # Dataloader teardown (issue #63)
 # ---------------------------------------------------------------------------
 
