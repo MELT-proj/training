@@ -45,7 +45,7 @@ sets in the master is `charts/results_sets.csv`.
 | WER, CER | melt-eval `asr_scorer`: the same text normalizer (`basic`) applied to reference and hypothesis, corpus-level per language (total errors over total words), percent. Aggregates average languages equally. | ASR sets |
 | chrF++ | sacrebleu chrF with word order 2. `chrfpp-lc` is computed over lowercased text and is the **primary** translation metric; `chrfpp` is cased. Aggregates are macro-means over directions. | ST sets |
 | spBLEU | BLEU on SentencePiece tokens (FLORES-200 model) | ST sets |
-| selection score | the campaign's ASR-only internal model-selection metric (`selection-metric/README.md`, lower is better) | internal |
+| selection score | the campaign's internal model-selection metric (`selection-metric/README.md`, lower is better); since 2026-11-02 the IFT-stage backbone default is the joint ASR+ST score | internal |
 
 Traps:
 - melt-eval's native `corpus_chrf` is already chrF++ and is **cased**. Our earlier self-distillation tables used plain
