@@ -18,5 +18,5 @@ CODE="${CODE:-/mnt/scratch-nyx/giuseppe/synth/code-qwen}"
 cd "$CODE"
 /mnt/scratch-artemis/giuseppe/venvs/vllm-qwen36/bin/python gen_tts_text.py \
   --out "${OUT:-/mnt/scratch-nyx/giuseppe/synth/e/tts_text_qwen36.jsonl}" --n-prompts "${NP:-380}" \
-  --model Qwen/Qwen3.6-35B-A3B --tp "${TP:-1}" --gpu-mem "${GPU_MEM:-0.88}" \
+  --seed "${SEED:-0}" --model Qwen/Qwen3.6-35B-A3B --tp "${TP:-1}" --gpu-mem "${GPU_MEM:-0.88}" \
   --ledger /mnt/scratch-nyx/giuseppe/synth/e/ledger-qwen.tsv --unit qwen36-tts-text

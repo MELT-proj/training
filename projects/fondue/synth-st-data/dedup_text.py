@@ -24,12 +24,19 @@ def minhash(words: list[str], num_perm: int) -> MinHash:
     return m
 
 
+US_CURRENCY = r"\$|\bUSD\b|\bdollars?\b"  # the prompts ask for a European setting; drop the stragglers
+
+
 def main(inp: str, out: str, threshold: float = 0.8, num_perm: int = 64, words_per_s: float = 2.6,
-         min_s: float = 3.0, max_s: float = 25.0) -> None:  # fmt: skip
+         min_s: float = 3.0, max_s: float = 25.0, drop_pattern: str = US_CURRENCY) -> None:  # fmt: skip
     rows = [json.loads(line) for line in open(inp)]
-    seen, kept, n_len, n_exact = set(), [], 0, 0
+    seen, kept, n_len, n_exact, n_pat = set(), [], 0, 0, 0
+    drop = re.compile(drop_pattern, re.IGNORECASE) if drop_pattern else None
     lsh = MinHashLSH(threshold=threshold, num_perm=num_perm)
     for r in rows:
+        if drop and drop.search(r["text"]):
+            n_pat += 1
+            continue
         words = norm(r["text"]).split()
         est = len(words) / words_per_s
         if not (min_s <= est <= max_s):
@@ -47,7 +54,8 @@ def main(inp: str, out: str, threshold: float = 0.8, num_perm: int = 64, words_p
         kept.append(r)
     write_jsonl_atomic(out, kept)
     print(
-        f"in {len(rows)}: length-gated {n_len}, exact dup {n_exact}, near dup {len(rows) - n_len - n_exact - len(kept)}, kept {len(kept)}"
+        f"in {len(rows)}: pattern-dropped {n_pat}, length-gated {n_len}, exact dup {n_exact}, "
+        f"near dup {len(rows) - n_pat - n_len - n_exact - len(kept)}, kept {len(kept)}"
     )
 
 

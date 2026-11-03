@@ -86,6 +86,14 @@ DOMAINS = {
     },
 }
 REGISTERS = ["formal", "neutral", "colloquial", "hurried or stressed"]
+# what each register sounds like in speech: the model otherwise writes polished prose for all of them
+REGISTER_STYLE = {
+    "formal": "polite, complete sentences, as a careful speaker would say them",
+    "neutral": "plain conversational speech with some contractions",
+    "colloquial": "relaxed everyday talk: contractions, fillers such as well, you know, like or I mean, "
+    "trailing-off or restarted phrases, and informal wording",
+    "hurried or stressed": "breathless, clipped talk: short fragments, interruptions, self-corrections and repeated words",
+}
 
 FIRST = [
     "Marianne",
@@ -457,9 +465,10 @@ def build_prompts(n_prompts: int, per_prompt: int, seed: int) -> list[dict]:
         role = rng.choice(roles)
         content = (
             f"Write {per_prompt} different things that {role} might say aloud in this situation: {scenario}. "
-            f"Register: {register}. Each item is one to three complete sentences of natural spoken English, "
-            f"8 to 40 words long, and different in wording and content from the others. Make them sound spoken, "
-            f"not written, as in real {scenario} speech. The setting is Europe: amounts are in euros or other European "
+            f"Register: {register} ({REGISTER_STYLE[register]}). Each item is one to three sentences of natural "
+            f"spoken English, 12 to 40 words long, and different in wording and content from the others. Make them "
+            f"sound spoken, not written, as in real {scenario} speech: transcribe how people actually talk, including "
+            f"their disfluencies, never polished prose. The setting is Europe: amounts are in euros or other European "
             f"currencies, never dollars, and times use the 24-hour clock or o'clock. Make them concrete and rich "
             f"in specific names, places, dates, numbers, amounts and "
             f"{'medication or product' if domain == 'healthcare' else 'organisation or product'} names, for example "
@@ -476,7 +485,7 @@ def parse_lines(raw: str) -> list[str]:
     lines = []
     for line in raw.splitlines():
         line = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", line).strip().strip('"“”').strip()
-        if 8 <= len(line.split()) <= 60 and line[-1:] in ".?!":
+        if 10 <= len(line.split()) <= 60 and line[-1:] in ".?!":
             lines.append(line)
     return lines
 
