@@ -35,7 +35,7 @@ def link(target: Path, link_path: Path) -> None:
 
 
 def set_translation(cut: dict, tgt: str, text: str, synth_fields: dict) -> None:
-    """Attach one translation and its per-target synth fields (`{"xcomet_xxl": 0.9, ...}`).
+    """Attach one translation and its per-target synth fields (`{"metricx_xxl": 0.9, ...}`).
 
     Per-target values live in `custom.synth.<field>.<tgt>` so a `cut_filter` rule can address
     them with a dotted path. `ok.<tgt>` = 1 marks a usable translation.

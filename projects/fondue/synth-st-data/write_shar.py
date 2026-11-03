@@ -61,7 +61,7 @@ def make_annotator(sidecar: str, stream: str, src_text_field: str, tts: dict | N
     def annotate(cut: dict) -> None:
         for r in rows.get(cut["id"], []):
             fields = {
-                "xcomet_xxl": r["xcomet_xxl"], "xcomet_spans": r["xcomet_spans"],
+                "metricx_xxl": r["metricx_xxl"],
                 "lid": r["lid"], "lid_p": r["lid_p"], "len_ratio": r["len_ratio"],
             }  # fmt: skip
             if r.get("entity_copy_rate") is not None:

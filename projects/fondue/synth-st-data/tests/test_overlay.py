@@ -24,7 +24,7 @@ def test_overlay_roundtrip_order_links_and_idempotence(tmp_path):
 
     def annotate(cut):
         if cut["id"] != "c1":  # c1 stays untranslated: no ok flag, dropped at training time
-            set_translation(cut, "lv", "tulkojums " + cut["id"], {"xcomet_xxl": 0.9})
+            set_translation(cut, "lv", "tulkojums " + cut["id"], {"metricx_xxl": 0.9})
 
     num, n = overlay_shard(str(src / "cuts.000000.jsonl"), str(src), str(out), annotate)
     assert (num, n) == ("000000", 3)
@@ -32,7 +32,7 @@ def test_overlay_roundtrip_order_links_and_idempotence(tmp_path):
     assert [c["id"] for c in cuts] == ["c0", "c1", "c2"]  # same order as the source
     assert cuts[0]["custom"]["pnc_text"] == "t0"  # original fields untouched
     assert cuts[0]["custom"]["synth"]["ok"] == {"lv": 1}
-    assert cuts[0]["custom"]["synth"]["xcomet_xxl"] == {"lv": 0.9}
+    assert cuts[0]["custom"]["synth"]["metricx_xxl"] == {"lv": 0.9}
     assert "synth" not in cuts[1]["custom"] and "translation_lv" not in cuts[1]["custom"]
     link = out / "recording.000000.tar"
     assert link.is_symlink() and not os.path.isabs(os.readlink(link)) and link.read_bytes() == b"tar"

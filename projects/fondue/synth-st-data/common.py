@@ -8,7 +8,9 @@ from pathlib import Path
 
 PROMPT_VERSION = "v1-instruction-first"
 MT_MODEL = "utter-project/EuroLLM-9B-Instruct"
-QE_MODEL = "Unbabel/XCOMET-XXL"
+QE_MODEL = "google/metricx-24-hybrid-xxl-v2p6"  # Apache-2.0; reference-free (QE) mode, error score in [0, 25], lower is better
+QE_MODEL_BF16 = QE_MODEL + "-bfloat16"  # Google's own half-memory release (fits a 48 GB A6000)
+QE_TOKENIZER = "google/mt5-xl"
 
 LANG_NAMES = {
     "en": "English", "de": "German", "fr": "French", "es": "Spanish", "it": "Italian",
@@ -22,8 +24,8 @@ EN2X_TARGETS = [
     "bg", "cs", "da", "el", "fi", "ga", "hr", "hu", "lt", "mt",
     "pl", "ro", "sk", "uk", "sv", "lv", "et", "sl",
 ]  # fmt: skip
-# XCOMET is built on XLM-R, which does not cover Maltese: such pairs also get a
-# round-trip chrF.
+# Maltese is the weakest-resourced target (and its QE the least validated): such pairs also get a
+# round-trip chrF as an independent check.
 NOT_IN_XLMR = {"mt"}
 
 MAX_NEW_TOKENS_FACTOR = 4  # generous cap relative to source tokens

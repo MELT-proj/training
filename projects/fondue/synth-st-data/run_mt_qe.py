@@ -2,7 +2,7 @@
 
 A unit is a pool JSONL (`make_units.py`); every row has `id`, `text`, `src_lang`
 (default en), `targets`, and optionally `ents`/`n_entities`. Two stages, each its
-own process so vLLM's GPU memory is certainly released before XCOMET loads:
+own process so vLLM's GPU memory is certainly released before MetricX loads:
 
   --stage mt  EuroLLM-9B-Instruct via vLLM, greedy, one candidate per source,
               instruction-first prompt. Directions with Maltese on either side
@@ -26,6 +26,8 @@ from common import (
     NOT_IN_XLMR,
     PROMPT_VERSION,
     QE_MODEL,
+    QE_MODEL_BF16,
+    QE_TOKENIZER,
     build_prompt,
     is_degenerate,
     ledger_append,
@@ -87,43 +89,57 @@ def stage_mt(unit_dir: Path, parts: list, ledger: str, unit: str, gpu_mem: float
         )
 
 
-def predict_with_oom_retry(model, samples: list[dict], batch: int):
-    """XCOMET-XXL in fp32 leaves ~20 GB of an H100-64GB for activations: halve the batch on OOM."""
-    import torch
-
-    while True:
-        try:
-            return model.predict(samples, batch_size=batch, gpus=1, progress_bar=False)
-        except torch.OutOfMemoryError:
-            if batch == 1:
-                raise
-            batch = max(1, batch // 2)
-            torch.cuda.empty_cache()
-            print(f"qe: CUDA OOM, retrying with batch {batch}", flush=True)
-
-
 _QE_CACHE: dict = {}
 
 
 def load_qe(ledger: str, unit: str, qe_dtype: str):
-    """XCOMET-XXL and fastText LID, loaded once per process (the load takes ~13 min from NFS)."""
+    """MetricX-24-Hybrid-XXL, its mT5 tokenizer and fastText LID, loaded once per process.
+
+    `bf16` loads Google's bfloat16 release (26 GB), `fp32` the full-precision one (52 GB, H100/H200).
+    Needs the metricx repo on PYTHONPATH (pinned in the image staging, see the README).
+    """
     if qe_dtype not in _QE_CACHE:
         import fasttext
         import torch
-        from comet import load_from_checkpoint
         from huggingface_hub import snapshot_download
+        from metricx24.models import MT5ForRegression
+
+        import transformers
 
         t0 = time.time()
-        ckpt = os.path.join(snapshot_download(QE_MODEL, local_files_only=True), "checkpoints/model.ckpt")
-        model = load_from_checkpoint(ckpt)
-        if qe_dtype == "bf16":
-            model = model.to(torch.bfloat16)
+        repo = QE_MODEL_BF16 if qe_dtype == "bf16" else QE_MODEL
+        dtype = torch.bfloat16 if qe_dtype == "bf16" else torch.float32
+        model = MT5ForRegression.from_pretrained(snapshot_download(repo, local_files_only=True), torch_dtype=dtype)
+        model.to("cuda").eval()
+        tok = transformers.AutoTokenizer.from_pretrained(QE_TOKENIZER)
         ledger_append(
             ledger, unit=unit, stage="qe_load", n=0, gpu_seconds=round(time.time() - t0), gpus=1, status="ok"
         )
         lid = fasttext.load_model(os.path.join(os.environ.get("SYNTH_ASSETS", "/opt/assets"), "lid.176.bin"))
-        _QE_CACHE[qe_dtype] = (model, lid)
+        _QE_CACHE[qe_dtype] = (model, tok, lid)
     return _QE_CACHE[qe_dtype]
+
+
+def metricx_scores(model, tok, pairs: list[tuple[str, str]], batch: int, max_len: int = 1536) -> list[float]:
+    """Reference-free MetricX error scores (0 best, 25 worst), input order kept; batches are length-sorted."""
+    import torch
+
+    ids = []
+    for src, hyp in pairs:
+        enc = tok("source: " + src + " candidate: " + hyp, max_length=max_len, truncation=True, padding=False)
+        ids.append(enc["input_ids"][:-1])  # MetricX drops the final EOS
+    order = sorted(range(len(ids)), key=lambda i: len(ids[i]))
+    scores = [0.0] * len(ids)
+    for i in range(0, len(order), batch):
+        idx = order[i : i + batch]
+        padded = tok.pad({"input_ids": [ids[j] for j in idx]}, return_tensors="pt").to("cuda")
+        with torch.inference_mode():
+            # use_cache=False: the one-step decoder breaks on the key/value cache of recent transformers
+            out = model(input_ids=padded["input_ids"], attention_mask=padded["attention_mask"], use_cache=False)
+            pred = out.predictions
+        for j, v in zip(idx, pred.float().cpu().tolist()):
+            scores[j] = v
+    return scores
 
 
 def stage_qe(unit_dir: Path, by_id: dict, ledger: str, unit: str, batch: int, qe_dtype: str, n_parts: int) -> None:
@@ -132,7 +148,7 @@ def stage_qe(unit_dir: Path, by_id: dict, ledger: str, unit: str, batch: int, qe
     todo = [k for k in range(n_parts) if not (unit_dir / f"final.{k:04d}.jsonl").exists()]
     if not todo:
         return
-    model, lid = load_qe(ledger, unit, qe_dtype)
+    model, tok, lid = load_qe(ledger, unit, qe_dtype)
 
     for k in todo:
         mt_rows = read_jsonl(unit_dir / f"mt.{k:04d}.jsonl")
@@ -141,24 +157,16 @@ def stage_qe(unit_dir: Path, by_id: dict, ledger: str, unit: str, batch: int, qe
             src = by_id[r["id"]]["text"]
             (dropped if is_degenerate(src, r["mt"]) or r["finish"] != "stop" else keep).append(r)
         t1 = time.time()
-        order = sorted(range(len(keep)), key=lambda i: len(keep[i]["mt"]))  # little padding per batch
-        samples = [{"src": by_id[keep[i]["id"]]["text"], "mt": keep[i]["mt"]} for i in order]
-        res = predict_with_oom_retry(model, samples, batch)
-        spans = res.metadata.error_spans
-        out = [None] * len(keep)
-        for j, i in enumerate(order):
-            r, seg = keep[i], by_id[keep[i]["id"]]
+        scores = metricx_scores(model, tok, [(by_id[r["id"]]["text"], r["mt"]) for r in keep], batch)
+        out = []
+        for r, score in zip(keep, scores):
+            seg = by_id[r["id"]]
             labels, probs = lid.predict(r["mt"].replace("\n", " "), k=1)
             ents = seg.get("ents", [])
             names = [e for e, lab in ents if lab in COPY_LABELS]
             row = {
                 "id": r["id"], "tgt": r["tgt"], "src_lang": r["src_lang"], "text": r["mt"],
-                "xcomet_xxl": round(float(res.scores[j]), 5),
-                "xcomet_spans": [
-                    {"text": s["text"], "start": s["start"], "end": s["end"],
-                     "severity": s["severity"], "confidence": round(float(s["confidence"]), 4)}
-                    for s in spans[j]
-                ],
+                "metricx_xxl": round(score, 4),
                 "lid": labels[0].replace("__label__", ""), "lid_p": round(float(probs[0]), 4),
                 "len_ratio": round(len(r["mt"]) / max(len(seg["text"]), 1), 3),
                 "n_entities": seg.get("n_entities", 0),
@@ -167,7 +175,7 @@ def stage_qe(unit_dir: Path, by_id: dict, ledger: str, unit: str, batch: int, qe
             }  # fmt: skip
             if "rt" in r:
                 row["rt_chrf"] = round(sacrebleu.sentence_chrf(r["rt"], [seg["text"]]).score / 100, 4)
-            out[i] = row
+            out.append(row)
         write_jsonl_atomic(unit_dir / f"dropped.{k:04d}.jsonl", dropped)
         write_jsonl_atomic(unit_dir / f"final.{k:04d}.jsonl", out)  # last: marks the chunk done
         ledger_append(
@@ -186,8 +194,8 @@ def main(
     chunk: int = 50000,
     ledger: str = "ledger.tsv",
     gpu_mem: float = 0.88,
-    qe_batch: int = 16,
-    qe_dtype: str = "fp32",
+    qe_batch: int = 32,
+    qe_dtype: str = "bf16",
     dry_run: bool = False,
 ) -> None:
     """One unit (`--pool`), or several comma-separated names under `--units-dir` in one process (one QE load)."""
