@@ -7,7 +7,7 @@ own process so vLLM's GPU memory is certainly released before MetricX loads:
   --stage mt  EuroLLM-9B-Instruct via vLLM, greedy, one candidate per source,
               instruction-first prompt. Directions with Maltese on either side
               also get a back-translation into the source language.
-  --stage qe  XCOMET-XXL (source + MT, no reference), LID, length ratio, entity
+  --stage qe  MetricX-24-Hybrid-XXL (source + MT, no reference), LID, length ratio, entity
               copy rate, round-trip chrF; degenerate outputs go to dropped.*.
 
 The pairs are processed in chunks; a chunk whose output exists is skipped, so a

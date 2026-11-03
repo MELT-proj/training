@@ -11,23 +11,25 @@ Everything is written as cuts-only Shar overlays over audio that already exists,
 | Stream | Content | Source audio |
 |---|---|---|
 | A | en -> 18 targets (bg cs da el fi ga hr hu lt mt pl ro sk uk sv lv et sl), 8 of 18 per segment, entity-dense segments get all 18 | existing English ASR audio |
-| B | gold LR <-> Y (en de fr es it) from FLEURS n-way parallelism, plus the train/test overlap audit | FLEURS |
+| B | FLEURS train transcripts of the 18 LR languages -> en/de/fr/es/it (EuroLLM MT; the FLoRes gold pairs are CC BY-SA and not used), plus the train/test overlap audit | FLEURS (CC BY 4.0) |
 | C | LR -> en/de/fr/es/it, neighbour pairs (lv-lt, sk-cs, hr-sl, fi-et, da-sv, bg-uk), Y -> LR | native LR and de/fr/es/it ASR audio |
-| D | XCOMET scores for ST data that already exists (Granary `ast` X->en, CoVoST2 en->et/sl/lv/sv) | existing Shars (new manifests only) |
+| D | MetricX scores for ST data that already exists (Granary `ast` X->en, CoVoST2 en->et/sl/lv/sv) | existing Shars (new manifests only) |
 | E | LLM-written English text -> multi-speaker TTS -> Stream A's MT + QE | synthetic (Kokoro-82M, Apache-2.0) |
 | F | noisy / reverberant copies (~30% of A/C/E, native LR tail), noisy FLEURS-dev eval | streams above, permissive noise corpora |
 
 MT is `utter-project/EuroLLM-9B-Instruct` (greedy, one candidate per source, instruction-first prompt, no reranking).
-QE is `Unbabel/XCOMET-XXL`, reference-free, score and error spans stored. **No threshold is applied here**: the filter is
+QE is `google/metricx-24-hybrid-xxl-v2p6` (Apache-2.0), reference-free; the score is an error value in [0, 25], lower is better. **No threshold is applied here**: the filter is
 a `cut_filter` `field` rule at train time on `custom.synth.*`. Only empty or degenerate outputs are dropped. Maltese:
-XCOMET is unreliable, so `rt_chrf` (back-translation chrF) is stored for every direction with `mt`.
+MetricX has no signal for it we trust, so `rt_chrf` (back-translation chrF) is stored for every direction with `mt`.
 
-XCOMET-XXL runs in **fp32 on H100/H200 only** (43 GB; batch 16 with an OOM retry on a 64 GB card). Do not run it in bf16.
+MetricX runs from Google's own releases: `-bfloat16` (26 GB, fits an A6000) or the fp32 one (52 GB, H100/H200). The bf16 release is
+checked against fp32 on a stratified sample before production (see the PR). The code is the pinned `google-research/metricx`
+checkout (`PYTHONPATH`), and `use_cache=False` is required with recent transformers.
 
 ## Manifest schema
 
 `custom.translation_<tgt>` holds the text. `custom.synth` holds `version, stream, mt_model, qe_model, prompt_version,
-src_lang, src_text_field, n_entities` and, per target, `ok.<tgt>`, `xcomet_xxl.<tgt>`, `xcomet_spans.<tgt>`, `lid.<tgt>`,
+src_lang, src_text_field, n_entities` and, per target, `ok.<tgt>`, `metricx_xxl.<tgt>`, `lid.<tgt>`,
 `lid_p.<tgt>`, `len_ratio.<tgt>`, `rt_chrf.<tgt>` (mt directions), `entity_copy_rate.<tgt>`; TTS cuts add `tts`
 (model, licence, voice, speed, domain), noisy cuts add `noise` (corpus, file, licence, category, SNR, RIR, seed, split, source cut).
 
@@ -41,21 +43,21 @@ translation have no `custom.synth.ok.<tgt>` and are dropped at train time (`miss
 |---|---|
 | `common.py` | languages, the MT prompt (`PROMPT_VERSION`), ledger and JSONL helpers, degenerate-output check |
 | `build_pool.py`, `make_units.py` | select segments per Shar shard (ASR-WER band, spaCy entities, target assignment) and pack them into ~250K-pair units |
-| `plan_stream_c.py`, `prep_qe_existing.py`, `fleurs_gold.py` | pools for streams C and D, gold join and audit for B |
-| `run_mt_qe.py` | one unit: MT (vLLM) then QE (XCOMET) in separate processes; chunked, idempotent (`mt/final/dropped.NNNN.jsonl`, `DONE`) |
+| `plan_stream_c.py`, `prep_qe_existing.py`, `plan_fleurs_mt.py`, `fleurs_gold.py` | pools for streams C, D and B, and the B train/test audit |
+| `run_mt_qe.py` | one unit: MT (vLLM) then QE (MetricX) in separate processes; chunked, idempotent (`mt/final/dropped.NNNN.jsonl`, `DONE`) |
 | `overlay.py`, `write_shar.py` | write the cuts-only overlays from unit outputs |
 | `gen_tts_text.py`, `dedup_text.py`, `tts_synth.py` | Stream E: text generation, dedup + length gate, Kokoro synthesis |
 | `noise_catalog.py`, `noise_mix.py` | Stream F: licence-filtered noise/RIR catalog (disjoint train/eval), mixer with per-cut provenance |
 | `compare_tts_text.py` | same metrics on two text files (duplicates, openings, entities, currency) |
 | `submit_units.sh`, `slurm/` | MN5 submit wrapper (8-node cap, busy-unit check, dry run) and sbatch files for MN5 and artemis |
-| `Singularity.synth.def`, `verify_models.py` | MT/QE image (vLLM 0.14.1, comet 2.2.7, lhotse 2) and an offline model check |
+| `Singularity.synth.def`, `verify_models.py` | MT/QE image (vLLM 0.14.1, lhotse 2) and an offline model check |
 | `setup_qwen_venv.sh` | separate venv with vLLM 0.19 for Qwen3.6 text generation |
 | `tests/` | unit tests (`common`, `overlay`, `noise`) |
 
 ## Environments
 
 - **MT + QE**: `synth.sif`, built from `Singularity.synth.def`. Models must be staged (MN5 has no internet): `hf_cache` with
-  EuroLLM-9B-Instruct, XCOMET-XXL, the xlm-roberta-xxl config, Kokoro-82M, plus `lid.176.bin`.
+  EuroLLM-9B-Instruct, the MetricX-24-Hybrid-XXL releases and the `google/mt5-xl` tokenizer, Kokoro-82M, plus `lid.176.bin`.
 - **Text generation for TTS**: Qwen3.6-35B-A3B (Apache-2.0) needs `vllm>=0.19`, so it runs in its own venv
   (`setup_qwen_venv.sh`), not in `synth.sif`. It fits on two A6000s with tensor parallel 2 (or one H200); thinking is off.
 - MN5 jobs read the submit directory when they *start*: submit from a frozen clone and never edit it while jobs are queued.

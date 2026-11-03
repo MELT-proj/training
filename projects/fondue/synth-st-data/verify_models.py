@@ -1,4 +1,4 @@
-"""Offline check that EuroLLM-9B-Instruct (vLLM) and XCOMET-XXL load and run.
+"""Offline check that EuroLLM-9B-Instruct (vLLM) and MetricX-24-Hybrid-XXL (bf16) load and run.
 
 Run inside synth.sif with HF_HUB_OFFLINE=1. Prints driver/CUDA info first.
 """
@@ -10,7 +10,6 @@ import torch
 
 
 EURO = "utter-project/EuroLLM-9B-Instruct"
-XCOMET = "Unbabel/XCOMET-XXL"
 SRC = [
     "The European Parliament voted on Tuesday in Strasbourg.",
     "Please take two tablets of ibuprofen after meals.",
@@ -42,15 +41,10 @@ def main() -> None:
     del llm
     torch.cuda.empty_cache()
 
-    from comet import load_from_checkpoint
-    from huggingface_hub import snapshot_download
+    from run_mt_qe import load_qe, metricx_scores
 
-    path = snapshot_download(XCOMET, local_files_only=True)
-    t = time.time()
-    model = load_from_checkpoint(os.path.join(path, "checkpoints/model.ckpt"))
-    print("comet load s", time.time() - t)
-    out = model.predict([{"src": s, "mt": m} for s, m in zip(SRC, mt)], batch_size=8, gpus=1)
-    print("XCOMET", out.scores, [list(md) for md in out.metadata.error_spans])
+    model, tok, _ = load_qe("/dev/null", "verify", "bf16")
+    print("MetricX", metricx_scores(model, tok, list(zip(SRC, mt)), 8))
 
 
 if __name__ == "__main__":

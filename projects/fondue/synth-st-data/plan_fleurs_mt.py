@@ -1,7 +1,7 @@
 """Stream B: pools and units that translate the FLEURS train transcripts of the 18 low-resource languages into Y.
 
 Replaces the FLoRes gold join (its target text is CC BY-SA). FLEURS audio and transcripts are CC BY 4.0;
-the translations are EuroLLM-9B-Instruct output, scored by XCOMET-XXL like every other stream. FLEURS cut
+the translations are EuroLLM-9B-Instruct output, scored by MetricX-24-Hybrid-XXL like every other stream. FLEURS cut
 ids are only unique per locale, so each language is its own corpus `fleurs_<lang>` (one unit each).
 Run inside synth.sif; the train/test audit stays in `fleurs_gold.py`.
 """
