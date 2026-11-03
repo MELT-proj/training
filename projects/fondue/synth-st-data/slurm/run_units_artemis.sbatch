@@ -18,8 +18,15 @@ GPU_MEM="${GPU_MEM:-0.88}"
 for P in SINGULARITYENV APPTAINERENV; do
   export ${P}_HF_HOME=/mnt/scratch-nyx/giuseppe/synth/hf_cache ${P}_HF_HUB_OFFLINE=1
   export ${P}_TRANSFORMERS_OFFLINE=1 ${P}_VLLM_NO_USAGE_STATS=1
+  export ${P}_VLLM_ATTENTION_BACKEND=FLASH_ATTN ${P}_VLLM_FLASH_ATTN_VERSION=2  # vLLM's FlashAttention-2 for MT
+done
+# flashinfer and others write under $HOME/.cache, which is not writable inside the container on artemis
+for P in SINGULARITYENV APPTAINERENV; do
+  export ${P}_XDG_CACHE_HOME=/tmp/synth-cache-$SLURM_JOB_ID ${P}_FLASHINFER_WORKSPACE_BASE=/tmp/synth-cache-$SLURM_JOB_ID
+  export ${P}_TRITON_CACHE_DIR=/tmp/synth-cache-$SLURM_JOB_ID/triton ${P}_TORCHINDUCTOR_CACHE_DIR=/tmp/synth-cache-$SLURM_JOB_ID/inductor
 done
 mkdir -p "$OUT"
+pids=()
 read -r -a ULIST <<< "$UNITS"
 for ((g=0; g<NGPU; g++)); do
   (
@@ -33,5 +40,8 @@ for ((g=0; g<NGPU; g++)); do
       done
     done
   ) &
+  pids+=($!)
 done
-wait
+rc=0
+for p in "${pids[@]}"; do wait "$p" || rc=1; done  # a failed GPU worker must fail the job, or afterok chains run on nothing
+exit $rc
