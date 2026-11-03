@@ -102,23 +102,37 @@ def predict_with_oom_retry(model, samples: list[dict], batch: int):
             print(f"qe: CUDA OOM, retrying with batch {batch}", flush=True)
 
 
+_QE_CACHE: dict = {}
+
+
+def load_qe(ledger: str, unit: str, qe_dtype: str):
+    """XCOMET-XXL and fastText LID, loaded once per process (the load takes ~13 min from NFS)."""
+    if qe_dtype not in _QE_CACHE:
+        import fasttext
+        import torch
+        from comet import load_from_checkpoint
+        from huggingface_hub import snapshot_download
+
+        t0 = time.time()
+        ckpt = os.path.join(snapshot_download(QE_MODEL, local_files_only=True), "checkpoints/model.ckpt")
+        model = load_from_checkpoint(ckpt)
+        if qe_dtype == "bf16":
+            model = model.to(torch.bfloat16)
+        ledger_append(
+            ledger, unit=unit, stage="qe_load", n=0, gpu_seconds=round(time.time() - t0), gpus=1, status="ok"
+        )
+        lid = fasttext.load_model(os.path.join(os.environ.get("SYNTH_ASSETS", "/opt/assets"), "lid.176.bin"))
+        _QE_CACHE[qe_dtype] = (model, lid)
+    return _QE_CACHE[qe_dtype]
+
+
 def stage_qe(unit_dir: Path, by_id: dict, ledger: str, unit: str, batch: int, qe_dtype: str, n_parts: int) -> None:
-    import fasttext
     import sacrebleu
-    import torch
-    from comet import load_from_checkpoint
-    from huggingface_hub import snapshot_download
 
     todo = [k for k in range(n_parts) if not (unit_dir / f"final.{k:04d}.jsonl").exists()]
     if not todo:
         return
-    t0 = time.time()
-    ckpt = os.path.join(snapshot_download(QE_MODEL, local_files_only=True), "checkpoints/model.ckpt")
-    model = load_from_checkpoint(ckpt)
-    if qe_dtype == "bf16":
-        model = model.to(torch.bfloat16)
-    ledger_append(ledger, unit=unit, stage="qe_load", n=0, gpu_seconds=round(time.time() - t0), gpus=1, status="ok")
-    lid = fasttext.load_model(os.path.join(os.environ.get("SYNTH_ASSETS", "/opt/assets"), "lid.176.bin"))
+    model, lid = load_qe(ledger, unit, qe_dtype)
 
     for k in todo:
         mt_rows = read_jsonl(unit_dir / f"mt.{k:04d}.jsonl")
@@ -162,10 +176,11 @@ def stage_qe(unit_dir: Path, by_id: dict, ledger: str, unit: str, batch: int, qe
 
 
 def main(
-    pool: str,
     out_dir: str,
     unit: str,
     stage: str,  # mt | qe
+    pool: str = "",
+    units_dir: str = "",
     default_targets: list[str] | None = None,
     limit: int = 0,
     chunk: int = 50000,
@@ -175,6 +190,18 @@ def main(
     qe_dtype: str = "fp32",
     dry_run: bool = False,
 ) -> None:
+    """One unit (`--pool`), or several comma-separated names under `--units-dir` in one process (one QE load)."""
+    for name in unit.split(","):
+        run_unit(
+            pool or str(Path(units_dir) / f"{name}.pool.jsonl"), out_dir, name, stage, default_targets, limit, chunk,
+            ledger, gpu_mem, qe_batch, qe_dtype, dry_run,
+        )  # fmt: skip
+
+
+def run_unit(
+    pool: str, out_dir: str, unit: str, stage: str, default_targets: list[str] | None, limit: int, chunk: int,
+    ledger: str, gpu_mem: float, qe_batch: int, qe_dtype: str, dry_run: bool,
+) -> None:  # fmt: skip
     unit_dir = Path(out_dir) / unit
     rows = read_jsonl(pool)
     if limit:
