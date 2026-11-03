@@ -40,14 +40,14 @@ def work(args: tuple) -> tuple[int, int, int]:
     from lhotse.shar.writers import SharWriter
     from scipy.signal import resample_poly
 
-    wid, rows, out, voice_list, threads = args
+    wid, rows, out, voice_list, threads, device = args
     torch.set_num_threads(threads)
-    pipes = {c: KPipeline(lang_code=c, repo_id=MODEL) for c in "ab"}
+    pipes = {c: KPipeline(lang_code=c, repo_id=MODEL, device=device) for c in "ab"}
     wdir = Path(out) / f"_w{wid:02d}"
     shutil.rmtree(wdir, ignore_errors=True)
     wdir.mkdir(parents=True)
     n_ok = n_skip = 0
-    with SharWriter(str(wdir), fields={"recording": "flac"}, shard_size=5000) as w:
+    with SharWriter(str(wdir), fields={"recording": "flac"}, shard_size=5000, compress_jsonl=False) as w:
         for r in rows:
             uid = hashlib.md5(r["text"].encode()).hexdigest()[:16]
             v = voice_list[int(uid, 16) % len(voice_list)]
@@ -89,24 +89,25 @@ def finalize(out: str) -> int:
     dest.mkdir(parents=True, exist_ok=True)
     k = 0
     for wdir in sorted(Path(out).glob("_w*")):
-        for cuts in sorted(wdir.glob("cuts.*.jsonl*")):
+        for cuts in sorted(c for c in wdir.glob("cuts.*.jsonl*") if not c.name.endswith(".idx")):
             num = cuts.name.split(".")[1]
             suffix = cuts.name[len(f"cuts.{num}") :]
             shutil.move(cuts, dest / f"cuts.{k:06d}{suffix}")
             shutil.move(wdir / f"recording.{num}.tar", dest / f"recording.{k:06d}.tar")
-            if (wdir / f"recording.{num}.tar.idx").exists():
-                shutil.move(wdir / f"recording.{num}.tar.idx", dest / f"recording.{k:06d}.tar.idx")
+            for idx in (f"cuts.{num}{suffix}.idx", f"recording.{num}.tar.idx"):
+                if (wdir / idx).exists():
+                    shutil.move(wdir / idx, dest / idx.replace(num, f"{k:06d}", 1))
             k += 1
         shutil.rmtree(wdir)
     return k
 
 
-def main(inp: str, out: str, hub_snapshot: str, workers: int = 12, threads: int = 2, limit: int = 0) -> None:
+def main(inp: str, out: str, hub_snapshot: str, workers: int = 12, threads: int = 2, limit: int = 0, device: str = "cpu") -> None:
     rows = [json.loads(line) for line in open(inp)]
     if limit:
         rows = rows[:limit]
     vl = voices(hub_snapshot)
-    parts = [(w, rows[w::workers], out, vl, threads) for w in range(workers)]
+    parts = [(w, rows[w::workers], out, vl, threads, device) for w in range(workers)]
     with Pool(workers) as pool:
         res = pool.map(work, parts)
     shards = finalize(out)
