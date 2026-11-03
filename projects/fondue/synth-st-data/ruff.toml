@@ -1,0 +1,7 @@
+# The root pyproject only lints melt/; this folder follows the same rules (run `ruff check` / `ruff format` here).
+extend = "../../../pyproject.toml"
+include = ["*.py", "tests/*.py"]
+
+[lint]
+# one-shot batch scripts read files in plain loops and exit; a context manager adds nothing
+extend-ignore = ["SIM115"]
