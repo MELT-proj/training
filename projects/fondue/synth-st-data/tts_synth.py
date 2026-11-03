@@ -1,6 +1,6 @@
 """Stream E, step 2: synthesise English utterances with Kokoro-82M (Apache-2.0) into a Shar source.
 
-Voices: all 28 American/British English voices of the model, assigned round-robin by utterance
+Voices: all 28 American/British English voices of the model, assigned by a hash of the text (uniform in expectation)
 (so accents and genders mix), speed uniform in [0.9, 1.1] seeded per utterance. Audio: 24 kHz
 -> 16 kHz mono FLAC. Cuts keep the text as `supervisions[0].text` and `custom.pnc_text`, and carry
 `custom.synth = {stream: tts_en, tts: {model, licence, voice, speed, text_prompt_domain, ...}}`.
