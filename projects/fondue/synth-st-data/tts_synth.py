@@ -102,7 +102,9 @@ def finalize(out: str) -> int:
     return k
 
 
-def main(inp: str, out: str, hub_snapshot: str, workers: int = 12, threads: int = 2, limit: int = 0, device: str = "cpu") -> None:
+def main(
+    inp: str, out: str, hub_snapshot: str, workers: int = 12, threads: int = 2, limit: int = 0, device: str = "cpu"
+) -> None:
     rows = [json.loads(line) for line in open(inp)]
     if limit:
         rows = rows[:limit]
