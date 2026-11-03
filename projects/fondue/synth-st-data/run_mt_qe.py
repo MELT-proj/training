@@ -145,7 +145,11 @@ def metricx_scores(model, tok, pairs: list[tuple[str, str]], batch: int, max_len
 def stage_qe(unit_dir: Path, by_id: dict, ledger: str, unit: str, batch: int, qe_dtype: str, n_parts: int) -> None:
     import sacrebleu
 
-    todo = [k for k in range(n_parts) if not (unit_dir / f"final.{k:04d}.jsonl").exists()]
+    # chunks whose MT is not written yet wait for a later pass; DONE is only set once every chunk has its final file
+    todo = [
+        k for k in range(n_parts)
+        if not (unit_dir / f"final.{k:04d}.jsonl").exists() and (unit_dir / f"mt.{k:04d}.jsonl").exists()
+    ]  # fmt: skip
     if not todo:
         return
     model, tok, lid = load_qe(ledger, unit, qe_dtype)

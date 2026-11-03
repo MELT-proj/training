@@ -1,12 +1,14 @@
 #!/bin/bash
 # Artemis (A6000 etc.) variant of run_units.sbatch: one process per GPU, units from UNITS (names), nyx scratch for everything.
+#   (UNITS_G0="..." UNITS_G1="..." pin units to GPUs instead of UNITS)
 #   sbatch --partition=a6000 --qos=gpu-medium --gres=gpu:4 --cpus-per-task=32 --mem=200G --time=2-00:00:00 \
 #          --export=ALL,UNITS="u1 u2 ...",OUT=...,STAGES=mt code/slurm/run_units_artemis.sbatch
 # Stages can be submitted separately (they write into the same OUT/<unit> chunks, so QE can be chained with
 # --dependency=afterok):  MT:  --export=ALL,STAGES=mt ...     QE (MetricX-24-Hybrid-XXL):  --export=ALL,STAGES=qe ...
 # QE_DTYPE=bf16 (default) uses Google's bfloat16 release, 26 GB: fits an A6000. fp32 (52 GB) needs an H100/H200.
 set -euo pipefail
-: "${UNITS:?}" "${OUT:?}"
+: "${OUT:?}"
+[ -n "${UNITS:-}" ] || [ -n "${UNITS_G0:-}" ] || { echo "set UNITS (round-robin) or UNITS_G<gpu>" >&2; exit 2; }
 CODE="${CODE:-/mnt/scratch-nyx/giuseppe/synth/code}"
 SIF="${SYNTH_SIF:-/mnt/scratch-nyx/giuseppe/synth/synth.sif}"
 UNIT_DIR="${UNIT_DIR:-/mnt/scratch-nyx/giuseppe/synth/units}"
@@ -28,11 +30,14 @@ for P in SINGULARITYENV APPTAINERENV; do
 done
 mkdir -p "$OUT"
 pids=()
-read -r -a ULIST <<< "$UNITS"
+read -r -a ULIST <<< "${UNITS:-}"
 for ((g=0; g<NGPU; g++)); do
   (
     mine=()
-    for ((i=g; i<${#ULIST[@]}; i+=NGPU)); do mine+=("${ULIST[$i]}"); done
+    explicit="UNITS_G$g"  # UNITS_G<gpu>="u1 u2 ..." pins units to a GPU, otherwise UNITS is dealt round-robin
+    if [ -n "${!explicit:-}" ]; then read -r -a mine <<< "${!explicit}"; else
+      for ((i=g; i<${#ULIST[@]}; i+=NGPU)); do mine+=("${ULIST[$i]}"); done
+    fi
     [ ${#mine[@]} -gt 0 ] || exit 0  # more GPUs than units
     for stage in $STAGES; do
       # MT reloads vLLM per unit (~1 min); QE takes all of this GPU's units in one process (the MetricX load is a few minutes)
