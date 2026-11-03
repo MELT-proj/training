@@ -1,15 +1,18 @@
 #!/bin/bash
 # Artemis (A6000 etc.) variant of run_units.sbatch: one process per GPU, units from UNITS (names), nyx scratch for everything.
 #   sbatch --partition=a6000 --qos=gpu-medium --gres=gpu:4 --cpus-per-task=32 --mem=200G --time=2-00:00:00 \
-#          --export=ALL,UNITS="u1 u2 ...",OUT=...,QE_DTYPE=bf16 code/slurm/run_units_artemis.sbatch
-# A6000 has 48 GB: XCOMET-XXL does not fit in fp32 there, so QE runs in bf16 (QE_DTYPE).
+#          --export=ALL,UNITS="u1 u2 ...",OUT=...,STAGES=mt code/slurm/run_units_artemis.sbatch
+# XCOMET-XXL is run in fp32 only (43 GB: H100/H200, not A6000), so the stages are submitted separately:
+#   MT on A6000:  --export=ALL,STAGES=mt ...      QE on H100/H200:  --export=ALL,STAGES=qe,QE_DTYPE=fp32 ...
+# Both write into the same OUT/<unit> chunks, so the QE job can be chained with --dependency=afterok.
 set -euo pipefail
 : "${UNITS:?}" "${OUT:?}"
 CODE="${CODE:-/mnt/scratch-nyx/giuseppe/synth/code}"
 SIF="${SYNTH_SIF:-/mnt/scratch-nyx/giuseppe/synth/synth.sif}"
 UNIT_DIR="${UNIT_DIR:-/mnt/scratch-nyx/giuseppe/synth/units}"
 NGPU="${NGPU:-4}"
-QE_DTYPE="${QE_DTYPE:-bf16}"
+QE_DTYPE="${QE_DTYPE:-fp32}"
+STAGES="${STAGES:-mt qe}"
 GPU_MEM="${GPU_MEM:-0.88}"
 # SingularityCE reads SINGULARITYENV_*, apptainer APPTAINERENV_*: set both
 for P in SINGULARITYENV APPTAINERENV; do
@@ -22,7 +25,7 @@ for ((g=0; g<NGPU; g++)); do
   (
     for ((i=g; i<${#ULIST[@]}; i+=NGPU)); do
       name="${ULIST[$i]}"
-      for stage in mt qe; do
+      for stage in $STAGES; do
         CUDA_VISIBLE_DEVICES=$g SINGULARITYENV_VLLM_CACHE_ROOT=/tmp/synth-vllm-$SLURM_JOB_ID-$g APPTAINERENV_VLLM_CACHE_ROOT=/tmp/synth-vllm-$SLURM_JOB_ID-$g \
         singularity exec --nv --bind /mnt/scratch-nyx "$SIF" \
           python "$CODE/run_mt_qe.py" --pool "$UNIT_DIR/$name.pool.jsonl" --out-dir "$OUT" --unit "$name" \
