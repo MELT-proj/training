@@ -39,8 +39,9 @@ model:
 
   decoder:
     # PI, 11-04: Instruct-2512, queued while the base-2512 arm is scored. If base wins,
-    # set name: utter-project/EuroLLM-1.7B-2512 AND chat_template_from below to the
-    # Instruct-2512 repo (the base ships no chat template), before the job starts.
+    # before the job starts: name: utter-project/EuroLLM-1.7B-2512, plus a line
+    # chat_template_from: utter-project/EuroLLM-1.7B-Instruct-2512 (the base ships no
+    # chat template; the base-2512 arm ran exactly so).
     name: utter-project/EuroLLM-1.7B-Instruct-2512
     attn_implementation: flash_attention_2
     freeze: false
@@ -732,10 +733,11 @@ data:
     lhotse_sampler_type: dynamic_bucketing
     num_buckets: 30
     buffer_size: 10000
-    # DRAFT: measured 11-01 on nyx by infra/check_training_config.py --only bins
-    # --measure (per-source duration histograms x the constant phase's weights, before
-    # the cut filter). Re-measure on MN5 once the data settles: a stale set is an OOM.
-    bucket_duration_bins: [2.36, 3.33, 4.2, 5.01, 5.86, 6.74, 7.74, 8.94, 10.32, 11.68, 13.09, 14.49, 15.56, 17.14, 18.82, 21.1, 24.22, 26.47, 27.47, 28.03, 28.43, 28.79, 29.11, 29.43, 29.75, 30.07, 34.82, 37.18, 38.72]
+    # Measured 11-04 on MN5's sources by infra/check_training_config.py --only bins
+    # --measure (per-source duration histograms x the constant phase's weights, before the
+    # cut filter). The 30.0 repeats are Mosel's many 30 s cuts: lhotse needs the edges
+    # sorted, not distinct, and the repeats only leave empty buckets.
+    bucket_duration_bins: [2.52, 3.62, 4.6, 5.55, 6.55, 7.71, 9.14, 10.78, 12.42, 14.14, 15.34, 16.87, 18.46, 20.2, 22.98, 25.54, 27.47, 28.56, 29.44, 30.0, 30.0, 30.0, 30.0, 30.0, 30.0, 30.0, 32.84, 36.64, 38.54]
     max_tokens: 400
 
     shuffle: true
