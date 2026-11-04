@@ -34,7 +34,8 @@ export NCCL_DEBUG="${NCCL_DEBUG:-INFO}"
 export NCCL_DEBUG_SUBSYS="${NCCL_DEBUG_SUBSYS:-INIT,NET}"
 
 COMMON=(--trainer.save_steps 15 --trainer.eval_steps 15 --trainer.logging_steps 1
-        --trainer.report_to none --trainer.save_total_limit 3)
+        --trainer.report_to none --trainer.save_total_limit 3
+        --run.perf_logging true)  # s/step and audio-s per step: the fill max_steps assumes
 
 case "$PHASE" in
 fresh)
