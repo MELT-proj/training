@@ -20,10 +20,13 @@ run:
   dry_run: false
   memory_preallocation: true
   stop_after_step: null # @@STOP_AFTER_STEP@@
+  # Every Fondue job after the first is a resume, and the fit leaves no room for AdamW's
+  # state before the first window (54 of 63 GB fresh): load it at the first step.
+  defer_optimizer_load: true
 
 # =============================================================================
-# Model: Whisper-large-v3 + MoE (8 experts, top-2) at 10 Hz + EuroLLM-1.7B-Instruct,
-# everything trainable (PI, 2026-10-29 and 10-30).
+# Model: Whisper-large-v3 + MoE (8 experts, top-2) at 10 Hz + EuroLLM-1.7B-Instruct-2512,
+# everything trainable (PI, 2026-10-29, 10-30 and 11-04).
 # =============================================================================
 model:
   encoder:
@@ -34,9 +37,10 @@ model:
     apply_spec_augment: false
 
   decoder:
-    # PROVISIONAL: EuroLLM-1.7B-Instruct-2512 may replace it at the IFT freeze
-    # (11-05); same tokens and chat template (plan_arm.py's decoder table).
-    name: utter-project/EuroLLM-1.7B-Instruct
+    # PI, 11-04: Instruct-2512, queued while the base-2512 arm is scored. If base wins,
+    # set name: utter-project/EuroLLM-1.7B-2512 AND chat_template_from below to the
+    # Instruct-2512 repo (the base ships no chat template), before the job starts.
+    name: utter-project/EuroLLM-1.7B-Instruct-2512
     attn_implementation: flash_attention_2
     freeze: false
     eos_token: <|im_end|>

@@ -103,9 +103,10 @@ def test_unscored_st_leaves_the_mix_when_annealing():
 
 def test_the_filters_keep_less_when_annealing():
     survival = bfm.Survival(bfm.QUALITY)
-    asr = {"rel": "yodas3/de/train", "tags": {"task": "asr", "lang": "de", "scored": "wer"}}
+    asr = {"rel": "yodas3/cs/train", "tags": {"task": "asr", "lang": "cs", "scored": "wer"}}
+    mosel = {"rel": "voxpopuli_mosel/mt/train", "tags": {"task": "asr", "lang": "mt", "scored": "wer"}}
     spite = {"rel": "spite_cv16_euro9b/train", "tags": {"task": "st", "tgt_lang": "de", "scored": "spite"}}
-    for s in (asr, spite):
+    for s in (asr, mosel, spite):
         assert 0 < survival.share(s, "anneal") < survival.share(s, "constant") < 1
     assert not survival.unknown
 
@@ -139,3 +140,14 @@ def test_only_the_annealing_config_restarts_the_data_stream_and_its_keys_exist()
     assert not constant["run"].get("restart_data_stream", False)
     assert anneal["run"]["restart_data_stream"] is True
     assert anneal["data"]["train_ds"]["seed"] != constant["data"]["train_ds"]["seed"]
+
+
+def test_every_mosel_language_has_a_leaf_and_a_histogram():
+    """Mosel was scored on MN5 only: a language without its histogram would train unfiltered."""
+    survival = bfm.Survival(bfm.QUALITY)
+    leaves = [e for e in _train(_all_asr_scored()) if e["rel"].startswith("voxpopuli_mosel/")]
+    assert {e["tags"]["lang"] for e in leaves} == set(bfm.MOSEL_LANGS)
+    for e in leaves:
+        assert "text_field" not in e["tags"], "Mosel trains on its supervision text"
+        survival.share(e, "constant")
+    assert not survival.unknown

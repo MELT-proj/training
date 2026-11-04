@@ -27,21 +27,29 @@ arXiv:2509.14128 §3.3.1) inside each task, alpha 0.2 within an entry and beta a
 task's entries (0.5 constant, 0.7 annealing, which cuts the tails' passes), on the hours
 that SURVIVE the phase's filters. ASR and ST then split the audio in proportion to those
 surviving hours. Written as cut probabilities. The surviving share of each leaf comes from
-the quality histograms in ``quality/`` (per corpus and language, measured 2026-10-30).
+the quality histograms in ``quality/`` (per corpus and language, measured 2026-10-30;
+VoxPopuli-Mosel on MN5, 2026-11-04).
 
 ``total_hours`` is the constant phase's surviving pool, ASR and ST ("train on all the
 data", PI 11-01); the last fifth of the steps anneals.
 
-    # 1. the sources, unweighted, into Fondue-sources.yaml (audits text fields first)
-    python3 projects/ablation-campaign/fondue/build_fondue_mix.py sources \\
-        --datasets-root /mnt/scratch-nyx/giuseppe/melt/melt-data/shar \\
-        --scores-root   /mnt/scratch-nyx/giuseppe/melt/melt-data/shar-asr-scores
+MN5 is what Fondue reads; nyx is where this runs. ``mn5_mirror.py`` lays out a datasets
+root and a scores root on nyx that match MN5 (nyx's copies, Yodas3 cut to MN5's languages,
+VoxPopuli-Mosel from ``mosel_stats.py`` run on MN5 and its score arrays copied over):
 
-    # 2. measure (cached in infra/.mix_weights_hours.json; resumes), filter, weight, write both configs
-    python3 infra/compute_mix_weights.py --config projects/ablation-campaign/fondue/Fondue-sources.yaml \\
-        --datasets-root /mnt/scratch-nyx/giuseppe/melt/melt-data/shar --jobs 32
+    # 0. on MN5 (a gp node): Mosel's hours, cut counts and WER histograms
+    python projects/ablation-campaign/fondue/quality/mosel_stats.py <MN5 shar-indexed> <MN5 shar-asr-scores> mosel_stats.json
+    #    -> trim into quality/mosel_wer_dist.json; rsync its wer.u16.npy + meta.json to <scores>
+    python3 projects/ablation-campaign/fondue/mn5_mirror.py --out <mirror> --mosel-scores <scores>
+
+    # 1. the sources, unweighted, into Fondue-sources.yaml (Mosel is audited by mosel_stats.py;
+    #    the nyx corpora by the full audit of 10-30, so --no-audit against the mirror)
+    python3 projects/ablation-campaign/fondue/build_fondue_mix.py sources \\
+        --datasets-root <mirror>/shar --scores-root <mirror>/shar-asr-scores --no-audit
+
+    # 2. filter, weight, write both configs (hours from the mirror's cache)
     python3 projects/ablation-campaign/fondue/build_fondue_mix.py render \\
-        --datasets-root /mnt/scratch-nyx/giuseppe/melt/melt-data/shar
+        --datasets-root <mirror>/shar --cache <mirror>/mix_weights_hours.json
 """
 
 from __future__ import annotations
@@ -111,10 +119,10 @@ MLS_DIRS = {
     "it": "italian", "nl": "dutch", "pl": "polish", "pt": "portuguese",
 }  # fmt: skip
 VOXPOPULI_LANGS = ("cs", "de", "en", "es", "et", "fi", "fr", "hu", "it", "lt", "nl", "pl", "ro", "sk", "sl")
-YODAS3_LANGS = (
-    "bg", "cs", "da", "de", "el", "es", "et", "fi", "fr", "hu",
-    "it", "lt", "lv", "nl", "pl", "pt", "ro", "sk", "sl", "sv",
-)  # fmt: skip
+# The languages left on MN5 (PI, 11-03); the rest moved off to make room for Mosel.
+YODAS3_LANGS = ("bg", "cs", "hu", "it", "pl", "pt")
+# VoxPopuli-Mosel: pseudo-labelled plenary speech, scored by Parakeet on MN5 (PI, 11-03).
+MOSEL_LANGS = ("bg", "cs", "da", "el", "et", "fi", "hr", "hu", "lt", "lv", "mt", "sk", "sl", "sv")
 GRANARY_DIRS = {
     "bg": "Bulgarian", "cs": "Czech", "da": "Danish", "de": "German", "el": "Greek",
     "en": "English", "es": "Spanish", "et": "Estonian", "fi": "Finnish", "fr": "French",
@@ -153,7 +161,7 @@ TRANSLATION_EN = "custom.translation_en"
 EXCLUDED = {
     "voxpopuli/hr/train": "47% of its cuts have no transcript",
     "yodas3/hr/train": "13 cuts (5 minutes), none with pnc_text",
-    "voxpopuli_mosel/bg": "no WER sidecar, generic conversion (board, 10-29)",
+    "yodas3 (da de el es et fi fr lt lv nl ro sk sl sv)": "moved off MN5 for VoxPopuli-Mosel (PI, 11-03)",
     "regional languages (ca, eu, gl, ...)": "only official EU languages, plus uk and ru (PI, 10-30)",
     "SPITE ko/zh": "only SPITE's EU targets and ru (PI, 10-30 and 11-01)",
     "instructs2s200k": "not ASR or ST",
@@ -176,6 +184,8 @@ def asr_leaves(lang: str, scored: set[str]) -> list[dict]:
         found.append((f"voxpopuli/{lang}/train", PNC))
     if lang in YODAS3_LANGS:
         found.append((f"yodas3/{lang}/train", PNC))
+    if lang in MOSEL_LANGS:
+        found.append((f"voxpopuli_mosel/{lang}/train", None))
     if lang in GRANARY_DIRS:
         found.append((f"yodas-granary/{GRANARY_DIRS[lang]}/asr_only", None))
         if lang != "en":  # English has no ast
@@ -240,7 +250,12 @@ def st_leaves(x_to_y: bool) -> list[dict]:
 
 def scored_leaves(scores_root: Path) -> set[str]:
     """Leaves (paths below the datasets root) that have a WER array."""
-    return {str(p.parent.relative_to(scores_root)) for p in scores_root.rglob("wer.u16.npy")}
+    # os.walk, not rglob: the MN5 mirror (mn5_mirror.py) is a tree of symlinks.
+    return {
+        str(Path(d).relative_to(scores_root))
+        for d, _, files in os.walk(scores_root, followlinks=True)
+        if "wer.u16.npy" in files
+    }
 
 
 def entry_key(tags: dict) -> str:
@@ -441,6 +456,9 @@ class Survival:
                 h = self.wer.setdefault((g["ds"], g["lang"]), [0.0] * len(g["wer_h"]))
                 for i, v in enumerate(g["wer_h"]):
                     h[i] += v
+        # VoxPopuli-Mosel was scored on MN5 only; its histograms come from mosel_stats.py there.
+        for g in json.loads((quality / "mosel_wer_dist.json").read_text()):
+            self.wer[("voxpopuli_mosel", g["lang"])] = g["wer_h"]
         st = json.loads((quality / "spite_dist.json").read_text())
         self.b_edges, self.x_edges = st["b_edges"], st["x_edges"]
         self.spite = {(g["ds"], g["tgt"]): g["src_h"] for g in st["groups"]}
