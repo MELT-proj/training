@@ -147,9 +147,11 @@ FLEURS_DIRS = {
 FLEURS_WITHOUT_PNC = ("ga",)
 ENGLISH_EXTRA = (
     "gigaspeech/train",
-    # People's Speech: clean_sa is not used (PI, 11-04). clean is out until its tars are re-shared:
-    # PAX extended headers in front of long or non-ASCII member names break lhotse's indexed tar
-    # reader, which the cut filter needs ("peoples_speech/clean/train" returns here once repacked).
+    # People's Speech: clean_sa is not used (PI, 11-04). clean's tars carry PAX headers (member names
+    # over 100 bytes) that break lhotse's indexed tar reader, which the cut filter needs, so the leaf
+    # is the re-shared copy: same cuts, tars with short member names. Its score arrays are a copy of
+    # clean/train's under the same relative path (the filter looks them up by the shar path).
+    "peoples_speech/clean_repacked/train",
     "librispeech/clean/train.100",
     "librispeech/clean/train.360",
     "librispeech/other/train.500",
