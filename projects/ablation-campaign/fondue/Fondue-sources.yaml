@@ -154,7 +154,7 @@ data:
         tags: {task: asr, lang: el, text_field: custom.metadata.sentence, scored: wer, wer_band: c50a20}
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli_mosel/el/train
-        tags: {task: asr, lang: el, scored: wer, wer_band: c50a20}
+        tags: {task: asr, lang: el, scored: wer, wer_band: c30a10}
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Greek/asr_only
         tags: {task: asr, lang: el, scored: wer, wer_band: c50a20}
@@ -223,7 +223,7 @@ data:
         tags: {task: asr, lang: et, text_field: custom.pnc_text, scored: wer, wer_band: c50a20}
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli_mosel/et/train
-        tags: {task: asr, lang: et, scored: wer, wer_band: c50a20}
+        tags: {task: asr, lang: et, scored: wer, wer_band: c30a10}
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Estonian/asr_only
         tags: {task: asr, lang: et, scored: wer, wer_band: c50a20}
@@ -337,7 +337,7 @@ data:
         tags: {task: asr, lang: lt, text_field: custom.pnc_text, scored: wer, wer_band: c40a15}
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli_mosel/lt/train
-        tags: {task: asr, lang: lt, scored: wer, wer_band: c40a15}
+        tags: {task: asr, lang: lt, scored: wer, wer_band: c30a10}
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Lithuanian/asr_only
         tags: {task: asr, lang: lt, scored: wer, wer_band: c40a15}
@@ -352,7 +352,7 @@ data:
         tags: {task: asr, lang: lv, text_field: custom.metadata.sentence, scored: wer, wer_band: c50a20}
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli_mosel/lv/train
-        tags: {task: asr, lang: lv, scored: wer, wer_band: c50a20}
+        tags: {task: asr, lang: lv, scored: wer, wer_band: c30a10}
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Latvian/asr_only
         tags: {task: asr, lang: lv, scored: wer, wer_band: c50a20}
@@ -367,7 +367,7 @@ data:
         tags: {task: asr, lang: mt, text_field: custom.metadata.sentence, scored: wer, wer_band: c40a15}
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli_mosel/mt/train
-        tags: {task: asr, lang: mt, scored: wer, wer_band: c40a15}
+        tags: {task: asr, lang: mt, scored: wer, wer_band: c30a10}
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/mt_mt/train
         tags: {task: asr, lang: mt, text_field: custom.pnc_text, scored: wer, wer_band: c40a15}
@@ -451,7 +451,7 @@ data:
         tags: {task: asr, lang: sk, text_field: custom.pnc_text, scored: wer, wer_band: c40a15}
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli_mosel/sk/train
-        tags: {task: asr, lang: sk, scored: wer, wer_band: c40a15}
+        tags: {task: asr, lang: sk, scored: wer, wer_band: c30a10}
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Slovak/asr_only
         tags: {task: asr, lang: sk, scored: wer, wer_band: c40a15}
@@ -469,7 +469,7 @@ data:
         tags: {task: asr, lang: sl, text_field: custom.pnc_text, scored: wer, wer_band: c50a20}
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli_mosel/sl/train
-        tags: {task: asr, lang: sl, scored: wer, wer_band: c50a20}
+        tags: {task: asr, lang: sl, scored: wer, wer_band: c30a10}
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/fleurs/sl_si/train
         tags: {task: asr, lang: sl, text_field: custom.pnc_text, scored: wer, wer_band: c50a20}
@@ -478,7 +478,7 @@ data:
         tags: {task: asr, lang: sv, text_field: custom.metadata.sentence, scored: wer, wer_band: c40a15}
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli_mosel/sv/train
-        tags: {task: asr, lang: sv, scored: wer, wer_band: c40a15}
+        tags: {task: asr, lang: sv, scored: wer, wer_band: c30a10}
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Swedish/asr_only
         tags: {task: asr, lang: sv, scored: wer, wer_band: c40a15}

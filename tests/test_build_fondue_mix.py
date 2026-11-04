@@ -65,6 +65,7 @@ def test_a_language_band_beats_a_corpus_band_beats_the_default():
     assert bfm.wer_band("cv22_sidon/de/train", "de") == bfm.WER_BY_CORPUS["cv22_sidon"]
     assert bfm.wer_band("cv22_sidon/lv/train", "lv") == bfm.WER_BY_LANG["lv"]
     assert bfm.wer_band("yodas3/de/train", "de") == bfm.WER_DEFAULT
+    assert bfm.wer_band("voxpopuli_mosel/lv/train", "lv") == bfm.WER_DEFAULT  # pseudo-labels beat the language
 
 
 @pytest.mark.parametrize("phase", ["constant", "anneal"])

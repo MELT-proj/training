@@ -101,6 +101,9 @@ WER_BY_LANG = {
     **dict.fromkeys(("ga", "sl", "et", "lv", "el"), (0.5, 0.2)),
     **dict.fromkeys(("mt", "lt", "sv", "sk"), (0.4, 0.15)),
 }
+# Pseudo-labelled corpora: a high WER is the label's fault, not the recognizer's, so the
+# language bands do not apply (PI, 11-04).
+WER_PSEUDO_LABELLED = {"voxpopuli_mosel": WER_DEFAULT}
 BLASER_MIN = 4.5  # audio vs English transcript, both phases
 XCOMET_MIN = {"constant": 0.85, "anneal": 0.98}
 
@@ -207,8 +210,10 @@ def asr_leaves(lang: str, scored: set[str]) -> list[dict]:
 
 
 def wer_band(rel: str, lang: str) -> tuple[float, float]:
-    """(constant, annealing) WER bounds of an ASR leaf: its language's, else its corpus's, else the default."""
-    return WER_BY_LANG.get(lang) or WER_BY_CORPUS.get(rel.split("/")[0]) or WER_DEFAULT
+    """(constant, annealing) WER bounds of an ASR leaf: a pseudo-labelled corpus's, else its
+    language's, else its corpus's, else the default."""
+    corpus = rel.split("/")[0]
+    return WER_PSEUDO_LABELLED.get(corpus) or WER_BY_LANG.get(lang) or WER_BY_CORPUS.get(corpus) or WER_DEFAULT
 
 
 def band_name(band: tuple[float, float]) -> str:
