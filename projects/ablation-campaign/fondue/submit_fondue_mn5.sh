@@ -3,7 +3,8 @@
 # Submit Fondue on MN5: N_CONSTANT chained jobs of Fondue.yaml (warmup and constant LR,
 # each resuming the newest checkpoint of the run's output dir; the phase ends at
 # run.stop_after_step), then one job of Fondue-anneal.yaml from the checkpoint at the
-# annealing step. 16 nodes, 3-day walls, acc_ehpc.
+# annealing step. 16 nodes, acc_ehpc; 3-day walls for the constant jobs, 2 days for the
+# annealing job (~35 h of steps at the dry run's 8.3 s/step, plus evals).
 #
 #   submit_fondue_mn5.sh            print the plan, submit nothing
 #   submit_fondue_mn5.sh --submit   copy the configs and submit the chain
@@ -31,6 +32,7 @@ export MELT_NODES="${MELT_NODES:-16}"
 export MELT_GPUS_PER_NODE=4
 export MELT_QOS="${MELT_QOS:-acc_ehpc}"
 export MELT_TIME="${MELT_TIME:-3-00:00:00}"
+ANNEAL_TIME="${ANNEAL_TIME:-2-00:00:00}"
 N_CONSTANT="${N_CONSTANT:-3}"
 EXP=Fondue
 CONFIGS="${OUTPUT_DIR}/${EXP}-configs"   # host path; /workspace/outputs/${EXP}-configs inside
@@ -41,7 +43,7 @@ COMMIT=$(git rev-parse --short HEAD)
 [[ -z "$(git status --porcelain)" ]] || { echo "the clone has uncommitted changes; submit from a clean commit" >&2; exit 1; }
 
 echo "Fondue from $(pwd) @ ${COMMIT}: ${N_CONSTANT} x Fondue.yaml to step ${ANNEAL_STEP}, then Fondue-anneal.yaml"
-echo "  ${MELT_NODES} nodes, ${MELT_TIME}, ${MELT_QOS}; configs read from ${CONFIGS}"
+echo "  ${MELT_NODES} nodes, ${MELT_QOS}; walls ${MELT_TIME} constant, ${ANNEAL_TIME} anneal; configs read from ${CONFIGS}"
 echo "  constant: ${OUTPUT_DIR}/${EXP} (MELT_SEED 42); anneal: ${OUTPUT_DIR}/${EXP}-anneal (MELT_SEED 43)"
 (( SUBMIT )) || { echo "(plan only; pass --submit)"; exit 0; }
 
@@ -57,20 +59,20 @@ ln -sfn "../${EXP}/checkpoint-${ANNEAL_STEP}" "${OUTPUT_DIR}/${EXP}-ck${ANNEAL_S
 # shellcheck disable=SC1091
 source infra/runners/sites/mn5.sh
 mkdir -p logs
-submit() {  # <dependency or ""> <train args...>; prints the job id
-    local dep="$1"; shift
-    local extra=(); [[ -n "$dep" ]] && extra=(--dependency="afterany:${dep}")
+submit() {  # <dependency or ""> <walltime> <train args...>; prints the job id
+    local dep="$1" wall="$2"; shift 2
+    local extra=(--time="${wall}"); [[ -n "$dep" ]] && extra+=(--dependency="afterany:${dep}")
     sbatch --parsable "${SBATCH_ARGS[@]}" "${extra[@]}" --job-name=fondue \
         bash/run_train_singularity.sbatch config/accelerate/ddp.yaml "$@"
 }
 
 prev=""
 for k in $(seq 1 "$N_CONSTANT"); do
-    prev=$(MELT_SEED=42 submit "$prev" --config "/workspace/outputs/${EXP}-configs/Fondue.yaml" \
+    prev=$(MELT_SEED=42 submit "$prev" "$MELT_TIME" --config "/workspace/outputs/${EXP}-configs/Fondue.yaml" \
         --trainer.output_dir "/workspace/outputs/${EXP}" --run.exp_name "${EXP}")
     echo "constant job ${k}/${N_CONSTANT}: ${prev}"
 done
-anneal=$(MELT_SEED=43 submit "$prev" --config "/workspace/outputs/${EXP}-configs/Fondue-anneal.yaml" \
+anneal=$(MELT_SEED=43 submit "$prev" "$ANNEAL_TIME" --config "/workspace/outputs/${EXP}-configs/Fondue-anneal.yaml" \
     --trainer.resume_from_checkpoint "/workspace/outputs/${EXP}-ck${ANNEAL_STEP}" \
     --trainer.output_dir "/workspace/outputs/${EXP}-anneal" --run.exp_name "${EXP}-anneal")
 echo "anneal job: ${anneal}"
