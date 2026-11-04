@@ -183,12 +183,6 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/gigaspeech/train
         tags: {task: asr, lang: en, text_field: custom.pnc_text, scored: wer, wer_band: c15a05}
       - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/peoples_speech/clean/train
-        tags: {task: asr, lang: en, text_field: custom.pnc_text, scored: wer, wer_band: c30a10}
-      - type: lhotse_shar
-        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/peoples_speech/clean_sa/train
-        tags: {task: asr, lang: en, text_field: custom.pnc_text, scored: wer, wer_band: c30a10}
-      - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/librispeech/clean/train.100
         tags: {task: asr, lang: en, text_field: custom.pnc_text, scored: wer, wer_band: c20a05}
       - type: lhotse_shar
