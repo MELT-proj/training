@@ -418,7 +418,7 @@ def implied_hour_shares(group_w: list[float], leaf_w: list[list[float]],
 
 def check_hour_shares(targets: list[list[float]], group_w: list[float],
                       leaf_w: list[list[float]], mean_cut: list[list[float]],
-                      ndigits: int = 8, rel_tol: float = 1e-5) -> None:
+                      ndigits: int = 10, rel_tol: float = 1e-5) -> None:
     """Raise ValueError if the weights, rounded as they are written, miss their targets."""
     want_total = sum(sum(row) for row in targets)
     got = implied_hour_shares(
@@ -542,6 +542,9 @@ def build_group_block(sources: list[dict], indent: int = 0, weights: str = "hour
         return sum(s["hours"] for s in by_lang[lang])
 
     cut_mode = weights == "cuts"
+    # A cut probability spans more decades than an hours share (a 10 h leaf beside a
+    # 10K h one), so 8 digits can miss its target; check_hour_shares rounds the same way.
+    w = ".10f" if cut_mode else ".8f"
     pad = " " * indent
     lines = [f"{pad}input_cfg:"]
     for lang in sorted(by_lang, key=lambda l: -hours_of(l)):
@@ -552,7 +555,7 @@ def build_group_block(sources: list[dict], indent: int = 0, weights: str = "hour
         lines.append(f"{pad}  # {lang}: {hours_of(lang):,.1f} h "
                      f"across {len(members)} corpora{note}")
         lines.append(f"{pad}  - type: group")
-        lines.append(f"{pad}    weight: {members[0]['p_l']:.8f}")
+        lines.append(f"{pad}    weight: {members[0]['p_l']:{w}}")
         # Every member of a group shares these by construction, so reading them
         # off the first member is safe.
         group_tags = {k: v for k, v in members[0]["tags"].items()
@@ -565,7 +568,7 @@ def build_group_block(sources: list[dict], indent: int = 0, weights: str = "hour
         for s in members:
             lines.append(f"{pad}      - type: lhotse_shar")
             lines.append(f"{pad}        shar_path: {s['raw_path']}")
-            lines.append(f"{pad}        weight: {s['p_c']:.8f}")
+            lines.append(f"{pad}        weight: {s['p_c']:{w}}")
             if s["tags"]:
                 lines.append(f"{pad}        tags:")
                 for k, v in s["tags"].items():
