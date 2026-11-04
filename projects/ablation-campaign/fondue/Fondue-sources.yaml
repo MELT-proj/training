@@ -381,6 +381,9 @@ data:
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/nl/train
         tags: {task: asr, lang: nl, text_field: custom.pnc_text, scored: wer, wer_band: c15a05}
       - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas3/nl/train
+        tags: {task: asr, lang: nl, text_field: custom.pnc_text, scored: wer, wer_band: c30a10}
+      - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Dutch/asr_only
         tags: {task: asr, lang: nl, scored: wer, wer_band: c30a10}
       - type: lhotse_shar
@@ -434,6 +437,9 @@ data:
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/voxpopuli/ro/train
         tags: {task: asr, lang: ro, text_field: custom.pnc_text, scored: wer, wer_band: c15a05}
+      - type: lhotse_shar
+        shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas3/ro/train
+        tags: {task: asr, lang: ro, text_field: custom.pnc_text, scored: wer, wer_band: c30a10}
       - type: lhotse_shar
         shar_path: ${oc.env:LOCAL_DATASETS_DIR}/yodas-granary/Romanian/asr_only
         tags: {task: asr, lang: ro, scored: wer, wer_band: c30a10}

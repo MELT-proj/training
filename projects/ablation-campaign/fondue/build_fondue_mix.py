@@ -23,8 +23,8 @@ Quality filters (PI, 11-01), the policy constants below:
 * ST with no per-cut score (Granary ast, CoVoST2, Europarl): constant phase only.
 
 Weights, per phase: the two-tier policy of ``infra/compute_mix_weights.py`` (Canary,
-arXiv:2509.14128 §3.3.1) inside each task, alpha 0.2 within an entry and beta across the
-task's entries (0.5 constant, 0.7 annealing, which cuts the tails' passes), on the hours
+arXiv:2509.14128 §3.3.1) inside each task, alpha 0.5 within an entry and beta 0.5 across the
+task's entries (Canary's values, both phases), on the hours
 that SURVIVE the phase's filters. ASR and ST then split the audio in proportion to those
 surviving hours. Written as cut probabilities. The surviving share of each leaf comes from
 the quality histograms in ``quality/`` (per corpus and language, measured 2026-10-30;
@@ -78,8 +78,10 @@ SOURCES = HERE / "Fondue-sources.yaml"
 RENDERED = {"constant": HERE / "Fondue.yaml", "anneal": HERE / "Fondue-anneal.yaml"}
 QUALITY = HERE / "quality"
 
-ALPHA = 0.2
-BETA = {"constant": 0.5, "anneal": 0.7}  # PI, 11-01: fewer passes over the tails while annealing
+# Canary's values (PI, 11-05). At alpha 0.2 the corpora a filter all but empties were
+# drawn thousands of times; 0.7 while annealing is dropped with it.
+ALPHA = 0.5
+BETA = {"constant": 0.5, "anneal": 0.5}
 DECAY_FRACTION = 5  # the last 1/5 of the steps anneals
 
 # --- quality policy (PI, 11-01) -------------------------------------------------------
@@ -122,8 +124,9 @@ MLS_DIRS = {
     "it": "italian", "nl": "dutch", "pl": "polish", "pt": "portuguese",
 }  # fmt: skip
 VOXPOPULI_LANGS = ("cs", "de", "en", "es", "et", "fi", "fr", "hu", "it", "lt", "nl", "pl", "ro", "sk", "sl")
-# The languages left on MN5 (PI, 11-03); the rest moved off to make room for Mosel.
-YODAS3_LANGS = ("bg", "cs", "hu", "it", "pl", "pt")
+# The languages left on MN5 (PI, 11-03; ro and nl moved back 11-05, Mosel has neither);
+# the rest moved off to make room for Mosel.
+YODAS3_LANGS = ("bg", "cs", "hu", "it", "nl", "pl", "pt", "ro")
 # VoxPopuli-Mosel: pseudo-labelled plenary speech, scored by Parakeet on MN5 (PI, 11-03).
 MOSEL_LANGS = ("bg", "cs", "da", "el", "et", "fi", "hr", "hu", "lt", "lv", "mt", "sk", "sl", "sv")
 GRANARY_DIRS = {
@@ -164,7 +167,7 @@ TRANSLATION_EN = "custom.translation_en"
 EXCLUDED = {
     "voxpopuli/hr/train": "47% of its cuts have no transcript",
     "yodas3/hr/train": "13 cuts (5 minutes), none with pnc_text",
-    "yodas3 (da de el es et fi fr lt lv nl ro sk sl sv)": "moved off MN5 for VoxPopuli-Mosel (PI, 11-03)",
+    "yodas3 (da de el es et fi fr lt lv sk sl sv)": "moved off MN5 for VoxPopuli-Mosel (PI, 11-03)",
     "regional languages (ca, eu, gl, ...)": "only official EU languages, plus uk and ru (PI, 10-30)",
     "SPITE ko/zh": "only SPITE's EU targets and ru (PI, 10-30 and 11-01)",
     "instructs2s200k": "not ASR or ST",
