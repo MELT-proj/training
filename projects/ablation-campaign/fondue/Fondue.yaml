@@ -2914,6 +2914,7 @@ data:
     # The hours Fondue draws over BOTH phases, set by the builder to the hours that
     # survive the constant phase's filters ("train on all the data", PI 11-01).
     total_hours: 516824.4
+    total_cuts: 177779618
     force_estimate: false
 
     min_duration: 0.5

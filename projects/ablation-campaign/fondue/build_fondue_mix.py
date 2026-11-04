@@ -31,7 +31,7 @@ the quality histograms in ``quality/`` (per corpus and language, measured 2026-1
 VoxPopuli-Mosel on MN5, 2026-11-04).
 
 ``total_hours`` is the constant phase's surviving pool, ASR and ST ("train on all the
-data", PI 11-01); the last fifth of the steps anneals.
+data", PI 11-01), and ``total_cuts`` its cuts (the trainer's start-up log needs one); the last fifth of the steps anneals.
 
 MN5 is what Fondue reads; nyx is where this runs. ``mn5_mirror.py`` lays out a datasets
 root and a scores root on nyx that match MN5 (nyx's copies, Yodas3 cut to MN5's languages,
@@ -561,6 +561,8 @@ def cmd_render(args: argparse.Namespace) -> None:
 
     template = SOURCES.read_text().splitlines()
     total_hours = sum(phases["constant"][1].values())
+    # The trainer logs "Num examples" from total_cuts; unset, it is None and the log line raises.
+    total_cuts = sum(s["cuts"] for s in phases["constant"][0])
     max_steps, anneal_step = schedule(
         total_hours,
         template_scalar(template, "batch_duration"),
@@ -578,7 +580,12 @@ def cmd_render(args: argparse.Namespace) -> None:
         out = RENDERED[phase]
         cmw.emit_training_config(sources, SOURCES, out, ALPHA, BETA[phase], exp_name="Fondue", weights="cuts")
         text = out.read_text()
-        text = re.sub(r"(?m)^(\s*total_hours:)\s*[0-9.]+", rf"\1 {total_hours:.1f}", text, count=1)
+        text = re.sub(
+            r"(?m)^(\s*)total_hours:\s*[0-9.]+",
+            rf"\1total_hours: {total_hours:.1f}\n\1total_cuts: {total_cuts}",
+            text,
+            count=1,
+        )
         text = text.replace("        # @@CUT_FILTER_RULES@@", "\n".join(cut_filter_rules(phase, bands)))
         # Pinned here, not by the launcher's formula, which assumes a fill of 1.0.
         text = text.replace("  max_steps: -1", f"  max_steps: {max_steps}").replace(
