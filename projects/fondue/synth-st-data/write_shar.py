@@ -76,6 +76,9 @@ def make_annotator(sidecar: str, stream: str, src_text_field: str, tts: dict | N
                 {"stream": stream, "mt_model": MT_MODEL, "qe_model": QE_MODEL, "prompt_version": PROMPT_VERSION,
                  "src_lang": r0["src_lang"], "src_text_field": src_text_field, "n_entities": r0["n_entities"]}
             )  # fmt: skip
+            if stream == "existing":  # the translation was made elsewhere; only the score is ours
+                s["mt_model"] = "existing"
+                del s["prompt_version"]
             if tts:
                 s["tts"] = tts
 
