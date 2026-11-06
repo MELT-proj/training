@@ -1,0 +1,49 @@
+Bootstrap: docker
+# Same CUDA base as the training image (cu126), so MN5's driver is known-good.
+# vLLM 0.14.1 pins torch 2.9.1 (cu128 wheels run on a cu126-capable driver only
+# if the driver is new enough; the smoke job prints torch.cuda.is_available()).
+From: nvidia/cuda:12.6.1-devel-ubuntu22.04
+
+# Build:  apptainer build --fakeroot synth.sif Singularity.synth.def
+# Models are NOT baked in (EuroLLM, MetricX-24-Hybrid-XXL, mT5 tokenizer are staged under
+# $HF_HOME). Model-independent assets (spaCy en_core_web_lg, GlotLID/fastText
+# lid) are baked into /opt/assets because MN5 has no internet.
+
+%environment
+    export PATH=/opt/venv/bin:$PATH
+    export VIRTUAL_ENV=/opt/venv
+    export SYNTH_ASSETS=/opt/assets
+    export CUDA_HOME=/usr/local/cuda
+
+%post
+    set -eux
+    export PATH=$PATH:/usr/local/bin
+    export UV_INSTALL_DIR=/usr/local/bin
+    export UV_PYTHON_INSTALL_DIR=/usr/local/share/uv/python
+
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        git build-essential curl ca-certificates espeak-ng libsndfile1 ffmpeg \
+        && rm -rf /var/lib/apt/lists/*
+
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    uv python install 3.12.9
+    uv venv /opt/venv --python 3.12.9
+    export VIRTUAL_ENV=/opt/venv PATH=/opt/venv/bin:$PATH
+
+    # vLLM first: it fixes torch/transformers. The rest is installed
+    # against that resolution so they cannot move torch.
+    uv pip install "vllm==0.14.1"
+    uv pip install "lhotse==2.0.0a3" sacrebleu \
+        soundfile torchaudio==2.9.1 spacy fasttext-wheel datasketch \
+        kokoro "misaki[en]" pandas pyarrow matplotlib tyro pytest ruff \
+        huggingface_hub
+    # fail the build if torch or vLLM moved.
+    python -c "import torch,vllm,lhotse,spacy; print(torch.__version__, vllm.__version__)"
+
+    mkdir -p /opt/assets
+    python -m spacy download en_core_web_lg
+    # fastText lid.176 (CC BY-SA 3.0): LID of MT outputs. GlotLID is better for
+    # ga/mt but is staged separately (see README) if its licence/size allow.
+    curl -L -o /opt/assets/lid.176.bin \
+        https://dl.fbaipublicfiles.com/fasttext/supervised-models/lid.176.bin
