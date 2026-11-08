@@ -823,6 +823,7 @@ def _moe_model_with_probe(coef):
     config = _local_melt_config()
     config.adapter_config = MELTAdapterConfig(_type="moe", num_experts=4, num_experts_per_tok=2)
     config.adapter_config.router_aux_loss_coef = coef
+    torch.manual_seed(0)
     model = MELTForCausalLM(config, load_backbones=False)
     model.probe = torch.nn.Parameter(torch.ones(()))
     model.next_aux = 1.0
@@ -856,8 +857,9 @@ def _micro_loss(trainer, model, rank, k, total_tokens, scale_aux=True):
 
     g = torch.Generator().manual_seed(1000 * rank + k)
     input_ids = torch.randint(0, 64, (1, TOKENS_PER_MICRO + 1), generator=g)
-    model.next_aux = 1.0 + rank + 0.5 * k  # distinct aux per (rank, micro-batch)
-    model.aux_loss_scale = trainer._aux_loss_scale(total_tokens) if scale_aux else 1.0
+    inner = trainer.model  # `model` may be the DDP wrapper; the scale lives on the module
+    inner.next_aux = 1.0 + rank + 0.5 * k  # distinct aux per (rank, micro-batch)
+    inner.aux_loss_scale = trainer._aux_loss_scale(total_tokens) if scale_aux else 1.0
     try:
         return Trainer.compute_loss(
             trainer,
@@ -871,7 +873,7 @@ def _micro_loss(trainer, model, rank, k, total_tokens, scale_aux=True):
             num_items_in_batch=total_tokens,
         )
     finally:
-        model.aux_loss_scale = 1.0
+        inner.aux_loss_scale = 1.0
 
 
 def _mean_aux(world, ga):
