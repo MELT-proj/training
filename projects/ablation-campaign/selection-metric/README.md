@@ -4,6 +4,8 @@ One score used to rank checkpoints from the five-language interface screen
 (`plan/01-interface-recipe.md` §3) and the audio-stack crossing
 (`plan/03-audio-stack.md` §2). Defined by the PI on 2026-09-23, before the
 crossing's results, so the ranking cannot be tuned to them. Lower is better.
+Since 2026-11-02 the checkpoints behind an IFT-stage backbone choice are ranked
+by the joint ASR+ST form below, with a lower OOD-related weight.
 
 ## Per-language quantity
 
@@ -43,6 +45,39 @@ score = (1.0 · med(ID) + 1.5 · med(OOD-train) + 0.6 · med(OOD-related)) / 3.1
 
 Always report the three weighted group medians alongside the score, plus the
 medians of the two reported-only groups.
+
+## Default for the IFT-stage backbone choice (2026-11-02)
+
+The backbone choice (`plan/02-backbones.md` §5) ranks checkpoints by a joint
+ASR+ST score. From 2026-11-02 that joint score is the default form of this
+metric:
+
+- **ASR half.** The metric above with the OOD-related weight lowered from 0.6
+  to 0.25 and the weights renormalised:
+
+  ```
+  sel(ASR) = (1.0 · med(ID) + 1.5 · med(OOD-train) + 0.25 · med(OOD-related)) / 2.75
+  ```
+
+  The groups, the clip at 1.0 and the frozen sets are unchanged.
+- **ST half.** `sel(ST) = 1 − med(chrF)/100`, lowercase plain chrF, 100 clips
+  per direction, over the five directions the IFT mix trains: `de, es, fr, it →
+  en` on `fleurs24-st-xen-dev`, grouped by source language, and `en → de` on
+  `fleurs24-st-enx-dev`, grouped by target language. The zero-shot related
+  directions are not scored.
+- **Joint.** `sel(ASR+ST) = (sel(ASR) + sel(ST)) / 2`, lower is better.
+
+`score.py` is unchanged: it prints the group medians, and the 0.25 ASR half is
+recomputed from them without re-scoring any log. The per-direction ST values
+come from `melteval st-metrics --group-by {src_lang,tgt_lang} --lowercase
+--json` on the `--no-score` logs.
+
+Every `sel(ASR)` already recorded for the screen and the crossing is the
+pre-registered 0.6 form above, and remains comparable only with 0.6 scores.
+The 0.25 weight was chosen on 2026-11-02, after all seven backbone arms had
+been scored, so rankings under the joint default are exploratory: report them
+next to the 0.6 ordering, and treat gaps inside the 0.002-0.010 noise band as a
+tie.
 
 ## How it is computed
 

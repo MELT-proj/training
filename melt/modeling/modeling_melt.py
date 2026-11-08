@@ -1280,6 +1280,17 @@ class MELTPreTrainedModel(PreTrainedModel):
     config_class = MELTConfig
     base_model_prefix = "melt"
     _skip_keys_device_placement = ["past_key_values"]
+    # Multiplier on the MoE load-balancing term of the training loss. 1.0 means
+    # `router_aux_loss_coef * aux_loss`, which is right whenever the model is called on
+    # its own. MELTTrainer sets it for the duration of a training step, because the
+    # HF Trainer rescales the model loss in a way that is correct for the
+    # globally-normalised cross-entropy but not for a per-micro-batch mean.
+    aux_loss_scale: float = 1.0
+
+    def _aux_loss_term(self, aux_loss: torch.Tensor) -> torch.Tensor:
+        """The MoE router load-balancing contribution to the loss."""
+        return self.config.adapter_config.router_aux_loss_coef * self.aux_loss_scale * aux_loss
+
     # Lets `--trainer.gradient_checkpointing true` reach the wrapped decoder.
     # HF's _set_gradient_checkpointing walks self.modules() and flips the flag
     # on every submodule that already carries it (the decoder's per-layer
@@ -2027,7 +2038,7 @@ class MELTForCausalLM(MELTPreTrainedModel, GenerationMixin):
                 **kwargs,
             )
             if aux_loss is not None:
-                loss = loss + self.config.adapter_config.router_aux_loss_coef * aux_loss
+                loss = loss + self._aux_loss_term(aux_loss)
 
         if not return_dict:
             output = (logits,) + outputs[1:]
@@ -2470,7 +2481,7 @@ class MELTForSequenceClassification(MELTPreTrainedModel):
         )
 
         if output.loss is not None and aux_loss is not None:
-            output.loss = output.loss + self.config.adapter_config.router_aux_loss_coef * aux_loss
+            output.loss = output.loss + self._aux_loss_term(aux_loss)
 
         # It loss is above 500, print labels and logits for debugging
         if output.loss is not None and output.loss.item() > 500:

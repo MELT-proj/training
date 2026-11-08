@@ -6,7 +6,7 @@ import torch
 
 from transformers.trainer_utils import IntervalStrategy
 
-from melt.modeling import MELTConfig, MELTForCausalLM
+from melt.modeling import MELTAdapterConfig, MELTConfig, MELTForCausalLM
 from melt.training.trainer import (
     MELTTrainer,
     _shutdown_dataloader_workers,
@@ -797,3 +797,216 @@ def test_multi_line_generations_stay_on_one_log_line():
 
     assert _one_line("\n\n</think>\n\nIt seems like you") == "</think> It seems like you"
     assert _one_line("already one line") == "already one line"
+
+
+# ---------------------------------------------------------------------------
+# MoE load-balancing weight under the HF Trainer's loss rescaling
+# ---------------------------------------------------------------------------
+# Trainer.compute_loss multiplies the loss by the number of processes when
+# `average_tokens_across_devices` is on and training_step then skips the division
+# by the accumulation steps. DDP's rank mean cancels the multiplication for the
+# cross-entropy (normalised by the global token count) but not for the aux term,
+# a per-micro-batch mean: it reached the optimizer with weight coef * world * ga.
+
+AUX_COEF = 0.01
+TOKENS_PER_MICRO = 5
+
+
+def _moe_model_with_probe(coef):
+    """Tiny MoE model whose audio side is stubbed to a learnable aux probe.
+
+    `aux = probe * a` for a per-micro-batch constant `a`, so `probe.grad` is the
+    total weight the aux term reaches the optimizer with, times `a`.
+    """
+    from test_modeling_melt import _local_melt_config
+
+    config = _local_melt_config()
+    config.adapter_config = MELTAdapterConfig(_type="moe", num_experts=4, num_experts_per_tok=2)
+    config.adapter_config.router_aux_loss_coef = coef
+    torch.manual_seed(0)
+    model = MELTForCausalLM(config, load_backbones=False)
+    model.probe = torch.nn.Parameter(torch.ones(()))
+    model.next_aux = 1.0
+
+    model._get_audio_embeddings = lambda **kw: (None, None, None, model.probe * model.next_aux)
+    model._merge_embeddings = lambda **kw: (
+        model._get_text_embeddings(input_ids=kw["input_ids"]),
+        kw["attention_mask"],
+        kw["labels"],
+    )
+    return model
+
+
+def _hf_trainer(model, world, ga, **args):
+    """A MELTTrainer shell carrying exactly what Trainer.compute_loss reads."""
+    trainer = _bare_trainer(
+        model=model,
+        args=SimpleNamespace(average_tokens_across_devices=True, n_gpu=1, **args),
+        _world_size=world,
+        # Trainer.compute_loss rescales by accelerator.num_processes; the
+        # attributes below are what newer transformers read on the way.
+        accelerator=SimpleNamespace(num_processes=world, unwrap_model=lambda m: m),
+        is_deepspeed_enabled=False,
+        model_accepts_loss_kwargs=True,
+        compute_loss_func=None,
+        label_smoother=None,
+        current_gradient_accumulation_steps=ga,
+    )
+    return trainer
+
+
+def _micro_loss(trainer, model, rank, k, total_tokens, scale_aux=True):
+    """What Trainer.training_step hands to backward() for one micro-batch."""
+    from transformers import Trainer
+
+    g = torch.Generator().manual_seed(1000 * rank + k)
+    input_ids = torch.randint(0, 64, (1, TOKENS_PER_MICRO + 1), generator=g)
+    inner = trainer.model  # `model` may be the DDP wrapper; the scale lives on the module
+    inner.next_aux = 1.0 + rank + 0.5 * k  # distinct aux per (rank, micro-batch)
+    inner.aux_loss_scale = trainer._aux_loss_scale(total_tokens) if scale_aux else 1.0
+    try:
+        return Trainer.compute_loss(
+            trainer,
+            model,
+            {
+                "input_ids": input_ids,
+                "labels": input_ids.clone(),
+                "input_features": torch.zeros(1, 1),
+                "attention_mask": torch.ones_like(input_ids),
+            },
+            num_items_in_batch=total_tokens,
+        )
+    finally:
+        inner.aux_loss_scale = 1.0
+
+
+def _mean_aux(world, ga):
+    return sum(1.0 + r + 0.5 * k for r in range(world) for k in range(ga)) / (world * ga)
+
+
+def _simulate_step(world, ga, coef, scale_aux=True):
+    """One optimizer step with `world` ranks run in turn, DDP-averaged by hand.
+
+    Returns (probe grad, logged train loss) as the Trainer would see them.
+    """
+    model = _moe_model_with_probe(coef)
+    trainer = _hf_trainer(model, world, ga)
+    total_tokens = world * ga * (TOKENS_PER_MICRO)  # shifted labels: one fewer than input
+    total_tokens = torch.tensor(total_tokens)
+    grads, logged = [], []
+    for rank in range(world):
+        model.zero_grad(set_to_none=True)
+        tr_loss = 0.0
+        for k in range(ga):
+            loss = _micro_loss(trainer, model, rank, k, total_tokens, scale_aux)
+            loss.backward()  # no division by ga: model_accepts_loss_kwargs
+            tr_loss += loss.item()
+        grads.append(model.probe.grad.item())
+        logged.append(tr_loss)
+    return sum(grads) / world, sum(logged) / world
+
+
+@pytest.mark.parametrize("world,ga", [(1, 1), (1, 2), (1, 4), (2, 3), (4, 2)])
+def test_moe_aux_term_weighs_the_configured_coefficient(world, ga):
+    """total objective = CE_mean + coef * mean(aux), whatever the world size and ga."""
+    grad, logged = _simulate_step(world, ga, AUX_COEF)
+    _, logged_ce = _simulate_step(world, ga, 0.0)
+
+    assert grad == pytest.approx(AUX_COEF * _mean_aux(world, ga), rel=1e-5)
+    assert logged == pytest.approx(logged_ce + AUX_COEF * _mean_aux(world, ga), rel=1e-5)
+
+
+@pytest.mark.parametrize("world,ga", [(2, 3), (4, 2)])
+def test_moe_aux_term_is_overweighted_without_the_scale(world, ga):
+    """The behaviour before the fix: coef * world * ga times the intended weight."""
+    grad, logged = _simulate_step(world, ga, AUX_COEF, scale_aux=False)
+    _, logged_ce = _simulate_step(world, ga, 0.0, scale_aux=False)
+
+    assert grad == pytest.approx(AUX_COEF * world * ga * _mean_aux(world, ga), rel=1e-5)
+    assert logged == pytest.approx(logged_ce + AUX_COEF * world * ga * _mean_aux(world, ga), rel=1e-5)
+
+
+def test_moe_aux_scale_is_identity_for_a_single_process_without_accumulation():
+    model = _moe_model_with_probe(AUX_COEF)
+    assert _hf_trainer(model, 1, 1)._aux_loss_scale(torch.tensor(10)) == 1.0
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"average_tokens_across_devices": False},
+        {"model_accepts_loss_kwargs": False},
+        {"num_items_in_batch": None},
+    ],
+)
+def test_moe_aux_scale_is_one_where_hf_divides_by_accumulation_itself(overrides):
+    """No token count / no x-world rescaling: HF's own 1/ga is already right."""
+    model = _moe_model_with_probe(AUX_COEF)
+    trainer = _hf_trainer(model, 8, 4)
+    num_items = overrides.pop("num_items_in_batch", torch.tensor(10))
+    if "average_tokens_across_devices" in overrides:
+        trainer.args.average_tokens_across_devices = False
+    if "model_accepts_loss_kwargs" in overrides:
+        trainer.model_accepts_loss_kwargs = False
+
+    assert trainer._aux_loss_scale(num_items) == 1.0
+
+
+def test_moe_aux_scale_is_world_times_accumulation_when_hf_rescales():
+    model = _moe_model_with_probe(AUX_COEF)
+    assert _hf_trainer(model, 64, 16)._aux_loss_scale(torch.tensor(10)) == pytest.approx(1 / 1024)
+
+
+def test_evaluation_loss_ignores_the_training_scale():
+    """The scale is only live inside training_step: eval keeps coef * aux."""
+    model = _moe_model_with_probe(AUX_COEF)
+    assert model.aux_loss_scale == 1.0
+    ids = torch.randint(0, 64, (1, 6))
+    kwargs = {"input_ids": ids, "labels": ids.clone(), "input_features": torch.zeros(1, 1)}
+    model.next_aux = 3.0
+    with_aux = model(**kwargs).loss
+    model.config.adapter_config.router_aux_loss_coef = 0.0
+    assert (with_aux - model(**kwargs).loss).item() == pytest.approx(AUX_COEF * 3.0, rel=1e-5)
+
+
+def _gloo_worker(rank, world, ga, port, queue):
+    import os
+
+    import torch.distributed as dist
+
+    os.environ.update(MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port))
+    dist.init_process_group("gloo", rank=rank, world_size=world)
+    try:
+        model = _moe_model_with_probe(AUX_COEF)
+        trainer = _hf_trainer(model, world, ga)
+        ddp = torch.nn.parallel.DistributedDataParallel(model, find_unused_parameters=True)
+        total_tokens = torch.tensor(world * ga * TOKENS_PER_MICRO)
+        for k in range(ga):
+            _micro_loss(trainer, ddp, rank, k, total_tokens).backward()
+        queue.put((rank, model.probe.grad.item()))
+    finally:
+        dist.destroy_process_group()
+
+
+def test_moe_aux_weight_survives_real_ddp_gradient_averaging():
+    """Two gloo processes with accumulation: DDP's rank mean, not a hand-made one."""
+    import socket
+
+    import torch.multiprocessing as mp
+
+    world, ga = 2, 3
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    ctx = mp.get_context("spawn")
+    queue = ctx.Queue()
+    procs = [ctx.Process(target=_gloo_worker, args=(r, world, ga, port, queue)) for r in range(world)]
+    for p in procs:
+        p.start()
+    grads = dict(queue.get(timeout=300) for _ in procs)
+    for p in procs:
+        p.join(timeout=60)
+
+    expected = AUX_COEF * _mean_aux(world, ga)
+    assert grads[0] == pytest.approx(expected, rel=1e-5)
+    assert grads[1] == pytest.approx(expected, rel=1e-5)
