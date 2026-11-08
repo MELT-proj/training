@@ -1532,6 +1532,7 @@ class MELTTrainer(Seq2SeqTrainer):
             self._run_preallocation(model)
             self._preallocation_done = True
 
+        self.model.aux_loss_scale = self._aux_loss_scale(num_items_in_batch)
         try:
             loss = super().training_step(model, inputs, num_items_in_batch)
         except torch.OutOfMemoryError:
@@ -1540,11 +1541,40 @@ class MELTTrainer(Seq2SeqTrainer):
                 self._dump_memory_snapshot()
             raise
         finally:
+            self.model.aux_loss_scale = 1.0
             if profiler is not None:
                 profiler.end_micro()
 
         self._accumulate_router_stats()
         return loss
+
+    def _aux_loss_scale(self, num_items_in_batch) -> float:
+        """Factor that makes the MoE aux term weigh ``router_aux_loss_coef`` in the objective.
+
+        HF normalises the cross-entropy by the token count of the whole optimizer
+        step (all ranks, all micro-batches). With ``average_tokens_across_devices``
+        it then multiplies the loss by the number of processes and skips the division
+        by the accumulation steps; DDP's mean over ranks undoes the multiplication for
+        the cross-entropy. The aux term is a per-micro-batch mean, so it would be left
+        with weight ``coef * world * accum``; scaling it by ``1 / (world * accum)``
+        inside the model loss restores ``coef``. On the other path (no token count, or
+        no cross-entropy rescaling) HF divides the loss by ``accum`` itself.
+        """
+        if not (
+            self.args.average_tokens_across_devices
+            and self.model_accepts_loss_kwargs
+            and self.compute_loss_func is None
+            and num_items_in_batch is not None
+        ):
+            return 1.0
+        # Mirrors Trainer.compute_loss, which multiplies by n_gpu under DataParallel.
+        multiplier = self.accelerator.num_processes
+        parallelism_config = getattr(self.accelerator, "parallelism_config", None)
+        if parallelism_config is not None:
+            multiplier //= parallelism_config.tp_size
+        if self.args.n_gpu > 1:
+            multiplier = self.args.n_gpu
+        return 1.0 / (multiplier * self.current_gradient_accumulation_steps)
 
     def get_batch_samples(self, epoch_iterator, num_batches, device):
         """Mark the dataloader wait of each optimizer step when ``run.step_profile`` is on."""
