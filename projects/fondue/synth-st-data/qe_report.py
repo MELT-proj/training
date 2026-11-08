@@ -29,11 +29,14 @@ def stream_of(unit: str) -> str:
 def main(
     synth: str = "/mnt/scratch-nyx/giuseppe/synth",
     out_dir: str = "/mnt/scratch-nyx/giuseppe/synth/reports/qe",
+    keep: float = 0.75,
+    mt_rt_keep: float = 0.0,
 ) -> None:
     os.makedirs(out_dir, exist_ok=True)
     outs = {"A": "out-a", "B": "out-b", "C": "out-c", "D": "out-d", "E": "out-e"}
     vals: dict[tuple, list] = defaultdict(list)
     dur: dict[tuple, float] = defaultdict(float)
+    rts: dict[tuple, list] = defaultdict(list)
     extra: dict[tuple, list] = defaultdict(lambda: [0, 0, 0])  # n, lid mismatch, len_ratio outside [0.5, 2]
     for pool in sorted(glob.glob(f"{synth}/units/*.pool.jsonl")):
         unit = os.path.basename(pool)[: -len(".pool.jsonl")]
@@ -51,6 +54,8 @@ def main(
                 key = (s, r["src_lang"], r["tgt"])
                 vals[key].append(r["metricx_xxl"])
                 dur[key] += seg[r["id"]]
+                if "rt_chrf" in r:
+                    rts[key].append(r["rt_chrf"])
                 e = extra[key]
                 e[0] += 1
                 e[1] += r["lid"] != r["tgt"]
@@ -69,6 +74,15 @@ def main(
         hist.append(
             {"stream": key[0], "src": key[1], "tgt": key[2], **{f"{b:.1f}": int(c) for b, c in zip(BINS[:-1], h)}}
         )
+    thr = []
+    for key in sorted(vals):
+        a = np.array(vals[key])
+        row = {"stream": key[0], "src": key[1], "tgt": key[2], "keep": keep, "metricx_max": round(float(np.quantile(a, keep)), 4),
+               "pairs_kept": int((a <= np.quantile(a, keep)).sum()), "hours_kept": round(dur[key] / 3600 * keep, 1)}  # fmt: skip
+        if rts[key] and mt_rt_keep:  # Maltese: the round-trip chrF is the second criterion
+            row["rt_chrf_min"] = round(float(np.quantile(rts[key], 1 - mt_rt_keep)), 4)
+        thr.append(row)
+    pd.DataFrame(thr).to_csv(f"{out_dir}/thresholds_keep{int(keep * 100)}.csv", index=False)
     pd.DataFrame(rows).to_csv(f"{out_dir}/quantiles.csv", index=False)
     pd.DataFrame(hist).to_csv(f"{out_dir}/histograms.csv", index=False)
     plot(vals, out_dir)
