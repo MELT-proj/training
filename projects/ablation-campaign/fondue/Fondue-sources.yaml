@@ -55,6 +55,9 @@ model:
     _type: moe
     freeze: false
     stack_factor: 5 # 50 Hz Whisper frames -> 10 Hz into the decoder (PI, 2026-10-30)
+    # PI, 11-08: the documented weight, which PR #171 makes the real one. Before it the
+    # Trainer's rescaling made it coef x 64 GPUs x ga 16 = 10.24 for Fondue.
+    router_aux_loss_coef: 0.01
 
   ckpt: null # from the Hub: no MA stage
 
@@ -748,6 +751,10 @@ data:
     seed: 1337
     shard_seed: 1337
     num_workers: 1
+    # Workers record their resume position every 16 batches, not every one: each record
+    # re-checks the whole source graph per buffered cut, 90% of a worker's CPU at 1
+    # (30 s/step on 11-07/08). Resume stays exact: torchdata replays the batches since.
+    snapshot_every_n_steps: 16
     pin_memory: true
     prefetch_factor: 32
     sample_rate: 16000
