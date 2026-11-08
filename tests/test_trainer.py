@@ -842,7 +842,11 @@ def _hf_trainer(model, world, ga, **args):
     trainer = _bare_trainer(
         model=model,
         args=SimpleNamespace(average_tokens_across_devices=True, n_gpu=1, **args),
+        _world_size=world,
+        # Trainer.compute_loss rescales by accelerator.num_processes; the
+        # attributes below are what newer transformers read on the way.
         accelerator=SimpleNamespace(num_processes=world, unwrap_model=lambda m: m),
+        is_deepspeed_enabled=False,
         model_accepts_loss_kwargs=True,
         compute_loss_func=None,
         label_smoother=None,

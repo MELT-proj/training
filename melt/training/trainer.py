@@ -1567,13 +1567,10 @@ class MELTTrainer(Seq2SeqTrainer):
             and num_items_in_batch is not None
         ):
             return 1.0
-        # Mirrors Trainer.compute_loss, which multiplies by n_gpu under DataParallel.
-        multiplier = self.accelerator.num_processes
-        parallelism_config = getattr(self.accelerator, "parallelism_config", None)
-        if parallelism_config is not None:
-            multiplier //= parallelism_config.tp_size
-        if self.args.n_gpu > 1:
-            multiplier = self.args.n_gpu
+        # The factor Trainer.compute_loss multiplies by: the process count (from our
+        # own ddp helpers, so no accelerate or tensor-parallel API is involved), or
+        # n_gpu under DataParallel.
+        multiplier = self.args.n_gpu if self.args.n_gpu > 1 else self._world_size
         return 1.0 / (multiplier * self.current_gradient_accumulation_steps)
 
     def get_batch_samples(self, epoch_iterator, num_batches, device):
