@@ -2089,10 +2089,12 @@ data:
     seed: 1338
     shard_seed: 1338
     num_workers: 1
-    # Workers record their resume position every 16 batches, not every one: each record
-    # re-checks the whole source graph per buffered cut, 90% of a worker's CPU at 1
-    # (30 s/step on 11-07/08). Resume stays exact: torchdata replays the batches since.
-    snapshot_every_n_steps: 16
+    # Each resume-position record re-checks the whole source graph per buffered cut: at 1,
+    # 90% of a worker's CPU (30 s/step, 11-07/08). torchdata records any batch within
+    # num_workers x prefetch_factor + num_workers + 1 = 34 of the interval's end, so 16
+    # still recorded every batch (31 s/step, MoE smokes 11-08); 512 records ~7% (~5 s/step).
+    # Resume stays exact: it replays up to 512 batches (~32 steps) since the last record.
+    snapshot_every_n_steps: 512
     pin_memory: true
     prefetch_factor: 32
     sample_rate: 16000
