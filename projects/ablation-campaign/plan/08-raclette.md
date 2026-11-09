@@ -287,6 +287,27 @@ A diverged x4 is a result, not an incident: I record it and cancel to save GPU-h
 
 Earliest read ~11-15; with the §0 queue estimate for D = 11-11, a read in 11-17 to 11-20 is plausible.
 
+## 9a. Smoke results (2026-11-09, `acc_debug`, 2 nodes x ga16, 40 steps, frozen clone `~/training-raclette` @ 608fb9d)
+
+x1 (job 48800465) and x4 (48801761), same seed and data. All measured.
+
+| check | result |
+|---|---|
+| per-group LRs | x1 `Optimizer group:` lines 2e-4 / 6e-6 / 2e-5 (adapter / encoder / decoder); x4 8e-4 / 2.4e-5 / 8e-5. The logged `learning_rate` is the adapter's: 2e-4 and 8e-4 at peak, reached at step 5 (warmup 4), 1.74e-4 / 6.9e-4 and 2.7e-5 / 1.07e-4 in the 8-step decay |
+| same batches | `train_hours/*` identical in the 8 logged steps of x1 and x4; audio per step identical |
+| step time | 4.4-6.0 s/step in 5-step windows, mean ~5.1 (x1 and x4 alike), at 2 nodes, ga16; the closing tqdm averages (6.4 and 37.5 s/it) include the first step and are not rates |
+| start-up | ~36 min from job start to the first step (dataloader build with the cut filter, then the preallocation passes) |
+| memory | the preallocation pass peaks at 31.1 GB (rank 0); the training-step peak is not in `perf.jsonl` (no `gpu_peak` key), so the earlier figure for Fondue (54 of 63 GB) stands unchecked |
+| `save_only_model` | `checkpoint-20` holds `model.safetensors` (9.66 GB), config, generation config, sampler state, trainer state: no optimizer, scheduler or RNG files. The run root has the processor and tokenizer files, as expected |
+| turn end | token id 4 is `<|im_end|>` (EuroLLM tokenizer) and is the `eos_token_id` of the saved `generation_config.json`. Hypotheses after 40 steps are not informative about stopping (one repeats to the cap, two end); the first scored arm checkpoint settles it |
+| final step | a run's last checkpoint is written only after the final in-trainer eval (x1's 40 min wall died in that eval, x4 with 1.5 h finished); real arms have 36 h |
+
+**Consequence for the estimates.** 5.1 s/step at ga16 is faster than the 8.55 s of the IB profile
+that §6 used (a ~0.8 s fixed part plus ~0.27 s per micro-batch fits both smokes). Derived, not measured at 4 nodes:
+ga64 ~19 s/step, so ~18 h per arm plus ~36 min start-up, ~19 h in all against the 36 h wall, and
+~330 GPU-h per arm (16 GPUs). The §6 table's s/step and wall rows are the pessimistic side.
+The two smokes cost about 11 GPU-h (estimate).
+
 ## 10. Questions for the PI
 
 Recommendation first in each.
