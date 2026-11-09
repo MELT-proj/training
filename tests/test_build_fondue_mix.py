@@ -152,3 +152,68 @@ def test_every_mosel_language_has_a_leaf_and_a_histogram():
         assert "text_field" not in e["tags"], "Mosel trains on its supervision text"
         survival.share(e, "constant")
     assert not survival.unknown
+
+
+# --- Raclette LR pilot (projects/ablation-campaign/raclette, plan/08-raclette.md) ---
+
+sys.path.insert(0, str(REPO_ROOT / "projects" / "ablation-campaign" / "raclette"))
+
+import render_raclette_configs as rrc  # noqa: E402
+
+FONDUE_YAML = REPO_ROOT / "projects" / "ablation-campaign" / "fondue" / "Fondue.yaml"
+
+
+def _raclette(arm: str, nodes: int = 4) -> str:
+    return rrc.render(FONDUE_YAML.read_text(), arm, nodes)
+
+
+def _val(text: str, key: str) -> str:
+    import re
+
+    return re.search(rf"^\s*{key}: ([^\s#]+)", text, flags=re.M).group(1)
+
+
+@pytest.mark.parametrize("arm", list(rrc.ARMS))
+def test_raclette_lrs_are_fondues_times_the_multiplier(arm):
+    text = _raclette(arm)
+    _, mult, _ = rrc.ARMS[arm]
+    got = [float(_val(text, k)) for k in ("encoder_lr", "adapter_lr", "decoder_lr")]
+    assert got == pytest.approx([v * mult for v in rrc.FONDUE_LRS], rel=1e-9)
+
+
+def test_raclette_x1_matches_the_lrs_in_fondue_itself():
+    base = FONDUE_YAML.read_text()
+    assert [float(_val(base, k)) for k in ("encoder_lr", "adapter_lr", "decoder_lr")] == list(rrc.FONDUE_LRS)
+
+
+def test_raclette_schedule_sits_on_the_read_grid():
+    text = _raclette("x1")
+    assert (_val(text, "max_steps"), _val(text, "num_decay_steps"), _val(text, "warmup_steps")) == ("3360", "672", "336")
+    assert (3360 - 672) % rrc.READ_EVERY == 0 and 3360 % (rrc.READ_EVERY // 2) == 0
+    assert _val(text, "save_steps") == _val(text, "eval_steps") == "1344"
+    assert "\n  stop_after_step:" not in text and _val(text, "save_only_model") == "true"
+    assert 25_000 < rrc.hours_drawn() < 25_300
+
+
+@pytest.mark.parametrize("nodes,ga", [(16, 16), (8, 32), (4, 64)])
+def test_raclette_keeps_1024_micro_batches_per_step(nodes, ga):
+    assert rrc.grad_accum(nodes) == ga
+    assert f"gradient_accumulation_steps: {ga}\n" in _raclette("x1", nodes)
+    assert nodes * rrc.GPUS_PER_NODE * ga == 1024
+
+
+def test_raclette_snapshot_interval_is_clear_of_the_data_loader_stall():
+    # torchdata snapshots about nw*pf + nw + 1 = 34 of every `interval` batches (nw 1, pf 32).
+    assert rrc.SNAPSHOT_EVERY > 34 and "snapshot_every_n_steps: 512\n" in _raclette("x1")
+
+
+def test_raclette_replicate_changes_only_the_init_seed():
+    a, b = _raclette("x1"), _raclette("x1-s43")
+    diff = [(x, y) for x, y in zip(a.splitlines(), b.splitlines()) if x != y and not x.startswith("#")]
+    assert {x.split(":")[0].strip() for x, _ in diff} == {"seed", "exp_name"}
+
+
+def test_raclette_render_fails_loudly_on_a_drifted_base():
+    drifted = FONDUE_YAML.read_text().replace("  save_steps: 1000\n", "  save_steps: 1001\n")
+    with pytest.raises(SystemExit):
+        rrc.render(drifted, "x1")

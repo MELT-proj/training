@@ -15,6 +15,18 @@ Action needed: who should do what, or "none".
 
 ---
 
+## 2026-11-09 — Claude (Raclette planning session) — Raclette cannot rescue a wrong LR in time; a config LR change is ignored on resume; acc_ehpc waits are days
+Context: planning Raclette now that Fondue no longer waits for it (`08-raclette.md`). Stage 1 only, no GPU spend.
+Finding:
+1. **LR change on resume does not work.** Toy test on CPU, transformers 5.16.1, AdamW + warmup_stable_decay: after `load_state_dict` the optimizer `lr`/`initial_lr` and scheduler `base_lrs` are the saved ones, the new config values are discarded. Fondue's later jobs and the anneal inherit 6e-6 / 2e-4 / 2e-5. Changing it needs an offline patch of a checkpoint copy and replacement chain jobs. Untested on a real checkpoint.
+2. **Queue (MN5, 11-09 07:36 CET, via alogin2; the `mn5` alias target is dead).** Fondue 48754959 is pending 16 h, priority 68,759, no start estimate. All 14 MoE jobs are already queued (66,790). `sbatch --test-only` puts a new job of 1/2/4/8/16 nodes at 11-17 18:55. Measured waits: the two 16-node Fondue jobs of 11-05 waited 26 h and 61 h; this user's `acc_ehpc` jobs since 10-01: median 8.0 h (2-4 nodes, n=40), 15.5 h (8-32 nodes, n=4, max 61 h).
+3. **Consequence.** With waits of 1-2.5 days, Fondue's chain gaps alone can push its end to 11-23 (median gaps, started 11-11) or past 11-29 (started 11-17, worst gaps). A full restart after any Raclette read is not realistic; a plateau LR change would need the read by ~11-13. The plan's realistic outputs: the paper, and possibly the anneal's peak LR.
+4. The brief's "last submission 11-25" cannot cover a full-length Fondue restart (6.4 d of steps alone); it fits only a single short job.
+5. Logged `learning_rate` is the adapter group only; checkpoints cost 28 GB with optimizer, 9.7 GB without; `epor48` scratch 17.82 of 19.53 TB.
+Action needed: PI answers the ten questions in `08-raclette.md` §10; someone decides whether Fondue's queue risk needs action (it is outside Raclette).
+
+---
+
 ## 2026-10-31 — Claude (step-profiling session) — Fondue step, decomposed: the fixed cost is a gradient all-reduce running on TCP sockets; socket tuning alone takes ga20 from 13.05 to 11.04 s/step. The 10-24 Fondue scaling table is superseded.
 Context: PI/orchestrator asked where the Fondue training step goes and what would make it faster, and for the grad_accum fit first because Raclette must run at Fondue's global batch (fixed Mon 11-02). Instruments are new, off by default: `run.step_profile` (phase marks at every boundary of the step, gradient-hook marks for the backward phases, torch.profiler windows) in `melt/training/step_profile.py`, plus `scaling-bench/profile/` (job driver, analysis script, isolated lever benchmark, raw data). All measurements: 2 nodes (8 H100), `master_dtype float32`, everything trainable, `stack_factor 5` (PI-confirmed 10 Hz), bd 15, gradient checkpointing ON, DDP, flash attention 2, loss/grad_norm finite on every retained step. 31.1 GPU-h used of 40; 7.2 of that went to six runs that failed (five out of memory, one my own bug).
 

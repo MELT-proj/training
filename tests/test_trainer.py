@@ -1010,3 +1010,10 @@ def test_moe_aux_weight_survives_real_ddp_gradient_averaging():
     expected = AUX_COEF * _mean_aux(world, ga)
     assert grads[0] == pytest.approx(expected, rel=1e-5)
     assert grads[1] == pytest.approx(expected, rel=1e-5)
+
+
+@pytest.mark.parametrize("world,ga", [(64, 16), (32, 32), (16, 64)])
+def test_moe_aux_scale_is_the_same_for_every_shape_of_1024_micro_batches(world, ga):
+    """Raclette runs 1,024 micro-batches per step on 16, 8 or 4 nodes: the aux weight must not move."""
+    model = _moe_model_with_probe(AUX_COEF)
+    assert _hf_trainer(model, world, ga)._aux_loss_scale(torch.tensor(10)) == pytest.approx(1 / 1024)
