@@ -4,7 +4,7 @@
 # acc_ehpc, 36 h wall. Run from the frozen clone ~/training-raclette; never touch it while jobs read it.
 #
 #   submit_raclette_mn5.sh plan                       print the arms, submit nothing
-#   [SMOKE_EXTRA="--a.b c"] submit_raclette_mn5.sh smoke <arm>   one acc_debug job (2 nodes, 40 steps)
+#   [SMOKE_EXTRA="--a.b c"] submit_raclette_mn5.sh smoke <arm>   one acc_debug job (2 nodes, 40 steps, 1.5 h wall: start-up took 36 min and the final eval ~10 min)
 #   submit_raclette_mn5.sh submit --go [--arms "x1 x2"] [--after JOBID] [--nice N]
 #
 # `submit` needs --go (the PI's go). --after (default $FONDUE_JOB, 48754959) adds
@@ -73,7 +73,7 @@ smoke)
     mkdir -p "$CONFIGS"
     python3 "${HERE}/render_raclette_configs.py" --base projects/ablation-campaign/fondue/Fondue.yaml --out-dir "$CONFIGS" --nodes 4 >/dev/null
     tag="Raclette-smoke-${SMOKE_ARM}${SMOKE_TAG:-}"
-    id=$(AFTER="" launch "$SMOKE_ARM" acc_debug 00:40:00 \
+    id=$(AFTER="" launch "$SMOKE_ARM" acc_debug "${SMOKE_WALL:-01:30:00}" \
         --run.perf_logging true --trainer.max_steps 40 --trainer.warmup_steps 4 \
         --trainer.lr_scheduler_kwargs.num_decay_steps 8 --trainer.gradient_accumulation_steps 16 \
         --trainer.save_steps 20 --trainer.eval_steps 100000 ${SMOKE_EXTRA:-} \
