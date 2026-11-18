@@ -52,7 +52,7 @@ VoxPopuli-Mosel from ``mosel_stats.py`` run on MN5 and its score arrays copied o
         --datasets-root <mirror>/shar --cache <mirror>/mix_weights_hours.json
 
     # 3. SpeechBlocks-Synth-v1 into the annealing config (reads the rendered Fondue-anneal.yaml; no cache, no data;
-    #    quality/speechblocks_synth_v1.json comes from projects/fondue/synth-st-data/make_mix_spec.py)
+    #    quality/speechblocks_synth_v1.json comes from data-utils/synth_st/make_mix_spec.py in MELT-proj/preprocessing)
     python3 projects/ablation-campaign/fondue/build_fondue_mix.py synth
 """
 
@@ -651,7 +651,7 @@ def cmd_render(args: argparse.Namespace) -> None:
 
 # --- SpeechBlocks-Synth-v1 ------------------------------------------------------------------
 #
-# The annealing config plus the synthetic collection (infra of projects/fondue/synth-st-data), as a pass over the
+# The annealing config plus the synthetic collection (MELT-proj/preprocessing, data-utils/synth_st), as a pass over the
 # rendered text: the deployed mixture is not re-derived, so it cannot drift. Every existing group keeps its share of
 # the audio relative to the others (all of them scaled down together); the collection's ST leaves enter as new groups,
 # weighted by the same alpha/beta over their own hours; its noisy copies of the native tail swap into the language group
@@ -1026,7 +1026,11 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
     y = sub.add_parser("synth", help="add SpeechBlocks-Synth-v1 to the annealing config (reads the rendered text)")
-    y.add_argument("--spec", default=str(SYNTH_SPEC), help="the leaf spec made by synth-st-data/make_mix_spec.py")
+    y.add_argument(
+        "--spec",
+        default=str(SYNTH_SPEC),
+        help="the leaf spec made by data-utils/synth_st/make_mix_spec.py in MELT-proj/preprocessing",
+    )
     y.add_argument("--base", default=str(RENDERED["anneal"]))
     y.add_argument("--out", default=str(SYNTH_OUT))
     y.add_argument("--root", default=SYNTH_ROOT, help="where the collection's Shar dirs are on the training host")
