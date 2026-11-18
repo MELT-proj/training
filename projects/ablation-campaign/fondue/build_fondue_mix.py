@@ -50,6 +50,10 @@ VoxPopuli-Mosel from ``mosel_stats.py`` run on MN5 and its score arrays copied o
     # 2. filter, weight, write both configs (hours from the mirror's cache)
     python3 projects/ablation-campaign/fondue/build_fondue_mix.py render \\
         --datasets-root <mirror>/shar --cache <mirror>/mix_weights_hours.json
+
+    # 3. SpeechBlocks-Synth-v1 into the annealing config (reads the rendered Fondue-anneal.yaml; no cache, no data;
+    #    quality/speechblocks_synth_v1.json comes from data-utils/synth_st/make_mix_spec.py in MELT-proj/preprocessing)
+    python3 projects/ablation-campaign/fondue/build_fondue_mix.py synth
 """
 
 from __future__ import annotations
@@ -645,9 +649,400 @@ def cmd_render(args: argparse.Namespace) -> None:
         print("Leaves with no quality histogram (kept whole):\n  " + "\n  ".join(sorted(survival.unknown)))
 
 
+# --- SpeechBlocks-Synth-v1 ------------------------------------------------------------------
+#
+# The annealing config plus the synthetic collection (MELT-proj/preprocessing, data-utils/synth_st), as a pass over the
+# rendered text: the deployed mixture is not re-derived, so it cannot drift. Every existing group keeps its share of
+# the audio relative to the others (all of them scaled down together); the collection's ST leaves enter as new groups,
+# weighted by the same alpha/beta over their own hours; its noisy copies of the native tail swap into the language group
+# they copy, which keeps its audio share (its weight counts cuts and the copies' cuts are shorter, so the weight grows).
+# Needs no hours cache: it reads the numbers the renderer printed into the config.
+
+SYNTH_SPEC = QUALITY / "speechblocks_synth_v1.json"
+SYNTH_ROOT = "/gpfs/scratch/epor48/synth/shar-indexed"  # MN5 scratch; /gpfs resolves as is inside the container
+SYNTH_OUT = HERE / "Fondue-anneal-synth.yaml"
+# A snapshot walks the whole source graph once per buffered cut, so 1,065 leaves instead of 160 make each one ~6x dearer
+# (nyx, one worker, world size 64: 6.5 s a snapshotted batch at 905 leaves against 1.0 s at 150; 34 batches per window).
+# Every 512 batches that is ~4 minutes of stall in ~4.5; every 8192, ~6% of the run. A resume replays up to this many batches.
+SYNTH_SNAPSHOT_EVERY = 8192
+# What each `synth_stream` tag stands for, printed into the config (the tags and rule names keep the letters).
+SYNTH_STREAMS = {
+    "A": "English speech into 18 languages (ST)",
+    "B": "FLEURS read speech of the 18 low-resource languages into en/de/fr/es/it (ST)",
+    "C": "native speech of the low-resource languages into other languages (ST)",
+    "D": "existing ST data (Granary X->en, CoVoST2 en->et/lv/sl/sv), now MetricX-scored (ST)",
+    "E": "synthetic (TTS) English speech into 18 languages (ST)",
+    "F": "noisy copies of A, C and E (ST, tagged with their source's letter) and of the native tail (ASR, tagged F)",
+}
+
+GROUP_NOTE = re.compile(
+    r"^(?P<pad> *)# (?P<key>\S+): (?P<hours>[\d,]+\.\d) h across (?P<n>\d+) corpora -- "
+    r"(?P<cuts>[\d.]+)% of the cuts, (?P<audio>[\d.]+)% of the audio$"
+)
+LEAF_NOTE = re.compile(
+    r"^(?P<pad> *)# (?P<hours>[\d,]+\.\d) h, mean cut (?P<mean>[\d.]+) s, (?P<audio>[\d.]+)% of the audio$"
+)
+WEIGHT_LINE = re.compile(r"^(?P<pad> *)weight: (?P<w>[0-9.]+)$")
+
+
+def parse_mix(lines: list[str], start: int, end: int) -> list[dict]:
+    """The language groups of ``train_ds.input_cfg``, as ``compute_mix_weights.build_group_block`` writes them.
+
+    Anything else is an error, so a change of the renderer cannot be mis-read into a wrong edit.
+    """
+    heads = [i for i in range(start + 1, end) if GROUP_NOTE.match(lines[i])]
+    if not heads:
+        raise ValueError("no language group found in train_ds.input_cfg")
+    groups = []
+    for k, head in enumerate(heads):
+        stop = heads[k + 1] if k + 1 < len(heads) else end
+        note = GROUP_NOTE.match(lines[head])
+        pad = len(note["pad"])
+        space = " " * pad
+        if lines[head + 1] != f"{space}- type: group":
+            raise ValueError(f"line {head + 2}: expected '- type: group' under the group note")
+        weight = WEIGHT_LINE.match(lines[head + 2])
+        if not weight or len(weight["pad"]) != pad + 2:
+            raise ValueError(f"line {head + 3}: expected the group's weight")
+        tags: dict[str, str] = {}
+        i = head + 3
+        if lines[i].strip() == "tags:":
+            i += 1
+            while len(lines[i]) - len(lines[i].lstrip()) > pad + 2:
+                key, value = lines[i].strip().split(": ", 1)
+                tags[key] = value
+                i += 1
+        if lines[i] != f"{space}  input_cfg:":
+            raise ValueError(f"line {i + 1}: expected the group's input_cfg")
+        leaf_space = " " * (pad + 4)
+        firsts = [j for j in range(i + 1, stop) if lines[j] == f"{leaf_space}- type: lhotse_shar"]
+        leaves = []
+        for n, first in enumerate(firsts):
+            last = firsts[n + 1] if n + 1 < len(firsts) else stop
+            leaf: dict = {"start": first}
+            for j in range(first, last):
+                w = WEIGHT_LINE.match(lines[j])
+                if w and len(w["pad"]) == pad + 6 and "weight_line" not in leaf:
+                    leaf["weight_line"], leaf["w"] = j, float(w["w"])
+                m = LEAF_NOTE.match(lines[j])
+                if m and len(m["pad"]) == pad + 6:
+                    leaf["note_line"] = j
+                    leaf["hours"], leaf["mean"] = float(m["hours"].replace(",", "")), float(m["mean"])
+            if "weight_line" not in leaf or "note_line" not in leaf:
+                raise ValueError(f"line {first + 1}: a leaf without a weight or a hours note")
+            leaves.append(leaf)
+        if not leaves:
+            raise ValueError(f"line {head + 1}: group {note['key']} has no leaves")
+        lang_key = tags["lang"] if tags.get("task") == "asr" else f"{tags.get('src_lang')}-{tags.get('tgt_lang')}"
+        groups.append(
+            {
+                "head": head, "stop": stop, "pad": pad, "key": lang_key, "tags": tags, "leaves": leaves,
+                "hours": float(note["hours"].replace(",", "")), "n": int(note["n"]),
+                "weight_line": head + 2, "w": float(weight["w"]),
+            }
+        )  # fmt: skip
+    return groups
+
+
+def synth_sources(spec: dict, root: str) -> list[dict]:
+    """The spec's ST leaves as the sources ``compute_mix_weights`` weighs: kept hours and cuts, tagged like SPITE's."""
+    out = []
+    for leaf in spec["st_leaves"]:
+        src, tgt = leaf["src"], leaf["tgt"]
+        path = f"{root}/{leaf['name']}/train"
+        tags = {
+            "task": "st", "src_lang": src, "tgt_lang": tgt, "text_field": f"custom.translation_{tgt}",
+            "scored": "synth", "synth_stream": leaf["stream"], "src_region_code": src, "tgt_region_code": tgt,
+        }  # fmt: skip
+        out.append(
+            {
+                "path": path, "raw_path": path, "task": "st", "lang_key": f"{src}-{tgt}", "tags": tags,
+                "hours": leaf["kept_s"] / 3600, "cuts": leaf["kept_pairs"], "group": leaf["group"],
+            }
+        )  # fmt: skip
+    return out
+
+
+def synth_rules(spec: dict) -> list[str]:
+    """One ``field`` rule per (stream, src, tgt): MetricX at most the direction's bound. A cut with no score is dropped."""
+    lines = []
+    for r in spec["rules"]:
+        name = f"synth_qe_{r['stream']}_{r['src']}_{r['tgt']}"
+        lines += [
+            f"        {name}: # MetricX <= {r['bound']}: the best {r['keep']:.0%} of {r['src']} -> {r['tgt']}, stream {r['stream']}",
+            f"          match: {{task: st, scored: synth, synth_stream: {r['stream']}, src_lang: {r['src']}, tgt_lang: {r['tgt']}}}",
+            f"          field: custom.synth.metricx_xxl.{r['tgt']}",
+            f"          max: {r['bound']}",
+        ]  # fmt: skip
+    return lines
+
+
+def asr_leaf_lines(pad: int, leaf: dict, root: str, weight: float, note: str) -> list[str]:
+    """A noisy native-tail ASR leaf, as ``build_group_block`` writes a leaf (no WER tags: no array exists for a copy)."""
+    space = " " * pad
+    tags = {"task": "asr", "lang": leaf["lang"]}
+    if "text_field" in leaf["tags"]:
+        tags["text_field"] = leaf["tags"]["text_field"]
+    tags |= {"scored": "none", "region_code": leaf["tags"]["region_code"], "synth_stream": "F"}
+    return [
+        f"{space}- type: lhotse_shar",
+        f"{space}  shar_path: {root}/{leaf['name']}/train",
+        f"{space}  weight: {weight:.10f}",
+        f"{space}  tags:",
+        *[f"{space}    {k}: {v}" for k, v in tags.items()],
+        f"{space}  {note}",
+    ]
+
+
+def swap_in_tail(group: dict, copies: list[dict], mean_exist: float) -> dict:
+    """Add noisy copies to one language group, keeping the group's share of the audio.
+
+    Inside a group the policy gives each corpus audio in proportion to hours**alpha. The copies join as corpora, so
+    they take their policy share of the group's audio and the old corpora scale down together; cut weights follow from
+    each corpus's mean cut length. The copies' cuts are shorter than the group's, so at the same weight (which counts
+    cuts) the group would now draw less audio: ``stretch`` is the factor on the group's weight that keeps its audio.
+    Returns the numbers the report and the line edits need.
+    """
+    old = group["leaves"]
+    mean_old = sum(x["w"] * x["mean"] for x in old)  # seconds of audio per cut drawn from the group
+    ref = max(old, key=lambda x: x["hours"])
+    # sum of hours**alpha over the old corpora, from the largest one: its audio share is known to 0.3%
+    sum_old = ref["hours"] ** ALPHA / (ref["w"] * ref["mean"] / mean_old)
+    for c in copies:
+        c["hours"] = c["s"] / 3600
+        c["mean"] = c["s"] / c["cuts"]
+    sum_new = sum(c["hours"] ** ALPHA for c in copies)
+    audio_new = sum_new / (sum_old + sum_new)  # the copies' share of the group's audio
+    u = [c["hours"] ** ALPHA / c["mean"] for c in copies]
+    u = [x / sum(u) for x in u]  # their weights among themselves
+    mean_new = sum(x * c["mean"] for x, c in zip(u, copies))
+    cut_new = audio_new * mean_old / (audio_new * mean_old + (1 - audio_new) * mean_new)
+    mean_group = (1 - cut_new) * mean_old + cut_new * mean_new  # seconds of audio per cut drawn, copies in
+    group_audio = group["w"] * mean_old / mean_exist  # the group's share of the existing mix's audio
+    return {
+        "audio_new": audio_new, "cut_new": cut_new, "u": u, "group_audio": group_audio,
+        "mean_group": mean_group, "stretch": mean_old / mean_group,
+        "leaf_audio": [audio_new * c["hours"] ** ALPHA / sum_new for c in copies],
+    }  # fmt: skip
+
+
+def apply_synth(
+    base: str,
+    spec: dict,
+    root: str = SYNTH_ROOT,
+    share: float | None = None,
+    snapshot_every: int | None = SYNTH_SNAPSHOT_EVERY,
+) -> tuple[str, dict]:
+    """``base`` (a rendered annealing config) with the collection added. Returns the text and a report.
+
+    ``share`` is the share of the audio drawn that the collection's ST leaves get; by default their hours' share of
+    all surviving hours, which is what the policy gives ST data (PI, 11-01). The weights are cut probabilities, so
+    the share is converted with the mean cut length of the existing mixture and of the collection.
+    """
+    if "synth_stream" in base:
+        raise ValueError("the base config already carries SpeechBlocks-Synth-v1: start from Fondue-anneal.yaml")
+    lines = base.splitlines()
+    start, end, indent = cmw._find_block(lines, "train_ds", "input_cfg")
+    groups = parse_mix(lines, start, end)
+    if abs(sum(g["w"] for g in groups) - 1) > 1e-6:
+        raise ValueError("the group weights of the base config do not sum to 1")
+    mean_exist = sum(g["w"] * sum(x["w"] * x["mean"] for x in g["leaves"]) for g in groups)
+    hours_exist = sum(g["hours"] for g in groups)
+
+    # The noisy copies first. Their cuts are shorter than their group's, so a group that takes them in needs a heavier
+    # weight (weights count cuts) to keep its audio: every group keeps the audio share it had among the existing groups.
+    by_lang = {g["tags"]["lang"]: g for g in groups if g["tags"].get("task") == "asr"}
+    copies_of: dict[str, list[dict]] = defaultdict(list)
+    for c in spec["asr_leaves"]:
+        copies_of[c["lang"]].append(dict(c))
+    swaps = {lang: swap_in_tail(by_lang[lang], copies, mean_exist) for lang, copies in sorted(copies_of.items())}
+    for g in groups:
+        g["stretch"] = 1.0
+    for lang, sw in swaps.items():
+        by_lang[lang]["stretch"] = sw["stretch"]
+    z = sum(g["w"] * g["stretch"] for g in groups)
+    # sum(w * stretch * mean cut now) is still sum(w * mean cut before): the same audio over z times the cuts
+    mean_now = mean_exist / z
+
+    sources = synth_sources(spec, root)
+    hours_synth = sum(s["hours"] for s in sources)
+    audio = share if share is not None else hours_synth / (hours_exist + hours_synth)
+    cmw.compute_weights(sources, ALPHA, BETA["anneal"])
+    cmw.to_cut_probabilities(sources)
+    mean_synth = sum(s["p_cl"] * s["mean_cut"] for s in sources)
+    cuts = (audio / mean_synth) / (audio / mean_synth + (1 - audio) / mean_now)  # the collection's share of the cuts
+    for s in sources:
+        s["p_l"] *= cuts
+        s["p_l_hours"] *= audio
+        s["p_cl_hours"] *= audio
+    keep_cuts, keep_audio = 1 - cuts, 1 - audio
+
+    replace: dict[int, str] = {}
+    insert: dict[int, list[str]] = defaultdict(list)
+    for g in groups:
+        g["w_new"] = g["w"] * g["stretch"] / z * keep_cuts
+        pad = " " * (g["pad"] + 2)
+        replace[g["weight_line"]] = f"{pad}weight: {g['w_new']:.10f}"
+        m = GROUP_NOTE.match(lines[g["head"]])
+        g["note"] = dict(m.groupdict())
+        in_tail = g["tags"].get("task") == "asr" and g["tags"]["lang"] in swaps
+        # the old corpora's share of the group's audio
+        old_part = 1 - swaps[g["tags"]["lang"]]["audio_new"] if in_tail else 1.0
+        for x in g["leaves"]:
+            m = LEAF_NOTE.match(lines[x["note_line"]])
+            replace[x["note_line"]] = (
+                f"{m['pad']}# {m['hours']} h, mean cut {m['mean']} s, "
+                f"{float(m['audio']) * keep_audio * old_part:.1f}% of the audio"
+            )
+
+    tail = []
+    for lang, copies in sorted(copies_of.items()):
+        g = by_lang[lang]
+        sw = swaps[lang]
+        for x in g["leaves"]:
+            old = float(WEIGHT_LINE.match(lines[x["weight_line"]])["w"])
+            replace[x["weight_line"]] = f"{' ' * (g['pad'] + 6)}weight: {old * (1 - sw['cut_new']):.10f}"
+        new_lines = []
+        for c, u, a in zip(copies, sw["u"], sw["leaf_audio"]):
+            pct = sw["group_audio"] * keep_audio * a
+            note = f"# {c['hours']:,.1f} h, mean cut {c['mean']:.1f} s, {pct:.1%} of the audio"
+            new_lines += asr_leaf_lines(g["pad"] + 4, c, root, sw["cut_new"] * u, note)
+        insert[g["stop"]] += new_lines
+        m = g["note"]
+        hours = float(m["hours"].replace(",", "")) + sum(c["hours"] for c in copies)
+        replace[g["head"]] = (
+            f"{m['pad']}# {m['key']}: {hours:,.1f} h across {int(m['n']) + len(copies)} corpora -- "
+            f"{g['w_new'] * 100:.1f}% of the cuts, {float(m['audio']) * keep_audio:.1f}% of the audio"
+        )
+        tail.append(
+            {
+                "lang": lang,
+                "copies": len(copies),
+                "hours": sum(c["hours"] for c in copies),
+                "audio_new": sw["audio_new"],
+                "stretch": sw["stretch"],
+            }
+        )
+    for g in groups:
+        if g["head"] not in replace:
+            m = g["note"]
+            replace[g["head"]] = (
+                f"{m['pad']}# {m['key']}: {m['hours']} h across {m['n']} corpora -- "
+                f"{g['w_new'] * 100:.1f}% of the cuts, {float(m['audio']) * keep_audio:.1f}% of the audio"
+            )
+
+    block = cmw.build_group_block(sources, indent=indent, weights="cuts")[1:]  # without its own "input_cfg:"
+    insert[end] += block
+    r_start, r_end, _ = cmw._find_block(lines, "cut_filter", "rules")
+    insert[r_end] += synth_rules(spec)
+    # the renderer's header comment sits just above `input_cfg:`
+    note_at = next(i for i in range(start, 0, -1) if re.match(r"^\s+# \d+ corpora, \d+ language entries", lines[i]))
+    n_dir = len({s["lang_key"] for s in sources})
+    pad = " " * indent
+    insert[note_at + 1] += [
+        f"{pad}#",
+        f"{pad}# SpeechBlocks-Synth-v1 (build_fondue_mix.py synth, spec of {spec['built']}): {audio:.1%} of the audio drawn",
+        f"{pad}# ({cuts:.1%} of the cuts) comes from its {len(sources)} ST leaves in {n_dir} direction groups, the last groups",
+        f"{pad}# below, weighted by the same alpha/beta over their own kept hours. The groups above are the deployed",
+        f"{pad}# mixture with every audio share scaled by {keep_audio:.6f} (the weights, which count cuts, by {keep_cuts / z:.6f}),",
+        f"{pad}# except that {len(spec['asr_leaves'])} noisy copies of the native tail sit inside the group of their language. That group",
+        f"{pad}# keeps its audio share, and since the copies' cuts are shorter its weight is raised, by {min(s['stretch'] for s in swaps.values()):.2f} to "
+        f"{max(s['stretch'] for s in swaps.values()):.2f}x before the scaling.",
+        f"{pad}#",
+        f"{pad}# Streams (tag synth_stream):",
+        *[f"{pad}#   {k}: {v}" for k, v in SYNTH_STREAMS.items()],
+    ]
+    replace[0] = (
+        "# Fondue-anneal-synth.yaml: generated by build_fondue_mix.py `synth` from Fondue-anneal.yaml. Do not hand-edit."
+    )
+    insert[1] += [
+        f"# Fondue-anneal.yaml plus SpeechBlocks-Synth-v1 ({spec['built']}): {audio:.1%} of the audio drawn ({cuts:.1%} of the cuts)",
+        f"# comes from its {len(sources)} ST leaves in {n_dir} direction groups. The notes below describe the deployed mixture.",
+    ]
+    if snapshot_every is not None:
+        i = next(i for i, line in enumerate(lines) if line.strip().startswith("snapshot_every_n_steps:"))
+        key_pad = lines[i][: len(lines[i]) - len(lines[i].lstrip())]
+        replace[i] = f"{key_pad}snapshot_every_n_steps: {snapshot_every}"
+        insert[i] += [
+            f"{key_pad}# SpeechBlocks-Synth-v1 adds {len(sources) + len(spec['asr_leaves'])} leaves to the {sum(len(g['leaves']) for g in groups)} above, and a snapshot",
+            f"{key_pad}# walks the whole graph per buffered cut: measured on nyx (one worker, world size 64), 6.5 s a snapshotted batch",
+            f"{key_pad}# at 905 leaves against 1.0 s at 150, in the 34 batches of every window. Every 512 that stalls the GPUs ~4 min",
+            f"{key_pad}# in ~4.5; every {snapshot_every}, ~{34 * 7.0 / (snapshot_every * 0.52):.0%} of the run. A resume replays up to {snapshot_every} batches.",
+        ]
+
+    out: list[str] = []
+    for i, line in enumerate(lines):
+        out += insert.get(i, [])
+        out.append(replace.get(i, line))
+    out += insert.get(len(lines), [])
+    text = "\n".join(out) + "\n"
+    total_hours = float(re.search(r"(?m)^\s*total_hours:\s*([0-9.]+)", base)[1])
+    steps = int(re.search(r"(?m)^\s*max_steps:\s*(\d+)", base)[1])
+    decay = int(re.search(r"(?m)^\s*num_decay_steps:\s*(\d+)", base)[1])
+    report = {
+        "audio_share": audio, "cut_share": cuts, "hours_synth": hours_synth, "hours_existing": hours_exist,
+        "mean_cut_existing": mean_now, "cut_scale": keep_cuts / z,
+        "drawn_hours": total_hours * decay / steps, "sources": sources, "tail": tail, "n_rules": len(spec["rules"]),
+        "n_leaves": len(sources) + len(spec["asr_leaves"]),
+    }  # fmt: skip
+    return text, report
+
+
+def cmd_synth(args: argparse.Namespace) -> None:
+    spec = json.loads(Path(args.spec).read_text())
+    base = Path(args.base).read_text()
+    share = None if args.share == "auto" else float(args.share)
+    text, rep = apply_synth(base, spec, args.root, share, args.snapshot_every or None)
+    out = Path(args.out)
+    out.write_text(text)
+    drawn = rep["drawn_hours"]
+    print(f"{spec['name']} ({spec['built']}) -> {out}")
+    print(
+        f"{rep['audio_share']:.2%} of the audio drawn ({rep['cut_share']:.2%} of the cuts): {rep['hours_synth']:,.0f} kept h "
+        f"against {rep['hours_existing']:,.0f} h of the deployed mix; the annealing phase draws {drawn:,.0f} h."
+    )
+    by_group: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0, 0.0])
+    entries: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0])
+    for s in rep["sources"]:
+        a = by_group[s["group"]]
+        a[0] += 1
+        a[1] += s["hours"]
+        a[2] += s["p_cl_hours"]
+        entries[s["lang_key"]][0] += s["hours"]
+        entries[s["lang_key"]][1] += s["p_cl_hours"]
+    print(f"\n{'stream':<7} {'leaves':>6} {'kept h':>9} {'share':>7} {'drawn h':>9} {'passes':>7}")
+    for k, (n, h, p) in sorted(by_group.items()):
+        print(f"{k:<7} {int(n):>6} {h:>9,.0f} {p:>7.2%} {p * drawn:>9,.0f} {p * drawn / h:>7.2f}")
+    print(f"\n{'entry':<8} {'kept h':>9} {'share':>7} {'drawn h':>9} {'passes':>7}   ({len(entries)} directions)")
+    rows = sorted(entries.items(), key=lambda kv: -kv[1][1])
+    for key, (h, p) in rows[:12] + rows[-5:]:
+        print(f"{key:<8} {h:>9,.1f} {p:>7.3%} {p * drawn:>9,.0f} {p * drawn / h:>7.2f}")
+    print(f"\n{'tail':<6} {'copies':>6} {'hours':>8} {'audio of its group':>20} {'group weight x':>15}")
+    for t in rep["tail"]:
+        print(f"{t['lang']:<6} {t['copies']:>6} {t['hours']:>8.1f} {t['audio_new']:>20.1%} {t['stretch']:>15.2f}")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
+    y = sub.add_parser("synth", help="add SpeechBlocks-Synth-v1 to the annealing config (reads the rendered text)")
+    y.add_argument(
+        "--spec",
+        default=str(SYNTH_SPEC),
+        help="the leaf spec made by data-utils/synth_st/make_mix_spec.py in MELT-proj/preprocessing",
+    )
+    y.add_argument("--base", default=str(RENDERED["anneal"]))
+    y.add_argument("--out", default=str(SYNTH_OUT))
+    y.add_argument("--root", default=SYNTH_ROOT, help="where the collection's Shar dirs are on the training host")
+    y.add_argument(
+        "--share", default="auto", help="audio share of the ST leaves: 'auto' (their hours' share) or e.g. 0.1"
+    )
+    y.add_argument(
+        "--snapshot-every",
+        type=int,
+        default=SYNTH_SNAPSHOT_EVERY,
+        help="data.train_ds.snapshot_every_n_steps for the ~1,000-leaf graph (0 keeps the base value)",
+    )
     s = sub.add_parser("sources", help="write Fondue-sources.yaml")
     s.add_argument("--datasets-root", default=os.environ.get("LOCAL_DATASETS_DIR"), required=False)
     s.add_argument("--scores-root", default=os.environ.get("LOCAL_ASR_SCORES_DIR"))
@@ -660,9 +1055,9 @@ def main() -> None:
     r.add_argument("--gpus-per-node", type=int, default=4)
     r.add_argument("--cache", default=str(REPO_ROOT / "infra" / ".mix_weights_hours.json"))
     args = p.parse_args()
-    if not args.datasets_root or (args.cmd == "sources" and not args.scores_root):
+    if args.cmd != "synth" and (not args.datasets_root or (args.cmd == "sources" and not args.scores_root)):
         p.error("--datasets-root (and, for sources, --scores-root) or their environment variables are required")
-    {"sources": cmd_sources, "render": cmd_render}[args.cmd](args)
+    {"sources": cmd_sources, "render": cmd_render, "synth": cmd_synth}[args.cmd](args)
 
 
 if __name__ == "__main__":
