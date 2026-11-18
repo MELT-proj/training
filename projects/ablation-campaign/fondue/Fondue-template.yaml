@@ -1,0 +1,229 @@
+# @@HEADER@@
+#
+# Fondue: one full fine-tune from the Hub components, no MA stage (PI, 2026-10-29).
+# DRAFT, NOT FROZEN. The rows still open are marked "# OPEN"; plan/06-fondue.md §3
+# holds the decision table and plan/timeline.md the dates.
+#
+# Rendered in two steps by build_fondue_mix.py (its docstring has the commands):
+#   1. `sources` writes every training source, tagged, into Fondue-sources.yaml;
+#   2. `render` weights them with the two-tier policy of infra/compute_mix_weights.py
+#      on the hours that survive the quality filters, and writes one config per phase:
+#      Fondue.yaml (warmup and constant LR, stops at the annealing step) and
+#      Fondue-anneal.yaml (resumes there with the annealing filters and weights).
+# Edit this template or the builder, never the rendered files.
+
+# =============================================================================
+# Run Configuration
+# =============================================================================
+run:
+  exp_name: Fondue
+  dry_run: false
+  memory_preallocation: true
+  stop_after_step: null # @@STOP_AFTER_STEP@@
+  # Every Fondue job after the first is a resume, and the fit leaves no room for AdamW's
+  # state before the first window (54 of 63 GB fresh): load it at the first step.
+  defer_optimizer_load: true
+
+# =============================================================================
+# Model: Whisper-large-v3 + MoE (8 experts, top-2) at 10 Hz + EuroLLM-1.7B-Instruct-2512,
+# everything trainable (PI, 2026-10-29, 10-30 and 11-04).
+# =============================================================================
+model:
+  encoder:
+    name: openai/whisper-large-v3
+    freeze: false
+    max_audio_seq_len: 3000 # Whisper takes exactly 30 s of 10 ms mel frames
+    attn_implementation: flash_attention_2
+    apply_spec_augment: false
+
+  decoder:
+    # PI, 11-04: Instruct-2512, queued while the base-2512 arm is scored. If base wins,
+    # before the job starts: name: utter-project/EuroLLM-1.7B-2512, plus a line
+    # chat_template_from: utter-project/EuroLLM-1.7B-Instruct-2512 (the base ships no
+    # chat template; the base-2512 arm ran exactly so).
+    name: utter-project/EuroLLM-1.7B-Instruct-2512
+    attn_implementation: flash_attention_2
+    freeze: false
+    eos_token: <|im_end|>
+    pad_token: </s>
+    audio_token: <|audio|>
+    audio_bos_token: <|audio_bos|>
+    audio_eos_token: <|audio_eos|>
+
+  adapter:
+    _type: moe
+    freeze: false
+    stack_factor: 5 # 50 Hz Whisper frames -> 10 Hz into the decoder (PI, 2026-10-30)
+    # PI, 11-08: the documented weight, which PR #171 makes the real one. Before it the
+    # Trainer's rescaling made it coef x 64 GPUs x ga 16 = 10.24 for Fondue.
+    router_aux_loss_coef: 0.01
+
+  ckpt: null # from the Hub: no MA stage
+
+  # Not optional: without it the Hub's bf16 decoder trains in pure bf16 under DDP.
+  # The 10-24 scaling bench ran without it and went to loss 0 / grad_norm nan at step 2.
+  master_dtype: float32
+
+# =============================================================================
+# Data
+# =============================================================================
+data:
+  sample_rate: 16000
+
+  apply_chat_template: true
+  prompt_template_selection: random
+  chat_template_config: chatml
+
+  strict_text_field: true
+  skip_text_field_mismatch: true
+
+  train_ds:
+    input_cfg:
+    # The hours Fondue draws over BOTH phases, set by the builder to the hours that
+    # survive the constant phase's filters ("train on all the data", PI 11-01).
+    total_hours: 0.0
+    force_estimate: false
+
+    min_duration: 0.5
+    max_duration: 60.0
+
+    batch_size: null
+    # 30 x grad_accum 16 (PI, 11-01): same audio per step as 15 x 20, 17-20% fewer
+    # GPU-h (step profile, PR #166), 54.4 of 63 GB peak with checkpointing on. A
+    # micro-batch carries ~26.3 s of audio (2.23 cuts), the fill the builder uses.
+    batch_duration: 30
+    quadratic_duration: null
+    lhotse_sampler_type: dynamic_bucketing
+    num_buckets: 30
+    buffer_size: 10000
+    # Measured 11-04 on MN5's sources by infra/check_training_config.py --only bins
+    # --measure (per-source duration histograms x the constant phase's weights, before the
+    # cut filter). The 30.0 repeats are Mosel's many 30 s cuts: lhotse needs the edges
+    # sorted, not distinct, and the repeats only leave empty buckets.
+    bucket_duration_bins: [2.52, 3.62, 4.6, 5.55, 6.55, 7.71, 9.14, 10.78, 12.42, 14.14, 15.34, 16.87, 18.46, 20.2, 22.98, 25.54, 27.47, 28.56, 29.44, 30.0, 30.0, 30.0, 30.0, 30.0, 30.0, 30.0, 32.84, 36.64, 38.54]
+    max_tokens: 400
+
+    shuffle: true
+    drop_last: false
+    seed: 1337
+    shard_seed: 1337
+    num_workers: 1
+    # Each resume-position record re-checks the whole source graph per buffered cut: at 1,
+    # 90% of a worker's CPU (30 s/step, 11-07/08). torchdata records any batch within
+    # num_workers x prefetch_factor + num_workers + 1 = 34 of the interval's end, so 16
+    # still recorded every batch (31 s/step, MoE smokes 11-08); 512 records ~7% (~5 s/step).
+    # Resume stays exact: it replays up to 512 batches (~32 steps) since the last record.
+    snapshot_every_n_steps: 512
+    pin_memory: true
+    prefetch_factor: 32
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+    # Per-cut quality bands (PR #157), one condition per rule: each phase has its own
+    # config. Thresholds are the builder's policy (PI, 11-01).
+    cut_filter:
+      scores_root: ${oc.env:LOCAL_ASR_SCORES_DIR}
+      rules:
+        # @@CUT_FILTER_RULES@@
+
+  validation_ds:
+    # Per NAMED set: every set below scores this many clips, a seeded draw.
+    max_samples: 20
+    input_cfg:
+    total_hours: 0.0
+    force_estimate: true
+    strict_text_field: true
+    skip_text_field_mismatch: true
+    prompt_template_selection: custom
+    prompt_template:
+      asr: "Transcribe the following {lang} audio: {audio_token}"
+      st: "Translate the following audio into {lang}: {audio_token}"
+    batch_size: 16
+    batch_duration: null
+    buffer_size: 20000
+    shuffle: false
+    drop_last: true
+    min_duration: 0.5
+    max_duration: 60.0
+    num_workers: 0
+    pin_memory: true
+    prefetch_factor: null
+    sample_rate: 16000
+    text_field: text
+    lang_field: lang
+
+# =============================================================================
+# Trainer
+# =============================================================================
+trainer:
+  output_dir: ${oc.env:OUTPUT_DIR}
+  overwrite_output_dir: false
+  resume_from_checkpoint: null
+  seed: 1337
+  do_train: true
+  do_eval: true
+  eval_on_start: true
+  average_tokens_across_devices: true
+
+  per_device_train_batch_size: -1 # Handled by Lhotse
+  per_device_eval_batch_size: 4
+  # With batch_duration 30 (PI, 11-01): 8.55 s/step on 2 nodes over InfiniBand,
+  # 20.3 GPU-h per 1,000 h; ~22 at 16 nodes (extrapolated, an upper bound). A
+  # 7.5 audio-h global batch at 16 nodes.
+  gradient_accumulation_steps: 16
+  gradient_checkpointing: true
+
+  # Warmup, a long plateau, then a cosine decay to 0.1x peak over the last fifth.
+  # build_fondue_mix.py pins max_steps and num_decay_steps (= max_steps / 5) from
+  # total_hours at the MEASURED fill; the annealing phase starts at
+  # max_steps - num_decay_steps. The launcher must not re-derive max_steps.
+  lr_scheduler_type: warmup_stable_decay
+  warmup_steps: 0.05
+  lr_scheduler_kwargs:
+    min_lr_ratio: 0.1
+    decay_type: cosine
+
+  num_train_epochs: 1
+  max_steps: -1
+
+  logging_strategy: steps
+  logging_steps: 5
+  report_to: wandb
+
+  # OPEN: cadence, gated on the batch (06-fondue.md §3, "checkpoint and eval cadence").
+  eval_strategy: steps
+  eval_steps: 500
+  batch_eval_metrics: true
+  predict_with_generate: true
+  generation_max_length: 256
+  generation_num_beams: 1
+
+  save_strategy: steps
+  save_steps: 1000
+  save_total_limit: 2
+
+  bf16: true
+  dataloader_num_workers: 4
+  remove_unused_columns: false
+  # Top-2 routing over 8 experts leaves an expert without tokens on some rank in
+  # some step; without this the scaling bench's 1-node smoke died in step 2.
+  ddp_find_unused_parameters: true
+  # Fewer, larger all-reduces; half of the step profile's NCCL fix, the other half
+  # is the socket tuning in infra/runners/sites/mn5.sh (PR #166).
+  ddp_bucket_cap_mb: 256
+
+  max_grad_norm: 1.0
+
+evaluation:
+  compute_metrics: true
+  enable_whisper_normalization: true
+  log_num_samples: 10
+
+optimization:
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  encoder_lr: 6e-6
+  adapter_lr: 2e-4
+  decoder_lr: 2e-5 # OPEN: Raclette's three LR points set it (IFT freeze, 11-05)
+  min_lr_scale: 0.1
