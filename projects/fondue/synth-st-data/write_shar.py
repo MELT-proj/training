@@ -109,7 +109,9 @@ def main(
     with Pool(jobs) as pool:
         res = pool.map(fn, [os.path.join(src_dir, s) for s in sorted(counts)])
     print(f"{out_dir}: {len(res)} shards, {sum(counts.values())} translations")
-    Path(out_dir, "SYNTH_COMPLETE").write_text(json.dumps({"stream": stream, "translations": counts}))
+    # Next to the Shar directory, never in it: lhotse takes every file of a Shar directory for a field, so a stray marker
+    # makes `CutSet.from_shar` raise and the indexed reader refuse the directory (the training loader opens it that way).
+    Path(out_dir).parent.joinpath("SYNTH_COMPLETE").write_text(json.dumps({"stream": stream, "translations": counts}))
 
 
 if __name__ == "__main__":

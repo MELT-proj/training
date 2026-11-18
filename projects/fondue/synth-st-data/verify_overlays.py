@@ -1,8 +1,10 @@
 """Check every overlay under `shar-out` against its source Shar and the unit outputs.
 
 Per shard: same number of cuts, same ids in the same order, audio tar link resolves, manifest index exists and has one
-offset per cut. Per corpus: the translations written equal the `final` rows (SYNTH_COMPLETE), every `ok` flag has its
-`translation_<tgt>` and score, and no text is empty. Run inside synth.sif.
+offset per cut. Per corpus: the translations written equal the `final` rows (`<corpus>/SYNTH_COMPLETE`, beside the Shar
+directory, not in it), every `ok` flag has its `translation_<tgt>` and score, no text is empty, and the Shar directory holds
+nothing but `cuts.*` and `recording.*` and is accepted by lhotse's indexed reader (the one the training loader uses).
+Run inside synth.sif.
 """
 
 import glob
@@ -12,6 +14,7 @@ import os
 from multiprocessing import Pool
 
 import tyro
+from lhotse.shar.readers.indexed import LazyIndexedSharIterator
 
 from overlay_all import resolve, source
 
@@ -61,9 +64,20 @@ def main(out_root: str = "/mnt/scratch-nyx/giuseppe/synth/shar-out", jobs: int =
     total_bad = 0
     for corpus_dir in sorted(glob.glob(f"{out_root}/*")):
         corpus = os.path.basename(corpus_dir)
-        done = os.path.join(corpus_dir, "train", "SYNTH_COMPLETE")
+        done = os.path.join(corpus_dir, "SYNTH_COMPLETE")
         if not os.path.exists(done):
             print(f"{corpus}: NOT COMPLETE")
+            total_bad += 1
+            continue
+        stray = sorted(
+            f for f in os.listdir(f"{corpus_dir}/train") if not f.startswith(("cuts.", "recording."))
+        )  # lhotse takes every file of a Shar directory for a field
+        if stray:
+            print(f"{corpus}: FAIL files in the Shar directory that lhotse would read as fields: {stray}")
+            total_bad += 1
+            continue
+        if not LazyIndexedSharIterator.supports_configuration(in_dir=f"{corpus_dir}/train"):
+            print(f"{corpus}: FAIL lhotse's indexed reader (the one the training loader uses) refuses the directory")
             total_bad += 1
             continue
         want = sum(json.load(open(done))["translations"].values())
