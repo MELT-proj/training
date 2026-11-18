@@ -33,6 +33,10 @@ DEMAND_CATEGORY = {
     "TBUS": "transport", "TCAR": "transport", "TMETRO": "metro_train",
 }  # fmt: skip
 DEMAND_EVAL = {"DWASHING", "NPARK", "OMEETING", "PSTATION", "TBUS"}
+# The mixer draws a category first, then a file in it. DEMAND has one recording per environment, so its seven
+# environment groups would take half of all draws with eleven files; every file is one `environment` category
+# instead and keeps its group in `env`.
+DEMAND_SAMPLING_CATEGORY = "environment"
 
 FSD_CATEGORY = {
     "dog": ["Dog", "Bark", "Growling"],
@@ -104,7 +108,8 @@ def demand(root: str) -> list[dict]:
         f = Path(root) / "demand" / "x" / env / "ch01.wav"
         if f.exists():
             out.append({"corpus": "DEMAND", "file_id": f"{env}/ch01", "path": str(f), "licence": "CC-BY-4.0",
-                        "category": cat, "split": "eval" if env in DEMAND_EVAL else "train"})  # fmt: skip
+                        "category": DEMAND_SAMPLING_CATEGORY, "env": cat,
+                        "split": "eval" if env in DEMAND_EVAL else "train"})  # fmt: skip
     return out
 
 
